@@ -68,3 +68,29 @@ describe("CodedHttpError (GEN-DUP-NEAR-008)", () => {
     expect(httpStatusFor(SAMPLE_STATUS_MAP, "toString" as SampleCode)).toBe(500);
   });
 });
+
+import { httpStatusFor as publicHttpStatus } from "@oscharko-dev/keiko-contracts/runtime/http-error";
+
+it("preserves public single native lookup and prototype fallback", () => {
+  let reads = 0;
+  const statuses = {
+    get failure(): number {
+      reads++;
+      return 503;
+    },
+  };
+  expect(publicHttpStatus(statuses, "failure")).toBe(503);
+  expect(reads).toBe(1);
+  expect(publicHttpStatus<string>({}, "constructor")).toBe(500);
+  const error = new Error("status getter");
+  expect(() =>
+    publicHttpStatus(
+      {
+        get failure(): never {
+          throw error;
+        },
+      },
+      "failure",
+    ),
+  ).toThrow(error);
+});

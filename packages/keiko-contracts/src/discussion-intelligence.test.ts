@@ -703,3 +703,62 @@ describe("KEIKO-0880 frozen contract tables", () => {
     }).toThrow(TypeError);
   });
 });
+
+describe("discussion actual raw collection admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves canonical and ordinary malformed collections through %s",
+    async (surface) => {
+      const api =
+        surface === "source"
+          ? { discussionModePlan, validateDiscussionModePlan }
+          : await import("@oscharko-dev/keiko-contracts/runtime/discussion-intelligence");
+      const plan = api.discussionModePlan("challenge");
+      expect(api.validateDiscussionModePlan(plan)).toEqual({ ok: true });
+      expect(
+        api.validateDiscussionModePlan({ ...plan, mandatedFacets: [...plan.mandatedFacets, 42] })
+          .ok,
+      ).toBe(false);
+      expect(
+        api.validateDiscussionModePlan({
+          ...plan,
+          groundingDirectives: [...plan.groundingDirectives, 42],
+        }),
+      ).toEqual({ ok: false, reasons: ["groundingDirectives: disagrees with canonical plan"] });
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "refuses substituted raw facet members through %s",
+    async (surface) => {
+      const api =
+        surface === "source"
+          ? { discussionModePlan, validateDiscussionModePlan }
+          : await import("@oscharko-dev/keiko-contracts/runtime/discussion-intelligence");
+      const plan = api.discussionModePlan("challenge");
+      const entries: unknown[] = [42, ...plan.mandatedFacets.slice(1)];
+      Object.defineProperties(entries, {
+        filter: { value: () => [...plan.mandatedFacets] },
+        some: { value: () => false },
+      });
+      expect(api.validateDiscussionModePlan({ ...plan, mandatedFacets: entries }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "refuses substituted raw grounding members through %s",
+    async (surface) => {
+      const api =
+        surface === "source"
+          ? { discussionModePlan, validateDiscussionModePlan }
+          : await import("@oscharko-dev/keiko-contracts/runtime/discussion-intelligence");
+      const plan = api.discussionModePlan("challenge");
+      const entries: unknown[] = [42, ...plan.groundingDirectives.slice(1)];
+      Object.defineProperties(entries, {
+        filter: { value: () => [...plan.groundingDirectives] },
+        some: { value: () => false },
+      });
+      expect(api.validateDiscussionModePlan({ ...plan, groundingDirectives: entries })).toEqual({
+        ok: false,
+        reasons: ["groundingDirectives: disagrees with canonical plan"],
+      });
+    },
+  );
+});

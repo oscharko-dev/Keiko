@@ -92,6 +92,9 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "client_turn_content_digest",
 ]);
 
+// V44 retains private per-chat composer text and its CAS revision, without provider metadata.
+const ALLOWED_CHAT_DRAFTS_COLUMNS = new Set(["chat_id", "text", "revision"]);
+
 const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "run_id",
   "schema_version",
@@ -187,6 +190,7 @@ const ALLOWED_GITHUB_ISSUE_READER_AUTHORIZATION_COLUMNS = new Set([
 // table missing here still fails the forbidden-substring scan; this pin only guarantees the
 // human review happens too.
 const EXPECTED_TABLES = new Set([
+  "chat_drafts",
   "chat_messages",
   "chats",
   "coding_history_tasks",
@@ -613,6 +617,17 @@ describe("forbidden-fields — coding history identity tables", () => {
     const inspector = openMigratedSchema(join(tmpDir, "coding-history-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(expected));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — private chat drafts (ADR-0013 / ADR-0114)", () => {
+  it("limits persisted drafts to reviewed text, chat identity, and revision", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "chat-draft-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_drafts"))).toEqual(ALLOWED_CHAT_DRAFTS_COLUMNS);
     } finally {
       inspector.close();
     }

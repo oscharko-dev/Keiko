@@ -14,6 +14,22 @@ import {
 } from "./git-repository-agent.js";
 
 describe("git repository agent operation contract", () => {
+  it("preserves payload identity and omits an absent idempotency key", () => {
+    const payload = { branchName: "feature" };
+    const parsed = parseGitRepositoryAgentOperationRequest({
+      schemaVersion: "1",
+      operation: "status",
+      mode: "read",
+      projectId: "/repos/alpha",
+      payload,
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.payload).toBe(payload);
+      expect(Object.hasOwn(parsed.value, "idempotencyKey")).toBe(false);
+    }
+  });
+
   it("accepts a typed read operation", () => {
     const parsed = parseGitRepositoryAgentOperationRequest({
       schemaVersion: "1",

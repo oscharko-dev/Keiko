@@ -786,3 +786,156 @@ describe("UTF-8-safe debug projections", () => {
     expect(event.kind).toBe("output");
   });
 });
+
+import {
+  parseDebugBootstrapRequest as publicBootstrap,
+  parseSetWatchesRequest as publicWatches,
+  parseScopesRequest as publicScopes,
+  parseVariablesRequest as publicVariables,
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
+
+describe.each([
+  [
+    "source",
+    parseDebugBootstrapRequest,
+    parseSetWatchesRequest,
+    parseScopesRequest,
+    parseVariablesRequest,
+  ],
+  ["public", publicBootstrap, publicWatches, publicScopes, publicVariables],
+] as const)(
+  "3918 DAP canonical construction %s",
+  (_surface, parseBootstrap, parseWatches, parseScopes, parseVariables) => {
+    it("copies the healthy bootstrap and keeps the reference key separation", () => {
+      const input = { schemaVersion, workspaceId };
+      const result = parseBootstrap(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (result.ok) expect(result.value).not.toBe(input);
+      const scopes = parseScopes({
+        schemaVersion,
+        sessionId: opaqueId,
+        pauseGeneration: 0,
+        frameRef: "frame_1",
+      });
+      expect(scopes.ok).toBe(true);
+      if (scopes.ok) {
+        expect(scopes.value.frameRef).toBe("frame_1");
+        expect(Object.hasOwn(scopes.value, "variableRef")).toBe(false);
+      }
+      expect(
+        parseVariables({
+          schemaVersion,
+          sessionId: opaqueId,
+          pauseGeneration: 0,
+          frameRef: "frame_1",
+        }).ok,
+      ).toBe(false);
+    });
+    it("refuses a malformed workspace identity in the canonical output phase", () => {
+      let reads = 0;
+      const input = {
+        schemaVersion,
+        get workspaceId(): unknown {
+          reads += 1;
+          return reads === 1 ? workspaceId : 42;
+        },
+      };
+      expect(parseBootstrap(input)).toEqual({
+        ok: false,
+        errors: ["debug bootstrap request is invalid or contains unknown fields"],
+      });
+      expect(reads).toBe(2);
+    });
+    it("refuses malformed physical watches concealed by caller every and map", () => {
+      const watches = [{}];
+      Object.defineProperty(watches, "every", { value: (): boolean => true });
+      Object.defineProperty(watches, "map", { value: (): unknown[] => [{}] });
+      expect(parseWatches({ schemaVersion, workspaceId, expectedRevision: 0, watches })).toEqual({
+        ok: false,
+        errors: ["set watches request is invalid or contains unknown fields"],
+      });
+    });
+    it("preserves healthy canonical watch copies and optional absence", () => {
+      const watches = [watch];
+      const result = parseWatches({ schemaVersion, workspaceId, expectedRevision: 0, watches });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.watches).not.toBe(watches);
+      expect(result.value.watches[0]).not.toBe(watch);
+      expect(result.value.watches[0]?.expression).toBe(watch.expression);
+    });
+  },
+);
+
+describe.each([
+  ["source", parseSetWatchesRequest],
+  ["public", publicWatches],
+] as const)("3918 dap-debug captured extent %s", (_surface, parse) => {
+  function inspectExtent(
+    laterExtent: number,
+    firstObservation: { readonly first: unknown } = { first: 1 },
+  ): {
+    readonly result: boolean;
+    readonly indexReads: number;
+    readonly lengths: readonly unknown[];
+  } {
+    const values: unknown[] = [watch];
+    const lengths: unknown[] = [];
+    let indexReads = 0;
+    let nativeVisits = 0;
+    const observed = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        if (key === "length") {
+          const length =
+            lengths.length === 0
+              ? firstObservation.first
+              : lengths.length === 1
+                ? laterExtent
+                : target.length;
+          lengths.push(length);
+          return length;
+        }
+        if (typeof key === "string" && /^\d+$/u.test(key)) indexReads += 1;
+        const datum: unknown = Reflect.get(target, key, receiver);
+        return datum;
+      },
+      has(target, key): boolean {
+        if (typeof key === "string" && /^\d+$/u.test(key)) nativeVisits += 1;
+        if (nativeVisits > DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches + 1)
+          throw new TypeError("fixture native traversal bound");
+        return Reflect.has(target, key);
+      },
+    });
+    return {
+      result: parse({ schemaVersion, workspaceId, expectedRevision: 0, watches: observed }).ok,
+      indexReads,
+      lengths,
+    };
+  }
+  it("preserves a healthy actual captured extent", () => {
+    const observation = inspectExtent(1);
+    expect(observation.result).toBe(true);
+    expect(observation.lengths.slice(0, 2)).toEqual([1, 1]);
+    expect(observation.indexReads).toBeGreaterThan(0);
+  });
+  it.each([NaN, undefined])("preserves original first-limit refusal for %s", (first) => {
+    const observation = inspectExtent(1, { first });
+    expect(observation).toEqual({ result: false, indexReads: 0, lengths: [first] });
+  });
+
+  it.each([DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches + 1, Infinity, 0.5, -1])(
+    "refuses captured extent %s before indexing",
+    (extent) => {
+      const observation = inspectExtent(extent);
+      expect({
+        accepted: observation.result,
+        indexReads: observation.indexReads,
+        firstTwoLengths: observation.lengths.slice(0, 2),
+      }).toEqual({
+        accepted: false,
+        indexReads: 0,
+        firstTwoLengths: [1, extent],
+      });
+    },
+  );
+});

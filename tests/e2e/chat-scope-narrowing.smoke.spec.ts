@@ -255,6 +255,36 @@ test("Files navigation announces narrowing and keeps the folder on later preview
   await page.screenshot({ path: testInfo.outputPath("scope-folder-kept.png") });
 });
 
+async function expectDraftRecoveryUsable(chat: ReturnType<Page["getByRole"]>): Promise<void> {
+  const retry = chat.getByRole("button", {
+    name: /Retry draft save|Erneut speichern/u,
+  });
+  await expect(retry).toBeVisible();
+  const warning = chat.getByRole("alert").filter({
+    hasText: /Draft not saved|Entwurf nicht gespeichert/u,
+  });
+  await expect(warning).toBeVisible();
+  const geometry = await warning.evaluate((node) => {
+    const action = node.querySelector("button")?.getBoundingClientRect();
+    const window = node.closest(".window")?.getBoundingClientRect();
+    const notice = node.getBoundingClientRect();
+    return {
+      overflowX: node.scrollWidth - node.clientWidth,
+      overflowY: node.scrollHeight - node.clientHeight,
+      actionHeight: action?.height ?? 0,
+      actionVisible:
+        action !== undefined && action.top >= notice.top && action.bottom <= notice.bottom,
+      noticeVisible:
+        window !== undefined && notice.top >= window.top && notice.bottom <= window.bottom,
+    };
+  });
+  expect(geometry.overflowX).toBeLessThanOrEqual(1);
+  expect(geometry.overflowY).toBeLessThanOrEqual(1);
+  expect(geometry.actionHeight).toBeGreaterThanOrEqual(24);
+  expect(geometry.actionVisible).toBe(true);
+  expect(geometry.noticeVisible).toBe(true);
+}
+
 async function chatGeometry(chat: ReturnType<Page["getByRole"]>): Promise<{
   readonly headerHeight: number;
   readonly hintWidth: number;
@@ -263,6 +293,7 @@ async function chatGeometry(chat: ReturnType<Page["getByRole"]>): Promise<{
   readonly footerBottom: number;
   readonly windowBottom: number;
 }> {
+  await expectDraftRecoveryUsable(chat);
   return chat.evaluate((node) => {
     const measure = (selector: string): DOMRect => {
       const element = node.querySelector(selector);
@@ -329,6 +360,10 @@ test("@smoke file-scope notice keeps an unbroken filename readable without horiz
   await seedConnectedWindows(page, fixture.root, fixture.chat, { width: 480, height: 480 });
   await page.goto("/");
   const { files, chatWindow, pill } = scopeViews(page);
+  await expect(pill).toHaveText(/Folder:|Ordner:/u);
+  await expect(chatWindow.getByTestId("grounding-help")).toContainText(
+    "The model has no file tools",
+  );
   await expectScope(request, fixture.root, fixture.chat.id, "workspace-root", []);
   await files.locator('.tr-dir-enter[data-path="docs"]').click();
   await expectScope(request, fixture.root, fixture.chat.id, "directory", ["docs"]);

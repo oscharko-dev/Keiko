@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES,
   GIT_REPOSITORY_SCHEMA_VERSION,
+  GIT_REPOSITORY_STATES,
   GIT_STATUS_CODES,
   isSafeGitRefName,
+  parseGitRepositoryStatusResponse,
+  parseGitRepositoryDiffResponse,
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "./git-repository.js";
@@ -491,4 +494,245 @@ describe("optional complete Git directory metadata", () => {
   ])("rejects malformed or unbounded metadata %j", (metadata) => {
     expect(validateGitRepositoryStatusResponse(makeValidStatusResponse(metadata)).ok).toBe(false);
   });
+});
+
+import {
+  validateGitRepositoryDiffResponse as validatePublicGitDiffResponse,
+  validateGitRepositoryStatusResponse as validatePublicGitStatusResponse,
+  parseGitRepositoryStatusResponse as parsePublicGitStatusResponse,
+  parseGitRepositoryDiffResponse as parsePublicGitDiffResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+
+describe("Git diff scope primitive admission (#3918)", () => {
+  for (const [surface, validate] of [
+    ["source", validateGitRepositoryDiffResponse],
+    ["public", validatePublicGitDiffResponse],
+  ] as const) {
+    it(`${surface}: refuses an array scope from actual JSON without coercion`, () => {
+      const response: unknown = JSON.parse(
+        JSON.stringify(makeValidDiffResponse({ scope: ["all"] })),
+      );
+      expect(validate(response)).toEqual({ ok: false, reasons: ["scope invalid"] });
+    });
+    it.each(["all", "worktree", "staged"])(`${surface}: admits the primitive %s scope`, (scope) => {
+      expect(validate(makeValidDiffResponse({ scope }))).toEqual({ ok: true });
+    });
+    it.each([null, undefined, 1, true, [], ["worktree"], {}, { toString: (): string => "all" }])(
+      `${surface}: refuses non-primitive scope %j`,
+      (scope) => {
+        expect(validate(makeValidDiffResponse({ scope }))).toEqual({
+          ok: false,
+          reasons: ["scope invalid"],
+        });
+      },
+    );
+    it(`${surface}: never invokes caller-controlled scope coercion`, () => {
+      let calls = 0;
+      const scope = {
+        toString(): never {
+          calls += 1;
+          throw new TypeError("untrusted coercion");
+        },
+      };
+      expect(validate(makeValidDiffResponse({ scope }))).toEqual({
+        ok: false,
+        reasons: ["scope invalid"],
+      });
+      expect(calls).toBe(0);
+    });
+  }
+});
+
+it("preserves exact repository-state vocabulary admission without unknown-valued projection", () => {
+  for (const state of GIT_REPOSITORY_STATES) {
+    expect(validateGitRepositoryStatusResponse(makeValidStatusResponse({ state }))).toEqual({
+      ok: true,
+    });
+    expect(validateGitRepositoryDiffResponse(makeValidDiffResponse({ state }))).toEqual({
+      ok: true,
+    });
+  }
+  for (const state of [undefined, null, ["available"], 1, true, {}, "AVAILABLE", "foreign"]) {
+    expect(validateGitRepositoryStatusResponse(makeValidStatusResponse({ state }))).toEqual({
+      ok: false,
+      reasons: ["state invalid"],
+    });
+    expect(validateGitRepositoryDiffResponse(makeValidDiffResponse({ state }))).toEqual({
+      ok: false,
+      reasons: ["state invalid"],
+    });
+  }
+});
+
+describe("Git status actual array element admission (#3918)", () => {
+  for (const [surface, validate] of [
+    ["source", validateGitRepositoryStatusResponse],
+    ["public", validatePublicGitStatusResponse],
+  ] as const) {
+    it(`${surface}: rejects changes holes and caller-controlled traversal bypasses`, () => {
+      const sparse: unknown[] = [];
+      sparse.length = 1;
+      const spoofed = Object.assign([null], { forEach: (): undefined => undefined });
+      for (const changes of [sparse, spoofed, [null]]) {
+        expect(validate(makeValidStatusResponse({ changes }))).toEqual({
+          ok: false,
+          reasons: ["changes[0] must be an object"],
+        });
+      }
+    });
+    it(`${surface}: rejects directory holes and caller-controlled traversal bypasses`, () => {
+      const sparse: unknown[] = [];
+      sparse.length = 1;
+      const spoofed = Object.assign([null], { every: (): boolean => true });
+      for (const untrackedDirectories of [sparse, spoofed, [null]]) {
+        expect(validate(makeValidStatusResponse({ untrackedDirectories }))).toEqual({
+          ok: false,
+          reasons: ["untrackedDirectories must be a bounded string array when present"],
+        });
+      }
+    });
+  }
+});
+
+export function parsePublicGitStatus(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitRepositoryStatusResponse
+> {
+  const result = parsePublicGitStatusResponse(input);
+  return result;
+}
+
+export function parsePublicGitDiff(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitRepositoryDiffResponse
+> {
+  const result = parsePublicGitDiffResponse(input);
+  return result;
+}
+
+describe("Git typed owning and public parsers (#3918)", () => {
+  for (const [surface, status, diff] of [
+    ["source", parseGitRepositoryStatusResponse, parseGitRepositoryDiffResponse],
+    ["public", parsePublicGitStatus, parsePublicGitDiff],
+  ] as const) {
+    it(`${surface}: retains original values, nested references and omitted versus own undefined`, () => {
+      const input = makeValidStatusResponse({
+        selectedRootIgnored: undefined,
+        untrackedDirectories: ["new"],
+      });
+      delete input.branch;
+      const parsed = status(input);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new TypeError("valid status fixture refused");
+      expect(parsed.value).toBe(input);
+      expect(parsed.value.changes).toBe(input.changes);
+      expect(parsed.value.untrackedDirectories).toBe(input.untrackedDirectories);
+      expect(Object.hasOwn(parsed.value, "branch")).toBe(false);
+      expect(Object.hasOwn(parsed.value, "selectedRootIgnored")).toBe(true);
+      const diffInput = makeValidDiffResponse({ path: undefined });
+      const parsedDiff = diff(diffInput);
+      expect(parsedDiff.ok).toBe(true);
+      if (!parsedDiff.ok) throw new TypeError("valid diff fixture refused");
+      expect(parsedDiff.value).toBe(diffInput);
+      expect(Object.hasOwn(parsedDiff.value, "path")).toBe(true);
+    });
+    it(`${surface}: checks later fields eagerly and retains ordered legacy reasons`, () => {
+      const invalidStatus = makeValidStatusResponse({
+        schemaVersion: 0,
+        state: [],
+        message: 4,
+        branch: 4,
+        available: 4,
+        changes: [null],
+        selectedRootIgnored: 4,
+      });
+      expect(status(invalidStatus)).toEqual(validateGitRepositoryStatusResponse(invalidStatus));
+      expect(status(invalidStatus)).toEqual({
+        ok: false,
+        reasons: [
+          "schemaVersion invalid",
+          "state invalid",
+          "message must be a bounded string when present",
+          "branch must be a string when present",
+          "available must be a boolean",
+          "changes[0] must be an object",
+          "selectedRootIgnored must be a boolean when present",
+        ],
+      });
+      const invalidDiff = makeValidDiffResponse({
+        schemaVersion: 0,
+        state: [],
+        reason: 4,
+        scope: ["all"],
+        diff: "long",
+        truncated: false,
+        maxBytes: 0,
+      });
+      expect(diff(invalidDiff)).toEqual(validateGitRepositoryDiffResponse(invalidDiff));
+      expect(diff(invalidDiff)).toEqual({
+        ok: false,
+        reasons: [
+          "schemaVersion invalid",
+          "state invalid",
+          "reason invalid",
+          "scope invalid",
+          "truncated must be true when diff exceeds maxBytes",
+          `diff must not exceed maxBytes by more than ${String(GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES)} bytes`,
+        ],
+      });
+    });
+    it(`${surface}: refuses primitive input and the actual malformed array bypasses`, () => {
+      for (const input of [undefined, null, true, 1, "value", []]) {
+        expect(status(input)).toEqual({ ok: false, reasons: ["response must be an object"] });
+        expect(diff(input)).toEqual({ ok: false, reasons: ["response must be an object"] });
+      }
+      const sparse: unknown[] = [];
+      sparse.length = 1;
+      const arrays = [
+        sparse,
+        Object.assign([null], { forEach: (): undefined => undefined, every: (): boolean => true }),
+      ];
+      for (const items of arrays) {
+        expect(status(makeValidStatusResponse({ changes: items })).ok).toBe(false);
+        expect(status(makeValidStatusResponse({ untrackedDirectories: items })).ok).toBe(false);
+      }
+    });
+    it(`${surface}: preserves getter observation counts and propagates getter failure`, () => {
+      const reads: string[] = [];
+      const input = new Proxy(makeValidStatusResponse(), {
+        get(target, key, receiver): unknown {
+          reads.push(String(key));
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(validateGitRepositoryStatusResponse(input)).toEqual({ ok: true });
+      const legacyReads = [...reads];
+      reads.length = 0;
+      expect(status(input).ok).toBe(true);
+      expect(reads).toEqual(legacyReads);
+      const thrown = new TypeError("fixture getter failure");
+      Object.defineProperty(input, "root", {
+        get(): never {
+          throw thrown;
+        },
+      });
+      expect(() => status(input)).toThrow(thrown);
+    });
+  }
+});
+
+it("public Git parser results carry distinct closed domain types without assertions", () => {
+  const result = parsePublicGitStatusResponse(makeValidStatusResponse());
+  if (result.ok) {
+    const value: import("@oscharko-dev/keiko-contracts").GitRepositoryStatusResponse = result.value;
+    expect(value.stagedCount).toBe(1);
+    // @ts-expect-error A validated status is not a validated diff response.
+    const wrong: import("@oscharko-dev/keiko-contracts").GitRepositoryDiffResponse = result.value;
+    expect(wrong).toBe(value);
+  } else {
+    // @ts-expect-error Failed admission carries reasons, never a typed value.
+    expect(result.value).toBeUndefined();
+  }
 });

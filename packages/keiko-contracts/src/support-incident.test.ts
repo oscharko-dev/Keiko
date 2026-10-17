@@ -590,3 +590,116 @@ describe("received private incident projection", () => {
     expect(parseSupportIncidentPrivateProjection(value)).toBeUndefined();
   });
 });
+
+import * as publicSupport from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+describe("source and emitted SupportIncident admission preservation", () => {
+  for (const [surface, api] of [
+    ["source", { parseSupportIncidentRecord, parseSupportIncidentPrivateProjection }],
+    ["public", publicSupport],
+  ] as const) {
+    it(`${surface}: returns the admitted record and its nested references`, () => {
+      const input = record();
+      const result = api.parseSupportIncidentRecord(input);
+      expect(result).toBe(input);
+      expect(result?.build).toBe(input.build);
+      expect(result?.correlation.childCorrelationIds).toBe(input.correlation.childCorrelationIds);
+      expect(result?.pin.status).toBe("pinned");
+    });
+    it(`${surface}: returns the actual projection producer unchanged`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      const result = api.parseSupportIncidentPrivateProjection(input);
+      expect(result).toBe(input);
+      expect(result?.segments).toBe(input.segments);
+      expect(result?.sufficiencyReasons).toBe(input.sufficiencyReasons);
+      expect(result?.coverage.presentClassCount).toBe(input.coverage.presentClassCount);
+    });
+    it.each(["fingerprint", "correlation", "build", "window", "pin"])(
+      `${surface}: refuses malformed nested record %s`,
+      (key) => {
+        expect(api.parseSupportIncidentRecord({ ...record(), [key]: {} })).toBeUndefined();
+      },
+    );
+    it(`${surface}: keeps browser own-undefined refusal and omitted acceptance`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      expect(api.parseSupportIncidentPrivateProjection(input)).toBe(input);
+      expect(
+        api.parseSupportIncidentPrivateProjection({ ...input, clientReport: undefined }),
+      ).toBeUndefined();
+    });
+    it(`${surface}: refuses a foreign evidence reason before typed success`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      expect(
+        api.parseSupportIncidentPrivateProjection({
+          ...input,
+          sufficiencyReasons: ["foreign-reason"],
+        }),
+      ).toBeUndefined();
+    });
+  }
+});
+
+describe("physical support member admission", () => {
+  for (const [surface, api] of [
+    ["source", { parseSupportIncidentRecord, parseSupportIncidentPrivateProjection }],
+    ["public", publicSupport],
+  ] as const) {
+    it(`${surface}: refuses a malformed child hidden by an overridden every`, () => {
+      const children = Object.assign([17], { every: () => true });
+      const input = {
+        ...record(),
+        correlation: { rootCorrelationId: "root-control-1", childCorrelationIds: children },
+      };
+      expect(api.parseSupportIncidentRecord(input)).toBeUndefined();
+    });
+    it(`${surface}: refuses a malformed segment hidden by an overridden every`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      const segments = Object.assign([{}], { every: () => true });
+      expect(api.parseSupportIncidentPrivateProjection({ ...input, segments })).toBeUndefined();
+    });
+    it(`${surface}: refuses a foreign reason hidden by an overridden every`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      const sufficiencyReasons = Object.assign(["foreign-reason"], { every: () => true });
+      expect(
+        api.parseSupportIncidentPrivateProjection({
+          ...input,
+          sufficiencyStatus: "complete",
+          sufficiencyReasons,
+        }),
+      ).toBeUndefined();
+    });
+    it(`${surface}: refuses a sparse segment collection`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      expect(
+        api.parseSupportIncidentPrivateProjection({ ...input, segments: Array(1) }),
+      ).toBeUndefined();
+    });
+    it(`${surface}: retains an inherited present segment and original collection reference`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      const segments: unknown[] = Array(1);
+      const inherited = { 0: input.segments[0] };
+      Object.setPrototypeOf(inherited, Array.prototype);
+      Object.setPrototypeOf(segments, inherited);
+      const offered = { ...input, segments };
+      const result = api.parseSupportIncidentPrivateProjection(offered);
+      expect(result).toBe(offered);
+      expect(result?.segments).toBe(segments);
+      expect(result?.segments[0]).toBe(input.segments[0]);
+    });
+  }
+});
+
+describe("Support consumed sufficiency reason admission", () => {
+  for (const [surface, parse] of [
+    ["source", parseSupportIncidentPrivateProjection],
+    ["public", publicSupport.parseSupportIncidentPrivateProjection],
+  ] as const) {
+    it(`${surface}: refuses hidden foreign reason beside a genuine degraded reason`, () => {
+      const input = supportIncidentPrivateProjection(incident());
+      const sufficiencyReasons = Object.assign(["foreign-reason", "sequence-anomaly"], {
+        every: (): boolean => true,
+      });
+      expect(parse({ ...input, sufficiencyReasons })).toBeUndefined();
+    });
+  }
+});

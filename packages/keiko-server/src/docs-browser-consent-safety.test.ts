@@ -196,3 +196,55 @@ describe("hostile input fail-closed classification (#1870)", () => {
     }
   });
 });
+
+describe("documentation public parser consent preservation (#3918)", () => {
+  it("keeps advisory healthy reasons separate from consent and persistent work", async () => {
+    const fx = await fixture();
+    for (const route of ["propose", "approve"]) {
+      const response = await fetch(
+        `http://${UI_HOST}:${String(fx.port)}/api/docs-browser/${route}`,
+        {
+          method: "POST",
+          headers: CSRF_HEADERS,
+          body: JSON.stringify({
+            target: "https://intranet/docs/private-canary/index.html?token=secret-canary",
+            lastNavigationReason: "preview-available",
+            approved: true,
+          }),
+        },
+      );
+      expect(response.status).toBe(200);
+      const body: unknown = await response.json();
+      expect(body).toMatchObject({ approved: route === "approve" });
+      if (route === "propose") expect(body).toMatchObject({ approvalRequired: true });
+      expect(JSON.stringify(body)).not.toContain("private-canary");
+      expect(JSON.stringify(body)).not.toContain("secret-canary");
+    }
+    expect(countPods(fx.deps)).toBe(0);
+    expect(countIndexingJobs(fx.deps)).toBe(0);
+    expect(fx.modelPortFactory).not.toHaveBeenCalled();
+  });
+
+  it("refuses malformed advisory inputs before persistent or model work", async () => {
+    const fx = await fixture();
+    for (const route of ["propose", "approve"]) {
+      const response = await fetch(
+        `http://${UI_HOST}:${String(fx.port)}/api/docs-browser/${route}`,
+        {
+          method: "POST",
+          headers: CSRF_HEADERS,
+          body: JSON.stringify({
+            target: "https://intranet/docs/",
+            lastNavigationReason: "future",
+          }),
+        },
+      );
+      expect(response.status).toBe(400);
+      const body: unknown = await response.json();
+      expect(body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    }
+    expect(countPods(fx.deps)).toBe(0);
+    expect(countIndexingJobs(fx.deps)).toBe(0);
+    expect(fx.modelPortFactory).not.toHaveBeenCalled();
+  });
+});

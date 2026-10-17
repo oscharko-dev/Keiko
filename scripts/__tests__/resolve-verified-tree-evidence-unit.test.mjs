@@ -145,8 +145,11 @@ describe("candidateProvedEveryReusedJob", () => {
   const everyJob = [
     "Semantic duplication",
     "Core quality",
+    "Static code-quality policy (Node 24.18.0)",
+    "Static code-quality policy (Node 26.8.1)",
     "Coverage suite (keiko-ui)",
-    "Coverage suite (scripts)",
+    "Coverage shard (scripts 1/2)",
+    "Coverage shard (scripts 2/2)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
     "Node 26 compatibility (shard 1/2)",
@@ -155,14 +158,28 @@ describe("candidateProvedEveryReusedJob", () => {
     "Portable secure-read smoke (windows-x64)",
     "Portable secure-read smoke (macos-arm64)",
     "Portable secure-read smoke (macos-x64)",
+    "Firefox smoke (shard 1/2)",
+    "Firefox smoke (shard 2/2)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
-    "Coverage shard (packages 1/3)",
+    ...[1, 2, 3, 4, 5].map((shard) => `Coverage shard (packages ${shard}/5)`),
   ].map((name) => ({ name, conclusion: "success" }));
 
   it("accepts a candidate that executed every reused job", async () => {
     stubFetch({ "/jobs": { body: { jobs: everyJob } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(true);
+  });
+
+  it.each([
+    ...[1, 2, 3, 4, 5].map((shard) => `Coverage shard (packages ${shard}/5)`),
+    ...[1, 2].map((shard) => `Coverage shard (scripts ${shard}/2)`),
+  ])("requires successful exact evidence for %s", async (name) => {
+    const missing = everyJob.filter((job) => job.name !== name);
+    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+      stubFetch({ "/jobs": { body: { jobs } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+    }
   });
 
   it("refuses a candidate that SKIPPED one of them", async () => {
@@ -189,9 +206,43 @@ describe("candidateProvedEveryReusedJob", () => {
     }
   });
 
+  it.each(["24.18.0", "26.8.1"])(
+    "requires successful exact evidence for static policy Node %s",
+    async (version) => {
+      const name = `Static code-quality policy (Node ${version})`;
+      const missing = everyJob.filter((job) => job.name !== name);
+      for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+        const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+        stubFetch({ "/jobs": { body: { jobs } } });
+        await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+      }
+    },
+  );
+
   it("refuses legacy single-job Node 26 evidence", async () => {
     const jobs = everyJob.filter((job) => !job.name.startsWith("Node 26 compatibility"));
     jobs.push({ name: "Node 26 compatibility", conclusion: "success" });
+    stubFetch({ "/jobs": { body: { jobs } } });
+    await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+  });
+
+  it.each([1, 2])("requires successful exact evidence for Firefox shard %s", async (shard) => {
+    const name = `Firefox smoke (shard ${shard}/2)`;
+    const missing = everyJob.filter((job) => job.name !== name);
+    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+      stubFetch({ "/jobs": { body: { jobs } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+    }
+  });
+
+  it.each([
+    ["duplicate first leg", ["Firefox smoke (shard 1/2)", "Firefox smoke (shard 1/2)"]],
+    ["unrelated prefix", ["Firefox smoke (shard unrelated/2)"]],
+    ["forged aggregate success", ["Firefox smoke", "ui"]],
+  ])("refuses incomplete Firefox evidence: %s", async (_label, names) => {
+    const jobs = everyJob.filter((job) => !job.name.startsWith("Firefox smoke"));
+    jobs.push(...names.map((name) => ({ name, conclusion: "success" })));
     stubFetch({ "/jobs": { body: { jobs } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });

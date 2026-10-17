@@ -12,6 +12,7 @@ import type { IncomingMessage } from "node:http";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
+  AtlassianConnectorActionExecutionResult,
   AtlassianConnectorActivityRecord,
   AtlassianConnectorPendingApproval,
   CodingWorkbenchAuthorityEnvelope,
@@ -24,6 +25,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
+  validateAtlassianConnectorActionExecutionResult,
   validateAtlassianConnectorActivityRecord,
   validateAtlassianConnectorPendingApproval,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
@@ -402,6 +404,37 @@ describe("write-action route — ADR-0128 D4 matrix (AC1)", () => {
   });
 });
 
+function checkedPendingApproval(input: unknown): AtlassianConnectorPendingApproval {
+  const result = validateAtlassianConnectorPendingApproval(input);
+  if (!result.ok) throw new TypeError("actual pending approval failed public validation");
+  expect(result.value).toBe(input);
+  return result.value;
+}
+
+function checkedActionExecution(input: unknown): AtlassianConnectorActionExecutionResult {
+  const result = validateAtlassianConnectorActionExecutionResult(input);
+  if (!result.ok) throw new TypeError("actual execution result failed public validation");
+  expect(result.value).toBe(input);
+  return result.value;
+}
+
+function assertReviewActivityTrail(
+  approval: AtlassianConnectorPendingApproval,
+  outcomes: readonly string[],
+): void {
+  const records = atlassianSyncJobRegistry.listActivity(approval.connectorId);
+  expect(records.map((record) => record.outcome)).toEqual(outcomes);
+  for (const record of records) {
+    const checked = validateAtlassianConnectorActivityRecord(record);
+    if (!checked.ok) throw new TypeError("actual approval activity failed public validation");
+    expect(checked.value).toBe(record);
+    expect(checked.value.correlationId).toBe(approval.correlationId);
+    expect(checked.value).not.toHaveProperty("contentPreview");
+    expect(checked.value).not.toHaveProperty("contentPreviewUnavailable");
+  }
+  expect(JSON.stringify(records)).not.toContain("Fix the flaky gate");
+}
+
 // ─── AC2: Ask for approval — pending, approve, reject ──────────────────────────
 describe("write-action route — pending approvals (AC2)", () => {
   it("parks a pending approval with ZERO fetcher invocations, then approve executes", async () => {
@@ -411,9 +444,11 @@ describe("write-action route — pending approvals (AC2)", () => {
     const { status, body } = await postAction("create-issue", authority, "governed-assist", guard);
     expect(status).toBe(202);
     expect(counter.count).toBe(0);
-    const approval = body.approval as AtlassianConnectorPendingApproval;
+    const approval = checkedPendingApproval(body.approval);
     expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
     expect(approval.actionType).toBe("create-issue");
+    expect(approval.contentPreview).toContain("Fix the flaky gate");
+    assertReviewActivityTrail(approval, ["pending-review"]);
     expect(approval.reviewReason).toBe("deterministic-risk-approval-required");
     // The projection lists through the read endpoints for the #2245 UI.
     const listed = (await handleListAtlassianConnectorActionApprovals(
@@ -434,9 +469,8 @@ describe("write-action route — pending approvals (AC2)", () => {
     )) as { status: number; body: Record<string, unknown> };
     expect(approved.status).toBe(200);
     expect(approved.body.disposition).toBe("review-required");
-    expect((approved.body.result as { status: string; targetRef?: string }).status).toBe(
-      "succeeded",
-    );
+    expect(checkedActionExecution(approved.body.result).status).toBe("succeeded");
+    assertReviewActivityTrail(approval, ["pending-review", "succeeded"]);
     expect(counter.count).toBeGreaterThan(0);
     // Single-use: a second approve finds nothing.
     const replayed = (await handleApproveAtlassianConnectorActionApproval(
@@ -953,9 +987,23 @@ describe("write-action route — audit completeness (AC4)", () => {
     );
     // allowed + succeeded (Full access comment).
     const allowedAuthority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-    await postAction("add-issue-comment", allowedAuthority, "autonomous-delivery", guard);
+    const succeeded = await postAction(
+      "add-issue-comment",
+      allowedAuthority,
+      "autonomous-delivery",
+      guard,
+    );
+    expect(checkedActionExecution(succeeded.body.result)).toEqual({
+      status: "succeeded",
+      targetRef: "20001",
+    });
     // provider-failure: allowed update-page hits the scripted 409 → typed conflict.
-    await postAction("update-page", allowedAuthority, "autonomous-delivery", guard);
+    const failed = await postAction("update-page", allowedAuthority, "autonomous-delivery", guard);
+    expect(checkedActionExecution(failed.body.result)).toEqual({
+      status: "failed",
+      reason: "conflict",
+      httpStatus: 409,
+    });
     // review-required (pending) under Ask for approval.
     editorAgentAuthorityRegistry.reset();
     const reviewAuthority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);

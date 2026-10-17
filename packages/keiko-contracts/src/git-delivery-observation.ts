@@ -58,10 +58,15 @@ export function isGitDeliveryObservationFailure(
 ): value is GitDeliveryObservationFailure {
   if (!record(value) || !exactKeys(value, ["reason", "state"]) || typeof value.reason !== "string")
     return false;
+  const states: Readonly<Partial<Record<string, GitDeliveryObservationFailure["state"]>>> =
+    GIT_DELIVERY_OBSERVATION_FAILURE_STATES;
+  if (!Object.hasOwn(GIT_DELIVERY_OBSERVATION_FAILURE_STATES, value.reason)) return false;
+  const state = value.state;
+  const reason = value.reason;
   return (
-    Object.hasOwn(GIT_DELIVERY_OBSERVATION_FAILURE_STATES, value.reason) &&
-    value.state ===
-      GIT_DELIVERY_OBSERVATION_FAILURE_STATES[value.reason as GitDeliveryObservationFailureReason]
+    typeof reason === "string" &&
+    Object.hasOwn(GIT_DELIVERY_OBSERVATION_FAILURE_STATES, reason) &&
+    state === states[reason]
   );
 }
 

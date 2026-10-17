@@ -189,9 +189,19 @@ rendering diagnostics join the same support timeline, including replay and regen
 Markdown evidence uses the coding run correlation and a separately validated provider message ID;
 short message IDs never stand in for transport correlation IDs.
 
-Composer dictation
-remains a distinct draft-editing feature; it never silently sends a
-message. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
+Composer dictation remains a distinct draft-editing feature; it never silently sends a message.
+Ordinary Chat uses one microphone/stop control: stop appends the completed transcript directly to the
+editable draft. A measured waveform occupies only the free footer space, with new samples beside the
+stop control and a fade before the persistent model/skill controls. There is no separate confirmation
+panel; editing and sending remain the normal composer actions. The Coding Workbench retains its explicit
+preview. Empty completion leaves the draft unchanged and announces retry through the same microphone.
+When the existing draft and transcript exceed the message limit, neither is truncated. The completed
+transcript remains in the capture's local state, an inline message explains how to make room, and the
+same control inserts it after an explicit retry without another recording or provider request. The
+existing `input-limit` Activity Log category records the refusal without either text body.
+The capture is bound to its starting conversation; a conversation change cancels the flow and rejects
+late completion. Completion and context cancellation emit only closed categories on the existing
+Activity Log. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
 
 No default transcription deployment or output voice is inherited when a deployment changes. An
 unchanged existing provider-specific value may be preserved by an unrelated update; selecting a new

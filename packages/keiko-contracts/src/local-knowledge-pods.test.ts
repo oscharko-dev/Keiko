@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
@@ -9,6 +9,8 @@ import {
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,
+  parseLocalKnowledgeCapsulesResponse,
+  parseLocalKnowledgeCapsuleSetsResponse,
   type KnowledgePodSummary,
 } from "./local-knowledge-pods.js";
 import { resolveKnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
@@ -764,3 +766,334 @@ describe("KnowledgePodSummary connectorSource projection (Issue #2240)", () => {
     );
   });
 });
+
+import {
+  validateKnowledgePodSummary as publicValidateSummary,
+  parseLocalKnowledgeCapsulesResponse as parsePublicCapsules,
+  parseLocalKnowledgeCapsuleSetsResponse as parsePublicCapsuleSets,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+type SummaryAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicSummary(input: unknown): void {
+  const result = publicValidateSummary(input);
+  if (result.ok) {
+    const count: number = result.value.counts.capsuleCount;
+    const raw: false = result.value.privacy.rawContentExposed;
+    const local: true = result.value.privacy.localFirst;
+    const mode: "sealed-local" | "standard" | "custom" = result.value.modelUsePolicy.mode;
+    const decision: "allow" | "deny" = result.value.modelUsePolicy.operations.rawContentRelease;
+    const _concrete: SummaryAny<typeof result.value> = false;
+    const _concretePrivacy: SummaryAny<typeof result.value.privacy.rawContentExposed> = false;
+    expect(result.value).toBe(input);
+    expect(count).toBe(happySummary().counts.capsuleCount);
+    expect(raw).toBe(false);
+    expect(local).toBe(true);
+    expect(mode).toBe(happySummary().modelUsePolicy.mode);
+    expect(decision).toBe(happySummary().modelUsePolicy.operations.rawContentRelease);
+  }
+}
+it("public summary consumer retains redaction and policy declarations and references", () => {
+  const input = happySummary();
+  consumePublicSummary(input);
+  const result = publicValidateSummary(input);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toBe(input);
+  expect(result.value.modelUsePolicy).toBe(input.modelUsePolicy);
+  expect(
+    publicValidateSummary({ ...input, privacy: { ...input.privacy, rawContentExposed: true } }).ok,
+  ).toBe(false);
+});
+
+function futureRemoteSummary(reasonCodes: readonly string[]): unknown {
+  const base = happySummary();
+  return {
+    ...base,
+    kind: "pod-set",
+    readiness: "unavailable",
+    setReadiness: {
+      readyCount: 0,
+      draftCount: 0,
+      degradedCount: 0,
+      unavailableCount: 1,
+      deniedCount: 0,
+      indexingCount: 0,
+      staleCount: 0,
+      errorCount: 0,
+      missingCount: 0,
+      reasonCodes,
+    },
+    sourceKinds: ["remote", "federated"],
+    retrieval: {
+      ...base.retrieval,
+      lexicalIndex: false,
+      vectorIndex: false,
+      hybridGrounding: false,
+    },
+    governance: { ...base.governance, locationKind: "remote" },
+    compatibility: { ...base.compatibility, backingKind: "capsule-set" },
+  };
+}
+
+describe.each([
+  ["source", validateKnowledgePodSummary],
+  ["public", publicValidateSummary],
+])("%s physical future reason membership", (_surface, validate) => {
+  it("refuses missing physical reasons despite an always-true caller method", () => {
+    const reasons: string[] = [];
+    Object.defineProperty(reasons, "includes", { value: () => true });
+    expect(validate(futureRemoteSummary(reasons))).toEqual({
+      ok: false,
+      errors: [
+        "setReadiness.reasonCodes must include future-remote-member for future placeholders",
+      ],
+    });
+  });
+  it("accepts physical reasons despite an always-false caller method", () => {
+    const reasons = ["future-remote-member", "future-federated-member"];
+    Object.defineProperty(reasons, "includes", { value: () => false });
+    const input = futureRemoteSummary(reasons);
+    expect(validate(input)).toEqual({ ok: true, value: input });
+    const result = validate(input);
+    if (!result.ok) throw new Error("expected admitted physical reasons");
+    expect(result.value).toBe(input);
+    expect(result.value.setReadiness?.reasonCodes).toBe(reasons);
+  });
+  it("preserves native present and inherited present reasons", () => {
+    for (const inherited of [false, true]) {
+      const reasons = ["future-remote-member", "future-federated-member"];
+      if (inherited) {
+        expect(Reflect.deleteProperty(reasons, "0")).toBe(true);
+        Object.setPrototypeOf(reasons, ["future-remote-member"]);
+      }
+      const input = futureRemoteSummary(reasons);
+      expect(validate(input)).toEqual({ ok: true, value: input });
+    }
+  });
+  it("preserves the first missing required reason", () => {
+    expect(validate(futureRemoteSummary([]))).toEqual({
+      ok: false,
+      errors: [
+        "setReadiness.reasonCodes must include future-remote-member for future placeholders",
+      ],
+    });
+  });
+});
+
+export function parsePublicCapsulesCatalog(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").LocalKnowledgeValidation<
+  import("@oscharko-dev/keiko-contracts").LocalKnowledgeCapsulesCatalogResponse
+> {
+  const result = parsePublicCapsules(input);
+  return result;
+}
+
+export function parsePublicCapsuleSetsCatalog(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").LocalKnowledgeValidation<
+  import("@oscharko-dev/keiko-contracts").LocalKnowledgeCapsuleSetsCatalogResponse
+> {
+  const result = parsePublicCapsuleSets(input);
+  return result;
+}
+
+function capsuleCatalogEntry(): object {
+  return {
+    id: happySummary().id,
+    displayName: "Legacy label",
+    lifecycleState: "ready",
+    sourceCount: 1,
+    updatedAt: 1.5,
+  };
+}
+
+function capsuleSetCatalogEntry(): object {
+  return { id: happySummary().id, displayName: "Legacy set", capsuleCount: 1, composedAt: 1.5 };
+}
+
+for (const { field, entry, parse, surface } of [
+  {
+    field: "capsules",
+    entry: capsuleCatalogEntry,
+    parse: parseLocalKnowledgeCapsulesResponse,
+    surface: "source",
+  },
+  {
+    field: "capsules",
+    entry: capsuleCatalogEntry,
+    parse: parsePublicCapsulesCatalog,
+    surface: "public",
+  },
+  {
+    field: "capsuleSets",
+    entry: capsuleSetCatalogEntry,
+    parse: parseLocalKnowledgeCapsuleSetsResponse,
+    surface: "source",
+  },
+  {
+    field: "capsuleSets",
+    entry: capsuleSetCatalogEntry,
+    parse: parsePublicCapsuleSetsCatalog,
+    surface: "public",
+  },
+])
+  describe(`Knowledge catalog ${surface} ${field} parser (#3918)`, () => {
+    it("preserves original current and legacy identities and optional presence", () => {
+      const current = happySummary();
+      const { modelUsePolicy: _omitted, ...legacy } = current;
+      for (const summary of [current, legacy, { ...legacy, modelUsePolicy: undefined }]) {
+        const input = { [field]: [entry()], knowledgePods: [summary] };
+        const result = parse(input);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("catalog fixture refused");
+        expect(result.value).toBe(input);
+        expect(result.value.knowledgePods).toBe(input.knowledgePods);
+        const admitted = result.value.knowledgePods?.[0];
+        if (admitted === undefined) throw new TypeError("catalog summary missing");
+        expect(admitted).toBe(summary);
+        expect(admitted.counts).toBe(summary.counts);
+        expect(admitted.compatibility).toBe(summary.compatibility);
+        expect(Object.hasOwn(admitted, "modelUsePolicy")).toBe(
+          Object.hasOwn(summary, "modelUsePolicy"),
+        );
+      }
+      expect(validateKnowledgePodSummary(legacy).ok).toBe(false);
+      expect(validateKnowledgePodSummary({ ...legacy, modelUsePolicy: undefined }).ok).toBe(false);
+      expect(validateKnowledgePodSummary(current).ok).toBe(true);
+      for (const input of [{ [field]: [] }, { [field]: [], knowledgePods: undefined }]) {
+        const result = parse(input);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("catalog fixture refused");
+        expect(result.value).toBe(input);
+        expect(Object.hasOwn(result.value, "knowledgePods")).toBe(
+          Object.hasOwn(input, "knowledgePods"),
+        );
+      }
+    });
+
+    it("refuses malformed ingress members sparse arrays and invalid present policy", () => {
+      const sparse: unknown[] = [];
+      sparse.length = 1;
+      for (const input of [
+        undefined,
+        null,
+        1,
+        "malformed",
+        [],
+        {},
+        { [field]: null },
+        { [field]: [null] },
+        { [field]: sparse },
+        { [field]: [{ ...entry(), id: 1 }] },
+        {
+          [field]: [
+            { ...entry(), ...(field === "capsules" ? { sourceCount: -1 } : { capsuleCount: -1 }) },
+          ],
+        },
+        { [field]: [], knowledgePods: sparse },
+        { [field]: [], knowledgePods: [{ ...happySummary(), modelUsePolicy: null }] },
+        { [field]: [], knowledgePods: [{ ...happySummary(), modelUsePolicy: { mode: "allow" } }] },
+        { [field]: [], knowledgePods: [{ ...happySummary(), counts: { sourceCount: -1 } }] },
+        { [field]: [], unexpected: true },
+      ]) {
+        const result = parse(input);
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new TypeError("malformed catalog admitted");
+        expect(result.errors.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("retains browser-safe legacy labels while rejecting malformed list scalars", () => {
+      for (const displayName of ["/private/legacy-name", "https://legacy.invalid/label"]) {
+        expect(parse({ [field]: [{ ...entry(), displayName }] }).ok).toBe(true);
+      }
+      for (const changed of [
+        { displayName: 7 },
+        { displayName: "" },
+        { id: null },
+        { lifecycleState: "invalid" },
+        field === "capsules" ? { updatedAt: -1 } : { composedAt: -1 },
+        field === "capsules" ? { sourceCount: 0.5 } : { capsuleCount: 0.5 },
+      ])
+        expect(parse({ [field]: [{ ...entry(), ...changed }] }).ok).toBe(false);
+    });
+  });
+
+import type { LocalKnowledgeValidation as PublicKnowledgeValidation } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import type { KnowledgePodSummary as PublicPodSummary } from "@oscharko-dev/keiko-contracts";
+
+export function parsePublicKnowledgeSummary(
+  input: unknown,
+): PublicKnowledgeValidation<PublicPodSummary> {
+  const result = publicValidateSummary(input);
+  return result;
+}
+
+describe("Knowledge pod summary public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateKnowledgePodSummary).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateSummary).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeSummary).parameter(0).toBeUnknown();
+    expectTypeOf(validateKnowledgePodSummary).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateSummary).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeSummary).parameter(0).not.toBeAny();
+    expectTypeOf(validateKnowledgePodSummary).returns.toEqualTypeOf<
+      LocalKnowledgeValidation<KnowledgePodSummary>
+    >();
+    expectTypeOf(validateKnowledgePodSummary).returns.not.toBeAny();
+    expectTypeOf(publicValidateSummary).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicPodSummary>
+    >();
+    expectTypeOf(parsePublicKnowledgeSummary).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicPodSummary>
+    >();
+    expectTypeOf(publicValidateSummary).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeSummary).returns.not.toBeAny();
+    const result = parsePublicKnowledgeSummary(happySummary());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicPodSummary>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.id).not.toBeAny();
+      expectTypeOf(result.value.id).not.toBeUnknown();
+      expectTypeOf(result.value.counts).not.toBeAny();
+      expectTypeOf(result.value.counts).not.toBeUnknown();
+      expectTypeOf(result.value.privacy.rawContentExposed).not.toBeAny();
+      expectTypeOf(result.value.privacy.rawContentExposed).not.toBeUnknown();
+      expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).not.toBeAny();
+      expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).not.toBeUnknown();
+    }
+  });
+});
+
+describe("Knowledge pod summary public responsibility (#3918)", () => {
+  it("preserves strict summary privacy policy counts and compatibility references", () => {
+    const input = happySummary();
+    const result = parsePublicKnowledgeSummary(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.counts).toBe(input.counts);
+    expect(result.value.modelUsePolicy).toBe(input.modelUsePolicy);
+    expect(result.value.compatibility).toBe(input.compatibility);
+    expectTypeOf(result.value.privacy.rawContentExposed).toEqualTypeOf<false>();
+    expectTypeOf(result.value.counts.capsuleCount).toEqualTypeOf<number>();
+    expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).toEqualTypeOf<
+      "allow" | "deny"
+    >();
+  });
+  it("refuses malformed strict summary privacy counts and missing model policy", () => {
+    for (const input of [
+      null,
+      { ...happySummary(), schemaVersion: "unsupported" },
+      { ...happySummary(), privacy: { ...happySummary().privacy, rawContentExposed: true } },
+      { ...happySummary(), counts: { ...happySummary().counts, vectorCount: -1 } },
+      { ...happySummary(), modelUsePolicy: undefined },
+      { ...happySummary(), displayName: "https://fixture.invalid/private" },
+    ])
+      expect(parsePublicKnowledgeSummary(input).ok).toBe(false);
+  });
+});
+
+import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";

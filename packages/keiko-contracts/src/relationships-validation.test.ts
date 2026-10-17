@@ -14,7 +14,7 @@
 //   * Context-gated codes: cardinality, lifecycle transition, endpoint resolver.
 //   * Determinism: same input → same result on two consecutive runs.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   ObjectReference,
   Relationship,
@@ -809,5 +809,235 @@ describe("validateRelationship — type narrowing on success", () => {
       expect(value.type).toBe("reads-context");
       expect(value.schemaVersion).toBe("1");
     }
+  });
+});
+
+describe("validateRelationship — accepted metadata type and identity (#3918)", () => {
+  it("includes null and explicit undefined in the validated contract", () => {
+    expectTypeOf<Relationship["metadata"]>().toEqualTypeOf<
+      Readonly<Record<string, unknown>> | null | undefined
+    >();
+  });
+
+  it.each([
+    { kind: "omitted", metadata: undefined, keyCount: 0 },
+    { kind: "object", metadata: { reason: "selected", retryCount: 3 }, keyCount: 2 },
+    { kind: "null", metadata: null, keyCount: 0 },
+    { kind: "undefined", metadata: undefined, keyCount: 0 },
+  ])("preserves $kind metadata through a null-aware consumer", ({ kind, metadata, keyCount }) => {
+    const payload = happy(
+      "reads-context",
+      endpoint("workflow-run", "metadata-source"),
+      endpoint("memory", "metadata-target"),
+    );
+    if (kind !== "omitted") payload.metadata = metadata;
+    const serialized = JSON.stringify(payload);
+    const result = validateRelationship(payload);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Expected accepted metadata");
+    const value: Relationship = result.value;
+    const explicitMetadata: Relationship = { ...value, metadata };
+    const count =
+      value.metadata === null || value.metadata === undefined
+        ? 0
+        : Object.keys(value.metadata).length;
+    expect(count).toBe(keyCount);
+    expect(value).toBe(payload);
+    expect(value.source).toBe(payload.source);
+    expect(value.target).toBe(payload.target);
+    expect(value.metadata).toBe(metadata);
+    expect(Object.hasOwn(value, "metadata")).toBe(kind !== "omitted");
+    expect(explicitMetadata.metadata).toBe(metadata);
+    expect(Object.hasOwn(explicitMetadata, "metadata")).toBe(true);
+    expect(JSON.stringify(value)).toBe(serialized);
+    expect(JSON.stringify(payload)).toBe(serialized);
+  });
+});
+
+// Actual pre-migration public validator access trace on the healthy proxy fixture.
+// This preserves observations during validation, not future getter or mutation stability.
+const RELATIONSHIP_VALIDATION_ACCESS_TRACE = [
+  "record.id",
+  "record.workspaceId",
+  "record.createdAt",
+  "record.updatedAt",
+  "record.etag",
+  "record.etag",
+  "record.source",
+  "source.kind",
+  "source.id",
+  "source.workspaceId",
+  "record.target",
+  "target.kind",
+  "target.id",
+  "target.workspaceId",
+  "record.source",
+  "record.target",
+  "record.schemaVersion",
+  "record.type",
+  "source.kind",
+  "target.kind",
+  "record.lifecycleState",
+  "record.type",
+  "record.lifecycleState",
+  "source.kind",
+  "target.kind",
+  "source.kind",
+  "target.kind",
+  "source.kind",
+  "target.kind",
+  "record.workspaceId",
+  "source.workspaceId",
+  "target.workspaceId",
+  "record.metadata",
+  "record.metadata",
+  "record.metadata",
+  "record.metadata",
+];
+
+function observeValidationReads<T extends object>(owner: string, value: T, reads: string[]): T {
+  return new Proxy(value, {
+    get(target, key, receiver): unknown {
+      if (typeof key === "string") reads.push(`${owner}.${key}`);
+      return Reflect.get(target, key, receiver);
+    },
+  });
+}
+
+describe("validateRelationship — checked phase observations (#3918)", () => {
+  it("preserves the actual original proxy read order and accepted references", () => {
+    const reads: string[] = [];
+    const source = observeValidationReads("source", endpoint("workflow-run", "source"), reads);
+    const target = observeValidationReads("target", endpoint("memory", "target"), reads);
+    const payload = happy("reads-context", source, target);
+    payload.metadata = { reason: "selected" };
+    const input = observeValidationReads("record", payload, reads);
+    reads.length = 0; // Fixture construction reads endpoint IDs before validation starts.
+    const result = validateRelationship(input);
+    expect(reads).toEqual(RELATIONSHIP_VALIDATION_ACCESS_TRACE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Expected checked phase success");
+    expect(result.value).toBe(input);
+    expect(result.value.source).toBe(source);
+    expect(result.value.target).toBe(target);
+  });
+
+  it.each([
+    { field: "id", invalid: 42, valid: "relationship" },
+    { field: "workspaceId", invalid: null, valid: WS },
+    { field: "createdAt", invalid: false, valid: "timestamp" },
+    { field: "updatedAt", invalid: [], valid: "timestamp" },
+    { field: "etag", invalid: "0", valid: 0 },
+  ])("rejects the malformed first observation of $field", ({ field, invalid, valid }) => {
+    const payload = happy(
+      "reads-context",
+      endpoint("workflow-run", "source"),
+      endpoint("memory", "target"),
+    );
+    let reads = 0;
+    Object.defineProperty(payload, field, {
+      enumerable: true,
+      get(): unknown {
+        return ++reads === 1 ? invalid : valid;
+      },
+    });
+    const result = validateRelationship(payload);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected malformed field refusal");
+    expect(result.errors[0]?.code).toBe("denied/invalid-structure");
+    expect(result.errors[0]?.field).toBe(field);
+    expect(reads).toBe(1);
+  });
+
+  it.each([Number.NaN, undefined])(
+    "preserves the original comparison for changing etag %s",
+    (second) => {
+      const payload = happy(
+        "reads-context",
+        endpoint("workflow-run", "source"),
+        endpoint("memory", "target"),
+      );
+      let reads = 0;
+      Object.defineProperty(payload, "etag", {
+        enumerable: true,
+        get(): unknown {
+          return ++reads === 1 ? 0 : second;
+        },
+      });
+      const result = validateRelationship(payload);
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(2);
+      if (!result.ok) throw new Error("Expected original comparison behavior");
+      expect(result.value).toBe(payload);
+    },
+  );
+
+  it.each([Number.NaN, -1])("retains ordinary invalid etag %s refusal", (etag) => {
+    const payload = happy(
+      "reads-context",
+      endpoint("workflow-run", "source"),
+      endpoint("memory", "target"),
+    );
+    payload.etag = etag;
+    const result = validateRelationship(payload);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected invalid integer refusal");
+    expect(result.errors[0]?.field).toBe("etag");
+  });
+
+  it.each(["source", "target"])("rejects unknown %s kind at the canonical phase", (side) => {
+    const payload = happy(
+      "reads-context",
+      endpoint("workflow-run", "source"),
+      endpoint("memory", "target"),
+    );
+    payload[side] = { kind: "unregistered-kind", id: "endpoint", workspaceId: WS };
+    const result = validateRelationship(payload);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected canonical kind refusal");
+    expect(result.errors).toEqual([
+      {
+        code: "denied/invalid-structure",
+        field: `${side}.kind`,
+        message: `${side}.kind is not a known object kind`,
+      },
+    ]);
+  });
+
+  it.each([[], ["entry"], "metadata", 42, false])("rejects non-record metadata %j", (metadata) => {
+    const payload = happy(
+      "reads-context",
+      endpoint("workflow-run", "source"),
+      endpoint("memory", "target"),
+    );
+    payload.metadata = metadata;
+    const result = validateRelationship(payload);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected metadata shape refusal");
+    expect(result.errors).toEqual([
+      {
+        code: "denied/payload-content-not-permitted",
+        field: "metadata",
+        message: "metadata must be an object when set",
+      },
+    ]);
+  });
+
+  it("rejects the malformed first endpoint observation before canonical membership", () => {
+    const source = endpoint("workflow-run", "source");
+    let reads = 0;
+    Object.defineProperty(source, "kind", {
+      enumerable: true,
+      get(): unknown {
+        return ++reads === 1 ? 42 : "workflow-run";
+      },
+    });
+    const result = validateRelationship(
+      happy("reads-context", source, endpoint("memory", "target")),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected malformed endpoint refusal");
+    expect(result.errors[0]?.field).toBe("source.kind");
+    expect(reads).toBe(1);
   });
 });

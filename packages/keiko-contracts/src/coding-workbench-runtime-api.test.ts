@@ -1424,3 +1424,418 @@ describe("native OpenCode retry SSE facts", () => {
     );
   });
 });
+
+describe("C2 owning runtime API admissions", () => {
+  it("refuses numeric argument classes skipped by a caller-owned iterator", () => {
+    const safeArgumentClasses: unknown[] = [42];
+    Object.defineProperty(safeArgumentClasses, "forEach", { value: (): void => undefined });
+    const value = {
+      requestId: "request-c2",
+      expectedRevision: 1,
+      decision: "approved",
+      safeArgumentClasses,
+    };
+    expect(parseCodingWorkbenchRuntimeApprovalDecisionRequest(value)).toEqual({
+      ok: false,
+      errors: ["safeArgumentClasses[0] must be a bounded safe identifier"],
+    });
+  });
+
+  it("refuses a sparse argument list with one owning diagnostic", () => {
+    const safeArgumentClasses: unknown[] = [];
+    safeArgumentClasses.length = 16;
+    const value = {
+      requestId: "request-c2",
+      expectedRevision: 1,
+      decision: "approved",
+      safeArgumentClasses,
+    };
+    expect(parseCodingWorkbenchRuntimeApprovalDecisionRequest(value)).toEqual({
+      ok: false,
+      errors: ["safeArgumentClasses[0] must be a bounded safe identifier"],
+    });
+  });
+
+  it("preserves an admitted argument collection and request reference", () => {
+    const safeArgumentClasses = ["safe-class"];
+    const value = {
+      requestId: "request-c2",
+      expectedRevision: 1,
+      decision: "approved",
+      safeArgumentClasses,
+    };
+    const result = parseCodingWorkbenchRuntimeApprovalDecisionRequest(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(value);
+      expect(result.value.safeArgumentClasses).toBe(safeArgumentClasses);
+    }
+  });
+
+  it.each(["0", null, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
+    "refuses an invalid second approval revision %s",
+    (revision) => {
+      const value = { requestId: "request-c2", decision: "approved" };
+      let reads = 0;
+      Object.defineProperty(value, "expectedRevision", {
+        enumerable: true,
+        get: (): unknown => (++reads === 1 ? 1 : revision),
+      });
+      expect(parseCodingWorkbenchRuntimeApprovalDecisionRequest(value)).toEqual({
+        ok: false,
+        errors: ["expectedRevision must be a non-negative safe integer"],
+      });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it("preserves a negative first safe revision and nonnegative second observation", () => {
+    const value = { requestId: "request-c2", decision: "approved" };
+    let reads = 0;
+    Object.defineProperty(value, "expectedRevision", {
+      enumerable: true,
+      get: (): number => (++reads === 1 ? -1 : 2),
+    });
+    const result = parseCodingWorkbenchRuntimeApprovalDecisionRequest(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(2);
+  });
+
+  it("refuses a result status admitted only by string coercion", () => {
+    const summary = { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false };
+    const result = {
+      status: { toString: (): string => "succeeded" },
+      exitCode: 0,
+      output: summary,
+      error: summary,
+    };
+    const value = { schemaVersion: "1", state: "succeeded", revision: 1, updatedAt: AT, result };
+    expect(validateCodingWorkbenchRuntimeSnapshot(value)).toEqual({
+      ok: false,
+      errors: ["result.status is invalid"],
+    });
+  });
+});
+
+function observeC2Field(
+  target: object,
+  key: string,
+  observations: readonly unknown[],
+): () => number {
+  let reads = 0;
+  Object.defineProperty(target, key, {
+    enumerable: true,
+    get: (): unknown => observations[reads++] ?? observations.at(-1),
+  });
+  return (): number => reads;
+}
+function c2Snapshot(): Record<string, unknown> {
+  return { schemaVersion: "1", state: "succeeded", revision: 1, updatedAt: AT };
+}
+function c2Summary(): Record<string, unknown> {
+  return { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false };
+}
+describe("C2 runtime API observed scalar admissions", () => {
+  it.each(["approval", "revoke", "snapshot"])("symptom: refuses later %s revision", (kind) => {
+    const value =
+      kind === "approval"
+        ? { requestId: "req-1", decision: "approved" }
+        : kind === "revoke"
+          ? { requestId: "req-1", grantId: "grant-1" }
+          : c2Snapshot();
+    observeC2Field(value, kind === "snapshot" ? "revision" : "expectedRevision", [1, Number.NaN]);
+    const result =
+      kind === "approval"
+        ? parseCodingWorkbenchRuntimeApprovalDecisionRequest(value)
+        : kind === "revoke"
+          ? parseCodingWorkbenchRuntimeResearchRevokeRequest(value)
+          : validateCodingWorkbenchRuntimeSnapshot(value);
+    expect(result.ok).toBe(false);
+  });
+  it.each(["approval", "revoke", "snapshot"])(
+    "healthy: two independent %s revision observations",
+    (kind) => {
+      const value =
+        kind === "approval"
+          ? { requestId: "req-1", decision: "approved" }
+          : kind === "revoke"
+            ? { requestId: "req-1", grantId: "grant-1" }
+            : c2Snapshot();
+      const reads = observeC2Field(
+        value,
+        kind === "snapshot" ? "revision" : "expectedRevision",
+        [-1, 2],
+      );
+      const result =
+        kind === "approval"
+          ? parseCodingWorkbenchRuntimeApprovalDecisionRequest(value)
+          : kind === "revoke"
+            ? parseCodingWorkbenchRuntimeResearchRevokeRequest(value)
+            : validateCodingWorkbenchRuntimeSnapshot(value);
+      expect(result.ok).toBe(true);
+      expect(reads()).toBe(2);
+      if (result.ok) expect(result.value).toBe(value);
+    },
+  );
+  it("symptom: refuses third start digest regex coercion", () => {
+    const value = {
+      requestId: "req-1",
+      taskIntent: "Inspect bounded fixture",
+      requestedMode: "supervised-coding",
+      issueRef: "#1",
+    };
+    observeC2Field(value, "expectedIssueBindingDigest", [
+      "1".repeat(64),
+      "1".repeat(64),
+      BigInt("1".repeat(64)),
+    ]);
+    expect(parseCodingWorkbenchRuntimeStartRequest(value).ok).toBe(false);
+  });
+  it("healthy: three independent start digest observations", () => {
+    const value = {
+      requestId: "req-1",
+      taskIntent: "Inspect bounded fixture",
+      requestedMode: "supervised-coding",
+      issueRef: "#1",
+    };
+    const reads = observeC2Field(value, "expectedIssueBindingDigest", [
+      "1".repeat(64),
+      "2".repeat(64),
+      "3".repeat(64),
+    ]);
+    expect(parseCodingWorkbenchRuntimeStartRequest(value).ok).toBe(true);
+    expect(reads()).toBe(3);
+  });
+  it("symptom: refuses second process digest regex coercion", () => {
+    const output = c2Summary();
+    observeC2Field(output, "sha256", ["1".repeat(64), BigInt("1".repeat(64))]);
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...c2Snapshot(),
+        result: { status: "succeeded", exitCode: 0, output, error: c2Summary() },
+      }).ok,
+    ).toBe(false);
+  });
+  it("healthy: two independent process digest observations", () => {
+    const output = c2Summary();
+    const reads = observeC2Field(output, "sha256", ["1".repeat(64), "2".repeat(64)]);
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...c2Snapshot(),
+        result: { status: "succeeded", exitCode: 0, output, error: c2Summary() },
+      }).ok,
+    ).toBe(true);
+    expect(reads()).toBe(2);
+  });
+  it.each(["lower", "upper"])("symptom: refuses invalid %s exit observation", (side) => {
+    const result = { status: "succeeded", output: c2Summary(), error: c2Summary() };
+    observeC2Field(
+      result,
+      "exitCode",
+      side === "lower" ? [0, 0, Number.NaN, Number.NaN] : [0, 0, 0, Number.NaN],
+    );
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), result }).ok).toBe(false);
+  });
+  it("healthy: four independent exit observations", () => {
+    const result = { status: "succeeded", output: c2Summary(), error: c2Summary() };
+    const reads = observeC2Field(result, "exitCode", [0, 1, 0, 255]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), result }).ok).toBe(true);
+    expect(reads()).toBe(4);
+  });
+  it("symptom: refuses third prompt budget observation", () => {
+    const contextUsage = {
+      state: "available",
+      source: "estimated",
+      capacityTokens: 1,
+      usedInputTokens: 0,
+      reservedOutputTokens: 0,
+      freeTokens: 1,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+    observeC2Field(contextUsage, "runPromptBudgetTokens", [1, 1, Number.NaN]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage }).ok).toBe(
+      false,
+    );
+  });
+  it("healthy: three independent prompt budget observations", () => {
+    const contextUsage = {
+      state: "available",
+      source: "estimated",
+      capacityTokens: 1,
+      usedInputTokens: 0,
+      reservedOutputTokens: 0,
+      freeTokens: 1,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+    const reads = observeC2Field(contextUsage, "runPromptBudgetTokens", [1, 2, 3]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage }).ok).toBe(true);
+    expect(reads()).toBe(3);
+  });
+});
+
+describe("C2 context count observations", () => {
+  it("refuses an invalid geometry-pass count with its original diagnostic", () => {
+    const contextUsage = {
+      state: "available",
+      source: "estimated",
+      usedInputTokens: 0,
+      reservedOutputTokens: 0,
+      freeTokens: 1,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+    const reads = observeC2Field(contextUsage, "capacityTokens", [1, Number.NaN]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage })).toEqual({
+      ok: false,
+      errors: ["contextUsage.capacityTokens is invalid"],
+    });
+    expect(reads()).toBe(2);
+  });
+  it("retains the original independent validation and geometry observations", () => {
+    const contextUsage = {
+      state: "available",
+      source: "estimated",
+      usedInputTokens: 0,
+      reservedOutputTokens: 0,
+      freeTokens: 1,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+    const reads = observeC2Field(contextUsage, "capacityTokens", [1, 1, 1]);
+    const value = { ...c2Snapshot(), contextUsage };
+    const result = validateCodingWorkbenchRuntimeSnapshot(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.contextUsage).toBe(contextUsage);
+    expect(reads()).toBe(3);
+  });
+  it("does not duplicate a stable invalid count diagnostic", () => {
+    const contextUsage = {
+      state: "available",
+      source: "estimated",
+      capacityTokens: Number.NaN,
+      usedInputTokens: 0,
+      reservedOutputTokens: 0,
+      freeTokens: 1,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage })).toEqual({
+      ok: false,
+      errors: ["contextUsage.capacityTokens is invalid"],
+    });
+  });
+});
+
+describe("C2 arithmetic context observations", () => {
+  function usage(): Record<string, unknown> {
+    return {
+      state: "available",
+      source: "estimated",
+      reservedOutputTokens: 0,
+      freeTokens: 0,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+  }
+  it("refuses infinite arithmetic operands after valid first and second observations", () => {
+    const contextUsage = usage();
+    const capacity = observeC2Field(contextUsage, "capacityTokens", [1, 1, Infinity]);
+    const used = observeC2Field(contextUsage, "usedInputTokens", [1, 1, Infinity, 0]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage })).toEqual({
+      ok: false,
+      errors: ["contextUsage.capacityTokens is invalid", "contextUsage.usedInputTokens is invalid"],
+    });
+    expect(capacity()).toBe(3);
+    expect(used()).toBe(4);
+  });
+  it("preserves independent healthy arithmetic and breakdown observations", () => {
+    const contextUsage = usage();
+    const capacity = observeC2Field(contextUsage, "capacityTokens", [1, 2, 3]);
+    const used = observeC2Field(contextUsage, "usedInputTokens", [1, 2, 3, 4]);
+    const value = { ...c2Snapshot(), contextUsage };
+    const result = validateCodingWorkbenchRuntimeSnapshot(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.contextUsage).toBe(contextUsage);
+    expect(capacity()).toBe(3);
+    expect(used()).toBe(4);
+  });
+});
+
+describe("C2 consumed context relation counts", () => {
+  function usage(): Record<string, unknown> {
+    return {
+      state: "available",
+      source: "estimated",
+      capacityTokens: 1,
+      reservedOutputTokens: 0,
+      freeTokens: 1,
+      cumulativePromptTokens: 0,
+      updatedAt: AT,
+    };
+  }
+  it("refuses an infinite fourth used count consumed by breakdown", () => {
+    const contextUsage = { ...usage(), breakdown: { conversationMessagesTokens: 1 } };
+    const reads = observeC2Field(contextUsage, "usedInputTokens", [0, 0, 0, Infinity]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage })).toEqual({
+      ok: false,
+      errors: ["contextUsage.usedInputTokens is invalid"],
+    });
+    expect(reads()).toBe(4);
+  });
+  it("refuses a negative infinite cumulative count consumed by budget", () => {
+    const contextUsage = { ...usage(), usedInputTokens: 0, runPromptBudgetTokens: 1 };
+    const reads = observeC2Field(contextUsage, "cumulativePromptTokens", [0, 0, -Infinity]);
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...c2Snapshot(), contextUsage })).toEqual({
+      ok: false,
+      errors: ["contextUsage.cumulativePromptTokens is invalid"],
+    });
+    expect(reads()).toBe(3);
+  });
+  it("preserves independent healthy relation observations and nested references", () => {
+    const contextUsage = { ...usage(), breakdown: { conversationMessagesTokens: 1 } };
+    const used = observeC2Field(contextUsage, "usedInputTokens", [0, 0, 0, 2]);
+    const cumulative = observeC2Field(contextUsage, "cumulativePromptTokens", [0, 0, 1]);
+    const budget = observeC2Field(contextUsage, "runPromptBudgetTokens", [1, 2, 3]);
+    const value = { ...c2Snapshot(), contextUsage };
+    const result = validateCodingWorkbenchRuntimeSnapshot(value);
+    expect(result.ok).toBe(true);
+    if (result.ok)
+      expect(
+        result.value.contextUsage?.state === "available"
+          ? result.value.contextUsage.breakdown
+          : undefined,
+      ).toBe(contextUsage.breakdown);
+    expect(used()).toBe(4);
+    expect(cumulative()).toBe(3);
+    expect(budget()).toBe(3);
+  });
+});
+
+describe("C2 Sonar comparison preservation", () => {
+  it("retains only the cumulative diagnostic for its consumed NaN observation", async () => {
+    const { validateCodingWorkbenchRuntimeSnapshot: publicSnapshot } =
+      await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api");
+    for (const validate of [validateCodingWorkbenchRuntimeSnapshot, publicSnapshot]) {
+      const contextUsage = {
+        state: "available",
+        source: "estimated",
+        capacityTokens: 1,
+        usedInputTokens: 0,
+        reservedOutputTokens: 0,
+        freeTokens: 1,
+        cumulativePromptTokens: 0,
+        runPromptBudgetTokens: 1,
+        updatedAt: AT,
+      };
+      const reads = observeC2Field(contextUsage, "cumulativePromptTokens", [0, 0, Number.NaN]);
+      expect(validate({ ...c2Snapshot(), contextUsage })).toEqual({
+        ok: false,
+        errors: ["contextUsage.cumulativePromptTokens is invalid"],
+      });
+      expect(reads()).toBe(3);
+    }
+  });
+});

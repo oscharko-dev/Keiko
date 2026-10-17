@@ -4,7 +4,12 @@
 // render as a different id, or a `../` traversal fragment, and still validate.
 
 import { describe, expect, it } from "vitest";
-import { validateMemoryIdString } from "./memory-internal.js";
+import {
+  validateMemoryIdString,
+  validateTags,
+  validateRetentionHint,
+  validateOptionalReference,
+} from "./memory-internal.js";
 
 function reasonsFor(value: unknown): readonly string[] {
   const errors: string[] = [];
@@ -62,4 +67,103 @@ describe("validateMemoryIdString", () => {
   ])("rejects an id containing an embedded %s", (_label, codePoint) => {
     expect(reasonsFor(`mem${String.fromCodePoint(codePoint)}forged`)).not.toEqual([]);
   });
+});
+
+describe("memory primitive preservation", () => {
+  it("retains tag entry and count boundaries with healthy controls", () => {
+    const errors: string[] = [];
+    validateTags(
+      "tags",
+      Array.from({ length: 32 }, () => "x".repeat(64)),
+      errors,
+    );
+    expect(errors).toEqual([]);
+    validateTags("tags", ["x".repeat(65)], errors);
+    expect(errors).toEqual(["tags entry must be a non-empty bounded control-free string"]);
+    errors.length = 0;
+    validateTags("tags", ["safe\u0000unsafe"], errors);
+    expect(errors).toEqual(["tags entry must be a non-empty bounded control-free string"]);
+  });
+
+  it("retains optional retention omission and explicit undefined", () => {
+    for (const hint of [
+      { policyKey: "default" },
+      { policyKey: "default", retainUntil: undefined, notes: undefined },
+      { policyKey: "default", retainUntil: 0, notes: "x".repeat(1024) },
+    ]) {
+      const errors: string[] = [];
+      validateRetentionHint("hint", hint, errors);
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, null])(
+    "rejects invalid retention time %s beside zero",
+    (retainUntil) => {
+      const errors: string[] = [];
+      validateRetentionHint("hint", { policyKey: "default", retainUntil: 0 }, errors);
+      expect(errors).toEqual([]);
+      validateRetentionHint("hint", { policyKey: "default", retainUntil }, errors);
+      expect(errors).toEqual(["hint.retainUntil must be a finite non-negative number when set"]);
+    },
+  );
+
+  it("uses the tag array receiver for every and iteration", () => {
+    const reads: string[] = [];
+    const target = ["tag"];
+    const tags = new Proxy(target, {
+      get(subject, key, receiver): unknown {
+        expect(receiver).toBe(tags);
+        reads.push(String(key));
+        return Reflect.get(subject, key, receiver);
+      },
+      has(subject, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(subject, key);
+      },
+    });
+    const errors: string[] = [];
+    validateTags("tags", tags, errors);
+    expect(errors).toEqual([]);
+    expect(reads).toEqual([
+      "every",
+      "length",
+      "has:0",
+      "0",
+      "length",
+      "Symbol(Symbol.iterator)",
+      "length",
+      "0",
+      "length",
+    ]);
+  });
+});
+
+it("keeps primitive observation results independent of a fixture-owned diagnostic sink", () => {
+  const errors: string[] = [];
+  Object.defineProperty(errors, "push", {
+    value(): number {
+      return 0;
+    },
+  });
+  expect(validateTags("tags", [""], errors)).toBe(false);
+  expect(validateTags("tags", ["healthy"], errors)).toBe(true);
+  expect(validateRetentionHint("hint", { policyKey: "" }, errors)).toBe(false);
+  expect(validateRetentionHint("hint", { policyKey: "healthy" }, errors)).toBe(true);
+  expect(validateOptionalReference("reference", "", errors)).toBe(false);
+  expect(validateOptionalReference("reference", "healthy", errors)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+it("returns canonical ID facts independently of diagnostic accumulation", () => {
+  const errors: string[] = [];
+  Object.defineProperty(errors, "push", {
+    value(): number {
+      return 0;
+    },
+  });
+  expect(validateMemoryIdString("id", "mem-1", errors)).toBe(true);
+  expect(validateMemoryIdString("id", undefined, errors)).toBe(false);
+  expect(validateMemoryIdString("id", "../bad", errors)).toBe(false);
+  expect(errors).toEqual([]);
 });

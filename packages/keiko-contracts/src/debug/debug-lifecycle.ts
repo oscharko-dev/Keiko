@@ -106,7 +106,12 @@ const STATES: Record<DebugSessionState, true> = {
   terminationPending: true,
   restartThrottled: true,
 };
-export const DEBUG_SESSION_STATES = Object.keys(STATES) as readonly DebugSessionState[];
+function isSessionState(value: unknown): value is DebugSessionState {
+  return typeof value === "string" && Object.hasOwn(STATES, value);
+}
+
+export const DEBUG_SESSION_STATES: readonly DebugSessionState[] =
+  Object.keys(STATES).filter(isSessionState);
 
 const EVENT_KINDS: Record<DebugLifecycleEventKind, true> = {
   start: true,
@@ -116,9 +121,12 @@ const EVENT_KINDS: Record<DebugLifecycleEventKind, true> = {
   "session-revoked": true,
   teardown: true,
 };
-export const DEBUG_LIFECYCLE_EVENT_KINDS = Object.keys(
-  EVENT_KINDS,
-) as readonly DebugLifecycleEventKind[];
+function isLifecycleEventKind(value: unknown): value is DebugLifecycleEventKind {
+  return typeof value === "string" && Object.hasOwn(EVENT_KINDS, value);
+}
+
+export const DEBUG_LIFECYCLE_EVENT_KINDS: readonly DebugLifecycleEventKind[] =
+  Object.keys(EVENT_KINDS).filter(isLifecycleEventKind);
 
 const REASONS: Record<DebugLifecycleReason, true> = {
   requested: true,
@@ -137,7 +145,12 @@ const REASONS: Record<DebugLifecycleReason, true> = {
   unexpectedEof: true,
   stopped: true,
 };
-export const DEBUG_LIFECYCLE_REASONS = Object.keys(REASONS) as readonly DebugLifecycleReason[];
+function isLifecycleReason(value: unknown): value is DebugLifecycleReason {
+  return typeof value === "string" && Object.hasOwn(REASONS, value);
+}
+
+export const DEBUG_LIFECYCLE_REASONS: readonly DebugLifecycleReason[] =
+  Object.keys(REASONS).filter(isLifecycleReason);
 
 // ─── (eventKind, state) legality table (KEIKO-0890) ─────────────────────────────────────────────
 //
@@ -207,7 +220,7 @@ export const EVIDENCE_KEYS: Readonly<Record<keyof DebugLifecycleEvidence, true>>
   outputTruncatedEvents: true,
 };
 function isNonnegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 // A DebugLifecycleEvent is an evidence record PLUS `sequence`, so it needs its own key table: the
@@ -244,12 +257,12 @@ function hasExactKeys(record: Record<string, unknown>): boolean {
 }
 
 function hasClosedVocabulary(record: Record<string, unknown>): boolean {
-  const eventKind = record.eventKind as DebugLifecycleEventKind;
-  const state = record.state as DebugSessionState;
+  const eventKind = record.eventKind;
+  const state = record.state;
   return (
-    Object.hasOwn(EVENT_KINDS, eventKind) &&
-    Object.hasOwn(STATES, state) &&
-    Object.hasOwn(REASONS, record.reason as DebugLifecycleReason) &&
+    isLifecycleEventKind(eventKind) &&
+    isSessionState(state) &&
+    isLifecycleReason(record.reason) &&
     LEGAL_STATES_BY_EVENT[eventKind].has(state)
   );
 }
@@ -283,9 +296,19 @@ function hasValidCounters(record: Record<string, unknown>): boolean {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasPositiveSequence(record: Record<string, unknown>): boolean {
+  if (!Number.isSafeInteger(record.sequence)) return false;
+  const sequence = record.sequence;
+  return isNonnegativeInteger(sequence) && sequence >= 1;
+}
+
 export function isDebugLifecycleEvidence(value: unknown): value is DebugLifecycleEvidence {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   return (
     hasExactKeys(record) &&
     hasClosedIdentity(record) &&
@@ -306,15 +329,14 @@ export function isDebugLifecycleEvidence(value: unknown): value is DebugLifecycl
  * had to hand-roll its own check, and the one in keiko-server did not bound the sequence at all.
  */
 export function isDebugLifecycleEvent(value: unknown): value is DebugLifecycleEvent {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   return (
     hasExactKeysFrom(record, EVENT_KEYS) &&
     hasClosedIdentity(record) &&
     hasClosedVocabulary(record) &&
     hasClosedAttestation(record) &&
     hasValidCounters(record) &&
-    Number.isSafeInteger(record.sequence) &&
-    (record.sequence as number) >= 1
+    hasPositiveSequence(record)
   );
 }

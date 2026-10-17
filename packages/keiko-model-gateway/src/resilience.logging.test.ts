@@ -10,7 +10,11 @@ import {
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { CircuitBreaker, executeWithRetry } from "./resilience.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type {
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import type { CircuitBreakerConfig, Clock } from "./types.js";
 import {
   expectActivityLogProof,
@@ -19,26 +23,29 @@ import {
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 }
 
 function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     sink: {
-      write(event: ModelGatewayLogEvent): void {
+      write(event: ModelGatewayLogTransport): void {
         events.push(event);
       },
     },
   };
 }
 
-function ops(events: readonly ModelGatewayLogEvent[]): readonly string[] {
+function ops(events: readonly ModelGatewayLogTransport[]): readonly string[] {
   return events.map((event) => event.op);
 }
 
-function eventFor(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
+function eventFor(
+  events: readonly ModelGatewayLogTransport[],
+  op: string,
+): ModelGatewayLogTransport {
   const found = events.find((event) => event.op === op);
   if (found === undefined) {
     throw new Error(`expected an event with op '${op}', saw: ${ops(events).join(", ")}`);
@@ -77,19 +84,19 @@ describe("executeWithRetry — activity log", () => {
     expect(scheduled.category).toBe("gateway");
     expect(scheduled.level).toBe("warn");
     expect(scheduled.correlationId).toBe("corr-0001");
-    expect(scheduled.errorKind).toBe("internal");
+    expect(normalFixtureEvent(scheduled).errorKind).toBe("internal");
     expect(scheduled.extra).toMatchObject({
       modelId: "example-chat-model",
       attempt: 1,
       maxRetries: 2,
       retryPolicy: "attempts",
     });
-    expect(typeof scheduled.extra?.delayMs).toBe("number");
+    expect(typeof normalFixtureEvent(scheduled).extra?.delayMs).toBe("number");
     // TransportError carries neither an HTTP status nor a server-supplied retry delay, so
     // providerErrorDetail() must contribute nothing here — pinning the negative case keeps the
     // positive ones below honest.
-    expect(scheduled.extra?.httpStatus).toBeUndefined();
-    expect(scheduled.extra?.retryAfterMs).toBeUndefined();
+    expect(normalFixtureEvent(scheduled).extra?.httpStatus).toBeUndefined();
+    expect(normalFixtureEvent(scheduled).extra?.retryAfterMs).toBeUndefined();
     const persisted = expectActivityLogProof(
       "gateway.retry.scheduled.emitted-line",
       formatActivityLogProofLine(scheduled),
@@ -119,12 +126,12 @@ describe("executeWithRetry — activity log", () => {
     const scheduledLines = log.events.filter((event) => event.op === "gateway.retry.scheduled");
     expect(scheduledLines).toHaveLength(2);
     for (const line of scheduledLines) {
-      expect(line.extra?.httpStatus).toBe(503);
-      expect(line.extra?.retryAfterMs).toBeUndefined();
+      expect(normalFixtureEvent(line).extra?.httpStatus).toBe(503);
+      expect(normalFixtureEvent(line).extra?.retryAfterMs).toBeUndefined();
     }
     const exhausted = eventFor(log.events, "gateway.retry.exhausted");
-    expect(exhausted.extra?.httpStatus).toBe(503);
-    expect(exhausted.extra?.retryAfterMs).toBeUndefined();
+    expect(normalFixtureEvent(exhausted).extra?.httpStatus).toBe(503);
+    expect(normalFixtureEvent(exhausted).extra?.retryAfterMs).toBeUndefined();
   });
 
   it("carries the provider's retryAfterMs and httpStatus=429 on both the scheduled and exhausted retry lines", async () => {
@@ -144,13 +151,13 @@ describe("executeWithRetry — activity log", () => {
     ).rejects.toBeInstanceOf(RateLimitError);
 
     const scheduled = eventFor(log.events, "gateway.retry.scheduled");
-    expect(scheduled.extra?.retryAfterMs).toBe(1_500);
+    expect(normalFixtureEvent(scheduled).extra?.retryAfterMs).toBe(1_500);
     // A rate limit is always HTTP 429 by definition — RateLimitError carries httpStatus too, so a
     // consumer never has to infer the status from errorKind === GATEWAY_RATE_LIMIT alone.
-    expect(scheduled.extra?.httpStatus).toBe(429);
+    expect(normalFixtureEvent(scheduled).extra?.httpStatus).toBe(429);
     const exhausted = eventFor(log.events, "gateway.retry.exhausted");
-    expect(exhausted.extra?.retryAfterMs).toBe(1_500);
-    expect(exhausted.extra?.httpStatus).toBe(429);
+    expect(normalFixtureEvent(exhausted).extra?.retryAfterMs).toBe(1_500);
+    expect(normalFixtureEvent(exhausted).extra?.httpStatus).toBe(429);
   });
 
   it("persists a long 503 cooldown as body-free retry evidence", async () => {
@@ -227,7 +234,8 @@ describe("executeWithRetry — activity log", () => {
       "gateway.retry.scheduled",
       "gateway.retry.exhausted",
     ]);
-    for (const line of log.events) expect(line.extra?.retryPolicy).toBe("outage-window");
+    for (const line of log.events)
+      expect(normalFixtureEvent(line).extra?.retryPolicy).toBe("outage-window");
     const scheduled = expectActivityLogProof(
       "gateway.retry.scheduled.emitted-line",
       formatActivityLogProofLine(eventFor(log.events, "gateway.retry.scheduled")),
@@ -343,14 +351,14 @@ describe("executeWithRetry — activity log", () => {
     ).rejects.toBeInstanceOf(RateLimitError);
     const budget = eventFor(log.events, "gateway.retry.budget-exhausted");
     expect(budget.level).toBe("warn");
-    expect(budget.errorKind).toBe("rate-limited");
+    expect(normalFixtureEvent(budget).errorKind).toBe("rate-limited");
     expect(budget.extra).toMatchObject({
       modelId: "m",
       hadPriorFailure: true,
       retryAfterMs: 5,
     });
     // A rate limit is always HTTP 429 by definition — RateLimitError carries httpStatus too.
-    expect(budget.extra?.httpStatus).toBe(429);
+    expect(normalFixtureEvent(budget).extra?.httpStatus).toBe(429);
     const persisted = expectActivityLogProof(
       "gateway.retry.budget-exhausted.emitted-line",
       formatActivityLogProofLine(budget),
@@ -387,8 +395,8 @@ describe("executeWithRetry — activity log", () => {
       ),
     ).rejects.toBeInstanceOf(ProviderError);
     const budget = eventFor(log.events, "gateway.retry.budget-exhausted");
-    expect(budget.extra?.httpStatus).toBe(503);
-    expect(budget.extra?.retryAfterMs).toBeUndefined();
+    expect(normalFixtureEvent(budget).extra?.httpStatus).toBe(503);
+    expect(normalFixtureEvent(budget).extra?.retryAfterMs).toBeUndefined();
   });
 
   it("stays silent — and behaviourally identical — when no sink is wired", async () => {
@@ -416,7 +424,7 @@ describe("CircuitBreaker — activity log", () => {
     const opened = eventFor(log.events, "gateway.circuit.opened");
     expect(opened.level).toBe("warn");
     expect(opened.category).toBe("gateway");
-    expect(opened.errorKind).toBe("unavailable");
+    expect(normalFixtureEvent(opened).errorKind).toBe("unavailable");
     expect(opened.extra).toMatchObject({
       modelId: "m",
       previousState: "closed",
@@ -462,7 +470,9 @@ describe("CircuitBreaker — activity log", () => {
       "debug",
       "debug",
     ]);
-    expect(rejections.every((event) => event.errorKind === "unavailable")).toBe(true);
+    expect(rejections.every((event) => normalFixtureEvent(event).errorKind === "unavailable")).toBe(
+      true,
+    );
     expect(rejections[0]?.extra).toMatchObject({
       modelId: "m",
       state: "open",
@@ -486,7 +496,7 @@ describe("CircuitBreaker — activity log", () => {
   // The demotion must be a real saving, not a relabelling: for a sink that declines `debug`,
   // a repeat refusal must not allocate an event at all.
   it("writes nothing beyond the first refusal for a sink that declines debug", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let now = 0;
     const clock: Clock = { now: () => now, sleep: () => Promise.resolve() };
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, {
@@ -545,7 +555,9 @@ describe("CircuitBreaker — activity log", () => {
     const rejections = log.events.filter((event) => event.op === "gateway.circuit.rejected");
     // First of the open window, two demoted repeats, then the first of the half-open window.
     expect(rejections.map((event) => event.level)).toEqual(["warn", "debug", "debug", "warn"]);
-    expect(rejections.map((event) => event.extra?.rejectedSinceTransition)).toEqual([1, 2, 3, 1]);
+    expect(
+      rejections.map((event) => normalFixtureEvent(event).extra?.rejectedSinceTransition),
+    ).toEqual([1, 2, 3, 1]);
   });
 
   it("records the half-open probe window and the close that ends it", () => {
@@ -639,14 +651,18 @@ describe("CircuitBreaker — activity log", () => {
 
     const waits = log.events.filter((event) => event.op === "gateway.circuit.wait");
     expect(
-      waits.map((event) => [event.correlationId, event.extra?.reason, event.extra?.outcome]),
+      waits.map((event) => [
+        event.correlationId,
+        normalFixtureEvent(event).extra?.reason,
+        normalFixtureEvent(event).extra?.outcome,
+      ]),
     ).toEqual([
       ["run-window", "circuit-cooldown", "started"],
       ["run-window", "circuit-cooldown", "timer"],
       ["chat-call-0001", "provider-cooldown", "started"],
       ["chat-call-0001", "provider-cooldown", "timer"],
     ]);
-    expect(waits.map((event) => event.extra?.retryPolicy)).toEqual([
+    expect(waits.map((event) => normalFixtureEvent(event).extra?.retryPolicy)).toEqual([
       "outage-window",
       "outage-window",
       "attempts",
@@ -702,3 +718,15 @@ describe("CircuitBreaker — caller correlation", () => {
     expect(eventFor(log.events, "gateway.circuit.opened").correlationId).toBeUndefined();
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

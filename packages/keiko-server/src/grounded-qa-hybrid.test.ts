@@ -40,6 +40,7 @@ import type {
   EvidenceStore,
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   standardPodModelUsePolicy,
@@ -348,7 +349,7 @@ async function seedReadyManualCapsule(displayName: string): Promise<{
       maxDepth: 3,
       maxBytes: 2_000_000,
       maxLinkSample: 50,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs,
       followRedirects: false,
     },
     sourceFingerprint: `fp-${capsuleId}`,

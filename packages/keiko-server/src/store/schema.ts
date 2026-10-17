@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 43;
+export const SCHEMA_VERSION = 44;
 
 interface Migration {
   readonly version: number;
@@ -1679,6 +1679,14 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 41, sql: V41_SQL },
   { version: 42, sql: V42_SQL },
   { version: 43, sql: V43_SQL },
+  {
+    version: 44,
+    sql: `CREATE TABLE chat_drafts (
+      chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision >= 1)
+    ) STRICT;`,
+  },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

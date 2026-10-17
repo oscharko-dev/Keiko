@@ -97,7 +97,8 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 }
 
 function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Message structure ──────────────────────────────────────────────────────────────────────────

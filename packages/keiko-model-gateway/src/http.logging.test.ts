@@ -6,7 +6,11 @@
 
 import { describe, expect, it } from "vitest";
 import { gatewayFetch, OutboundHttpEgressError } from "./http.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type {
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -14,26 +18,29 @@ import {
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 }
 
 function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     sink: {
-      write(event: ModelGatewayLogEvent): void {
+      write(event: ModelGatewayLogTransport): void {
         events.push(event);
       },
     },
   };
 }
 
-function ops(events: readonly ModelGatewayLogEvent[]): readonly string[] {
+function ops(events: readonly ModelGatewayLogTransport[]): readonly string[] {
   return events.map((event) => event.op);
 }
 
-function eventFor(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
+function eventFor(
+  events: readonly ModelGatewayLogTransport[],
+  op: string,
+): ModelGatewayLogTransport {
   const found = events.find((event) => event.op === op);
   if (found === undefined) {
     throw new Error(`expected an event with op '${op}', saw: ${ops(events).join(", ")}`);
@@ -150,7 +157,7 @@ describe("gatewayFetch — activity log", () => {
       log: other.sink,
     });
     expect(
-      eventFor(other.events, "http.gateway.fetch.started").extra?.requestBytes,
+      normalFixtureEvent(eventFor(other.events, "http.gateway.fetch.started")).extra?.requestBytes,
     ).toBeUndefined();
   });
 
@@ -158,7 +165,7 @@ describe("gatewayFetch — activity log", () => {
   // never be handed one — the endpoint parse behind the route-planning line is pure waste
   // when nobody is reading at that level.
   it("materialises no debug event at all for a sink that declines debug", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gated: ModelGatewayLogSink = {
       write: (event): void => {
         events.push(event);
@@ -175,7 +182,7 @@ describe("gatewayFetch — activity log", () => {
     // requests are flowing with it — see the outcome-level case below.
     expect(ops(events)).toEqual(["http.gateway.fetch.started", "http.gateway.fetch.completed"]);
 
-    const answered: ModelGatewayLogEvent[] = [];
+    const answered: ModelGatewayLogTransport[] = [];
     await gatewayFetch("https://gateway.example/v1/x", {
       fetchImpl: respondWith(503),
       log: {
@@ -230,8 +237,8 @@ describe("gatewayFetch — activity log", () => {
     });
     const completed = eventFor(okLog.events, "http.gateway.fetch.completed");
     expect(completed.level).toBe("info");
-    expect(completed.status).toBe(200);
-    expect(typeof completed.durationMs).toBe("number");
+    expect(normalFixtureEvent(completed).status).toBe(200);
+    expect(typeof normalFixtureEvent(completed).durationMs).toBe("number");
     const completedPersisted = expectActivityLogProof(
       "http.gateway.fetch.completed.emitted-line",
       formatActivityLogProofLine(completed),
@@ -245,7 +252,7 @@ describe("gatewayFetch — activity log", () => {
     });
     const answered = eventFor(errLog.events, "http.gateway.fetch.completed");
     expect(answered.level).toBe("warn");
-    expect(answered.status).toBe(503);
+    expect(normalFixtureEvent(answered).status).toBe(503);
   });
 
   // CORRELATION. With N requests in flight against one endpoint the lines are interleaved, so
@@ -339,8 +346,8 @@ describe("gatewayFetch — activity log", () => {
     ).rejects.toBeInstanceOf(OutboundHttpEgressError);
     const failed = eventFor(log.events, "http.gateway.fetch.failed");
     expect(failed.level).toBe("warn");
-    expect(failed.errorKind).toBe("permission-denied");
-    expect(failed.extra?.endpointClass).toBe("loopback");
+    expect(normalFixtureEvent(failed).errorKind).toBe("permission-denied");
+    expect(normalFixtureEvent(failed).extra?.endpointClass).toBe("loopback");
     expect(failed.extra).not.toHaveProperty("endpointDigest");
     const failedPersisted = expectActivityLogProof(
       "http.gateway.fetch.failed.emitted-line",
@@ -363,7 +370,7 @@ describe("gatewayFetch — activity log", () => {
       gatewayFetch("https://gateway.example/v1/x", { fetchImpl: failing, log: log.sink }),
     ).rejects.toThrow();
     const failed = eventFor(log.events, "http.gateway.fetch.failed");
-    expect(failed.errorKind).toBe("unavailable");
+    expect(normalFixtureEvent(failed).errorKind).toBe("unavailable");
     expect(JSON.stringify(failed)).not.toContain("sk-in-message");
   });
 
@@ -400,3 +407,15 @@ describe("gatewayFetch — activity log", () => {
     expect(JSON.stringify(seenInit)).not.toContain("corr-init");
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -274,3 +274,130 @@ describe("bounded Monaco-safe semantic tokens", () => {
     expect(parseManagedLspSemanticTokenLegend(hostile).ok).toBe(false);
   });
 });
+
+import {
+  parseManagedLspCandidateCapabilities as publicCandidate,
+  parseManagedLspSemanticTokenLegend as publicLegend,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+
+describe.each([
+  ["source", parseManagedLspCandidateCapabilities, parseManagedLspSemanticTokenLegend],
+  ["public", publicCandidate, publicLegend],
+] as const)("3918 capability owning admission %s", (_surface, parseCandidate, parseLegend) => {
+  it("preserves the healthy candidate reference and concrete fields", () => {
+    const input = candidate();
+    const result = parseCandidate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.language).toBe("python");
+    expect(result.value.operations).toBe(input.operations);
+  });
+  it("refuses an absent physical operation", () => {
+    expect(parseCandidate({ ...candidate(), operations: new Array<unknown>(1) })).toEqual({
+      ok: false,
+      errors: ["candidate capabilities are invalid or contain unknown fields"],
+    });
+  });
+  it("refuses a physical operation concealed by caller every", () => {
+    const operations = [42];
+    Object.defineProperty(operations, "every", { value: (): boolean => true });
+    expect(parseCandidate({ ...candidate(), operations })).toEqual({
+      ok: false,
+      errors: ["candidate capabilities are invalid or contain unknown fields"],
+    });
+  });
+  it("refuses an absent physical legend type despite matching counts", () => {
+    expect(
+      parseLegend({
+        ...legend(),
+        tokenTypes: new Array<unknown>(1),
+        returnedTypeCount: 1,
+        totalTypeCount: 1,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: ["semantic-token legend is invalid or contains unknown fields"],
+    });
+  });
+  it("retains an ordinary inherited operation", () => {
+    const operations = new Array<unknown>(1);
+    const prototype = { 0: "hover" };
+    Object.setPrototypeOf(prototype, Array.prototype);
+    Object.setPrototypeOf(operations, prototype);
+    const result = parseCandidate({ ...candidate(), operations });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.operations).toBe(operations);
+  });
+});
+
+import { LANGUAGE_SERVICE_OPERATIONS } from "./language-service.js";
+
+describe.each([
+  ["source", parseManagedLspCandidateCapabilities],
+  ["public", publicCandidate],
+] as const)("3918 managed-lsp-capabilities captured extent %s", (_surface, parse) => {
+  function inspectExtent(
+    laterExtent: number,
+    firstObservation: { readonly first: unknown } = { first: 1 },
+  ): {
+    readonly result: boolean;
+    readonly indexReads: number;
+    readonly lengths: readonly unknown[];
+  } {
+    const values: unknown[] = ["hover"];
+    const lengths: unknown[] = [];
+    let indexReads = 0;
+    let nativeVisits = 0;
+    const observed = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        if (key === "length") {
+          const length =
+            lengths.length === 0
+              ? firstObservation.first
+              : lengths.length === 1
+                ? laterExtent
+                : target.length;
+          lengths.push(length);
+          return length;
+        }
+        if (typeof key === "string" && /^\d+$/u.test(key)) indexReads += 1;
+        const datum: unknown = Reflect.get(target, key, receiver);
+        return datum;
+      },
+      has(target, key): boolean {
+        if (typeof key === "string" && /^\d+$/u.test(key)) nativeVisits += 1;
+        if (nativeVisits > LANGUAGE_SERVICE_OPERATIONS.length + 1)
+          throw new TypeError("fixture native traversal bound");
+        return Reflect.has(target, key);
+      },
+    });
+    return { result: parse({ ...candidate(), operations: observed }).ok, indexReads, lengths };
+  }
+  it("preserves a healthy actual captured extent", () => {
+    const observation = inspectExtent(1);
+    expect(observation.result).toBe(true);
+    expect(observation.lengths.slice(0, 2)).toEqual([1, 1]);
+    expect(observation.indexReads).toBeGreaterThan(0);
+  });
+  it.each([NaN, undefined])("preserves original first-limit refusal for %s", (first) => {
+    const observation = inspectExtent(1, { first });
+    expect(observation).toEqual({ result: false, indexReads: 0, lengths: [first] });
+  });
+
+  it.each([LANGUAGE_SERVICE_OPERATIONS.length + 1, Infinity, 0.5, -1])(
+    "refuses captured extent %s before indexing",
+    (extent) => {
+      const observation = inspectExtent(extent);
+      expect({
+        accepted: observation.result,
+        indexReads: observation.indexReads,
+        firstTwoLengths: observation.lengths.slice(0, 2),
+      }).toEqual({
+        accepted: false,
+        indexReads: 0,
+        firstTwoLengths: [1, extent],
+      });
+    },
+  );
+});

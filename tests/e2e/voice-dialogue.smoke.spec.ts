@@ -14,7 +14,8 @@
 // integration suites cover parser, turn-manager, and BFF persistence behavior; this smoke proves the
 // user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
-import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

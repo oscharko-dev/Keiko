@@ -5521,18 +5521,21 @@ function hostTransportHarness(input: {
   readonly canSpawn?: () => boolean;
   readonly reaps?: boolean;
   readonly onSpawn?: () => void;
+  readonly now?: () => number;
 }): {
   readonly manager: CodingRuntimeManager;
   readonly captures: { executable: string; args: readonly string[]; cwd: string }[];
   readonly handshake: Mock<() => Promise<{ readonly ok: true }>>;
   readonly events: CodingWorkbenchRuntimeEvent[];
   readonly diagnostics: ServerDiagnosticRecord[];
+  readonly release: Mock<() => true>;
 } {
   const child = fakeChild();
   const captures: { executable: string; args: readonly string[]; cwd: string }[] = [];
   const events: CodingWorkbenchRuntimeEvent[] = [];
   const diagnostics: ServerDiagnosticRecord[] = [];
   const handshake = vi.fn(() => Promise.resolve({ ok: true as const }));
+  const release = vi.fn((): true => true);
   const manager = createTestCodingRuntimeManager({
     processEnv: {},
     diagnostics: {
@@ -5557,6 +5560,8 @@ function hostTransportHarness(input: {
       input.lifetime,
     ),
     canSpawnRuntime: input.canSpawn,
+    now: input.now,
+    releaseRuntimeAfterReap: release,
     openCodeLifecycleAdapter: {
       prepare: () =>
         Promise.resolve({
@@ -5571,7 +5576,7 @@ function hostTransportHarness(input: {
       events.push(event);
     },
   });
-  return { manager, captures, handshake, events, diagnostics };
+  return { manager, captures, handshake, events, diagnostics, release };
 }
 
 function startHostTransport(
@@ -5584,6 +5589,82 @@ function startHostTransport(
     ...launchRequest(workspace, fixture.managedRoot, fixture.executablePath),
     ...extra,
   });
+}
+
+function blockedHostPacket(): {
+  readonly stdin: Writable;
+  readonly entered: Promise<void>;
+  finishLate(): void;
+} {
+  let enter: (() => void) | undefined;
+  let callback: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const stdin = new Writable({
+    write(_chunk, _encoding, done): void {
+      callback = done;
+      enter?.();
+    },
+  });
+  return {
+    stdin,
+    entered,
+    finishLate: (): void => {
+      if (callback === undefined) throw new Error("host-packet-write-not-entered");
+      callback();
+    },
+  };
+}
+
+async function timedOutHostPacket(reaps: boolean): Promise<{
+  readonly result: Awaited<ReturnType<CodingRuntimeManager["start"]>>;
+  readonly harness: ReturnType<typeof hostTransportHarness>;
+}> {
+  const workspace = tempDir("keiko-host-workspace-");
+  const program = await preparedHostFixture(workspace);
+  const packet = blockedHostPacket();
+  const harness = hostTransportHarness({
+    program,
+    stdin: packet.stdin,
+    lifetime: true,
+    reaps,
+    now: () => 1000,
+  });
+  // Real disk attestation must finish before the unchanged writer timeout is advanced.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let starting: Promise<Awaited<ReturnType<CodingRuntimeManager["start"]>>> | undefined;
+  try {
+    starting = Promise.resolve(
+      startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 }),
+    );
+    await Promise.race([
+      packet.entered,
+      starting.then(() => {
+        throw new Error("host-start-settled-before-packet-write");
+      }),
+    ]);
+    expect(harness.captures).toHaveLength(1);
+    expect(harness.handshake).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersByTimeAsync(5);
+    const result = await starting;
+    expect(packet.stdin.destroyed).toBe(true);
+    packet.finishLate();
+    await settle();
+    expect(harness.handshake).not.toHaveBeenCalled();
+    expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
+    return { result, harness };
+  } finally {
+    packet.stdin.destroy();
+    try {
+      await vi.runAllTimersAsync();
+      await starting;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
 }
 
 describe("inactive fixed host prepared transport", () => {
@@ -5674,19 +5755,48 @@ describe("inactive fixed host prepared transport", () => {
   });
 
   it("retains recovery when a timed-out packet writer cannot prove process reap", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    const stdin = new Writable({
-      write(): void {
-        /* Noncooperative test transport. */
-      },
-    });
-    const harness = hostTransportHarness({ program, stdin, lifetime: true, reaps: false });
-    await expect(
-      startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 }),
-    ).resolves.toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    const { result, harness } = await timedOutHostPacket(false);
+    expect(result).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
     expect(harness.handshake).not.toHaveBeenCalled();
     expect(harness.manager.health().status).toBe("recovery-required");
+    expect(harness.release).not.toHaveBeenCalled();
+  });
+
+  it("stops a timed-out packet writer after authentic complete process reap", async () => {
+    const { result, harness } = await timedOutHostPacket(true);
+    expect(result).toMatchObject({ ok: false, failureCode: "start-timeout" });
+    expect(harness.manager.health().status).toBe("stopped");
+    expect(harness.release).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an expired host-attestation deadline before spawn or packet write", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    const packet = blockedHostPacket();
+    let clock = 1000;
+    const harness = hostTransportHarness({
+      program,
+      stdin: packet.stdin,
+      lifetime: true,
+      reaps: false,
+      now: (): number => {
+        const current = clock;
+        clock += 20;
+        return current;
+      },
+    });
+    try {
+      const result = await startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 });
+      expect(result).toMatchObject({ ok: false, failureCode: "start-timeout" });
+      expect(harness.captures).toHaveLength(0);
+      expect(harness.handshake).not.toHaveBeenCalled();
+      expect(harness.manager.health().status).toBe("stopped");
+      expect(harness.release).not.toHaveBeenCalled();
+      expect(packet.stdin.writableLength).toBe(0);
+      expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
+    } finally {
+      packet.stdin.destroy();
+    }
   });
 
   it("freshly refuses changed host bytes before spawn", async () => {

@@ -222,15 +222,19 @@ function parseFilters(value: unknown): FieldResult<readonly NativeFileDialogFilt
   return { ok: true, value: filters };
 }
 
+function isNativeFileDialogMode(value: unknown): value is NativeFileDialogMode {
+  return typeof value === "string" && MODE_SET.has(value);
+}
+
 function parseMode(
   value: unknown,
 ):
   | { readonly ok: true; readonly value: NativeFileDialogMode }
   | { readonly ok: false; readonly error: string } {
-  if (typeof value !== "string" || !MODE_SET.has(value)) {
+  if (!isNativeFileDialogMode(value)) {
     return { ok: false, error: "mode is invalid" };
   }
-  return { ok: true, value: value as NativeFileDialogMode };
+  return { ok: true, value: value };
 }
 
 // Fail-closed request validation for the BFF route. Unknown modes, oversized fields, malformed
@@ -260,10 +264,11 @@ export function validateNativeFileDialogRequest(input: unknown): NativeFileDialo
 
 // Expected selection count for a mode, enforced by the server against adapter output:
 // exactly one for single-selection modes, 1..NATIVE_FILE_DIALOG_MAX_SELECTIONS for `open-files`.
-export function nativeFileDialogSelectionBounds(mode: NativeFileDialogMode): {
-  readonly min: number;
-  readonly max: number;
-} {
+export function nativeFileDialogSelectionBounds(
+  mode: NativeFileDialogMode,
+):
+  | { readonly min: 1; readonly max: 1 }
+  | { readonly min: 1; readonly max: typeof NATIVE_FILE_DIALOG_MAX_SELECTIONS } {
   if (mode === "open-files") return { min: 1, max: NATIVE_FILE_DIALOG_MAX_SELECTIONS };
   return { min: 1, max: 1 };
 }

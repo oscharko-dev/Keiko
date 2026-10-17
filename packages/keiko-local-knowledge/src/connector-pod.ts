@@ -76,7 +76,7 @@ import {
   updateSourceScopeInCapsule,
 } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
-import type { KnowledgeLogSink } from "./knowledge-log.js";
+import { knowledgeLogCorrelationId, type KnowledgeLogSink } from "./knowledge-log.js";
 
 // Synthetic absolute mount root (never touches disk; the in-memory page fs serves the bytes).
 const CONNECTOR_VIRTUAL_ROOT_PREFIX = "/keiko-connector-pod";
@@ -151,12 +151,14 @@ export function createConnectorPodShell(
 function buildConnectorPodSummary(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
+  logSink?: KnowledgeLogSink,
+  correlationId?: string,
 ): KnowledgePodSummary {
   const capsule = getCapsule(store, capsuleId);
   if (capsule === undefined) {
     throw new KnowledgeStoreError("connector capsule vanished during sync");
   }
-  return buildKnowledgePodSummary(store, capsule);
+  return buildKnowledgePodSummary(store, capsule, { logSink, correlationId });
 }
 
 // Reconstruct the approved scope from persisted state ONLY — a sync request can never supply or
@@ -590,7 +592,12 @@ export async function applyConnectorSyncRun(
   return {
     changeSummary: summary,
     ...(artifacts.indexing === undefined ? {} : { indexing: artifacts.indexing }),
-    summary: buildConnectorPodSummary(deps.store, deps.capsuleId),
+    summary: buildConnectorPodSummary(
+      deps.store,
+      deps.capsuleId,
+      deps.logSink,
+      knowledgeLogCorrelationId(runId),
+    ),
   };
 }
 
@@ -652,5 +659,13 @@ export function recordUnappliedConnectorSyncRun(
   if (input.outcome === "failed") {
     updateCapsuleState(deps.store, deps.capsuleId, "error");
   }
-  return { changeSummary: summary, summary: buildConnectorPodSummary(deps.store, deps.capsuleId) };
+  return {
+    changeSummary: summary,
+    summary: buildConnectorPodSummary(
+      deps.store,
+      deps.capsuleId,
+      deps.logSink,
+      knowledgeLogCorrelationId(runId),
+    ),
+  };
 }

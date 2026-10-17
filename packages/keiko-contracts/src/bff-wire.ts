@@ -59,7 +59,6 @@ import type { PrDescriptionApplicationState } from "./pr-description-application
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
 import {
-  CONTEXT_LANE_IDS,
   type ContextAssemblyDiagnostics,
   type ContextBudgetPressure,
   type ContextLaneId,
@@ -680,10 +679,8 @@ export type ConversationMemoryCaptureSurfaceWire =
 export function isConversationMemoryCaptureSurfaceWire(
   value: unknown,
 ): value is ConversationMemoryCaptureSurfaceWire {
-  return (
-    typeof value === "string" &&
-    (CONVERSATION_MEMORY_CAPTURE_SURFACES as readonly string[]).includes(value)
-  );
+  const surfaces: readonly string[] = CONVERSATION_MEMORY_CAPTURE_SURFACES;
+  return typeof value === "string" && surfaces.includes(value);
 }
 
 export interface ConversationMemoryRequestWire {
@@ -709,8 +706,8 @@ export interface UpdateMemoryAutonomyPolicyWire {
 export function parseUpdateMemoryAutonomyPolicyWire(
   value: unknown,
 ): UpdateMemoryAutonomyPolicyWire | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as Record<string, unknown>;
+  if (!isWireRecord(value)) return undefined;
+  const candidate = value;
   return isCodingWorkbenchMode(candidate.requestedMode) &&
     Number.isSafeInteger(candidate.expectedRevision) &&
     Number(candidate.expectedRevision) >= 0
@@ -773,8 +770,8 @@ function isBoundedRepositoryPath(value: unknown): value is string {
 export function parseUpdateGitHubIssueReaderAuthorizationWire(
   value: unknown,
 ): UpdateGitHubIssueReaderAuthorizationWire | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as Record<string, unknown>;
+  if (!isWireRecord(value)) return undefined;
+  const candidate = value;
   const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.has(key));
   if (extra.length > 0 || !isBoundedRepositoryPath(candidate.repositoryPath)) return undefined;
   return typeof candidate.authorized === "boolean" &&
@@ -969,9 +966,8 @@ export function isDesktopChatStreamTerminalEvent(
 export function eventIsDesktopChatStreamTerminal(
   event: DesktopChatStreamEventType,
 ): event is DesktopChatStreamTerminalEventType {
-  return DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES.includes(
-    event as DesktopChatStreamTerminalEventType,
-  );
+  const events: readonly DesktopChatStreamEventType[] = DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES;
+  return events.includes(event);
 }
 
 // Issue #148 — Safe document context extraction for conversation inputs.
@@ -1112,6 +1108,15 @@ export function classifyAttachmentMime(mimeType: string): "image" | "document" |
 export const MAX_DESKTOP_CHAT_INPUT_BYTES = 256_000;
 // Keep the independent code-unit and UTF-8 byte ceilings explicit: callers must enforce both.
 export const MAX_DESKTOP_CHAT_INPUT_CHARS = 256_000;
+/** Private, chat-bound composer text; never part of chat listings or model context. */
+export interface ChatDraft {
+  readonly text: string;
+  readonly revision: number;
+}
+export interface ChatDraftUpdate {
+  readonly text: string;
+  readonly expectedRevision: number;
+}
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 
@@ -1362,10 +1367,8 @@ export type GroundedRerankerFailureKind = (typeof GROUNDED_RERANKER_FAILURE_KIND
 export function isGroundedRerankerFailureKind(
   value: unknown,
 ): value is GroundedRerankerFailureKind {
-  return (
-    typeof value === "string" &&
-    (GROUNDED_RERANKER_FAILURE_KINDS as readonly string[]).includes(value)
-  );
+  const kinds: readonly string[] = GROUNDED_RERANKER_FAILURE_KINDS;
+  return typeof value === "string" && kinds.includes(value);
 }
 
 export interface GroundedRerankerDiagnostics {
@@ -1543,10 +1546,16 @@ function buildContextSummary(
   for (const lane of diagnostics.lanes) {
     includedByLane.set(lane.laneId, lane.includedItems);
   }
-  const laneCounts = {} as Record<ContextLaneId, number>;
-  for (const laneId of CONTEXT_LANE_IDS) {
-    laneCounts[laneId] = includedByLane.get(laneId) ?? 0;
-  }
+  const laneCounts: Record<ContextLaneId, number> = {
+    "system-contract": includedByLane.get("system-contract") ?? 0,
+    "user-task": includedByLane.get("user-task") ?? 0,
+    "active-plan": includedByLane.get("active-plan") ?? 0,
+    "repo-evidence": includedByLane.get("repo-evidence") ?? 0,
+    "tool-observations": includedByLane.get("tool-observations") ?? 0,
+    "working-memory": includedByLane.get("working-memory") ?? 0,
+    "history-summary": includedByLane.get("history-summary") ?? 0,
+    "verification-evidence": includedByLane.get("verification-evidence") ?? 0,
+  };
   return {
     totalEstimatedTokens: diagnostics.totalEstimatedTokens,
     budgetPressure: diagnostics.budgetPressure,

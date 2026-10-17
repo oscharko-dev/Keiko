@@ -298,10 +298,20 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   it.each([
+    "workspace-viewport-fitted",
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",
     "scope-refusal-skipped-draft",
     "scope-refusal-skipped-unproven",
+    "context-details-expanded",
+    "context-details-collapsed",
+    "dictation-inserted",
+    "dictation-empty",
+    "dictation-context-changed",
+    "send-failure-restored",
+    "send-failure-skipped-owner",
+    "send-failure-skipped-draft",
+    "send-failure-skipped-unproven",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

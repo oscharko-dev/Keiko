@@ -143,7 +143,8 @@ function isStringArray(value: unknown): value is readonly string[] {
 }
 
 function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Conventional-commit parse (linear, ReDoS-safe) ───────────────────────────────────────────────

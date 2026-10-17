@@ -2437,11 +2437,15 @@ function failedSourceIds(
 
 function listValidatedKnowledgePodSummaries(
   store: ReturnType<typeof openKnowledgeStore>,
-  kind?: KnowledgePodSummaryKind,
+  kind: KnowledgePodSummaryKind,
+  correlationId: string | undefined,
 ): readonly KnowledgePodSummary[] {
   // Pass the kind down so the projection only materializes the requested collection: a corrupt
   // capsule of one kind must not fail-close the listing of the other kind.
-  return listKnowledgePodSummaries(store, kind).map((summary) => {
+  return listKnowledgePodSummaries(store, kind, {
+    logSink: processServerLogSink(),
+    correlationId,
+  }).map((summary) => {
     const validation = validateKnowledgePodSummary(summary);
     if (!validation.ok) {
       throw new KnowledgeStoreError("Knowledge Pod summary validation failed.");
@@ -2539,7 +2543,7 @@ export async function handleListLocalKnowledgeCapsules(
         updatedAt: capsule.updatedAt,
       }));
       if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsules } };
-      const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod");
+      const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod", ctx.correlationId);
       return {
         status: 200,
         body: {
@@ -2567,7 +2571,11 @@ export async function handleListLocalKnowledgeCapsuleSets(
         composedAt: capsuleSet.composedAt,
       }));
       if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsuleSets } };
-      const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod-set");
+      const knowledgePods = listValidatedKnowledgePodSummaries(
+        env.store,
+        "pod-set",
+        ctx.correlationId,
+      );
       return {
         status: 200,
         body: {

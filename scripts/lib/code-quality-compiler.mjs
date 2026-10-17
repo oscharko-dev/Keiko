@@ -2,7 +2,11 @@ import { Buffer } from "node:buffer";
 import { readFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
-import { collectPolicyMembership, policyDigest } from "./code-quality-inventory.mjs";
+import { collectPolicyPaths, policyDigest } from "./code-quality-inventory.mjs";
+import { compareStrings } from "./compare-strings.mjs";
+
+// Witnesses remain private: exposed compiler metadata cannot rewrite the admitted text or bytes.
+const SNAPSHOT_WITNESSES = new WeakMap();
 
 const DEFAULT_LIMITS = Object.freeze({
   programs: 2,
@@ -10,6 +14,8 @@ const DEFAULT_LIMITS = Object.freeze({
   nodes: 5_000_000,
   aliases: 64,
   emitBytes: 16 * 1024 * 1024,
+  emissionTimeout: 10_000,
+  emissionOutputBytes: 1024 * 1024,
 });
 
 export function subjectPath(subject, absolute) {
@@ -34,9 +40,21 @@ function observedInputs(subject) {
   return inputs;
 }
 
+// Native realpath needs procfs on musl; the ordinary API remains the compatibility fallback.
+function canonicalSourcePath(path) {
+  if (process.platform !== "linux") return realpathSync(path);
+  try {
+    const resolved = realpathSync.native(path);
+    if (resolved === path) return resolved;
+  } catch {
+    return realpathSync(path);
+  }
+  return realpathSync(path);
+}
+
 function regularSource(path) {
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(path) !== path)
+  if (!stat.isFile() || stat.isSymbolicLink() || canonicalSourcePath(path) !== path)
     throw new TypeError("unsafe-symbol-source");
 }
 
@@ -78,14 +96,43 @@ function subjectFingerprint(subject) {
   );
 }
 
-export function createCompilerContext(subject, options = {}) {
+function proofManifest(subject, roots) {
+  const entries = roots
+    .map(({ owner, paths }) => {
+      if (!subject.contexts.has(owner) || !Array.isArray(paths))
+        throw new TypeError("invalid-proof-context");
+      const selected = [...new Set(paths)].sort(compareStrings);
+      for (const path of selected) {
+        const file = subject.inventory.files.find((entry) => entry.path === path);
+        const actual = [...subject.contexts.keys()]
+          .filter((key) => key === "" || path.startsWith(`${key}/`))
+          .sort((a, b) => b.length - a.length)[0];
+        if (!file || file.production || !/\.test\.[cm]?tsx?$/u.test(path) || actual !== owner)
+          throw new TypeError("invalid-proof-root");
+        regularSource(join(subject.root, path));
+      }
+      return Object.freeze({ owner, paths: Object.freeze(selected) });
+    })
+    .sort((a, b) => a.owner.localeCompare(b.owner));
+  if (new Set(entries.map(({ owner }) => owner)).size !== entries.length)
+    throw new TypeError("duplicate-proof-owner");
+  return Object.freeze(entries);
+}
+
+export function createCompilerContext(subject, options = {}, roots = []) {
   const state = {
     subject,
+    proofRoots: roots,
+    proofManifest: proofManifest(subject, roots),
+    proofFingerprint: policyDigest(JSON.stringify(roots)),
     limits: limitsFrom(options),
     inputs: observedInputs(subject),
     fingerprint: subjectFingerprint(subject),
     snapshots: new Map(),
     programs: new Map(),
+    emissions: new Map(),
+    declarations: new Map(),
+    proofFailures: new Map(),
     bytes: 0,
     nodes: 0,
     emittedBytes: 0,
@@ -97,9 +144,24 @@ export function createCompilerContext(subject, options = {}) {
     read: (path) => readOwned(state, path),
     context: (path) => ownerContext(state, path),
     program: (path) => programFor(state, path),
+    proofProgram: (path) => programFor(state, path, "proof"),
+    resolveModule: (source, specifier, config, mode) =>
+      ts.resolveModuleName(
+        specifier,
+        source,
+        config.options,
+        compilerHost(state, config),
+        undefined,
+        undefined,
+        mode,
+      ).resolvedModule,
     assertCurrent: () => assertCurrent(state),
     close: () => {
       state.programs.clear();
+      state.emissions.clear();
+      state.declarations.clear();
+      state.proofFailures.clear();
+      for (const previous of state.snapshots.values()) SNAPSHOT_WITNESSES.delete(previous);
       state.snapshots.clear();
       state.closed = true;
     },
@@ -110,14 +172,15 @@ function assertOpen(state) {
   if (state.closed) throw new TypeError("symbol-resolver-closed");
 }
 
-function snapshot(state, absolute, text) {
-  const digest = policyDigest(text);
+function snapshot(state, absolute, text, digest = policyDigest(text)) {
   const previous = state.snapshots.get(absolute);
   if (previous && previous.digest !== digest) throw new TypeError("symbol-subject-changed");
   if (!previous) {
     state.bytes += Buffer.byteLength(text);
     if (state.bytes > state.limits.sourceBytes) throw new TypeError("symbol-source-budget");
-    state.snapshots.set(absolute, { digest, text });
+    const admitted = { digest };
+    SNAPSHOT_WITNESSES.set(admitted, text.includes("\uFFFD") ? Buffer.from(text, "utf8") : text);
+    state.snapshots.set(absolute, admitted);
   }
   return text;
 }
@@ -129,9 +192,9 @@ function readOwned(state, path) {
   regularSource(absolute);
   const text = readFileSync(absolute, "utf8");
   const expected = state.inputs.get(path);
-  if (expected !== undefined && policyDigest(text) !== expected)
-    throw new TypeError("symbol-subject-changed");
-  return snapshot(state, absolute, text);
+  const digest = policyDigest(text);
+  if (expected !== undefined && digest !== expected) throw new TypeError("symbol-subject-changed");
+  return snapshot(state, absolute, text, digest);
 }
 
 function ownerContext(state, path) {
@@ -156,14 +219,62 @@ function compilerHost(state, config) {
   return host;
 }
 
-function programFor(state, path) {
-  assertOpen(state);
+function immutableProofOption(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableProofOption));
+  if (!value || typeof value !== "object") return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(value).map(([key, option]) => [key, immutableProofOption(option)]),
+    ),
+  );
+}
+
+function proofConfiguration(config, fileNames) {
+  const options = Object.fromEntries(
+    Object.entries(config.options).map(([key, value]) => [
+      key,
+      // The compiler's original config AST is not a plain option collection and stays untouched.
+      key === "configFile" ? value : immutableProofOption(value),
+    ]),
+  );
+  const configFile = Object.getOwnPropertyDescriptor(config.options, "configFile");
+  if (configFile) Object.defineProperty(options, "configFile", configFile);
+  options.noEmit = true;
+  return Object.freeze({
+    ...config,
+    fileNames: Object.freeze(fileNames),
+    options: Object.freeze(options),
+  });
+}
+
+function programConfig(state, path, role) {
   const { owner, config } = ownerContext(state, path);
   if (!config) throw new TypeError("symbol-context-missing");
-  const cached = state.programs.get(owner);
+  if (role === "production") return { owner, config, key: JSON.stringify([owner, role, []]) };
+  const entry = state.proofManifest.find((value) => value.owner === owner);
+  if (!entry?.paths.includes(path)) throw new TypeError("undeclared-proof-root");
+  const fileNames = [
+    ...new Set([...config.fileNames, ...entry.paths.map((root) => join(state.subject.root, root))]),
+  ].sort(compareStrings);
+  return {
+    owner,
+    config: proofConfiguration(config, fileNames),
+    key: JSON.stringify([owner, role, entry.paths]),
+  };
+}
+
+function programFor(state, path, role = "production") {
+  assertOpen(state);
+  if (role === "proof") assertCurrent(state);
+  const { owner, config, key } = programConfig(state, path, role);
+  const failure = state.proofFailures.get(key);
+  if (failure) throw failure;
+  const cached = state.programs.get(key);
   if (cached) {
-    state.programs.delete(owner);
-    state.programs.set(owner, cached);
+    state.programs.delete(key);
+    state.programs.set(key, cached);
     return cached;
   }
   assertCurrent(state);
@@ -173,16 +284,21 @@ function programFor(state, path) {
     projectReferences: config.projectReferences,
     host: compilerHost(state, config),
   });
+  state.created += 1;
+  if (role === "proof" && ts.getPreEmitDiagnostics(program).length) {
+    const error = new TypeError("unqualified-proof-context");
+    state.proofFailures.set(key, error);
+    throw error;
+  }
   const context = {
+    role,
     owner,
     config,
     program,
     checker: program.getTypeChecker(),
-    emitted: new Map(),
     qualified: new Set(),
   };
-  state.created += 1;
-  state.programs.set(owner, context);
+  state.programs.set(key, context);
   if (state.programs.size > state.limits.programs)
     state.programs.delete(state.programs.keys().next().value);
   return context;
@@ -190,20 +306,34 @@ function programFor(state, path) {
 
 function assertCurrent(state) {
   assertOpen(state);
+  if (policyDigest(JSON.stringify(state.proofRoots)) !== state.proofFingerprint)
+    throw new TypeError("symbol-proof-context-changed");
   if (subjectFingerprint(state.subject) !== state.fingerprint)
     throw new TypeError("symbol-context-changed");
-  const current = collectPolicyMembership(state.subject.root).paths;
+  const current = collectPolicyPaths(state.subject.root);
   if (current.join("\0") !== state.subject.membership.paths.join("\0"))
     throw new TypeError("symbol-membership-changed");
   for (const [path, expected] of state.inputs) {
     const absolute = join(state.subject.root, path);
     regularSource(absolute);
-    if (policyDigest(readFileSync(absolute)) !== expected)
+    if (!hasCurrentDigest(absolute, state.snapshots.get(absolute), expected))
       throw new TypeError("symbol-subject-changed");
   }
-  for (const [path, { digest }] of state.snapshots) {
-    if (policyDigest(readFileSync(path)) !== digest) throw new TypeError("symbol-subject-changed");
+  for (const [path, previous] of state.snapshots) {
+    if (!hasCurrentDigest(path, previous, previous.digest))
+      throw new TypeError("symbol-subject-changed");
   }
+}
+
+function hasCurrentDigest(path, previous, expected) {
+  const witness = SNAPSHOT_WITNESSES.get(previous);
+  // Invalid UTF8 decodes with U+FFFD, so it cannot equal an admitted string without that character.
+  if (previous?.digest === expected && typeof witness === "string")
+    return readFileSync(path, "utf8") === witness;
+  const bytes = readFileSync(path);
+  if (previous?.digest === expected && Buffer.isBuffer(witness) && bytes.equals(witness))
+    return true;
+  return policyDigest(bytes) === expected;
 }
 
 export function visitCompilerNodes(state, node, visit) {

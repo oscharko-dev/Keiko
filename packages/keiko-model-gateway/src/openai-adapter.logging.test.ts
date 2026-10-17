@@ -12,6 +12,7 @@ import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import {
   logModelId,
+  type ModelGatewayLogTransport,
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -23,22 +24,25 @@ import {
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 }
 
 function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     sink: {
-      write(event: ModelGatewayLogEvent): void {
+      write(event: ModelGatewayLogTransport): void {
         events.push(event);
       },
     },
   };
 }
 
-function eventFor(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
+function eventFor(
+  events: readonly ModelGatewayLogTransport[],
+  op: string,
+): ModelGatewayLogTransport {
   const found = events.find((event) => event.op === op);
   if (found === undefined) {
     const seen = events.map((event) => event.op).join(", ");
@@ -112,8 +116,8 @@ describe("OpenAiAdapter.call — activity log", () => {
       timeoutMs: 12_000,
       stream: false,
     });
-    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(typeof dispatch.extra?.bodyBytes).toBe("number");
+    expect(normalFixtureEvent(dispatch).extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(typeof normalFixtureEvent(dispatch).extra?.bodyBytes).toBe("number");
     // Never the prompt content, and never the api key.
     expect(JSON.stringify(log.events)).not.toContain("some private prompt text");
     expect(JSON.stringify(log.events)).not.toContain(CONFIG.apiKey);
@@ -143,7 +147,7 @@ describe("OpenAiAdapter.call — activity log", () => {
     });
     await adapter.call(REQUEST, CONFIG);
     const dispatch = eventFor(log.events, "chat.request.dispatch");
-    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(dispatch).extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(dispatch)).not.toContain("provider.example");
   });
 
@@ -162,7 +166,9 @@ describe("OpenAiAdapter.call — activity log", () => {
       adapter.call({ ...REQUEST, modelId }, { ...CONFIG, modelId }),
     ).resolves.toMatchObject({ content: "pong" });
 
-    expect(eventFor(log.events, "chat.request.dispatch").extra?.modelId).toBe(logModelId(modelId));
+    expect(normalFixtureEvent(eventFor(log.events, "chat.request.dispatch")).extra?.modelId).toBe(
+      logModelId(modelId),
+    );
     expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
@@ -241,7 +247,7 @@ describe("OpenAiAdapter.call — activity log", () => {
   // The gate from the port's side: a sink that declines `info` must never receive the attempt
   // line — `logLevelEnabled` is asked before the event is even built.
   it("skips the dispatch line entirely for a level-gated sink that declines info", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gated: ModelGatewayLogSink = {
       write: (event): void => {
         events.push(event);
@@ -276,7 +282,7 @@ describe("OpenAiAdapter.call — activity log", () => {
     };
     await adapter.call(request, CONFIG);
     const dispatch = eventFor(log.events, "chat.request.dispatch");
-    const bytes = dispatch.extra?.bodyBytes;
+    const bytes = normalFixtureEvent(dispatch).extra?.bodyBytes;
     expect(typeof bytes).toBe("number");
     expect(bytes as number).toBeGreaterThan("日本語テキスト".length);
   });
@@ -305,7 +311,7 @@ describe("OpenAiAdapter.call — activity log", () => {
     };
     await adapter.call(request, { ...CONFIG, modelId: "gpt-5.6" });
     const dispatch = eventFor(log.events, "chat.request.dispatch");
-    expect(dispatch.extra?.reasoningEffort).toBe("none");
+    expect(normalFixtureEvent(dispatch).extra?.reasoningEffort).toBe("none");
 
     const persisted = expectActivityLogProof(
       "chat.request.dispatch.emitted-line",
@@ -326,7 +332,7 @@ describe("OpenAiAdapter.call — activity log", () => {
     const request: GatewayRequest = { ...REQUEST, reasoningEffort: "medium" };
     await adapter.call(request, { ...CONFIG, modelId: "gpt-5.6" });
     const dispatch = eventFor(log.events, "chat.request.dispatch");
-    expect(dispatch.extra?.reasoningEffort).toBe("medium");
+    expect(normalFixtureEvent(dispatch).extra?.reasoningEffort).toBe("medium");
   });
 
   it("omits reasoning_effort from the dispatch line when the request declared none and no override applies", async () => {
@@ -343,3 +349,15 @@ describe("OpenAiAdapter.call — activity log", () => {
     expect(dispatch.extra).not.toHaveProperty("reasoningEffort");
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

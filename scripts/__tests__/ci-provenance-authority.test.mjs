@@ -9,7 +9,7 @@ const workflow = parse(
 );
 
 describe("CI provenance authority", () => {
-  it.each(["build-scan-sbom-smoke", "ui"])(
+  it.each(["build-scan-sbom-smoke", "firefox-smoke", "ui"])(
     "%s executes candidate code without OIDC or attestation authority",
     (id) => {
       expect(workflow.jobs[id].permissions).toEqual({ contents: "read" });

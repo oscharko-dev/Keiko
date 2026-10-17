@@ -251,3 +251,93 @@ describe("notRunTestGenerationFunnel + constants", () => {
     expect(EDITOR_TEST_GENERATION_TARGET_KINDS).toContain("frontend-component");
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const parsed = publicOwner.parseEditorTestGenerationRequest(fileRequest());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.target.kind).toBe("file");
+    if (parsed.value.target.kind === "file") expect(parsed.value.target.document).toBe(OVERLAY);
+    expect(publicOwner.notRunTestGenerationFunnel().executionEnabled).toBe(false);
+  });
+});
+
+// #3918 finite original-first observations.
+describe("#3918 captured output root admission", () => {
+  it.each([
+    ["source", parseEditorTestGenerationRequest],
+    ["public", publicOwner.parseEditorTestGenerationRequest],
+  ])("%s refuses a malformed second root", (_surface, parse) => {
+    const input = fileRequest();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : undefined) });
+    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
+    expect(reads).toBe(2);
+  });
+  it.each([
+    ["source", parseEditorTestGenerationRequest],
+    ["public", publicOwner.parseEditorTestGenerationRequest],
+  ])("%s keeps a valid changed second root", (_surface, parse) => {
+    const input = fileRequest();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : "/other") });
+    const parsed = parse(input);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.root).toBe("/other");
+    expect(reads).toBe(2);
+  });
+});
+
+describe("#3918 frontend-component optional range shape hypothesis", () => {
+  it.each([
+    ["source", parseEditorTestGenerationRequest],
+    ["public", publicOwner.parseEditorTestGenerationRequest],
+  ])("%s refuses malformed optional range", (_surface, parse) => {
+    const input = fileRequest({
+      target: { kind: "frontend-component", document: OVERLAY, componentName: "Widget", range: {} },
+    });
+    expect(parse(input)).toEqual({
+      ok: false,
+      errors: ["target.range must be { start, end } when present for a frontend-component target"],
+    });
+  });
+});
+
+function callerOverlayEvery(): unknown[] {
+  const entries: unknown[] = [{}];
+  Object.defineProperty(entries, "every", { value: (): boolean => true });
+  return entries;
+}
+describe("#3918 forward overlay physical admission", () => {
+  it.each([parseEditorTestGenerationRequest, publicOwner.parseEditorTestGenerationRequest])(
+    "healthy overlays and ordinary refusal",
+    (parse) => {
+      expect(
+        parse(fileRequest({ target: { kind: "changed-file-set", documents: [OVERLAY] } })).ok,
+      ).toBe(true);
+      expect(parse(fileRequest({ target: { kind: "changed-file-set", documents: [{}] } }))).toEqual(
+        {
+          ok: false,
+          errors: ["target.documents must be a non-empty array of { path, languageId, text }"],
+        },
+      );
+    },
+  );
+  it.each([parseEditorTestGenerationRequest, publicOwner.parseEditorTestGenerationRequest])(
+    "finite overlay caller every refusal",
+    (parse) => {
+      expect(
+        parse(
+          fileRequest({ target: { kind: "changed-file-set", documents: callerOverlayEvery() } }),
+        ),
+      ).toEqual({
+        ok: false,
+        errors: ["target.documents must be a non-empty array of { path, languageId, text }"],
+      });
+    },
+  );
+});

@@ -40,3 +40,15 @@ describe("editor hot-exit contracts", () => {
     ).toBe(false);
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    expect(publicOwner.isEditorHotExitIndexRecordV2(VALID_RECORD)).toBe(true);
+    expect(
+      publicOwner.isEditorHotExitIndexRecordV2({ ...VALID_RECORD, serverReceivedAt: -1 }),
+    ).toBe(false);
+  });
+});

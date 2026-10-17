@@ -144,17 +144,22 @@ const PROVIDER_ENDPOINT_STYLE_TABLE: Record<ProviderEndpointStyle, true> = {
   "openai-compatible": true,
   "azure-openai-deployment": true,
 };
-export const PROVIDER_ENDPOINT_STYLES = Object.keys(
+function isProviderEndpointStyleKey(value: string): value is ProviderEndpointStyle {
+  return Object.hasOwn(PROVIDER_ENDPOINT_STYLE_TABLE, value);
+}
+export const PROVIDER_ENDPOINT_STYLES: readonly ProviderEndpointStyle[] = Object.keys(
   PROVIDER_ENDPOINT_STYLE_TABLE,
-) as readonly ProviderEndpointStyle[];
+).filter(isProviderEndpointStyleKey);
 
 const REALTIME_AUTH_MODE_TABLE: Record<RealtimeAuthMode, true> = {
   "api-key": true,
   "ephemeral-session": true,
 };
-export const REALTIME_AUTH_MODES = Object.keys(
-  REALTIME_AUTH_MODE_TABLE,
-) as readonly RealtimeAuthMode[];
+function isRealtimeAuthModeKey(value: string): value is RealtimeAuthMode {
+  return Object.hasOwn(REALTIME_AUTH_MODE_TABLE, value);
+}
+export const REALTIME_AUTH_MODES: readonly RealtimeAuthMode[] =
+  Object.keys(REALTIME_AUTH_MODE_TABLE).filter(isRealtimeAuthModeKey);
 
 // ─── Product voice persona (Issue #1557, Epic #1556, ADR-0094 D1) ──────────────
 // A `VoicePersona` is a PRODUCT-level voice identity the operator offers to the end user — "what
@@ -1068,13 +1073,16 @@ const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
   moderation: "unsupported",
 };
 
+function isDeclaredModelModeKey(value: string): value is DeclaredModelMode {
+  return Object.hasOwn(DECLARED_MODE_ROLES, value);
+}
+
 /**
  * Every mode Keiko recognises, DERIVED from the role table so the two cannot drift. Used to keep
  * foreign mode strings out of logs and wire payloads.
  */
-export const DECLARED_MODEL_MODES: readonly DeclaredModelMode[] = Object.keys(
-  DECLARED_MODE_ROLES,
-) as DeclaredModelMode[];
+export const DECLARED_MODEL_MODES: readonly DeclaredModelMode[] =
+  Object.keys(DECLARED_MODE_ROLES).filter(isDeclaredModelModeKey);
 
 /**
  * Closed vocabulary for "why discovery will not configure this model". Either a mode the gateway
@@ -1098,9 +1106,7 @@ export interface GatewayUnsupportedDiscoveredModel {
  */
 export function modelKindForDeclaredMode(mode: string): DeclaredModeRole {
   const normalized = mode.trim().toLowerCase();
-  return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
-    ? DECLARED_MODE_ROLES[normalized as DeclaredModelMode]
-    : "unsupported";
+  return isDeclaredModelModeKey(normalized) ? DECLARED_MODE_ROLES[normalized] : "unsupported";
 }
 
 /**
@@ -1109,9 +1115,7 @@ export function modelKindForDeclaredMode(mode: string): DeclaredModeRole {
  */
 export function boundedUnsupportedReason(mode: string): GatewayModelUnsupportedReason {
   const normalized = mode.trim().toLowerCase();
-  return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
-    ? (normalized as DeclaredModelMode)
-    : "unrecognised-mode";
+  return isDeclaredModelModeKey(normalized) ? normalized : "unrecognised-mode";
 }
 
 /** True when a declared mode names a chat-compatible lane. Single source for the chat vocabulary. */

@@ -115,6 +115,8 @@ export function presentChatSessionError(
 ): string | undefined {
   const presentation = chatSessionErrorPresentation(error);
   switch (presentation.kind) {
+    case "draft-attachments-unsaved":
+      return t("chat.draft.attachmentsUnsaved");
     case "none":
       return undefined;
     case "attachment-cleanup-deferred":

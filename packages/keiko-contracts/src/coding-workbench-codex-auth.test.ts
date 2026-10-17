@@ -123,3 +123,131 @@ describe("selectCodingWorkbenchRuntimeProfile", () => {
     }
   });
 });
+
+function c1bCoverageProfile(): Record<string, unknown> {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    profileId: "codex-subscription",
+    modelSource: "chatgpt-codex-subscription-profile",
+    runtimeSource: "codex-cli-adapter",
+    status: "connected",
+    authMethod: "chatgpt-device-code",
+    credentialStore: "keyring",
+    stateScope: "os-credential-store",
+    stateRoot: "os-credential-store",
+    usesGlobalCodexHome: false,
+    runtimeBinarySources: ["managed-sidecar-runtime"],
+    supportsBrowserLogin: true,
+    supportsDeviceCode: true,
+    supportsAccessToken: true,
+    deploymentPolicyDisabled: false,
+    headless: false,
+  };
+}
+
+describe("C1B Codex primitive refusal coverage", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy profile reference through %s",
+    async (seam) => {
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-codex-auth.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth");
+      const input = c1bCoverageProfile();
+      expect(module.validateCodingWorkbenchCodexSubscriptionProfile(input)).toEqual({
+        ok: true,
+        value: input,
+      });
+    },
+  );
+  it.each([
+    "schemaVersion",
+    "modelSource",
+    "runtimeSource",
+    "status",
+    "profileId",
+    "authMethod",
+    "credentialStore",
+    "stateScope",
+    "stateRoot",
+    "usesGlobalCodexHome",
+    "supportsBrowserLogin",
+    "supportsDeviceCode",
+    "supportsAccessToken",
+    "deploymentPolicyDisabled",
+    "headless",
+  ])("rejects malformed profile %s without hiding later diagnostics", async (field) => {
+    const module = await import("./coding-workbench-codex-auth.js");
+    const input = { ...c1bCoverageProfile(), [field]: 7 };
+    const result = module.validateCodingWorkbenchCodexSubscriptionProfile(input);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("malformed profile admitted");
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain(field);
+  });
+  it("keeps malformed binary members and later Boolean diagnostics eager", async () => {
+    const module = await import("./coding-workbench-codex-auth.js");
+    const result = module.validateCodingWorkbenchCodexSubscriptionProfile({
+      ...c1bCoverageProfile(),
+      runtimeBinarySources: [7, "invalid"],
+      headless: 7,
+      extra: true,
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "profile.extra is not allowed",
+        "profile.runtimeBinarySources[0] is invalid",
+        "profile.runtimeBinarySources[1] is invalid",
+        "profile.headless must be a boolean",
+      ],
+    });
+  });
+  it.each([null, { method: "invalid" }, { method: "chatgpt-device-code", extra: true }])(
+    "refuses malformed setup request %j",
+    async (input) => {
+      const module = await import("./coding-workbench-codex-auth.js");
+      expect(module.validateCodingWorkbenchCodexAuthSetupRequest(input).ok).toBe(false);
+    },
+  );
+  it.each([
+    "schemaVersion",
+    "profileId",
+    "method",
+    "modelSource",
+    "runtimeSource",
+    "credentialStore",
+    "stateScope",
+    "stateRoot",
+    "usesGlobalCodexHome",
+    "commandLabel",
+    "requiresSecretInput",
+    "credentialTransport",
+  ])("refuses malformed setup plan %s", async (field) => {
+    const module = await import("./coding-workbench-codex-auth.js");
+    const input = {
+      schemaVersion: "1",
+      profileId: "codex-subscription",
+      method: "codex-access-token",
+      modelSource: "chatgpt-codex-subscription-profile",
+      runtimeSource: "codex-cli-adapter",
+      credentialStore: "keyring",
+      stateScope: "os-credential-store",
+      stateRoot: "os-credential-store",
+      usesGlobalCodexHome: false,
+      ...module.codingWorkbenchCodexAuthMethodRowFor("codex-access-token"),
+    };
+    expect(module.validateCodingWorkbenchCodexAuthSetupPlan(input).ok).toBe(true);
+    const result = module.validateCodingWorkbenchCodexAuthSetupPlan({ ...input, [field]: 7 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("malformed setup plan admitted");
+    expect(result.errors.some((error) => error.includes(field))).toBe(true);
+  });
+  it.each([
+    "validateCodingWorkbenchCodexSubscriptionProfile",
+    "validateCodingWorkbenchCodexAuthSetupPlan",
+  ] as const)("refuses non-object at %s", async (name) => {
+    const module = await import("./coding-workbench-codex-auth.js");
+    expect(module[name](null).ok).toBe(false);
+  });
+});

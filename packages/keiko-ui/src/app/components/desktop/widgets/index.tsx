@@ -1,22 +1,12 @@
 import dynamic from "next/dynamic";
 import { gitObjectId } from "./gitObjectId";
 import { useEffect, useMemo, type ReactNode } from "react";
-import type {
-  QualityIntelligenceInlineSource,
-  QualityIntelligenceUiRegenerateResult,
-} from "@oscharko-dev/keiko-contracts";
 import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { WindowCfgValue } from "../windows/types";
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import { requestGatewaySetup } from "./shared/gatewaySetupBus";
-import {
-  buildConnectedRunSources,
-  connectedRunSourcesCfgFromInlineSources,
-  connectedRunSourcesCfgFromSources,
-  connectedRunSourcesFromWindowCfg,
-} from "./quality-intelligence/connectedSources";
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
@@ -194,12 +184,12 @@ const FigmaImageSourceWindow = dynamic(
   () => import("./figma/FigmaImageSourceWindow").then((mod) => mod.FigmaImageSourceWindow),
   { ssr: false, loading: windowChunkFallback },
 );
-const QiHubPanel = dynamic(
-  () => import("./quality-intelligence/QiHubPanel").then((mod) => mod.QiHubPanel),
+const QiHubWindowHost = dynamic(
+  () => import("./quality-intelligence/QiHubWindowHost").then((mod) => mod.QiHubWindowHost),
   { ssr: false, loading: windowChunkFallback },
 );
-const QiRunCard = dynamic(
-  () => import("./quality-intelligence/QiRunCard").then((mod) => mod.QiRunCard),
+const QiRunWindowHost = dynamic(
+  () => import("./quality-intelligence/QiRunWindowHost").then((mod) => mod.QiRunWindowHost),
   { ssr: false, loading: windowChunkFallback },
 );
 const RelationshipsView = dynamic(
@@ -430,24 +420,6 @@ function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly st
   }
 }
 
-// Serialise the currently-connected source set (Files folders/file, Connector capsules, Figma
-// snapshots) into a scalar cfg field so it can ride through openWindow (whose cfg values must be
-// scalars). Reuses the SAME builder the RunLauncher generates from, so a re-check reconstructs the
-// exact sources — same order, same labels — and never reports false drift on an unchanged source.
-function connectedSourcesCfgFromCtx(ctx: WindowRenderContext): Record<string, string> {
-  const sources = buildConnectedRunSources({
-    connectedFilePath: ctx.linkedFilePath ?? null,
-    connectedRoot: ctx.linkedRoot,
-    connectedRoots: ctx.linkedRoots,
-    connectedCapsuleIds: ctx.linkedCapsuleIds,
-    connectedCapsuleSetIds: ctx.linkedCapsuleSetIds,
-    connectedFigmaSnapshotRunIds: ctx.linkedFigmaSnapshotRunIds,
-    connectedFigmaSnapshotSources: ctx.linkedFigmaSnapshotSources,
-    connectedImageSources: ctx.linkedImageSources,
-  });
-  return connectedRunSourcesCfgFromSources(sources);
-}
-
 function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
   const v = cfg["access"];
   return v === "ask" || v === "full" ? v : undefined;
@@ -582,52 +554,8 @@ registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
-registerWindowRender("quality", (_cfg, ctx) => (
-  <QiHubPanel
-    openRun={(runId: string, recheckableSources?: readonly QualityIntelligenceInlineSource[]) => {
-      const sourceCfg =
-        recheckableSources !== undefined
-          ? connectedRunSourcesCfgFromInlineSources(recheckableSources)
-          : connectedSourcesCfgFromCtx(ctx);
-      ctx.openWindow("qiRun", { runId, ...sourceCfg });
-    }}
-    connectedRoot={ctx.linkedRoot}
-    connectedFilePath={ctx.linkedFilePath ?? null}
-    connectedRoots={ctx.linkedRoots}
-    connectedCapsuleIds={ctx.linkedCapsuleIds}
-    connectedCapsuleSetIds={ctx.linkedCapsuleSetIds}
-    connectedFigmaSnapshotRunIds={ctx.linkedFigmaSnapshotRunIds}
-    connectedFigmaSnapshotSources={ctx.linkedFigmaSnapshotSources}
-    connectedImageSources={ctx.linkedImageSources}
-  />
-));
-registerWindowRender("qiRun", (cfg, ctx) => {
-  const runId = str(cfg, "runId");
-  if (runId === undefined || runId === "") {
-    return (
-      <div className="lk-empty">
-        <p className="lk-empty-body">Open a run from the Quality Intelligence hub.</p>
-      </div>
-    );
-  }
-  const connectedSources = connectedRunSourcesFromWindowCfg(cfg);
-  // A regeneration writes a NEW immutable run; open it on the canvas so the user sees the merged
-  // (fresh + regenerated) tests, carrying the same connected sources so the new card can itself
-  // re-check drift (Epic #735, Issue #744 "refreshed card"). The original run card is left intact.
-  const sourceCfg = connectedRunSourcesCfgFromSources(connectedSources);
-  return (
-    <QiRunCard
-      runId={runId}
-      connectedSources={connectedSources}
-      onRegenerated={(result: QualityIntelligenceUiRegenerateResult) => {
-        ctx.openWindow("qiRun", {
-          runId: result.runId,
-          ...sourceCfg,
-        });
-      }}
-    />
-  );
-});
+registerWindowRender("quality", (_cfg, ctx) => <QiHubWindowHost ctx={ctx} />);
+registerWindowRender("qiRun", (cfg, ctx) => <QiRunWindowHost cfg={cfg} ctx={ctx} />);
 
 // Epic #532 — Relationship engine hub. Singleton tool window mirroring the QI hub: the governed
 // relationship graph lives inside the Workspace, not as a full-page route.

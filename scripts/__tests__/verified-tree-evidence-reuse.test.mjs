@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,10 +25,51 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const workflow = YAML.parse(readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"));
 const jobs = workflow.jobs;
 
+it("publishes measured native host coverage in the existing Sonar script report", () => {
+  const steps = jobs["coverage-sonar"].steps;
+  const build = steps.findIndex((step) => step.run === "npm run build:packages");
+  const install = steps.findIndex((step) =>
+    step.run?.startsWith("npm ci --prefix native/opencode-service-host"),
+  );
+  const measure = steps.findIndex((step) => step.run === "npm run test:coverage:scripts:merge");
+  const native = steps.findIndex(
+    (step) => step.run === "npm run test:coverage:opencode-service-host",
+  );
+  const evaluate = steps.findIndex((step) => step.run === "npm run check:coverage:quality");
+  const mapping = steps.findIndex((step) =>
+    step.run?.startsWith("node scripts/check-lcov-source-mapping.mjs"),
+  );
+  const scan = steps.findIndex((step) => step.id === "sonar-scan");
+  expect(build).toBeGreaterThan(-1);
+  expect(install).toBeGreaterThan(build);
+  expect(measure).toBeGreaterThan(install);
+  expect(native).toBeGreaterThan(measure);
+  expect(evaluate).toBeGreaterThan(native);
+  expect(mapping).toBeGreaterThan(evaluate);
+  expect(scan).toBeGreaterThan(mapping);
+  expect(
+    Object.values(jobs)
+      .flatMap((job) => job.steps ?? [])
+      .filter((step) => step.run === "npm run test:coverage:opencode-service-host"),
+  ).toHaveLength(1);
+  expect(
+    jobs["coverage-scripts"].steps.some(
+      (step) => step.run === "npm run test:coverage:opencode-service-host",
+    ),
+  ).toBe(false);
+  expect(steps[native].if).toBe(steps[measure].if);
+  expect(steps[native]["continue-on-error"]).toBeUndefined();
+  const { scripts } = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  expect(scripts["test:coverage:opencode-service-host"]).toContain("--experimental-test-coverage");
+  expect(scripts["test:coverage:opencode-service-host"]).toContain("--test-reporter=lcov");
+  expect(scripts["test:coverage:opencode-service-host"]).toContain(">> coverage/scripts/lcov.info");
+});
+
 /** Every job whose verdict a verified tree lets this run reuse. */
 const GATED_JOBS = Object.freeze([
   "semantic-duplication",
   "core-quality",
+  "code-quality-policy",
   "coverage-packages",
   "coverage-ui",
   "coverage-scripts",
@@ -37,6 +78,7 @@ const GATED_JOBS = Object.freeze([
   "cross-platform-smoke",
   "node-26-compatibility",
   "portable-secure-read",
+  "firefox-smoke",
   "ui",
 ]);
 
@@ -47,6 +89,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   CHANGE_SCOPE_RESULT: "success",
   PROTECTED_BRANCH_RESULT: "success",
   CORE_QUALITY_RESULT: "success",
+  CODE_QUALITY_POLICY_RESULT: "success",
   COVERAGE_SONAR_RESULT: "success",
   SECRET_SCAN_RESULT: "success",
   SEMANTIC_DUPLICATION_RESULT: "success",
@@ -72,6 +115,7 @@ const REUSING = Object.freeze({
   TREE_EVIDENCE_HEAD_SHA: "ff5c58ea61685b4de7b9546c8ae7fe48fa75c77d",
   TREE_EVIDENCE_TREE_SHA: "a2847b68a9c436c015dd07e6e542169c1eb56470",
   CORE_QUALITY_RESULT: "skipped",
+  CODE_QUALITY_POLICY_RESULT: "skipped",
   COVERAGE_SONAR_RESULT: "skipped",
   SEMANTIC_DUPLICATION_RESULT: "skipped",
   UI_RESULT: "skipped",
@@ -142,6 +186,7 @@ const COND_OR_DEV_PUSH = () => "${{ !cancelled() && (" + GUARD + " || " + DEV_PU
 const EXPECTED_CONDITIONS = Object.freeze({
   "semantic-duplication": COND(),
   "core-quality": COND(),
+  "code-quality-policy": COND(),
   "coverage-packages": COND_OR_DEV_PUSH(),
   "coverage-ui": COND_OR_DEV_PUSH(),
   "coverage-scripts": COND_OR_DEV_PUSH(),
@@ -150,6 +195,7 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
   "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
   "portable-secure-read": COND(DOC_ONLY_CLAUSE),
+  "firefox-smoke": COND(),
   ui: COND(),
 });
 
@@ -255,6 +301,9 @@ describe("the resolver refuses every event that may not reuse", () => {
 function gatedDisplayNames(job) {
   const definition = jobs[job];
   const name = String(definition.name);
+  if (name.includes("${{ matrix.node }}")) {
+    return definition.strategy.matrix.node.map((node) => name.replace("${{ matrix.node }}", node));
+  }
   if (name.includes("${{ matrix.shard }}")) {
     return definition.strategy.matrix.shard.map((shard) =>
       name.replace("${{ matrix.shard }}", String(shard)),
@@ -294,6 +343,49 @@ describe("the resolver inventory covers every gated job", () => {
       ).toBe(true);
     }
   });
+});
+
+describe("required static policy matrix", () => {
+  it("pins both governed runtimes and all fresh full-report prerequisites", () => {
+    const job = jobs["code-quality-policy"];
+    expect(job["runs-on"]).toBe("ubuntu-24.04-arm");
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      matrix: { node: ["24.18.0", "26.8.1"] },
+    });
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(jobs["core-quality"]["runs-on"]).toBe("ubuntu-latest");
+    expect(jobs["node-26-compatibility"]["runs-on"]).toBe("ubuntu-latest");
+    expect(jobs["core-quality"].needs).toContain("code-quality-policy");
+    expect(jobs.ci.needs).toContain("code-quality-policy");
+    expect(job.steps.filter((step) => step.run).map((step) => step.run)).toEqual([
+      "node scripts/check-ci-merge-candidate.mjs",
+      "node scripts/check-runtime-toolchain.mjs --exact",
+      "npm ci --ignore-scripts",
+      "npm run provision:usearch",
+      "npm run build:packages",
+      "npm run check:code-quality-policy:cli-smoke",
+      `node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+/usr/bin/time -v npm run check:code-quality-policy:repository
+`,
+      "npm run check:code-quality-policy:raw-reader",
+    ]);
+    for (const step of job.steps) {
+      expect(step["continue-on-error"]).toBeUndefined();
+      if (step.name !== "Verify pull-request merge candidate consistency")
+        expect(step.if).toBeUndefined();
+    }
+  });
+
+  it.each(["failure", "cancelled", "skipped", "", "unknown"])(
+    "refuses static policy result %s unless exact-tree reuse permits a clean skip",
+    (result) => {
+      expect(runAggregator({ CODE_QUALITY_POLICY_RESULT: result })).toBe(1);
+      if (result !== "skipped")
+        expect(runAggregator({ ...REUSING, CODE_QUALITY_POLICY_RESULT: result })).toBe(1);
+    },
+  );
 });
 
 describe("complete Node 26 qualification shards", () => {
@@ -408,6 +500,34 @@ describe("the aggregator still fails closed", () => {
       "${{ needs.portable-secure-read.result }}",
     );
   });
+  it("runs the original OpenCode host suites on every required native platform", () => {
+    const steps = jobs["portable-secure-read"].steps;
+    const build = steps.findIndex((step) => step.run === "npm run build:packages");
+    const install = steps.findIndex(
+      (step) =>
+        step.run ===
+        "npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false",
+    );
+    const qualify = steps.findIndex((step) => step.run === "npm run test:opencode-service-host");
+    expect(build).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(build);
+    expect(qualify).toBeGreaterThan(install);
+    for (const index of [build, install, qualify]) {
+      expect(steps[index].if).toBeUndefined();
+      expect(steps[index]["continue-on-error"]).toBeUndefined();
+    }
+  });
+
+  it("keeps every original OpenCode host suite reachable from the required command", () => {
+    const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+    const suites = readdirSync(join(repoRoot, "native/opencode-service-host"))
+      .filter((name) => name.endsWith(".test.mjs"))
+      .sort()
+      .map((name) => `native/opencode-service-host/${name}`);
+    expect(suites.length).toBeGreaterThan(0);
+    expect(manifest.scripts["test:opencode-service-host"]).toBe(`node --test ${suites.join(" ")}`);
+  });
+
   it("accepts a complete reuse claim whose gates were skipped by the guard", () => {
     expect(runAggregator(REUSING)).toBe(0);
   });
@@ -525,4 +645,125 @@ describe("acceptMergedPullCandidate", () => {
       expect(acceptMergedPullCandidate(candidate, SHA)).toBeNull();
     },
   );
+});
+
+/**
+ * Execute the real dependency check before candidate code.
+ * @param {Record<string, string>} overrides
+ * @returns {number}
+ */
+function runFirefoxDependency(overrides) {
+  const step = jobs.ui.steps[0];
+  try {
+    execFileSync("bash", ["-e", "-c", step.run], {
+      env: {
+        ...process.env,
+        KEIKO_FIREFOX_RESULT: "success",
+        KEIKO_EVENT_NAME: "pull_request",
+        KEIKO_BASE_REF: "dev",
+        ...overrides,
+      },
+      stdio: "pipe",
+    });
+    return 0;
+  } catch (error) {
+    return typeof error.status === "number" ? error.status : 1;
+  }
+}
+
+describe("complete isolated Firefox smoke shards", () => {
+  it("keeps both mandatory partitions and the unchanged literal smoke command", () => {
+    const job = jobs["firefox-smoke"];
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 2,
+      matrix: { shard: [1, 2] },
+    });
+    expect(gatedDisplayNames("firefox-smoke")).toEqual([
+      "Firefox smoke (shard 1/2)",
+      "Firefox smoke (shard 2/2)",
+    ]);
+    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(job["timeout-minutes"]).toBe(20);
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(job.steps.filter((step) => step.run).map((step) => step.run)).toEqual([
+      "node scripts/check-ci-merge-candidate.mjs",
+      "node scripts/check-runtime-toolchain.mjs --exact",
+      "npm ci --ignore-scripts",
+      "npm run build:packages",
+      "npm run build --workspace @oscharko-dev/keiko-ui",
+      "./node_modules/.bin/playwright install --with-deps firefox",
+      "npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/2",
+    ]);
+    expect(job.steps.find((step) => step.name === "Release smoke E2E (Firefox)")).toMatchObject({
+      "timeout-minutes": 20,
+    });
+    for (const step of job.steps) {
+      expect(step["continue-on-error"]).toBeUndefined();
+      if (step.name === "Upload Firefox smoke traces on failure") continue;
+      if (
+        new Set(["Install locked Playwright Firefox", "Release smoke E2E (Firefox)"]).has(step.name)
+      ) {
+        expect(step.if).toBe("${{ " + EDITOR_CLAUSE.slice(1, -1) + " }}");
+        continue;
+      }
+      if (step.name !== "Verify pull-request merge candidate consistency") {
+        expect(step.if).toBeUndefined();
+      }
+    }
+  });
+
+  it("keeps isolated sandbox setup and failure artifacts for each runner", () => {
+    const steps = jobs["firefox-smoke"].steps;
+    expect(steps.some((step) => step.uses === "./.github/actions/setup-sandbox-isolation")).toBe(
+      true,
+    );
+    const upload = steps.find((step) => step.name === "Upload Firefox smoke traces on failure");
+    expect(upload.if).toBe("${{ failure() }}");
+    expect(upload.with).toEqual({
+      name: "playwright-smoke-firefox-shard-${{ matrix.shard }}-of-2",
+      path: "test-results/",
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+  });
+
+  it("requires both shards before the existing protected UI work", () => {
+    expect(jobs.ui.needs).toEqual(["verified-tree", "firefox-smoke"]);
+    expect(jobs.ui["timeout-minutes"]).toBe(60);
+    expect(jobs.ci.needs).toContain("ui");
+    expect(jobs.ui.steps[0].name).toBe("Require complete Firefox smoke shards");
+    expect(jobs.ui.steps[0].if).toBeUndefined();
+    expect(jobs.ui.steps[0].env).toEqual({
+      KEIKO_FIREFOX_RESULT: "${{ needs.firefox-smoke.result }}",
+    });
+    expect(jobs.ui.steps.some((step) => step.run?.includes("test:e2e:smoke:firefox"))).toBe(false);
+  });
+
+  it.each(["pull_request", "push", "merge_group", "workflow_dispatch"])(
+    "accepts completed shards for %s",
+    (event) => {
+      expect(runFirefoxDependency({ KEIKO_EVENT_NAME: event })).toBe(0);
+    },
+  );
+
+  it.each(["failure", "cancelled", "skipped", "", "unknown"])(
+    "fails UI closed on every non-success matrix result: %s",
+    (result) => {
+      for (const event of ["pull_request", "push", "merge_group", "workflow_dispatch"]) {
+        expect(
+          runFirefoxDependency({ KEIKO_FIREFOX_RESULT: result, KEIKO_EVENT_NAME: event }),
+        ).toBe(1);
+      }
+    },
+  );
+
+  it("rejects an unexpected skipped matrix even on the editor fast path", () => {
+    expect(
+      runFirefoxDependency({
+        KEIKO_FIREFOX_RESULT: "skipped",
+        KEIKO_BASE_REF: "feat/keiko-editor",
+      }),
+    ).toBe(1);
+  });
 });

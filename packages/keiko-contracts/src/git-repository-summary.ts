@@ -6,6 +6,7 @@ import type {
   GitRepositoryState,
   GitUnavailableReason,
   GitRepositoryValidation,
+  GitRepositoryParseResult,
 } from "./git-repository.js";
 import {
   GIT_REPOSITORY_STATES,
@@ -72,6 +73,15 @@ export interface GitRemotesResponse {
 
 export type GitRepositorySummaryValidation = GitRepositoryValidation; // reuse ok/fail shape
 
+function rejectSummaryField(reasons: string[], reason: string): false {
+  reasons.push(reason);
+  return false;
+}
+
+function isGitRepositoryState(input: unknown): input is GitRepositoryState {
+  return typeof input === "string" && new Set<string>(GIT_REPOSITORY_STATES).has(input);
+}
+
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
@@ -128,16 +138,23 @@ function validateRemoteUrl(
   field: "fetchUrl" | "pushUrl",
   reasons: string[],
   index: number,
-): void {
+): boolean {
+  let valid = true;
   const value = input[field];
-  if (value === undefined) return;
+  if (value === undefined) return true;
   if (!isString(value)) {
-    reasons.push(`remotes[${String(index)}].${field} must be a string when present`);
-    return;
+    return rejectSummaryField(
+      reasons,
+      `remotes[${String(index)}].${field} must be a string when present`,
+    );
   }
   if (!isSafeRemoteUrl(value)) {
-    reasons.push(`remotes[${String(index)}].${field} is not a redaction-safe URL`);
+    valid = rejectSummaryField(
+      reasons,
+      `remotes[${String(index)}].${field} is not a redaction-safe URL`,
+    );
   }
+  return valid;
 }
 
 function validateRemote(
@@ -145,37 +162,46 @@ function validateRemote(
   reasons: string[],
   index: number,
   options: { readonly allowUrls: boolean },
-): void {
+): boolean {
+  let valid = true;
   if (!isRecord(input)) {
-    reasons.push(`remotes[${String(index)}] must be an object`);
-    return;
+    valid = rejectSummaryField(reasons, `remotes[${String(index)}] must be an object`);
+    return valid;
   }
-  if (!isString(input.name)) reasons.push(`remotes[${String(index)}].name must be a string`);
+  if (!isString(input.name))
+    valid = rejectSummaryField(reasons, `remotes[${String(index)}].name must be a string`);
   if (!options.allowUrls) {
     if (input.fetchUrl !== undefined) {
-      reasons.push(`remotes[${String(index)}].fetchUrl is not allowed in summary`);
+      valid = rejectSummaryField(
+        reasons,
+        `remotes[${String(index)}].fetchUrl is not allowed in summary`,
+      );
     }
     if (input.pushUrl !== undefined) {
-      reasons.push(`remotes[${String(index)}].pushUrl is not allowed in summary`);
+      valid = rejectSummaryField(
+        reasons,
+        `remotes[${String(index)}].pushUrl is not allowed in summary`,
+      );
     }
-    return;
+    return valid;
   }
-  validateRemoteUrl(input, "fetchUrl", reasons, index);
-  validateRemoteUrl(input, "pushUrl", reasons, index);
+  valid = validateRemoteUrl(input, "fetchUrl", reasons, index) && valid;
+  return validateRemoteUrl(input, "pushUrl", reasons, index) && valid;
 }
 
 function validateRemotesArray(
   input: unknown,
   reasons: string[],
   options: { readonly allowUrls: boolean },
-): void {
-  if (!Array.isArray(input)) {
-    reasons.push("remotes must be an array");
-    return;
+): boolean {
+  if (!Array.isArray(input)) return rejectSummaryField(reasons, "remotes must be an array");
+  const remotes: readonly unknown[] = input;
+  const length = remotes.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    valid = validateRemote(remotes[index], reasons, index, options) && valid;
   }
-  input.forEach((remote, index) => {
-    validateRemote(remote, reasons, index, options);
-  });
+  return valid;
 }
 
 // The producer (keiko-server gitPorcelainStatus.ts parseUpstreamRef) emits either { ref } alone or
@@ -204,41 +230,48 @@ function validateWireEnvelopeOptionals(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
   options: { readonly checkMessage: boolean },
-): void {
+): boolean {
+  let valid = true;
   if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    reasons.push("reason invalid");
+    valid = rejectSummaryField(reasons, "reason invalid");
   }
   if (options.checkMessage && input.message !== undefined && !isBoundedGitMessage(input.message)) {
-    reasons.push("message must be a bounded string when present");
+    valid = rejectSummaryField(reasons, "message must be a bounded string when present");
   }
   if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    reasons.push("repositoryRoot must be a string when present");
+    valid = rejectSummaryField(reasons, "repositoryRoot must be a string when present");
   }
+  return valid;
 }
 
 function validateSummaryBranchFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.branch !== undefined && !isString(input.branch)) {
-    reasons.push("branch must be a string when present");
+    valid = rejectSummaryField(reasons, "branch must be a string when present");
   }
   if (input.upstream !== undefined && !isGitUpstreamSummary(input.upstream)) {
-    reasons.push("upstream must be { ref, remote?, branch? } when present");
+    valid = rejectSummaryField(reasons, "upstream must be { ref, remote?, branch? } when present");
   }
   if (input.lastSync !== undefined && !isGitLastSyncMetadata(input.lastSync)) {
-    reasons.push("lastSync must be { lastFetchAtMs? } when present");
+    valid = rejectSummaryField(reasons, "lastSync must be { lastFetchAtMs? } when present");
   }
+  return valid;
 }
 
 function validateSummaryCounters(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!isBoolean(input.detached)) reasons.push("detached must be a boolean");
-  if (!isBoolean(input.clean)) reasons.push("clean must be a boolean");
-  if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
+): boolean {
+  let valid = true;
+  if (!isBoolean(input.available))
+    valid = rejectSummaryField(reasons, "available must be a boolean");
+  if (!isBoolean(input.detached)) valid = rejectSummaryField(reasons, "detached must be a boolean");
+  if (!isBoolean(input.clean)) valid = rejectSummaryField(reasons, "clean must be a boolean");
+  if (!isBoolean(input.truncated))
+    valid = rejectSummaryField(reasons, "truncated must be a boolean");
   for (const key of [
     "ahead",
     "behind",
@@ -247,42 +280,70 @@ function validateSummaryCounters(
     "untrackedCount",
     "conflictedCount",
   ] as const) {
-    if (!isNonNegativeInteger(input[key])) reasons.push(`${key} must be a non-negative integer`);
+    if (!isNonNegativeInteger(input[key]))
+      valid = rejectSummaryField(reasons, `${key} must be a non-negative integer`);
   }
+  return valid;
 }
 
-// The summary is a compact wire envelope with required counters, ahead/behind, and a remotes
-// array; keeping the validator in one place makes failure messages predictable for callers.
-export function validateGitRepositorySummary(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
+function validateGitReadIdentity(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  let valid = true;
+  if (input.schemaVersion !== GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION)
+    valid = rejectSummaryField(reasons, "schemaVersion invalid");
+  if (!isString(input.root)) valid = rejectSummaryField(reasons, "root must be a string");
+  if (!isGitRepositoryState(input.state)) valid = rejectSummaryField(reasons, "state invalid");
+  return valid;
+}
+
+function admitGitSummary(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitRepositorySummary {
+  let valid = validateGitReadIdentity(input, reasons);
+  valid = validateWireEnvelopeOptionals(input, reasons, { checkMessage: true }) && valid;
+  valid = validateSummaryBranchFields(input, reasons) && valid;
+  valid = validateSummaryCounters(input, reasons) && valid;
+  return validateRemotesArray(input.remotes, reasons, { allowUrls: false }) && valid;
+}
+
+function admitGitRemotes(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitRemotesResponse {
+  let valid = validateGitReadIdentity(input, reasons);
+  valid = validateWireEnvelopeOptionals(input, reasons, { checkMessage: false }) && valid;
+  if (!isBoolean(input.available))
+    valid = rejectSummaryField(reasons, "available must be a boolean");
+  if (!isBoolean(input.truncated))
+    valid = rejectSummaryField(reasons, "truncated must be a boolean");
+  return validateRemotesArray(input.remotes, reasons, { allowUrls: true }) && valid;
+}
+
+export function parseGitRepositorySummary(
+  input: unknown,
+): GitRepositoryParseResult<GitRepositorySummary> {
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  if (input.schemaVersion !== GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION) {
-    reasons.push("schemaVersion invalid");
-  }
-  if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
-    reasons.push("state invalid");
-  }
-  validateWireEnvelopeOptionals(input, reasons, { checkMessage: true });
-  validateSummaryBranchFields(input, reasons);
-  validateSummaryCounters(input, reasons);
-  validateRemotesArray(input.remotes, reasons, { allowUrls: false });
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  const reasons: string[] = [];
+  return admitGitSummary(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+}
+
+export function parseGitRemotesResponse(
+  input: unknown,
+): GitRepositoryParseResult<GitRemotesResponse> {
+  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+  const reasons: string[] = [];
+  return admitGitRemotes(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+}
+
+export function validateGitRepositorySummary(input: unknown): GitRepositoryValidation {
+  const parsed = parseGitRepositorySummary(input);
+  return parsed.ok ? { ok: true } : parsed;
 }
 
 export function validateGitRemotesResponse(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  if (input.schemaVersion !== GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION) {
-    reasons.push("schemaVersion invalid");
-  }
-  if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
-    reasons.push("state invalid");
-  }
-  validateWireEnvelopeOptionals(input, reasons, { checkMessage: false });
-  if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
-  validateRemotesArray(input.remotes, reasons, { allowUrls: true });
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  const parsed = parseGitRemotesResponse(input);
+  return parsed.ok ? { ok: true } : parsed;
 }

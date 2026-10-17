@@ -19,6 +19,7 @@
 // title/body DRAFT it returns is user-editable and is NEVER persisted to evidence (evidence carries only
 // the titleByteLength / bodyByteLength already defined on the GitDeliveryPr*Inputs).
 
+import { isGitDeliveryRiskClass } from "./git-delivery.js";
 import type {
   GitDeliveryExecutionErrorCode,
   GitDeliveryParseResult,
@@ -290,7 +291,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Exported enum guards ─────────────────────────────────────────────────────────────────────────
@@ -621,11 +623,21 @@ export function isGitPullRequestReadinessBlocker(
 }
 
 function isBlockerArray(value: unknown): value is readonly GitPullRequestReadinessBlocker[] {
-  return Array.isArray(value) && value.every(isGitPullRequestReadinessBlocker);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitPullRequestReadinessBlocker(value[index])) return false;
+  }
+  return true;
 }
 
 function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
-  return blockers.some((blocker) => blocker.severity === "blocking");
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (blockers[index]?.severity === "blocking") return true;
+  }
+  return false;
 }
 
 // Every code collectAdvisoryBlockers ever constructs via advisory(...) — kept immediately beside
@@ -641,18 +653,26 @@ const CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT: ReadonlySet<GitPullRequestReadin
 function hasIllegitimateAdvisoryBlocker(
   blockers: readonly GitPullRequestReadinessBlocker[],
 ): boolean {
-  return blockers.some(
-    (blocker) =>
-      blocker.severity === "advisory" &&
-      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code),
-  );
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    const blocker = blockers[index];
+    if (
+      blocker?.severity === "advisory" &&
+      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code)
+    )
+      return true;
+  }
+  return false;
 }
 
 // "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
 // been seen, no blocking entry may follow.
 function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
   let sawAdvisory = false;
-  for (const blocker of blockers) {
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    const blocker = blockers[index];
+    if (blocker === undefined) return false;
     if (blocker.severity === "advisory") {
       sawAdvisory = true;
     } else if (sawAdvisory) {
@@ -681,7 +701,13 @@ export function isGitPullRequestReadinessSummary(
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every(isString);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isString(value[index])) return false;
+  }
+  return true;
 }
 
 export function isGitPullRequestChangeNarrative(
@@ -698,6 +724,35 @@ export function isGitPullRequestChangeNarrative(
   );
 }
 
+function isSummarySection(value: unknown): value is GitPrSummarySection {
+  return (
+    isRecord(value) &&
+    isGitPrChangeType(value.changeType) &&
+    isNonNegativeInteger(value.commitCount) &&
+    isNonNegativeInteger(value.fileCount) &&
+    isNonNegativeInteger(value.areaCount) &&
+    (value.primaryArea === undefined || isString(value.primaryArea))
+  );
+}
+
+function isRiskSection(value: unknown): value is GitPrRiskSection {
+  return (
+    isRecord(value) &&
+    isGitDeliveryRiskClass(value.riskClass) &&
+    isGitPrPolicyOutcome(value.policyOutcome) &&
+    isBoolean(value.requiresApproval)
+  );
+}
+
+function isChangeNarrativeSection(value: unknown): value is GitPrChangeNarrativeSection {
+  return (
+    isRecord(value) &&
+    isBoolean(value.touchesTests) &&
+    isStringArray(value.areas) &&
+    isGitPrChangeType(value.changeType)
+  );
+}
+
 export function isGitPullRequestMetadataDraft(
   value: unknown,
 ): value is GitPullRequestMetadataDraft {
@@ -705,9 +760,9 @@ export function isGitPullRequestMetadataDraft(
     isRecord(value) &&
     value.schemaVersion === GIT_PULL_REQUEST_SCHEMA_VERSION &&
     isString(value.composedTitle) &&
-    isRecord(value.summarySection) &&
-    isRecord(value.riskSection) &&
-    isRecord(value.changeNarrativeSection) &&
+    isSummarySection(value.summarySection) &&
+    isRiskSection(value.riskSection) &&
+    isChangeNarrativeSection(value.changeNarrativeSection) &&
     isString(value.riskNarrative)
   );
 }

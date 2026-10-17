@@ -92,3 +92,25 @@ describe("connected-context aggregate omission validation", () => {
     expect(validateOmittedContextEntries(omitted, pack.scope, [])).toEqual({ ok: true });
   });
 });
+
+import { connectedContextOmittedCounts } from "./connected-context.js";
+import { connectedContextOmittedCounts as publicOmittedCounts } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+
+describe.each([
+  ["source", connectedContextOmittedCounts],
+  ["public", publicOmittedCounts],
+])("%s complete omission-count construction", (_label, count) => {
+  it("preserves vocabulary order, accumulated totals and supplied-count identity", () => {
+    const omitted = [
+      { scopePath: "one", reason: "binary", omittedAtMs: 0 },
+      { scopePath: "two", reason: "binary", omittedAtMs: 0 },
+    ] as const;
+    const result = count({ omitted });
+    expect(Object.keys(result)).toEqual(CANDIDATE_OMISSION_REASONS);
+    expect(result.binary).toBe(2);
+    for (const reason of CANDIDATE_OMISSION_REASONS)
+      if (reason !== "binary") expect(result[reason]).toBe(0);
+    expect(count({ omitted, omittedCounts: result })).toBe(result);
+    expect(count({ omitted: [] })).toEqual(count({ omitted: [], omittedCounts: undefined }));
+  });
+});

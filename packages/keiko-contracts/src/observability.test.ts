@@ -738,3 +738,697 @@ describe("canonical Activity Log event validation", () => {
     }
   });
 });
+
+import {
+  ActivityLogEventValidationError as publicActivityLogEventValidationError,
+  activityLogEvent as publicActivityLogEvent,
+  activityLogEventRegistration as publicActivityLogEventRegistration,
+  activityLogOperationSchema as publicActivityLogOperationSchema,
+  isActivityLogDiagnosticWhen as publicIsActivityLogDiagnosticWhen,
+  validateRegisteredActivityLogEvent as validatePublicObservedEvent,
+  withActivityLogCorrelation as publicWithActivityLogCorrelation,
+  withActivityLogParentCorrelation as publicWithActivityLogParentCorrelation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+const publicSupportAdmission = {
+  ActivityLogEventValidationError: publicActivityLogEventValidationError,
+  activityLogEvent: publicActivityLogEvent,
+  activityLogEventRegistration: publicActivityLogEventRegistration,
+  activityLogOperationSchema: publicActivityLogOperationSchema,
+  isActivityLogDiagnosticWhen: publicIsActivityLogDiagnosticWhen,
+  validateRegisteredActivityLogEvent: validatePublicObservedEvent,
+  withActivityLogCorrelation: publicWithActivityLogCorrelation,
+  withActivityLogParentCorrelation: publicWithActivityLogParentCorrelation,
+};
+
+describe("Support owned refusal and field observation admission", () => {
+  for (const [surface, api] of [
+    [
+      "source",
+      {
+        activityLogEvent,
+        activityLogOperationSchema,
+        ActivityLogEventValidationError,
+        validateRegisteredActivityLogEvent,
+        withActivityLogCorrelation,
+        withActivityLogParentCorrelation,
+      },
+    ],
+    ["public", publicSupportAdmission],
+  ] as const) {
+    function markerEvent(kind: unknown, unreadable = false): { event: object; reads: number } {
+      const operation = api.activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      let reads = 0;
+      const error = new api.ActivityLogEventValidationError("invalid-field-type");
+      Object.defineProperty(error, "kind", {
+        get(): unknown {
+          reads += 1;
+          if (unreadable) throw new TypeError("unreadable fixture kind");
+          return kind;
+        },
+      });
+      const result: unknown = Reflect.apply(api.activityLogEvent, undefined, [
+        operation,
+        {},
+        {
+          get generation(): number {
+            throw error;
+          },
+        },
+      ]);
+      if (typeof result !== "object" || result === null)
+        throw new TypeError("event object required");
+      const event = result;
+      return { event, reads };
+    }
+    it(`${surface}: preserves healthy refusal and correlation markers`, () => {
+      const { event, reads } = markerEvent("invalid-field-type");
+      expect(reads).toBe(1);
+      for (const forwarded of [
+        event,
+        api.withActivityLogCorrelation(event, "fixture-correlation"),
+        api.withActivityLogParentCorrelation(event, "fixture-parent"),
+      ]) {
+        expect(() => api.validateRegisteredActivityLogEvent(forwarded)).toThrow(
+          new api.ActivityLogEventValidationError("invalid-field-type"),
+        );
+      }
+    });
+    it.each([42, "foreign-kind", undefined])(
+      `${surface}: closes modified error kind %s`,
+      (kind) => {
+        const { event, reads } = markerEvent(kind);
+        expect(reads).toBe(1);
+        expect(
+          Object.getOwnPropertyDescriptor(
+            event,
+            Symbol.for("@oscharko-dev/keiko-contracts/activity-log-event-rejection"),
+          ),
+        ).toEqual({
+          value: "registration-mismatch",
+          enumerable: false,
+          configurable: false,
+          writable: false,
+        });
+        expect(() => api.validateRegisteredActivityLogEvent(event)).toThrow(
+          new api.ActivityLogEventValidationError("registration-mismatch"),
+        );
+      },
+    );
+    it(`${surface}: keeps unreadable kind on the closed fallback`, () => {
+      const { event, reads } = markerEvent(undefined, true);
+      expect(reads).toBe(1);
+      expect(() => api.validateRegisteredActivityLogEvent(event)).toThrow(
+        new api.ActivityLogEventValidationError("registration-mismatch"),
+      );
+    });
+    it(`${surface}: preserves the fourth healthy extra observation`, () => {
+      const operation = api.activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const result: unknown = Reflect.apply(api.activityLogEvent, undefined, [
+        operation,
+        {},
+        { generation: 1 },
+      ]);
+      if (typeof result !== "object" || result === null)
+        throw new TypeError("event object required");
+      const event = result;
+      const originalFields: unknown = Reflect.get(event, "extra");
+      if (typeof originalFields !== "object" || originalFields === null)
+        throw new TypeError("event fields required");
+      let reads = 0;
+      Object.defineProperty(event, "extra", {
+        get(): object {
+          reads += 1;
+          return { ...originalFields, generation: reads === 4 ? 2 : 1 };
+        },
+      });
+      expect(api.validateRegisteredActivityLogEvent(event)).toBe(operation);
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: refuses malformed fourth extra with its closed field diagnostic`, () => {
+      const operation = api.activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const result: unknown = Reflect.apply(api.activityLogEvent, undefined, [
+        operation,
+        {},
+        { generation: 1 },
+      ]);
+      if (typeof result !== "object" || result === null)
+        throw new TypeError("event object required");
+      const event = result;
+      const originalFields: unknown = Reflect.get(event, "extra");
+      if (typeof originalFields !== "object" || originalFields === null)
+        throw new TypeError("event fields required");
+      let reads = 0;
+      Object.defineProperty(event, "extra", {
+        get(): unknown {
+          reads += 1;
+          return reads === 4 ? null : originalFields;
+        },
+      });
+      expect(() => api.validateRegisteredActivityLogEvent(event)).toThrow(
+        new api.ActivityLogEventValidationError("fields-not-object"),
+      );
+      expect(reads).toBe(4);
+    });
+  }
+});
+
+describe("Support public registration shape admission", () => {
+  for (const [surface, api] of [
+    [
+      "source",
+      {
+        activityLogEvent,
+        activityLogOperationSchema,
+        activityLogEventRegistration,
+        validateRegisteredActivityLogEvent,
+        withActivityLogCorrelation,
+        withActivityLogParentCorrelation,
+        ActivityLogEventValidationError,
+      },
+    ],
+    ["public", publicSupportAdmission],
+  ] as const) {
+    function fixtureEvent(): { event: object; operation: ActivityLogOperationRegistration } {
+      const operation = api.activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const event: unknown = Reflect.apply(api.activityLogEvent, undefined, [
+        operation,
+        {},
+        { generation: 1 },
+      ]);
+      if (typeof event !== "object" || event === null) throw new TypeError("event object required");
+      return { event, operation };
+    }
+    function attachRaw(event: object, registration: unknown): object {
+      const copy = { ...event };
+      Object.defineProperty(copy, ACTIVITY_LOG_EVENT_REGISTRATION, { value: registration });
+      return copy;
+    }
+    // Preservation proofs: structural observation is not canonical write admission.
+    it(`${surface}: observes inherited registration values and hidden symbol attachments`, () => {
+      const { event, operation } = fixtureEvent();
+      const inherited = {};
+      Object.setPrototypeOf(inherited, operation);
+      const observed = attachRaw(event, inherited);
+      expect(Object.getOwnPropertyDescriptor(observed, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
+        value: inherited,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      expect(api.activityLogEventRegistration(observed)).toBe(inherited);
+      expect(() => api.validateRegisteredActivityLogEvent(observed)).toThrow(
+        new api.ActivityLogEventValidationError("registration-mismatch"),
+      );
+      const inheritedAttachment = {};
+      Object.setPrototypeOf(inheritedAttachment, event);
+      expect(api.activityLogEventRegistration(inheritedAttachment)).toBe(operation);
+    });
+    it(`${surface}: retains own and inherited parent identity with the accessor receiver`, () => {
+      for (const inherited of [false, true]) {
+        const { event } = fixtureEvent();
+        const holder = inherited ? {} : event;
+        const receivers: unknown[] = [];
+        Object.defineProperty(holder, "parentCorrelationId", {
+          get(this: object): string {
+            receivers.push(this);
+            return "fixture-existing-parent";
+          },
+          configurable: true,
+        });
+        if (inherited) Object.setPrototypeOf(event, holder);
+        expect(api.withActivityLogParentCorrelation(event, "fixture-new-parent")).toBe(event);
+        expect(receivers).toEqual([event]);
+      }
+    });
+    it(`${surface}: rebinds absent and explicitly undefined parents without losing the marker`, () => {
+      for (const present of [false, true]) {
+        const { event, operation } = fixtureEvent();
+        if (present) Object.defineProperty(event, "parentCorrelationId", { value: undefined });
+        expect(Object.hasOwn(event, "parentCorrelationId")).toBe(present);
+        const rebound = api.withActivityLogParentCorrelation(event, "fixture-new-parent");
+        expect(rebound).not.toBe(event);
+        expect(Reflect.get(rebound, "parentCorrelationId")).toBe("fixture-new-parent");
+        expect(Object.getOwnPropertyDescriptor(rebound, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
+          value: operation,
+          enumerable: false,
+          configurable: false,
+          writable: false,
+        });
+        expect(api.validateRegisteredActivityLogEvent(rebound)).toBe(operation);
+      }
+    });
+    it(`${surface}: keeps registration proxy observations ordered and receiver-bound`, () => {
+      const { event, operation } = fixtureEvent();
+      const trace: PropertyKey[] = [];
+      const receivers: unknown[] = [];
+      const observed = new Proxy(
+        { ...operation },
+        {
+          get(target, key, receiver): unknown {
+            trace.push(key);
+            receivers.push(receiver);
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      expect(api.activityLogEventRegistration(attachRaw(event, observed))).toBe(observed);
+      expect(trace).toEqual([
+        "fields",
+        "contractKind",
+        "schemaVersion",
+        "op",
+        "category",
+        "owner",
+        "emitter",
+        "diagnosticWhen",
+        "causal",
+        "lifecycle",
+        "analyzerProjection",
+        "failureClasses",
+        "proofIds",
+        "releaseImpact",
+      ]);
+      expect(receivers).toEqual(trace.map(() => observed));
+    });
+    it(`${surface}: reads an existing proxy parent once before any copying or marker reads`, () => {
+      const { event } = fixtureEvent();
+      Object.setPrototypeOf(event, { parentCorrelationId: "fixture-existing-parent" });
+      const trace: PropertyKey[] = [];
+      const observed = new Proxy(event, {
+        get(target, key, receiver): unknown {
+          trace.push(key);
+          expect(receiver).toBe(observed);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(api.withActivityLogParentCorrelation(observed, "fixture-new-parent")).toBe(observed);
+      expect(trace).toEqual(["parentCorrelationId"]);
+    });
+    it(`${surface}: observes a missing proxy parent before copying fields and hidden markers`, () => {
+      const { event, operation } = fixtureEvent();
+      const trace: PropertyKey[] = [];
+      const observed = new Proxy(event, {
+        get(target, key, receiver): unknown {
+          trace.push(key);
+          expect(receiver).toBe(observed);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const rebound = api.withActivityLogParentCorrelation(observed, "fixture-new-parent");
+      expect(trace).toEqual([
+        "parentCorrelationId",
+        "category",
+        "op",
+        "extra",
+        ACTIVITY_LOG_EVENT_REGISTRATION,
+        Symbol.for("@oscharko-dev/keiko-contracts/activity-log-event-rejection"),
+      ]);
+      expect(api.validateRegisteredActivityLogEvent(rebound)).toBe(operation);
+    });
+    it.each(["getter", "proxy"])(
+      `${surface}: closes unreadable registration %s at each owning refusal boundary`,
+      (transport) => {
+        const { event, operation } = fixtureEvent();
+        const failure = new TypeError("fixture observation failure");
+        const raw = { ...operation };
+        Object.defineProperty(raw, "fields", {
+          get(): never {
+            throw failure;
+          },
+        });
+        const observed =
+          transport === "getter"
+            ? raw
+            : new Proxy(
+                { ...operation },
+                {
+                  get(target, key, receiver): unknown {
+                    if (key === "fields") throw failure;
+                    return Reflect.get(target, key, receiver);
+                  },
+                },
+              );
+        const candidate = attachRaw(event, observed);
+        expect(api.activityLogEventRegistration(candidate)).toBeUndefined();
+        expect(() => api.validateRegisteredActivityLogEvent(candidate)).toThrow(
+          new api.ActivityLogEventValidationError("registration-mismatch"),
+        );
+      },
+    );
+    it.each(["getter", "proxy"])(
+      `${surface}: propagates unreadable direct parent and symbol %s observations`,
+      (transport) => {
+        const failure = new TypeError("fixture direct observation failure");
+        for (const key of ["parentCorrelationId", ACTIVITY_LOG_EVENT_REGISTRATION]) {
+          const { event } = fixtureEvent();
+          const raw = { ...event };
+          Object.defineProperty(raw, key, {
+            get(): never {
+              throw failure;
+            },
+          });
+          const observed =
+            transport === "getter"
+              ? raw
+              : new Proxy(event, {
+                  get(target, property, receiver): unknown {
+                    if (property === key) throw failure;
+                    return Reflect.get(target, property, receiver);
+                  },
+                });
+          const read =
+            key === "parentCorrelationId"
+              ? (): object => api.withActivityLogParentCorrelation(observed, "fixture-new-parent")
+              : (): unknown => api.activityLogEventRegistration(observed);
+          expect(read).toThrow(failure);
+        }
+      },
+    );
+    it(`${surface}: preserves healthy original and complete cloned registration identity`, () => {
+      const { event, operation } = fixtureEvent();
+      expect(api.activityLogEventRegistration(event)).toBe(operation);
+      const copy: unknown = JSON.parse(JSON.stringify(operation));
+      const cloned = attachRaw(event, copy);
+      expect(api.activityLogEventRegistration(cloned)).toBe(copy);
+      expect(api.validateRegisteredActivityLogEvent(cloned)).toBe(operation);
+    });
+    it(`${surface}: refuses an empty public registration while preserving private mismatch`, () => {
+      const { event } = fixtureEvent();
+      const raw = {};
+      const malformed = attachRaw(event, raw);
+      expect(api.activityLogEventRegistration(malformed)).toBeUndefined();
+      for (const copy of [
+        malformed,
+        api.withActivityLogCorrelation(malformed, "fixture-correlation"),
+        api.withActivityLogParentCorrelation(malformed, "fixture-parent"),
+      ]) {
+        expect(Object.getOwnPropertyDescriptor(copy, ACTIVITY_LOG_EVENT_REGISTRATION)?.value).toBe(
+          raw,
+        );
+        expect(() => api.validateRegisteredActivityLogEvent(copy)).toThrow(
+          new api.ActivityLogEventValidationError("registration-mismatch"),
+        );
+      }
+    });
+    it(`${surface}: preserves omitted diagnostics and refuses own undefined diagnostics`, () => {
+      const { event, operation } = fixtureEvent();
+      const copy: unknown = JSON.parse(JSON.stringify(operation));
+      if (typeof copy !== "object" || copy === null)
+        throw new TypeError("registration object required");
+      expect(api.activityLogEventRegistration(attachRaw(event, copy))).toBe(copy);
+      Object.defineProperty(copy, "diagnosticWhen", { value: undefined });
+      expect(api.activityLogEventRegistration(attachRaw(event, copy))).toBeUndefined();
+    });
+    it(`${surface}: refuses a malformed non-enumerable own registration field`, () => {
+      const { event, operation } = fixtureEvent();
+      const copy: unknown = JSON.parse(JSON.stringify(operation));
+      if (typeof copy !== "object" || copy === null)
+        throw new TypeError("registration object required");
+      const fields: unknown = Reflect.get(copy, "fields");
+      if (typeof fields !== "object" || fields === null)
+        throw new TypeError("registration fields required");
+      Object.defineProperty(fields, "hidden", { value: 42 });
+      expect(api.activityLogEventRegistration(attachRaw(event, copy))).toBeUndefined();
+    });
+    it(`${surface}: refuses a malformed physical registration member hidden by caller every`, () => {
+      const { event, operation } = fixtureEvent();
+      const copy: unknown = JSON.parse(JSON.stringify(operation));
+      if (typeof copy !== "object" || copy === null)
+        throw new TypeError("registration object required");
+      Object.defineProperty(copy, "failureClasses", {
+        value: Object.assign([42], { every: (): boolean => true }),
+      });
+      expect(api.activityLogEventRegistration(attachRaw(event, copy))).toBeUndefined();
+    });
+  }
+});
+
+import { isActivityLogDiagnosticWhen } from "./observability.js";
+
+describe("Consolidated Support diagnostic arrays", () => {
+  const fields: Readonly<Record<string, ActivityLogFieldContract>> = {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failed", "healthy"],
+    },
+    flag: { type: "boolean", dataClass: "closed-enum", required: true },
+  };
+  for (const [surface, api] of [
+    [
+      "source",
+      {
+        isActivityLogDiagnosticWhen,
+        activityLogOperationSchema,
+        activityLogEvent,
+        validateRegisteredActivityLogEvent,
+        ActivityLogEventValidationError,
+      },
+    ],
+    ["public", publicSupportAdmission],
+  ] as const) {
+    it(`${surface}: healthy admits string and boolean conditions`, () => {
+      expect(
+        api.isActivityLogDiagnosticWhen(fields, [
+          { field: "outcome", values: ["failed"] },
+          { field: "flag", values: [true] },
+        ]),
+      ).toBe(true);
+    });
+    it(`${surface}: unsafe refuses physical diagnostic conditions`, () => {
+      expect(
+        api.isActivityLogDiagnosticWhen(
+          fields,
+          Object.assign([42], { every: (): boolean => true }),
+        ),
+      ).toBe(false);
+    });
+    for (const field of ["outcome", "flag"] as const) {
+      it(`${surface}: unsafe refuses physical ${field} diagnostic values`, () => {
+        expect(
+          api.isActivityLogDiagnosticWhen(fields, [
+            { field, values: Object.assign([42], { every: (): boolean => true }) },
+          ]),
+        ).toBe(false);
+      });
+    }
+    it(`${surface}: healthy preserves distinct boolean diagnostic values`, () => {
+      expect(
+        api.isActivityLogDiagnosticWhen(fields, [{ field: "flag", values: [false, true] }]),
+      ).toBe(true);
+    });
+    it(`${surface}: iterator refuses duplicate physical diagnostic values`, () => {
+      const values = [false, false];
+      Object.defineProperty(values, Symbol.iterator, {
+        value: function* (): Generator<boolean, void, unknown> {
+          yield false;
+          yield true;
+        },
+      });
+      expect(api.isActivityLogDiagnosticWhen(fields, [{ field: "flag", values }])).toBe(false);
+    });
+    function canonicalEvent(op: string): {
+      event: object;
+      operation: ActivityLogOperationRegistration;
+    } {
+      const operation = api.activityLogOperationSchema(op);
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const values =
+        op === "gateway.instance.reused"
+          ? { generation: 1 }
+          : { outcome: "inspected", inputTokens: 1, inputBudget: 2, tokensSaved: 0 };
+      const event: unknown = Reflect.apply(api.activityLogEvent, undefined, [
+        operation,
+        { correlationId: "fixture-correlation" },
+        values,
+      ]);
+      if (typeof event !== "object" || event === null) throw new TypeError("event required");
+      return { event, operation };
+    }
+    it(`${surface}: healthy validates actual canonical producer metadata`, () => {
+      const { event, operation } = canonicalEvent("gateway.instance.reused");
+      expect(api.validateRegisteredActivityLogEvent(event)).toBe(operation);
+      const diagnostic = canonicalEvent("chat.context.management");
+      expect(api.validateRegisteredActivityLogEvent(diagnostic.event)).toBe(diagnostic.operation);
+    });
+    for (const field of [
+      "proofIds",
+      "failureClasses",
+      "diagnosticWhen",
+      "diagnosticValues",
+    ] as const) {
+      it(`${surface}: unsafe refuses physical canonical metadata ${field}`, () => {
+        const { event, operation } = canonicalEvent(
+          field.startsWith("diagnostic") ? "chat.context.management" : "gateway.instance.reused",
+        );
+        const raw = { ...operation };
+        const bad = Object.assign([42], { every: (): boolean => true });
+        if (field === "diagnosticValues") {
+          const condition = operation.diagnosticWhen?.[0];
+          if (condition === undefined) throw new TypeError("condition required");
+          Object.defineProperty(raw, "diagnosticWhen", {
+            value: [
+              { ...condition, values: Object.assign([42, 43], { every: (): boolean => true }) },
+            ],
+          });
+        } else Object.defineProperty(raw, field, { value: bad });
+        const copy = { ...event };
+        Object.defineProperty(copy, ACTIVITY_LOG_EVENT_REGISTRATION, { value: raw });
+        expect(() => api.validateRegisteredActivityLogEvent(copy)).toThrow(
+          new api.ActivityLogEventValidationError("registration-mismatch"),
+        );
+      });
+    }
+  }
+});
+
+describe("Support registration structural field variants", () => {
+  for (const [surface, read] of [
+    ["source", activityLogEventRegistration],
+    ["public", publicSupportAdmission.activityLogEventRegistration],
+  ] as const) {
+    function withField(field: unknown): { event: object; raw: object } {
+      const operation = activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const raw = { ...operation, fields: { sample: field } };
+      const event = { op: operation.op, category: operation.category, extra: { generation: 1 } };
+      Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: raw });
+      return { event, raw };
+    }
+    for (const [label, field] of [
+      ["boolean", { type: "boolean", dataClass: "closed-enum", required: false }],
+      ["integer", { type: "integer", dataClass: "safe-version", required: true }],
+      ["number", { type: "number", dataClass: "duration", required: true }],
+      ["string", { type: "string", dataClass: "opaque-id", required: true, maxLength: 20 }],
+      [
+        "string-array",
+        {
+          type: "string-array",
+          dataClass: "digest",
+          required: true,
+          maxItems: 3,
+          values: ["fixture"],
+        },
+      ],
+    ] as const) {
+      it(`${surface}: admits complete ${label} field structure without write authority`, () => {
+        const { event, raw } = withField(field);
+        expect(read(event)).toBe(raw);
+        expect(() => validateRegisteredActivityLogEvent(event)).toThrow(
+          new ActivityLogEventValidationError("registration-mismatch"),
+        );
+      });
+    }
+    for (const [label, field] of [
+      ["non-object", 42],
+      ["unknown type", { type: "foreign", dataClass: "count", required: true }],
+      ["integer data class", { type: "integer", dataClass: "opaque-id", required: true }],
+      ["boolean data class", { type: "boolean", dataClass: "count", required: true }],
+      ["required flag", { type: "number", dataClass: "count", required: "yes" }],
+      [
+        "maximum length",
+        { type: "string", dataClass: "opaque-id", required: true, maxLength: "bad" },
+      ],
+      [
+        "maximum items",
+        { type: "string-array", dataClass: "digest", required: true, maxItems: "bad" },
+      ],
+      [
+        "vocabulary container",
+        { type: "string", dataClass: "closed-enum", required: true, values: 42 },
+      ],
+      [
+        "vocabulary member",
+        { type: "string", dataClass: "closed-enum", required: true, values: [42] },
+      ],
+    ] as const) {
+      it(`${surface}: refuses malformed ${label} field structure`, () => {
+        expect(read(withField(field).event)).toBeUndefined();
+      });
+    }
+    it(`${surface}: refuses sparse and invalid-extent physical registration arrays`, () => {
+      const operation = activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      for (const proofIds of [
+        new Array<unknown>(1),
+        new Proxy(["fixture"], {
+          get(target, key): unknown {
+            return key === "length" ? 0.5 : Reflect.get(target, key);
+          },
+        }),
+      ]) {
+        const raw = { ...operation, proofIds };
+        const event = {};
+        Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: raw });
+        expect(read(event)).toBeUndefined();
+      }
+    });
+    it(`${surface}: admits positive and boolean diagnostics and refuses malformed conditions`, () => {
+      const operation = activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const fields = {
+        count: { type: "integer", dataClass: "count", required: true },
+        flag: { type: "boolean", dataClass: "closed-enum", required: true },
+      };
+      for (const diagnosticWhen of [
+        [{ field: "count", positive: true }],
+        [{ field: "flag", values: [false] }],
+      ]) {
+        const raw = { ...operation, fields, diagnosticWhen };
+        const event = {};
+        Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: raw });
+        expect(read(event)).toBe(raw);
+      }
+      for (const diagnosticWhen of [
+        [42],
+        [{ field: 42, positive: true }],
+        [{ field: "count", positive: false }],
+      ]) {
+        const event = {};
+        Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
+          value: { ...operation, fields, diagnosticWhen },
+        });
+        expect(read(event)).toBeUndefined();
+      }
+    });
+    it(`${surface}: refuses an unreadable registration field`, () => {
+      const operation = activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const raw = { ...operation };
+      Object.defineProperty(raw, "fields", {
+        get(): never {
+          throw new TypeError("fixture refusal");
+        },
+      });
+      const event = {};
+      Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: raw });
+      expect(read(event)).toBeUndefined();
+    });
+  }
+});
+
+export function validatePublicObservation(event: object): ActivityLogOperationRegistration {
+  const registration = validatePublicObservedEvent(event);
+  return registration;
+}
+
+it("public observation consumer preserves canonical validator identity and refusal", () => {
+  const operation = publicSupportAdmission.activityLogOperationSchema("gateway.instance.reused");
+  if (operation === undefined) throw new TypeError("canonical operation required");
+  const event: unknown = Reflect.apply(publicSupportAdmission.activityLogEvent, undefined, [
+    operation,
+    {},
+    { generation: 1 },
+  ]);
+  if (typeof event !== "object" || event === null) throw new TypeError("event object required");
+  expect(validatePublicObservation(event)).toBe(operation);
+  expect(() => validatePublicObservation({ ...event })).toThrow(
+    new publicSupportAdmission.ActivityLogEventValidationError("unregistered-operation"),
+  );
+});

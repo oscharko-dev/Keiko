@@ -1,6 +1,6 @@
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   ACTIVITY_LOG_READINESS_REASONS,
@@ -2350,4 +2350,67 @@ it("accepts only stage-specific closed gateway profile outcomes", () => {
     expect(isClientStageIngestRequest({ ...report, gatewayProfile })).toBe(false);
   expect(isClientStageIngestRequest({ ...report, stage: "window chunk" })).toBe(false);
   expect(isClientStageIngestRequest({ ...report, phase: "started" })).toBe(false);
+});
+
+import { isClientDiagnosticKind as publicDiagnosticKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
+describe.each([
+  ["source", isClientDiagnosticKind],
+  ["public", publicDiagnosticKind],
+])("%s generic diagnostic vocabulary preservation", (_label, check) => {
+  it("retains closed vocabulary and rejects coercible non-strings", () => {
+    for (const kind of CLIENT_DIAGNOSTIC_KINDS) expect(check(kind)).toBe(true);
+    for (const value of [null, undefined, 0, Symbol("kind"), "future-diagnostic", {}])
+      expect(check(value)).toBe(false);
+    const value = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(check(value)).toBe(false);
+  });
+});
+
+import { isClientBindingIngestRequest as publicBindingReport } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
+describe.each([
+  ["source", isClientBindingIngestRequest],
+  ["public", publicBindingReport],
+])("%s actual generic-membership binding report", (_label, check) => {
+  it("accepts healthy evidence and refuses malformed outcome without coercion", () => {
+    const input = {
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      windowRef: "chat-under-test",
+    };
+    expect(check(input)).toBe(true);
+    for (const outcome of [null, undefined, 0, Symbol("outcome"), "future", {}])
+      expect(check({ ...input, outcome })).toBe(false);
+    const outcome = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(check({ ...input, outcome })).toBe(false);
+  });
+});
+
+it("retains the public binding predicate's closed outcome guarantee", () => {
+  const input: unknown = {
+    kind: "binding",
+    surface: "chat-window",
+    outcome: "target-missing",
+    referenceShape: "redacted",
+    heuristicFlagged: false,
+    windowRef: "chat-under-test",
+  };
+  expect(publicBindingReport(input)).toBe(true);
+  if (publicBindingReport(input)) {
+    expectTypeOf(input.outcome).toEqualTypeOf<
+      "resolved" | "target-missing" | "candidates-offered" | "choice-kept" | "choice-withdrawn"
+    >();
+  }
 });

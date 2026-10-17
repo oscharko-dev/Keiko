@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b9a5527331fb004fcdafe1c639ed3ccc27c7a1f319597e47f2b8e86c0bbae369"
+    "catalogDigest": "336ba37500103c36ffadc3fb8dd615bab24f3022b9c246cc28cf56815faedfe0"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 539,
-    "proofCount": 551,
-    "resolvedProofCount": 551,
-    "failureClassCount": 346,
+    "operationCount": 541,
+    "proofCount": 553,
+    "resolvedProofCount": 553,
+    "failureClassCount": 348,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -94,6 +94,7 @@
         "chat.continuity.degraded",
         "chat.continuity.rehydration",
         "chat.creation.rejected",
+        "chat.draft.operation",
         "chat.regeneration.rejected",
         "chat.response.message",
         "chat.scope.update",
@@ -461,6 +462,7 @@
         "indexing.start.accepted",
         "indexing.start.refused",
         "knowledge.log.sink-failed",
+        "knowledge.manual-refresh-summary.rejected",
         "knowledge.store.encryption-rejected",
         "knowledge.store.quarantined",
         "memory-vault.log.sink-failed",
@@ -713,6 +715,8 @@
     }
   ],
   "failureClassScenarios": {
+    "knowledge-manual-summary-validation": ["memory-knowledge.rejection"],
+    "chat-draft-persistence": ["bff.dependency-failure"],
     "markdown-skill-library": ["bff.dependency-failure"],
     "client-scope-notice": ["client-diagnostics.dependency-failure"],
     "client-evidence-inspection": ["client-diagnostics.dependency-failure"],
@@ -1125,6 +1129,7 @@
     "chat.continuity.degraded.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.continuity.rehydration.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
@@ -2122,6 +2127,9 @@
     ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
+    ],
+    "knowledge.manual-refresh-summary.rejected.omission": [
+      "packages/keiko-local-knowledge/src/knowledge-pods.test.ts"
     ],
     "knowledge.store.encryption-rejected.mode": [
       "packages/keiko-local-knowledge/src/store.log-sink-safety.test.ts"

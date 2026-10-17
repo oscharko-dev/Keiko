@@ -45,8 +45,7 @@ export function isQualityIntelligenceReviewAction(
   value: unknown,
 ): value is QualityIntelligenceReviewAction {
   return (
-    typeof value === "string" &&
-    QUALITY_INTELLIGENCE_REVIEW_ACTIONS.includes(value as QualityIntelligenceReviewAction)
+    typeof value === "string" && new Set<string>(QUALITY_INTELLIGENCE_REVIEW_ACTIONS).has(value)
   );
 }
 

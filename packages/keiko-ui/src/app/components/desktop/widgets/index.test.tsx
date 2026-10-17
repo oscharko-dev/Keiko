@@ -12,6 +12,12 @@ vi.mock("./BoundRootTarget", async (importOriginal) => {
   return await importOriginal<typeof import("./BoundRootTarget")>();
 });
 
+const connectedSourcesModuleLoaded = vi.hoisted(() => vi.fn());
+vi.mock("./quality-intelligence/connectedSources", async (importOriginal) => {
+  connectedSourcesModuleLoaded();
+  return await importOriginal<typeof import("./quality-intelligence/connectedSources")>();
+});
+
 const chatSessionMock = vi.hoisted(() => ({
   activeChat: {
     id: "chat-1",
@@ -713,6 +719,7 @@ vi.mock("../../../local-knowledge/connector-graph", () => ({
 
 import "./index";
 const boundRootModuleLoadsAtRegistryImport = boundRootModuleLoaded.mock.calls.length;
+const connectedSourcesModuleLoadsAtRegistryImport = connectedSourcesModuleLoaded.mock.calls.length;
 import {
   assertWindowRenderRegistryComplete,
   missingWindowRenderTypes,
@@ -794,6 +801,14 @@ afterEach((): void => {
 });
 
 describe("workspace widget renderer registry", () => {
+  it("defers connected Quality Intelligence sources until its window opens", async () => {
+    expect(connectedSourcesModuleLoadsAtRegistryImport).toBe(0);
+    render(<>{WIN_TYPES.quality.render({}, makeCtx())}</>);
+    expect(screen.queryByTestId("qi-hub")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("qi-hub")).toHaveTextContent("/repo");
+    expect(connectedSourcesModuleLoaded).toHaveBeenCalledTimes(1);
+  });
+
   it("defers the real root picker until its window opens and keeps children unmounted while loading", async () => {
     expect(boundRootModuleLoadsAtRegistryImport).toBe(0);
     render(<>{WIN_TYPES.terminal.render({ projectPath: "/repo" }, makeCtx())}</>);

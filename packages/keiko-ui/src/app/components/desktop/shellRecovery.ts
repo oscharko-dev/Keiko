@@ -10,9 +10,9 @@ import type {
   EditorM11SettingScope,
   EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
-import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 
 const RESET_SCOPES: readonly EditorM11SettingScope[] = ["user", "workspace"];
 
@@ -37,7 +37,10 @@ async function clearOverridesInScope(
   snapshot: EditorM11SettingsSnapshot,
   scope: EditorM11SettingScope,
 ): Promise<EditorM11SettingsSnapshot | null> {
+  const correlationId = crypto.randomUUID();
   try {
+    const { EDITOR_M7_SCHEMA_VERSION } =
+      await import("@oscharko-dev/keiko-contracts/runtime/editor-m7");
     const result = await mutate(
       {
         schemaVersion: EDITOR_M7_SCHEMA_VERSION,
@@ -47,7 +50,7 @@ async function clearOverridesInScope(
         settingIds: ["keybindingOverrides"],
       },
       snapshot.etag,
-      crypto.randomUUID(),
+      correlationId,
     );
     if (result.kind === "ok") return result.snapshot;
     reportClientDiagnostic(`shell-recovery: ${scope} layer refused the reset (${result.kind})`);
@@ -55,7 +58,11 @@ async function clearOverridesInScope(
   } catch (error) {
     reportClientDiagnostic(
       `shell-recovery: ${scope} layer reset failed (${clientErrorSummary(error)})`,
-      { correlationId: correlationIdOf(error) },
+      {
+        correlationId: correlationIdOf(error) ?? correlationId,
+        errorKind: "unavailable",
+        errorEvidence: clientErrorEvidence(error),
+      },
     );
     return null;
   }

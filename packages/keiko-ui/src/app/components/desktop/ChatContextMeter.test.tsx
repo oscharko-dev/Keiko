@@ -155,7 +155,8 @@ describe("Chat context window breakdown", () => {
     const policy = [...panel.querySelectorAll("p")].find((paragraph) =>
       paragraph.textContent?.includes("retrieved fresh"),
     );
-    expect(policy).toHaveTextContent("768 tokens");
+    expect(within(panel).getByText(/90% of the 768-token conversation budget/)).toBeInTheDocument();
+    expect(policy).toHaveTextContent("never summarized");
     expect(policy).not.toHaveTextContent("8,000");
     expect(policy).not.toHaveTextContent("a third");
   });
@@ -166,7 +167,7 @@ describe("Chat context window breakdown", () => {
     const policy = [...panel.querySelectorAll("p")].find((paragraph) =>
       paragraph.textContent?.includes("retrieved fresh"),
     );
-    expect(policy).toHaveTextContent("Conversation history uses its own input budget.");
+    expect(policy).toHaveTextContent("Conversation capacity is separate.");
     expect(policy).not.toHaveTextContent(/8,000|a third|current conversation input budget is/u);
   });
 
@@ -195,7 +196,7 @@ describe("Chat context window breakdown", () => {
     expect(within(panel).getByText("Conversation headroom")).toBeInTheDocument();
     expect(
       within(panel).getByText(
-        "Keiko compacts the conversation at 90% of its 8,000-token lane. Source capacity is separate.",
+        "Automatic compaction at 90% of the 8,000-token conversation budget. Sources use separate capacity.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -210,7 +211,7 @@ describe("Chat context window breakdown", () => {
       "Only 4 of 16 references fit the model's context window. The most relevant were used.",
     );
     expect(
-      within(panel).getByText("Last knowledge request: 5,901 tokens (measured by the provider)."),
+      within(panel).getByText("Last knowledge request: 5,901 tokens measured by the provider."),
     ).toBeInTheDocument();
     expect(within(panel).getByText("4,988 tokens until automatic compaction.")).toBeInTheDocument();
     expect(within(panel).getByText(/never summarized/u)).toBeInTheDocument();
@@ -223,7 +224,7 @@ describe("Chat context window breakdown", () => {
     });
     expect(
       within(panel).getByText(
-        "Last knowledge request: 5,901 tokens (measured by the provider). Keiko estimated that request at 6,420 tokens. The breakdown above estimates the next request.",
+        "Last knowledge request: 5,901 tokens measured by the provider; 6,420 estimated for that request.",
       ),
     ).toBeInTheDocument();
   });
@@ -346,9 +347,7 @@ describe("Chat context meter presentation details", () => {
       ...status(8_000),
       compaction: { tokensBefore: 900, tokensAfter: 300, tokensSaved: 600, messagesCompacted: 1 },
     });
-    expect(
-      within(panel).getByText("600 tokens saved across 1 summarized message."),
-    ).toBeInTheDocument();
+    expect(within(panel).getByText("600 tokens saved · 1 message summarized")).toBeInTheDocument();
   });
 
   it("uses the singular saved-tokens string in German too", async () => {
@@ -361,7 +360,7 @@ describe("Chat context meter presentation details", () => {
       "de",
     );
     expect(
-      await within(panel).findByText("600 Tokens bei 1 zusammengefassten Nachricht eingespart."),
+      await within(panel).findByText("600 Tokens gespart · 1 Nachricht zusammengefasst"),
     ).toBeInTheDocument();
   });
 
@@ -376,7 +375,7 @@ describe("Chat context meter presentation details", () => {
     );
     expect(
       await within(panel).findByText(
-        "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf 6.420 Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
+        "Letzte Wissensanfrage: 5.901 Tokens vom Anbieter gemessen; 6.420 für diese Anfrage geschätzt.",
       ),
     ).toBeInTheDocument();
   });
@@ -430,19 +429,17 @@ describe("Chat context meter presentation details", () => {
           }),
     );
     expect(
-      within(panel).getByText(
-        "The stored history (9,400 tokens) is compacted automatically to about 3,100 tokens before the next request.",
-      ),
+      within(panel).getByText("Next request: history reduced from 9,400 to about 3,100 tokens."),
     ).toBeInTheDocument();
     expect(
-      within(panel).getByText(/declares no context window for this model/u),
+      within(panel).getByText(/Context window assumed until the provider reports/u),
     ).toBeInTheDocument();
   });
 
   it("omits the pending compaction and assumed-window notes when neither applies", () => {
     const panel = renderMeter({ ...status(8_000), compaction: undefined });
-    expect(within(panel).queryByText(/compacted automatically to about/u)).toBeNull();
-    expect(within(panel).queryByText(/declares no context window/u)).toBeNull();
+    expect(within(panel).queryByText(/Next request: history reduced/u)).toBeNull();
+    expect(within(panel).queryByText(/Context window assumed/u)).toBeNull();
   });
 });
 
@@ -477,9 +474,7 @@ describe("Chat context meter", () => {
     const { compact } = fixture(8_000);
     fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
     expect(screen.getByText("8,000")).toBeInTheDocument();
-    expect(
-      screen.getByText("7,000 tokens saved across 30 summarized messages."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("7,000 tokens saved · 30 messages summarized")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
     expect(compact).toHaveBeenCalledOnce();
   });
@@ -521,6 +516,24 @@ describe("Chat context meter", () => {
     await user.tab({ shift: true });
     expect(trigger).toHaveFocus();
     await user.tab();
+    await user.tab();
+    const details = screen.getByRole("button", { name: "Context usage details" });
+    expect(details).toHaveFocus();
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    const explanation = document.getElementById(details.getAttribute("aria-controls") ?? "");
+    expect(explanation).not.toBeVisible();
+    await user.keyboard("{Enter}");
+    expect(explanation).toBeVisible();
+    expect(contextApi.report).toHaveBeenCalledWith(
+      "Keiko context explanation visibility changed.",
+      { composerActivity: "context-details-expanded" },
+    );
+    await user.keyboard(" ");
+    expect(explanation).not.toBeVisible();
+    expect(contextApi.report).toHaveBeenCalledWith(
+      "Keiko context explanation visibility changed.",
+      { composerActivity: "context-details-collapsed" },
+    );
     await user.tab();
     expect(screen.getByRole("button", { name: "Following composer action" })).toHaveFocus();
     expect(screen.queryByRole("region", { name: "Conversation context" })).not.toBeInTheDocument();

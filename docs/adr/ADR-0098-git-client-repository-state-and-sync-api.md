@@ -113,9 +113,19 @@ below.
   `validateGitSyncPreview` / `validateGitSyncExecuteResponse` validators. `GitSyncPreview` imports
   `GitUpstreamSummary` from `git-repository-summary.ts`, so the upstream shape is defined once.
 
-The barrel (`index.ts`) re-exports each module in its own `export type {…}` + `export {…}` block,
-following the existing `git-repository.js` block (isolatedModules: runtime values in the value block,
-types in the type block). The exports are additive; `KEIKO_CONTRACTS_VERSION` is untouched.
+The root barrel (`index.ts`) exposes these Git declarations through `export type` blocks.
+Executable APIs come from the existing `@oscharko-dev/keiko-contracts/runtime/git-history`,
+`/runtime/git-repository-summary` and `/runtime/git-sync` subpaths. The exports are additive;
+`KEIKO_CONTRACTS_VERSION` is untouched.
+
+The additive `parseGitHistoryResponse`, `parseGitRepositorySummary`, `parseGitRemotesResponse`,
+`parseGitSyncPreview` and `parseGitSyncExecuteResponse` entrypoints reuse the owning validators'
+concrete admission and the existing closed `GitRepositoryParseResult<T>`. Success carries the
+original admitted object; legacy validators keep their verdict-only signatures. Both sync
+responses validate a supplied `upstream` with the same `isGitUpstreamSummary` guard, including its
+paired remote/branch fields. Omitted and explicitly undefined optionals retain their meaning.
+Preview admission preserves the executable/block-reason complement; execute admission preserves
+the closed outcome vocabulary. A diagnostic accumulator alone is not evidence of typed admission.
 
 ### D2 — The read routes reuse the hardened `gitRoutes.ts` seams unchanged in behavior
 
@@ -293,6 +303,12 @@ identity immediately before the network command. A continuity denial returns the
 that no fetch or pull attempt occurred and preserves the denial in the durable reconstruction
 ledger. This runtime-authority gate does not route fetch/pull through the governed mutation kernel
 or widen its frozen action-kind taxonomy.
+
+The browser admits preview and execute responses through those owning typed parsers on the existing
+lazy fetch path. A malformed payload or an empty 204 refuses with the existing 502 contract error,
+response correlation and body-free client diagnostic. This response check happens after the
+original POST and cannot replay an execution; request bodies, approvals, runtime authority,
+cancellation and the server's execution/evidence paths keep their existing contracts.
 
 The group is registered in `routes.ts` by spreading `...GIT_DELIVERY_SYNC_ROUTE_GROUP` next to the
 other git-delivery groups, with a comment citing #1573.

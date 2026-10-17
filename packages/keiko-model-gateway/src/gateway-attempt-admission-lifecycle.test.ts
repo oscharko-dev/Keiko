@@ -80,7 +80,13 @@ function fixture(): {
     {
       adapter: new OpenAiAdapter({ fetchImpl, requestId: "lifecycle", costClass: "low" }),
       spendBudget: { reserve },
-      log: { write: (event): void => void events.push(event) },
+      log: {
+        write: (event): void => {
+          if (event.category === "diagnostic")
+            throw new TypeError("Expected normal fixture evidence");
+          events.push(event);
+        },
+      },
     },
   );
   const admission = vi.fn<NonNullable<GatewayCallRequest["attemptAdmission"]>>(() => ({ settle }));

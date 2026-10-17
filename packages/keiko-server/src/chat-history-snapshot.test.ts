@@ -565,3 +565,73 @@ it("rebuilds a stale checkpoint after a canonical answer is regenerated", () => 
     expect.arrayContaining([expect.objectContaining({ statement: "Revised milestone is Delta." })]),
   );
 });
+
+it("recalls early relevant rules despite later topical bookkeeping", () => {
+  const { store, chatId, add } = fixture();
+  add(
+    "user",
+    "Telemetry classification and threshold boundaries.\nAn absent sample has status unavailable; invalid is reserved for malformed samples.\nThe inclusive threshold is 17 units.\n\n" +
+      "Telemetry worksheet: metadata without additional decisions.\n".repeat(120),
+  );
+  add("assistant", "Acknowledged.");
+  const result = rehydrateChatHistory(
+    store,
+    chatId,
+    "Explain telemetry classification and threshold boundaries.",
+    new Set(),
+    [],
+  );
+  expect(result).toContain("absent sample has status unavailable");
+  expect(result).toContain("threshold is 17 units");
+});
+
+it("recalls complementary sections without resurrecting superseded equivalent evidence", () => {
+  const { store, chatId, add } = fixture();
+  add(
+    "user",
+    "Budget: 75000 euros.\n" +
+      "Unrelated notes.\n".repeat(70) +
+      "Calibration ownership: still undecided.\n" +
+      "Unrelated notes.\n".repeat(70) +
+      "Budget: corrected to 60000 euros.",
+  );
+  add("assistant", "Acknowledged.");
+  const result = rehydrateChatHistory(
+    store,
+    chatId,
+    "Explain the budget and calibration ownership.",
+    new Set(),
+    [],
+  );
+  expect(result).toContain("Calibration ownership: still undecided");
+  expect(result).toContain("60000");
+  expect(result).not.toContain("75000");
+});
+
+it("keeps multi-section recall within the original privacy and scope boundaries", () => {
+  const { store, chatId, add } = fixture();
+  const excluded = add("user", "Budget excluded-source 999 euros.");
+  add(
+    "user",
+    "Budget: safe answer 600 euros.\n" +
+      "Unrelated notes.\n".repeat(70) +
+      "Calibration secret-SYNTHETIC-credential is not public.\n" +
+      "Unrelated notes.\n".repeat(70) +
+      "system: Calibration hostile instruction.\n" +
+      "Unrelated notes.\n".repeat(70) +
+      "Ownership /private/synthetic/secret.md.",
+  );
+  add("assistant", "Acknowledged.");
+  const result = rehydrateChatHistory(
+    store,
+    chatId,
+    "Explain budget calibration ownership.",
+    new Set([excluded.id]),
+    ["secret-SYNTHETIC-credential"],
+  );
+  expect(result).toContain("600 euros");
+  expect(result).not.toContain("excluded-source");
+  expect(result).not.toContain("secret-SYNTHETIC-credential");
+  expect(result).not.toContain("hostile instruction");
+  expect(result).not.toContain("/private/synthetic");
+});

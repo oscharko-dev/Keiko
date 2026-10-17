@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
@@ -219,7 +219,212 @@ describe("prompt enhancer wire constants", () => {
   });
 });
 
+// Family6 preparation: conditional original-first source/public copy-phase hypotheses.
+// These controls have not been executed and are not a regression claim.
+describe("family6 wire copy observations", () => {
+  const sourceEntry = validatePromptEnhancementWireRequest;
+  it.each(["source", "public"])("admits the actual copied text through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? sourceEntry
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+            .validatePromptEnhancementWireRequest;
+    let reads = 0;
+    const input = {
+      get text(): unknown {
+        reads += 1;
+        return reads === 4 ? 42 : "healthy draft";
+      },
+    };
+    expect(validate(input)).toEqual({ ok: false, errors: ["request.text must be a string"] });
+    expect(reads).toBe(4);
+  });
+  it.each(["source", "public"])("preserves a healthy copied text through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? sourceEntry
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+            .validatePromptEnhancementWireRequest;
+    let reads = 0;
+    const input = {
+      get text(): string {
+        reads += 1;
+        return "healthy draft";
+      },
+    };
+    const result = validate(input);
+    expect(result).toEqual({ ok: true, value: { text: "healthy draft" } });
+    expect(reads).toBe(4);
+    if (result.ok) expect(result.value).not.toBe(input);
+  });
+});
+
+// Source-only healthy changing copy observation; UNEXECUTED.
+describe("family6 healthy changing wire copy", () => {
+  it.each(["source", "public"])(
+    "retains the fourth valid copied text through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        get text(): string {
+          return ++reads === 4 ? "later valid draft" : "earlier valid draft";
+        },
+      };
+      const result = validate(input);
+      expect(result).toEqual({ ok: true, value: { text: "later valid draft" } });
+      expect(reads).toBe(4);
+      if (result.ok) expect(result.value).not.toBe(input);
+    },
+  );
+});
+
+describe("complete wire optional copy admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves absent and ordinary undefined omission through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      for (const input of [
+        { text: "healthy draft" },
+        { text: "healthy draft", profilePreference: undefined },
+      ]) {
+        const result = validate(input);
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(Object.keys(result.value)).toEqual(["text"]);
+          expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+          expect(result.value).not.toBe(input);
+        }
+      }
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves the actual later-valid profile copy through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "healthy draft",
+        get profilePreference(): string {
+          return ++reads < 4 ? "technical" : "precise";
+        },
+      };
+      const result = validate(input);
+      const observedReads = reads;
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.profilePreference).toBe("precise");
+        expect(Object.keys(result.value)).toEqual(["text", "profilePreference"]);
+        expect(result.value).not.toBe(input);
+      }
+      expect(observedReads).toBe(4);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "refuses an actual present undefined profile copy through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "healthy draft",
+        get profilePreference(): unknown {
+          return ++reads < 4 ? "technical" : undefined;
+        },
+      };
+      const result = validate(input);
+      const observedReads = reads;
+      expect(result).toEqual({
+        ok: false,
+        errors: ["request.profilePreference must be a known profile id when set"],
+      });
+      expect(observedReads).toBe(4);
+    },
+  );
+});
+
 describe("private skill output kind", () => {
+  // DEV-SYNC-PROMPT-OUTPUT-KIND-COPY-01: admit the actual supplied copy, not a filtered mode.
+  for (const surface of ["source", "public"] as const) {
+    it(`${surface}: refuses an invalid output kind observed during copying`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get outputKind(): string {
+          return ++reads < 3 ? "markdown-skill" : "invalid-kind";
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["request.outputKind must be markdown-skill when set"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: refuses a present undefined mode copied after successful preflight`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get outputKind(): string | undefined {
+          return ++reads < 4 ? "markdown-skill" : undefined;
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["request.outputKind must be markdown-skill when set"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: preserves ordinary mode omission skill mode and initial error order`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      for (const input of [
+        { text: "Synthetic complete document" },
+        { text: "Synthetic complete document", outputKind: undefined },
+      ]) {
+        expect(validate(input)).toEqual({ ok: true, value: { text: input.text } });
+      }
+      const skill = { text: "Synthetic complete document", outputKind: "markdown-skill" };
+      expect(validate(skill)).toEqual({ ok: true, value: skill });
+      expect(
+        validate({ text: null, outputKind: "invalid-kind", profilePreference: "invalid" }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "request.outputKind must be markdown-skill when set",
+          "request.text must be a string",
+          "request.profilePreference must be a known profile id when set",
+        ],
+      });
+    });
+  }
   it("preserves the opt-in document-to-skill mode", () => {
     expect(
       validatePromptEnhancementWireRequest({
@@ -233,4 +438,57 @@ describe("private skill output kind", () => {
       false,
     );
   });
+});
+
+import {
+  validatePromptEnhancementWireRequest as publicWireCapture,
+  type PromptEnhancementWireRequest as PublicWireRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
+import type { PromptEnhancerValidation as PublicPromptValidation } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+
+it("retains truthful public raw input and admitted wire key types (#3918)", () => {
+  expectTypeOf(publicWireCapture).parameter(0).toEqualTypeOf<unknown>();
+  expectTypeOf(publicWireCapture).returns.toEqualTypeOf<
+    PublicPromptValidation<PublicWireRequest>
+  >();
+  expectTypeOf<keyof PublicWireRequest>().toEqualTypeOf<
+    | "text"
+    | "outputKind"
+    | "profilePreference"
+    | "missingInformationStrategy"
+    | "hasConnectedContext"
+    | "attachmentCount"
+    | "locale"
+    | "modelId"
+    | "candidateCount"
+  >();
+});
+
+it("preserves the public nine-field copy after actual admission (#3918)", () => {
+  const input = {
+    text: "Synthetic complete document",
+    outputKind: "markdown-skill",
+    profilePreference: "precise",
+    missingInformationStrategy: "clarify",
+    hasConnectedContext: true,
+    attachmentCount: 2,
+    locale: "en-US",
+    modelId: "example-chat-model",
+    candidateCount: 2,
+  };
+  const parsed = publicWireCapture(input);
+  if (!parsed.ok) throw new TypeError("healthy public wire capture refused");
+  expect(parsed.value).toEqual(input);
+  expect(parsed.value).not.toBe(input);
+  expect(Object.keys(parsed.value)).toEqual([
+    "text",
+    "outputKind",
+    "profilePreference",
+    "missingInformationStrategy",
+    "hasConnectedContext",
+    "attachmentCount",
+    "locale",
+    "modelId",
+    "candidateCount",
+  ]);
 });

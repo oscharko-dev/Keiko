@@ -583,6 +583,7 @@ function createManagedAgentWorkspaceFixture(): ManagedAgentWorkspaceFixture {
   runManagedFixtureGit(repositoryRoot, ["init", "-q"]);
   runManagedFixtureGit(repositoryRoot, ["config", "user.email", "test@example.invalid"]);
   runManagedFixtureGit(repositoryRoot, ["config", "user.name", "Keiko Test"]);
+  runManagedFixtureGit(repositoryRoot, ["config", "commit.gpgsign", "false"]);
   writeFileSync(join(repositoryRoot, "README.md"), "managed agent fixture\n");
   runManagedFixtureGit(repositoryRoot, ["add", "README.md"]);
   runManagedFixtureGit(repositoryRoot, ["commit", "-qm", "fixture"]);

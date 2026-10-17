@@ -33,7 +33,6 @@ import {
   exactKeys,
   isOneOf,
   isRecord,
-  result,
   validateStrictUtcInstant,
 } from "./coding-workbench-runtime-api-validation.js";
 // The GitHub issue reference parser is a dependency-free leaf (#3385). Its runtime surface is
@@ -379,6 +378,11 @@ const LEGAL_TRANSITIONS: Readonly<
   "recovery-required": ["idle"],
 } as const);
 
+function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
+  errors.push(...issues);
+  return issues.length === 0;
+}
+
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -394,172 +398,364 @@ export function isLegalCodingWorkbenchRuntimeTransition(
   );
 }
 
-export function validateCodingWorkbenchRuntimeIntent(
-  value: unknown,
-): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeIntent> {
-  if (!isRecord(value)) return { ok: false, errors: ["runtime intent must be an object"] };
+function validateObservedLifecycleCommand(
+  command: unknown,
+  priorValid: boolean,
+  errors: string[],
+): boolean {
+  if (isOneOf(command, CODING_WORKBENCH_LIFECYCLE_COMMANDS)) return true;
+  if (priorValid) appendValidationIssues(errors, "command is invalid");
+  return false;
+}
+
+function observedIntegerIsValid(value: unknown, minimum: number): value is number {
+  const safeInteger = Number.isSafeInteger(value);
+  return typeof value === "number" && safeInteger && value >= minimum;
+}
+
+function validateRuntimeIntentKeys(value: Record<string, unknown>, errors: string[]): boolean {
   const common = ["schemaVersion", "requestId", "command"];
   const allowed =
     value.command === "start"
       ? [...common, "taskIntent", "requestedMode", "modelSource"]
       : [...common, "runId"];
-  const errors = Object.keys(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `runtimeIntent.${key} is not allowed`);
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
-    errors.push("schemaVersion is invalid");
-  if (!isNonEmpty(value.requestId)) errors.push("requestId must be a non-empty string");
-  if (!isOneOf(value.command, CODING_WORKBENCH_LIFECYCLE_COMMANDS))
-    errors.push("command is invalid");
-  if (value.command === "start") validateStartIntent(value, errors);
-  else if (
-    isOneOf(value.command, CODING_WORKBENCH_LIFECYCLE_COMMANDS) &&
-    !isNonEmpty(value.runId)
-  ) {
-    errors.push("runId must be a non-empty string");
+  return appendValidationIssues(
+    errors,
+    ...Object.keys(value)
+      .filter((key) => !allowed.includes(key))
+      .map((key) => `runtimeIntent.${key} is not allowed`),
+  );
+}
+
+function admitCodingWorkbenchRuntimeIntent(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeIntent {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "runtime intent must be an object");
+    return false;
   }
-  return errors.length === 0
-    ? { ok: true, value: value as unknown as CodingWorkbenchRuntimeIntent }
+  valid = [validateRuntimeIntentKeys(value, errors), valid].every(Boolean);
+  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
+  if (!isNonEmpty(value.requestId))
+    valid = [appendValidationIssues(errors, "requestId must be a non-empty string"), valid].every(
+      Boolean,
+    );
+  const commandIsValid = isOneOf(value.command, CODING_WORKBENCH_LIFECYCLE_COMMANDS);
+  if (!commandIsValid)
+    valid = [appendValidationIssues(errors, "command is invalid"), valid].every(Boolean);
+  let commandDiagnosticEmitted = !commandIsValid;
+  const branchCommand = value.command;
+  if (branchCommand === "start") valid = [validateStartIntent(value, errors), valid].every(Boolean);
+  else {
+    const observedCommand = value.command;
+    const observedValid = isOneOf(observedCommand, CODING_WORKBENCH_LIFECYCLE_COMMANDS);
+    if (observedValid && !isNonEmpty(value.runId))
+      valid = appendValidationIssues(errors, "runId must be a non-empty string");
+    const observedCommandIsValid = validateObservedLifecycleCommand(
+      observedCommand,
+      !commandDiagnosticEmitted,
+      errors,
+    );
+    commandDiagnosticEmitted = [commandDiagnosticEmitted, !observedCommandIsValid].some(Boolean);
+    valid = [observedCommandIsValid, valid].every(Boolean);
+  }
+  valid = [
+    validateObservedLifecycleCommand(branchCommand, !commandDiagnosticEmitted, errors),
+    valid,
+  ].every(Boolean);
+  return valid;
+}
+
+export function validateCodingWorkbenchRuntimeIntent(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeIntent> {
+  const errors: string[] = [];
+  return admitCodingWorkbenchRuntimeIntent(value, errors)
+    ? { ok: true, value }
     : { ok: false, errors };
+}
+
+function admitCodingWorkbenchRuntimeAuthorityEnvelope(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeAuthorityEnvelope {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "runtime authority must be an object");
+    return false;
+  }
+  valid = [
+    appendValidationIssues(
+      errors,
+      ...exactKeys(
+        value,
+        ["schemaVersion", "authority", "binding", "intentDigest", "nonceDigest", "issuedAt"],
+        "runtimeAuthority",
+      ),
+    ),
+    valid,
+  ].every(Boolean);
+  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
+  const authority = validateCodingWorkbenchAuthorityEnvelope(value.authority);
+  if (!authority.ok)
+    valid = [
+      appendValidationIssues(errors, ...authority.errors.map((error) => `authority.${error}`)),
+      valid,
+    ].every(Boolean);
+  valid = [validateBinding(value.binding, errors), valid].every(Boolean);
+  valid = [validateDigest(value.intentDigest, "intentDigest", errors), valid].every(Boolean);
+  valid = [validateDigest(value.nonceDigest, "nonceDigest", errors), valid].every(Boolean);
+  valid = [validateRuntimeUtcField(value.issuedAt, "issuedAt", errors), valid].every(Boolean);
+  if (authority.ok && !bindingRootMatches(authority.value.workspace.rootDigest, value.binding)) {
+    valid = [
+      appendValidationIssues(
+        errors,
+        "binding workspace root digest must match authority workspace",
+      ),
+      valid,
+    ].every(Boolean);
+  }
+  if (authority.ok && isRecord(value.binding)) {
+    valid = [
+      validateAuthorityBindingCorrelation(authority.value, value.binding, errors),
+      valid,
+    ].every(Boolean);
+  }
+  return valid;
 }
 
 export function validateCodingWorkbenchRuntimeAuthorityEnvelope(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAuthorityEnvelope> {
-  if (!isRecord(value)) return { ok: false, errors: ["runtime authority must be an object"] };
-  const errors = exactKeys(
-    value,
-    ["schemaVersion", "authority", "binding", "intentDigest", "nonceDigest", "issuedAt"],
-    "runtimeAuthority",
-  );
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
-    errors.push("schemaVersion is invalid");
-  const authority = validateCodingWorkbenchAuthorityEnvelope(value.authority);
-  if (!authority.ok) errors.push(...authority.errors.map((error) => `authority.${error}`));
-  validateBinding(value.binding, errors);
-  validateDigest(value.intentDigest, "intentDigest", errors);
-  validateDigest(value.nonceDigest, "nonceDigest", errors);
-  validateStrictUtcInstant(value.issuedAt, "issuedAt", errors);
-  if (authority.ok && authority.value.workspace.rootDigest !== bindingRootDigest(value.binding)) {
-    errors.push("binding workspace root digest must match authority workspace");
-  }
-  if (authority.ok && isRecord(value.binding)) {
-    validateAuthorityBindingCorrelation(authority.value, value.binding, errors);
-  }
-  return errors.length === 0
-    ? { ok: true, value: value as unknown as CodingWorkbenchRuntimeAuthorityEnvelope }
+  const errors: string[] = [];
+  return admitCodingWorkbenchRuntimeAuthorityEnvelope(value, errors)
+    ? { ok: true, value }
     : { ok: false, errors };
+}
+
+function admitCodingWorkbenchRuntimeState(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeState {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "runtime state must be an object");
+    return false;
+  }
+  valid = [
+    appendValidationIssues(
+      errors,
+      ...exactKeys(
+        value,
+        [
+          "schemaVersion",
+          "state",
+          "revision",
+          "updatedAt",
+          "runId",
+          "taskId",
+          "workspaceId",
+          "runtimeSource",
+          "modelSource",
+          "failureCode",
+        ],
+        "runtimeState",
+      ),
+    ),
+    valid,
+  ].every(Boolean);
+  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
+  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES))
+    valid = [appendValidationIssues(errors, "state is invalid"), valid].every(Boolean);
+  const revisionIsSafeInteger = Number.isSafeInteger(value.revision);
+  const revision = revisionIsSafeInteger ? value.revision : undefined;
+  if (!revisionIsSafeInteger || !observedIntegerIsValid(revision, 0))
+    valid = [appendValidationIssues(errors, "revision must be non-negative"), valid].every(Boolean);
+  valid = [validateRuntimeUtcField(value.updatedAt, "updatedAt", errors), valid].every(Boolean);
+  valid = [validateOptionalStateFields(value, errors), valid].every(Boolean);
+  valid = [validateStateShape(value, errors), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchRuntimeState(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeState> {
-  if (!isRecord(value)) return { ok: false, errors: ["runtime state must be an object"] };
-  const errors = exactKeys(
-    value,
-    [
-      "schemaVersion",
-      "state",
-      "revision",
-      "updatedAt",
-      "runId",
-      "taskId",
-      "workspaceId",
-      "runtimeSource",
-      "modelSource",
-      "failureCode",
-    ],
-    "runtimeState",
-  );
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
-    errors.push("schemaVersion is invalid");
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
-  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0)
-    errors.push("revision must be non-negative");
-  validateStrictUtcInstant(value.updatedAt, "updatedAt", errors);
-  validateOptionalStateFields(value, errors);
-  validateStateShape(value, errors);
-  return result(value, errors);
+  const errors: string[] = [];
+  return admitCodingWorkbenchRuntimeState(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
+}
+
+function admitCodingWorkbenchRuntimeMintConfirmation(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeMintConfirmation {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "mint confirmation must be an object");
+    return false;
+  }
+  valid = [
+    appendValidationIssues(
+      errors,
+      ...exactKeys(
+        value,
+        ["approvalId", "approvalToken", "taskId", "operatorId", "intentDigest", "expiresAt"],
+        "mintConfirmation",
+      ),
+    ),
+    valid,
+  ].every(Boolean);
+  for (const key of ["approvalId", "approvalToken", "taskId", "operatorId"] as const)
+    if (!isNonEmpty(value[key]))
+      valid = [appendValidationIssues(errors, `${key} is required`), valid].every(Boolean);
+  valid = [validateDigest(value.intentDigest, "intentDigest", errors), valid].every(Boolean);
+  valid = [validateRuntimeUtcField(value.expiresAt, "expiresAt", errors), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchRuntimeMintConfirmation(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeMintConfirmation> {
-  if (!isRecord(value)) return { ok: false, errors: ["mint confirmation must be an object"] };
-  const errors = exactKeys(
-    value,
-    ["approvalId", "approvalToken", "taskId", "operatorId", "intentDigest", "expiresAt"],
-    "mintConfirmation",
-  );
-  for (const key of ["approvalId", "approvalToken", "taskId", "operatorId"] as const)
-    if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
-  validateDigest(value.intentDigest, "intentDigest", errors);
-  validateStrictUtcInstant(value.expiresAt, "expiresAt", errors);
-  return result(value, errors);
+  const errors: string[] = [];
+  return admitCodingWorkbenchRuntimeMintConfirmation(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
+}
+
+const AUTHORITY_FACT_KEYS = [
+  "binding",
+  "actionClasses",
+  "connectorScopes",
+  "runtimeSource",
+  "modelSource",
+  "budgetDigest",
+  "commandPolicyDigest",
+  "networkPolicyDigest",
+  "gatesDigest",
+  "branchConstraintsDigest",
+  "modelProfileDigest",
+  "issueBindingDigest",
+];
+
+function admitCodingWorkbenchRuntimeAuthorityFacts(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeAuthorityFacts {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "authority facts must be an object");
+    return false;
+  }
+  valid = [
+    appendValidationIssues(errors, ...exactKeys(value, AUTHORITY_FACT_KEYS, "authorityFacts")),
+    valid,
+  ].every(Boolean);
+  valid = [validateBinding(value.binding, errors), valid].every(Boolean);
+  for (const key of AUTHORITY_FACT_KEYS.filter(
+    (key) => key.endsWith("Digest") && key !== "issueBindingDigest",
+  ))
+    valid = [validateDigest(value[key], key, errors), valid].every(Boolean);
+  if (value.issueBindingDigest !== undefined)
+    valid = [validateDigest(value.issueBindingDigest, "issueBindingDigest", errors), valid].every(
+      Boolean,
+    );
+  if (!Array.isArray(value.actionClasses) || !Array.isArray(value.connectorScopes))
+    valid = [appendValidationIssues(errors, "authority scopes must be arrays"), valid].every(
+      Boolean,
+    );
+  else {
+    if (!runtimeScopeMembersValid(value.actionClasses, CODING_WORKBENCH_ACTION_CLASSES))
+      valid = [
+        appendValidationIssues(errors, "actionClasses contains an invalid member"),
+        valid,
+      ].every(Boolean);
+    if (!runtimeScopeMembersValid(value.connectorScopes, CODING_WORKBENCH_CONNECTOR_SCOPES))
+      valid = [
+        appendValidationIssues(errors, "connectorScopes contains an invalid member"),
+        valid,
+      ].every(Boolean);
+  }
+  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
+    valid = [appendValidationIssues(errors, "runtimeSource is invalid"), valid].every(Boolean);
+  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
+    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchRuntimeAuthorityFacts(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAuthorityFacts> {
-  if (!isRecord(value)) return { ok: false, errors: ["authority facts must be an object"] };
-  const keys = [
-    "binding",
-    "actionClasses",
-    "connectorScopes",
-    "runtimeSource",
-    "modelSource",
-    "budgetDigest",
-    "commandPolicyDigest",
-    "networkPolicyDigest",
-    "gatesDigest",
-    "branchConstraintsDigest",
-    "modelProfileDigest",
-    "issueBindingDigest",
-  ];
-  const errors = exactKeys(value, keys, "authorityFacts");
-  validateBinding(value.binding, errors);
-  for (const key of keys.filter((key) => key.endsWith("Digest") && key !== "issueBindingDigest"))
-    validateDigest(value[key], key, errors);
-  if (value.issueBindingDigest !== undefined)
-    validateDigest(value.issueBindingDigest, "issueBindingDigest", errors);
-  if (!Array.isArray(value.actionClasses) || !Array.isArray(value.connectorScopes))
-    errors.push("authority scopes must be arrays");
-  else {
-    if (!value.actionClasses.every((entry) => isOneOf(entry, CODING_WORKBENCH_ACTION_CLASSES)))
-      errors.push("actionClasses contains an invalid member");
-    if (!value.connectorScopes.every((entry) => isOneOf(entry, CODING_WORKBENCH_CONNECTOR_SCOPES)))
-      errors.push("connectorScopes contains an invalid member");
+  const errors: string[] = [];
+  return admitCodingWorkbenchRuntimeAuthorityFacts(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
+}
+
+const ADAPTER_REQUEST_KEYS = [
+  "authorityRef",
+  "delegationId",
+  "idempotencyKey",
+  "binding",
+  "runtimeSource",
+  "modelSource",
+];
+
+function admitCodingWorkbenchRuntimeAdapterStartRequest(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeAdapterStartRequest {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "adapter request must be an object");
+    return false;
   }
+  valid = [
+    appendValidationIssues(errors, ...exactKeys(value, ADAPTER_REQUEST_KEYS, "adapterRequest")),
+    valid,
+  ].every(Boolean);
+  valid = [validateBinding(value.binding, errors), valid].every(Boolean);
+  if (!isRecord(value.authorityRef))
+    valid = [appendValidationIssues(errors, "authorityRef is required"), valid].every(Boolean);
+  else {
+    valid = [
+      appendValidationIssues(
+        errors,
+        ...exactKeys(value.authorityRef, ["runId", "envelopeDigest"], "authorityRef"),
+      ),
+      valid,
+    ].every(Boolean);
+    if (!isNonEmpty(value.authorityRef.runId))
+      valid = [appendValidationIssues(errors, "authorityRef.runId is required"), valid].every(
+        Boolean,
+      );
+    valid = [
+      validateDigest(value.authorityRef.envelopeDigest, "authorityRef.envelopeDigest", errors),
+      valid,
+    ].every(Boolean);
+  }
+  for (const key of ["delegationId", "idempotencyKey"] as const)
+    if (!isNonEmpty(value[key]))
+      valid = [appendValidationIssues(errors, `${key} is required`), valid].every(Boolean);
   if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
-    errors.push("runtimeSource is invalid");
+    valid = [appendValidationIssues(errors, "runtimeSource is invalid"), valid].every(Boolean);
   if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
-    errors.push("modelSource is invalid");
-  return result(value, errors);
+    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchRuntimeAdapterStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAdapterStartRequest> {
-  if (!isRecord(value)) return { ok: false, errors: ["adapter request must be an object"] };
-  const errors = exactKeys(
-    value,
-    ["authorityRef", "delegationId", "idempotencyKey", "binding", "runtimeSource", "modelSource"],
-    "adapterRequest",
-  );
-  validateBinding(value.binding, errors);
-  if (!isRecord(value.authorityRef)) errors.push("authorityRef is required");
-  else {
-    errors.push(...exactKeys(value.authorityRef, ["runId", "envelopeDigest"], "authorityRef"));
-    if (!isNonEmpty(value.authorityRef.runId)) errors.push("authorityRef.runId is required");
-    validateDigest(value.authorityRef.envelopeDigest, "authorityRef.envelopeDigest", errors);
-  }
-  for (const key of ["delegationId", "idempotencyKey"] as const)
-    if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
-  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
-    errors.push("runtimeSource is invalid");
-  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
-    errors.push("modelSource is invalid");
-  return result(value, errors);
+  const errors: string[] = [];
+  return admitCodingWorkbenchRuntimeAdapterStartRequest(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
 const ISSUE_PREVIEW_REQUEST_KEYS = ["repositoryPath", "issueRef"] as const;
@@ -593,51 +789,144 @@ export function parseCodingWorkbenchIssuePreviewRequest(
   return { repositoryPath, issueRef };
 }
 
-function validateIssuePreviewText(value: Record<string, unknown>, errors: string[]): void {
+function validateIssuePreviewText(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (
     typeof value.title !== "string" ||
-    value.title.length > CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS
+    !previewTextIsWithinBound(value.title, CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS)
   ) {
-    errors.push("issuePreview.title must be a bounded string");
+    valid = [
+      appendValidationIssues(errors, "issuePreview.title must be a bounded string"),
+      valid,
+    ].every(Boolean);
   }
   if (
     typeof value.bodyExcerpt !== "string" ||
-    value.bodyExcerpt.length > CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS
+    !previewTextIsWithinBound(value.bodyExcerpt, CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS)
   ) {
-    errors.push("issuePreview.bodyExcerpt must be a bounded string");
+    valid = [
+      appendValidationIssues(errors, "issuePreview.bodyExcerpt must be a bounded string"),
+      valid,
+    ].every(Boolean);
   }
   if (typeof value.bodyExcerptTruncated !== "boolean") {
-    errors.push("issuePreview.bodyExcerptTruncated must be a boolean");
+    valid = [
+      appendValidationIssues(errors, "issuePreview.bodyExcerptTruncated must be a boolean"),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateIssuePreviewComments(value: Record<string, unknown>, errors: string[]): void {
+function validateIssuePreviewComments(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (
     value.comments !== undefined &&
     (!Array.isArray(value.comments) ||
       value.comments.length > 8 ||
-      value.comments.some(
-        (comment: unknown) => typeof comment !== "string" || comment.length > 1_024,
-      ))
+      !previewCommentMembersValid(value.comments))
   ) {
-    errors.push("issuePreview.comments must contain at most eight bounded excerpts");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "issuePreview.comments must contain at most eight bounded excerpts",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (value.commentsTruncated !== undefined && typeof value.commentsTruncated !== "boolean") {
-    errors.push("issuePreview.commentsTruncated must be a boolean");
+    valid = [
+      appendValidationIssues(errors, "issuePreview.commentsTruncated must be a boolean"),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateIssuePreviewProvenance(value: unknown, errors: string[]): void {
+function validateIssuePreviewProvenance(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("issuePreview.provenance must be an object");
-    return;
+    valid = [
+      appendValidationIssues(errors, "issuePreview.provenance must be an object"),
+      valid,
+    ].every(Boolean);
+    return valid;
   }
-  errors.push(...exactKeys(value, ["ownerAndRepo", "issueNumber", "url"], "provenance"));
-  if (!isNonEmpty(value.ownerAndRepo)) errors.push("provenance.ownerAndRepo is required");
-  if (!Number.isSafeInteger(value.issueNumber) || Number(value.issueNumber) < 1) {
-    errors.push("provenance.issueNumber must be a positive integer");
+  valid = [
+    appendValidationIssues(
+      errors,
+      ...exactKeys(value, ["ownerAndRepo", "issueNumber", "url"], "provenance"),
+    ),
+    valid,
+  ].every(Boolean);
+  if (!isNonEmpty(value.ownerAndRepo))
+    valid = [appendValidationIssues(errors, "provenance.ownerAndRepo is required"), valid].every(
+      Boolean,
+    );
+  const issueNumberIsSafeInteger = Number.isSafeInteger(value.issueNumber);
+  const issueNumber = issueNumberIsSafeInteger ? value.issueNumber : undefined;
+  if (!issueNumberIsSafeInteger || !observedIntegerIsValid(issueNumber, 1)) {
+    valid = [
+      appendValidationIssues(errors, "provenance.issueNumber must be a positive integer"),
+      valid,
+    ].every(Boolean);
   }
-  if (!isNonEmpty(value.url)) errors.push("provenance.url is required");
+  if (!isNonEmpty(value.url))
+    valid = [appendValidationIssues(errors, "provenance.url is required"), valid].every(Boolean);
+
+  return valid;
+}
+
+function admitCodingWorkbenchIssuePreview(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchIssuePreview {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "issue preview must be an object");
+    return false;
+  }
+  valid = [
+    appendValidationIssues(
+      errors,
+      ...exactKeys(
+        value,
+        [
+          "untrusted",
+          "title",
+          "bodyExcerpt",
+          "bodyExcerptTruncated",
+          "commentCount",
+          "comments",
+          "commentsTruncated",
+          "state",
+          "provenance",
+        ],
+        "issuePreview",
+      ),
+    ),
+    valid,
+  ].every(Boolean);
+  if (value.untrusted !== true)
+    valid = [appendValidationIssues(errors, "issuePreview.untrusted must be true"), valid].every(
+      Boolean,
+    );
+  valid = [validateIssuePreviewText(value, errors), valid].every(Boolean);
+  valid = [validateIssuePreviewComments(value, errors), valid].every(Boolean);
+  const commentCountIsSafeInteger = Number.isSafeInteger(value.commentCount);
+  const commentCount = commentCountIsSafeInteger ? value.commentCount : undefined;
+  if (!commentCountIsSafeInteger || !observedIntegerIsValid(commentCount, 0)) {
+    valid = [
+      appendValidationIssues(errors, "issuePreview.commentCount must be a non-negative integer"),
+      valid,
+    ].every(Boolean);
+  }
+  if (!isOneOf(value.state, CODING_WORKBENCH_ISSUE_STATES))
+    valid = [appendValidationIssues(errors, "issuePreview.state is invalid"), valid].every(Boolean);
+  valid = [validateIssuePreviewProvenance(value.provenance, errors), valid].every(Boolean);
+  return valid;
 }
 
 /**
@@ -647,117 +936,142 @@ function validateIssuePreviewProvenance(value: unknown, errors: string[]): void 
 export function validateCodingWorkbenchIssuePreview(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchIssuePreview> {
-  if (!isRecord(value)) return { ok: false, errors: ["issue preview must be an object"] };
-  const errors = exactKeys(
-    value,
-    [
-      "untrusted",
-      "title",
-      "bodyExcerpt",
-      "bodyExcerptTruncated",
-      "commentCount",
-      "comments",
-      "commentsTruncated",
-      "state",
-      "provenance",
-    ],
-    "issuePreview",
-  );
-  if (value.untrusted !== true) errors.push("issuePreview.untrusted must be true");
-  validateIssuePreviewText(value, errors);
-  validateIssuePreviewComments(value, errors);
-  if (!Number.isSafeInteger(value.commentCount) || Number(value.commentCount) < 0) {
-    errors.push("issuePreview.commentCount must be a non-negative integer");
-  }
-  if (!isOneOf(value.state, CODING_WORKBENCH_ISSUE_STATES))
-    errors.push("issuePreview.state is invalid");
-  validateIssuePreviewProvenance(value.provenance, errors);
-  return result(value, errors);
+  const errors: string[] = [];
+  return admitCodingWorkbenchIssuePreview(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
 function validateAuthorityBindingCorrelation(
   authority: CodingWorkbenchAuthorityEnvelope,
   binding: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (!authority.taskRefs.includes(String(binding.taskId))) {
-    errors.push("binding task id must be present in authority task references");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "binding task id must be present in authority task references",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (authority.workspace.workspaceId !== binding.workspaceId) {
-    errors.push("binding workspace id must match authority workspace");
+    valid = [
+      appendValidationIssues(errors, "binding workspace id must match authority workspace"),
+      valid,
+    ].every(Boolean);
   }
   if (authority.branch.headRef !== binding.branchRef) {
-    errors.push("binding branch reference must match authority head reference");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "binding branch reference must match authority head reference",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (
     !authority.branch.allowedPrefixes.some((prefix) => String(binding.branchRef).startsWith(prefix))
   ) {
-    errors.push("binding branch reference must satisfy authority branch constraints");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "binding branch reference must satisfy authority branch constraints",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateBinding(value: unknown, errors: string[]): void {
+function validateBinding(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("binding must be an object");
-    return;
+    valid = [appendValidationIssues(errors, "binding must be an object"), valid].every(Boolean);
+    return valid;
   }
-  errors.push(
-    ...exactKeys(
-      value,
-      [
-        "taskId",
-        "projectId",
-        "projectDigest",
-        "workspaceId",
-        "workspaceRootDigest",
-        "branchRef",
-        "branchHeadDigest",
-      ],
-      "binding",
+  valid = [
+    appendValidationIssues(
+      errors,
+      ...exactKeys(
+        value,
+        [
+          "taskId",
+          "projectId",
+          "projectDigest",
+          "workspaceId",
+          "workspaceRootDigest",
+          "branchRef",
+          "branchHeadDigest",
+        ],
+        "binding",
+      ),
     ),
-  );
+    valid,
+  ].every(Boolean);
   for (const key of ["taskId", "projectId", "workspaceId", "branchRef"] as const) {
-    if (!isNonEmpty(value[key])) errors.push(`binding.${key} must be a non-empty string`);
+    if (!isNonEmpty(value[key]))
+      valid = [
+        appendValidationIssues(errors, `binding.${key} must be a non-empty string`),
+        valid,
+      ].every(Boolean);
   }
   for (const key of ["projectDigest", "workspaceRootDigest", "branchHeadDigest"] as const) {
-    validateDigest(value[key], `binding.${key}`, errors);
+    valid = [validateDigest(value[key], `binding.${key}`, errors), valid].every(Boolean);
   }
+
+  return valid;
 }
 
-function bindingRootDigest(value: unknown): unknown {
-  return isRecord(value) ? value.workspaceRootDigest : undefined;
+function bindingRootMatches(expectedDigest: string, rawBinding: unknown): boolean {
+  return expectedDigest === (isRecord(rawBinding) ? rawBinding.workspaceRootDigest : undefined);
 }
 
-function validateDigest(value: unknown, path: string, errors: string[]): void {
+function validateDigest(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
-    errors.push(`${path} must be a 64-character lowercase hex digest`);
+    valid = [
+      appendValidationIssues(errors, `${path} must be a 64-character lowercase hex digest`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateOptionalStateFields(value: Record<string, unknown>, errors: string[]): void {
+function validateOptionalStateFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   for (const key of ["runId", "taskId", "workspaceId"] as const) {
     if (value[key] !== undefined && !isNonEmpty(value[key]))
-      errors.push(`${key} must be a non-empty string`);
+      valid = [appendValidationIssues(errors, `${key} must be a non-empty string`), valid].every(
+        Boolean,
+      );
   }
   if (
     value.runtimeSource !== undefined &&
     !isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES)
   )
-    errors.push("runtimeSource is invalid");
+    valid = [appendValidationIssues(errors, "runtimeSource is invalid"), valid].every(Boolean);
   if (
     value.modelSource !== undefined &&
     !isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES)
   )
-    errors.push("modelSource is invalid");
+    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
   if (
     value.failureCode !== undefined &&
     !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES)
   )
-    errors.push("failureCode is invalid");
+    valid = [appendValidationIssues(errors, "failureCode is invalid"), valid].every(Boolean);
+
+  return valid;
 }
 
-function validateStateShape(value: Record<string, unknown>, errors: string[]): void {
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) return;
+function validateStateShape(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) return valid;
   const unbound = value.state === "idle";
   const bindings = [
     value.runId,
@@ -767,41 +1081,93 @@ function validateStateShape(value: Record<string, unknown>, errors: string[]): v
     value.modelSource,
   ];
   if (unbound && bindings.some((entry) => entry !== undefined))
-    errors.push("unbound state must not carry run binding");
+    valid = [
+      appendValidationIssues(errors, "unbound state must not carry run binding"),
+      valid,
+    ].every(Boolean);
   const recoveryHasBinding =
     value.state === "recovery-required" && bindings.some((entry) => entry !== undefined);
   const requiresBinding = !unbound && value.state !== "recovery-required";
   if ((requiresBinding || recoveryHasBinding) && bindings.some((entry) => !isNonEmpty(entry)))
-    errors.push("run-bound state requires complete binding");
-  validateStateFailureShape(value, errors);
+    valid = [
+      appendValidationIssues(errors, "run-bound state requires complete binding"),
+      valid,
+    ].every(Boolean);
+  valid = [validateStateFailureShape(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
-function validateStateFailureShape(value: Record<string, unknown>, errors: string[]): void {
+function validateStateFailureShape(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   const requiresFailure = value.state === "failed" || value.state === "recovery-required";
   if (requiresFailure && value.failureCode === undefined)
-    errors.push("failure state requires failureCode");
+    valid = [appendValidationIssues(errors, "failure state requires failureCode"), valid].every(
+      Boolean,
+    );
   const permitsFailure = ["failed", "cancelled", "taken-over", "recovery-required"].includes(
     String(value.state),
   );
   if (!permitsFailure && value.failureCode !== undefined)
-    errors.push("state must not carry failureCode");
+    valid = [appendValidationIssues(errors, "state must not carry failureCode"), valid].every(
+      Boolean,
+    );
+
+  return valid;
 }
 
-function validateStartIntent(value: Record<string, unknown>, errors: string[]): void {
+function validateStartIntent(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (
     !isNonEmpty(value.taskIntent) ||
     value.taskIntent.length > CODING_WORKBENCH_TASK_INTENT_MAX_CHARS
   ) {
-    errors.push("taskIntent must be a bounded non-empty string");
+    valid = [
+      appendValidationIssues(errors, "taskIntent must be a bounded non-empty string"),
+      valid,
+    ].every(Boolean);
   }
   // Validated against the package's own frozen tables, not local copies. The re-declared arrays here
   // were a second source of truth for two closed vocabularies the rest of this same file already
   // validates against CODING_WORKBENCH_MODEL_SOURCES — so adding a mode would have silently left
   // this one validator rejecting it.
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
-    errors.push("requestedMode is invalid");
+    valid = [appendValidationIssues(errors, "requestedMode is invalid"), valid].every(Boolean);
   }
   if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES)) {
-    errors.push("modelSource is invalid");
+    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
   }
+
+  return valid;
+}
+
+// The shared owner still implements strict UTC semantics; this phase adds only the primitive witness.
+function validateRuntimeUtcField(value: unknown, path: string, errors: string[]): value is string {
+  const previousErrors = errors.length;
+  validateStrictUtcInstant(value, path, errors);
+  return typeof value === "string" && errors.length === previousErrors;
+}
+
+// Concrete physical scope observations, not a generic unknown-to-domain certificate.
+function runtimeScopeMembersValid(value: unknown, allowed: readonly string[]): boolean {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!isOneOf(value[index], allowed)) return false;
+  }
+  return true;
+}
+
+function previewCommentMembersValid(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    const comment: unknown = value[index];
+    if (typeof comment !== "string" || comment.length > 1_024) return false;
+  }
+  return true;
+}
+
+function previewTextIsWithinBound(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.length <= maximum;
 }

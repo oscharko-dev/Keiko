@@ -701,9 +701,8 @@ export function isLanguageFormattingOptions(value: unknown): value is LanguageFo
 }
 
 function isLanguageServiceOperation(value: unknown): value is LanguageServiceOperation {
-  return (
-    typeof value === "string" && (LANGUAGE_SERVICE_OPERATIONS as readonly string[]).includes(value)
-  );
+  const operations: readonly string[] = LANGUAGE_SERVICE_OPERATIONS;
+  return typeof value === "string" && operations.includes(value);
 }
 
 type PositionOperation = Extract<
@@ -756,11 +755,17 @@ function collectBaseErrors(value: Record<string, unknown>): string[] {
 }
 
 function isPositionOperation(operation: LanguageServiceOperation): operation is PositionOperation {
-  return POSITION_OPERATIONS.includes(operation as PositionOperation);
+  const positionOperationsValues: readonly string[] = POSITION_OPERATIONS;
+  return positionOperationsValues.includes(operation);
 }
 
 function isLanguageDiagnostics(value: unknown): value is readonly LanguageDiagnostic[] {
-  return Array.isArray(value) && value.every(isLanguageDiagnostic);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isLanguageDiagnostic(value[index])) return false;
+  }
+  return true;
 }
 
 function collectPositionErrors(
@@ -839,20 +844,45 @@ export function parseLanguageServiceRequest(
     };
   }
   const operation = value.operation;
+  if (!isLanguageServiceOperation(operation)) {
+    return {
+      ok: false,
+      errors: [`operation must be one of: ${LANGUAGE_SERVICE_OPERATIONS.join(", ")}`],
+    };
+  }
   const errors = [...collectBaseErrors(value), ...collectOperationErrors(operation, value)];
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, value: assembleRequest(operation, value) };
+  return assembleRequest(operation, value);
 }
 
-// Narrowing already guaranteed by parseLanguageServiceRequest; this assembles the concrete shape.
+// The original assembly observations are admitted before their values become typed output.
+function invalidRequestField(message: string): LanguageServiceParseFail {
+  return { ok: false, errors: [message] };
+}
+
+function isLanguageRoot(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    utf8ByteLength(value) <= LANGUAGE_SERVICE_PATH_MAX_BYTES &&
+    // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
 function assembleRequest(
   operation: LanguageServiceOperation,
   value: Record<string, unknown>,
-): LanguageServiceRequest {
-  const root = value.root as string;
-  const document = value.document as LanguageDocumentOverlay;
+): LanguageServiceParse<LanguageServiceRequest> {
+  const root = value.root;
+  const document = value.document;
+  const rootIsValid = isLanguageRoot(root);
+  const documentIsValid = isLanguageDocumentOverlay(document);
+  const errors: string[] = [];
+  if (!rootIsValid) errors.push("root must be a non-empty string");
+  if (!documentIsValid) errors.push("document must be { path, languageId, text }");
+  if (!rootIsValid || !documentIsValid) return { ok: false, errors };
   return assembleValidatedRequest(operation, root, document, value);
 }
 
@@ -861,45 +891,36 @@ function assembleValidatedRequest(
   root: string,
   document: LanguageDocumentOverlay,
   value: Record<string, unknown>,
-): LanguageServiceRequest {
-  if (operation === "renameApply") {
-    return assembleRenameApplyRequest(root, document, value);
-  }
-  if (isPositionOperation(operation)) {
+): LanguageServiceParse<LanguageServiceRequest> {
+  if (operation === "renameApply") return assembleRenameApplyRequest(root, document, value);
+  if (isPositionOperation(operation))
     return assemblePositionRequest(operation, root, document, value);
-  }
-  if (operation === "codeActions") {
-    return assembleCodeActionsRequest(root, document, value);
-  }
+  if (operation === "codeActions") return assembleCodeActionsRequest(root, document, value);
   if (operation === "inlayHints") {
-    return {
-      operation,
-      root,
-      document,
-      range: value.range as LanguageRange,
-    };
+    const range = value.range;
+    return isLanguageRange(range)
+      ? { ok: true, value: { operation, root, document, range } }
+      : invalidRequestField("range must be { start, end }");
   }
-  if (operation === "formatting") {
-    return assembleFormattingRequest(root, document, value);
-  }
-  // KEIKO-0950: the previous `if (isBaseDocumentOperation(operation)) { return {...}; }` block
-  // returned the same shape as the fallthrough — a dead branch. Removed together with the
-  // unused BaseDocumentOperation type predicate and its supporting table.
-  return { operation, root, document };
+  if (operation === "formatting") return assembleFormattingRequest(root, document, value);
+  // KEIKO-0950: the original dead base-document branch remains retired.
+  return { ok: true, value: { operation, root, document } };
 }
 
 function assembleRenameApplyRequest(
   root: string,
   document: LanguageDocumentOverlay,
   value: Record<string, unknown>,
-): LanguageRenameApplyRequest {
-  return {
-    operation: "renameApply",
-    root,
-    document,
-    position: value.position as LanguagePosition,
-    newName: value.newName as string,
-  };
+): LanguageServiceParse<LanguageRenameApplyRequest> {
+  const position = value.position;
+  const newName = value.newName;
+  const positionIsValid = isLanguagePosition(position);
+  const nameIsValid = isNonEmptyString(newName);
+  const errors: string[] = [];
+  if (!positionIsValid) errors.push("position must be { line, character }");
+  if (!nameIsValid) errors.push("newName must be a non-empty string");
+  if (!positionIsValid || !nameIsValid) return { ok: false, errors };
+  return { ok: true, value: { operation: "renameApply", root, document, position, newName } };
 }
 
 function assemblePositionRequest(
@@ -907,43 +928,40 @@ function assemblePositionRequest(
   root: string,
   document: LanguageDocumentOverlay,
   value: Record<string, unknown>,
-): Extract<
-  LanguageServiceRequest,
-  { readonly operation: Exclude<PositionOperation, "renameApply"> }
+): LanguageServiceParse<
+  Extract<LanguageServiceRequest, { readonly operation: Exclude<PositionOperation, "renameApply"> }>
 > {
-  return {
-    operation,
-    root,
-    document,
-    position: value.position as LanguagePosition,
-  };
+  const position = value.position;
+  return isLanguagePosition(position)
+    ? { ok: true, value: { operation, root, document, position } }
+    : invalidRequestField("position must be { line, character }");
 }
 
 function assembleCodeActionsRequest(
   root: string,
   document: LanguageDocumentOverlay,
   value: Record<string, unknown>,
-): LanguageCodeActionsRequest {
-  return {
-    operation: "codeActions",
-    root,
-    document,
-    range: value.range as LanguageRange,
-    diagnostics: value.diagnostics as readonly LanguageDiagnostic[],
-  };
+): LanguageServiceParse<LanguageCodeActionsRequest> {
+  const range = value.range;
+  const diagnostics = value.diagnostics;
+  const rangeIsValid = isLanguageRange(range);
+  const diagnosticsAreValid = isLanguageDiagnostics(diagnostics);
+  const errors: string[] = [];
+  if (!rangeIsValid) errors.push("range must be { start, end }");
+  if (!diagnosticsAreValid) errors.push("diagnostics must be an array of LanguageDiagnostic");
+  if (!rangeIsValid || !diagnosticsAreValid) return { ok: false, errors };
+  return { ok: true, value: { operation: "codeActions", root, document, range, diagnostics } };
 }
 
 function assembleFormattingRequest(
   root: string,
   document: LanguageDocumentOverlay,
   value: Record<string, unknown>,
-): LanguageFormattingRequest {
-  return value.options === undefined
-    ? { operation: "formatting", root, document }
-    : {
-        operation: "formatting",
-        root,
-        document,
-        options: value.options as LanguageFormattingOptions,
-      };
+): LanguageServiceParse<LanguageFormattingRequest> {
+  if (value.options === undefined)
+    return { ok: true, value: { operation: "formatting", root, document } };
+  const options = value.options;
+  return isLanguageFormattingOptions(options)
+    ? { ok: true, value: { operation: "formatting", root, document, options } }
+    : invalidRequestField("options must be { tabSize?, insertSpaces? }");
 }

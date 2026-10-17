@@ -266,6 +266,9 @@ export type EditorTestGenerationParse = EditorTestGenerationParseOk | EditorTest
 // A LanguageRange is `{ start, end }` of two LanguagePositions. Defined locally because the
 // language-service module exposes only the position guard; this keeps the test-generation contract a
 // leaf with no new shared dependency.
+const EDITOR_TEST_GENERATION_TARGET_KINDS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_TEST_GENERATION_TARGET_KINDS;
+
 function isWireRange(value: unknown): value is LanguageRange {
   return isRecord(value) && isLanguagePosition(value.start) && isLanguagePosition(value.end);
 }
@@ -317,9 +320,19 @@ function isOverlayArray(value: unknown): value is readonly LanguageDocumentOverl
   ) {
     return false;
   }
-  return value.every(
-    (entry) => isLanguageDocumentOverlay(entry) && isBoundedOverlayText(entry.text),
-  );
+  return physicalOverlayMembers(value);
+}
+
+function physicalOverlayMembers(value: readonly unknown[]): boolean {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 1 || extent > EDITOR_TEST_GENERATION_MAX_OVERLAYS)
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const entry: unknown = value[index];
+    if (!isLanguageDocumentOverlay(entry) || !isBoundedOverlayText(entry.text)) return false;
+  }
+  return true;
 }
 
 // Collects the shape errors for a single-document target (file/selection/symbol/frontend-component).
@@ -340,6 +353,7 @@ function collectScopedTargetErrors(
   if (kind === "frontend-component" && !isNonEmptyString(target.componentName)) {
     errors.push("target.componentName must be a non-empty string for a frontend-component target");
   }
+  collectFrontendRangeErrors(kind, target, errors);
 }
 
 // Collects the target-shape errors for one wire target, dispatching on `kind`.
@@ -351,7 +365,7 @@ function collectTargetErrors(target: unknown, errors: string[]): void {
   const kind = target.kind;
   if (
     typeof kind !== "string" ||
-    !(EDITOR_TEST_GENERATION_TARGET_KINDS as readonly string[]).includes(kind)
+    !EDITOR_TEST_GENERATION_TARGET_KINDS_ADMISSION_VALUES.includes(kind)
   ) {
     errors.push(`target.kind must be one of: ${EDITOR_TEST_GENERATION_TARGET_KINDS.join(", ")}`);
     return;
@@ -394,17 +408,75 @@ export function parseEditorTestGenerationRequest(value: unknown): EditorTestGene
     return { ok: false, errors };
   }
   const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
+  const request = captureCompleteTestGenerationRequest(value, context);
+  if (!isCompleteTestGenerationRequest(request))
+    return { ok: false, errors: collectRequestErrors({ ...request }) };
+  return { ok: true, value: request };
+}
+
+interface CapturedEditorTestGenerationWireRequest {
+  readonly schemaVersion: typeof EDITOR_TEST_GENERATION_SCHEMA_VERSION;
+  readonly root: unknown;
+  readonly target: unknown;
+  readonly contextBudgetBytes: unknown;
+  readonly editorSessionId?: string;
+  readonly context?: ReturnType<typeof buildContextSelectors>;
+}
+
+function captureCompleteTestGenerationRequest(
+  value: Record<string, unknown>,
+  context: ReturnType<typeof buildContextSelectors> | undefined,
+): CapturedEditorTestGenerationWireRequest {
   return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
-      root: value.root as string,
-      ...(isBoundedEditorSessionId(value.editorSessionId)
-        ? { editorSessionId: value.editorSessionId }
-        : {}),
-      target: value.target as EditorTestGenerationWireTarget,
-      contextBudgetBytes: value.contextBudgetBytes as number,
-      ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
-    },
+    schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+    root: value.root,
+    ...(isBoundedEditorSessionId(value.editorSessionId)
+      ? { editorSessionId: value.editorSessionId }
+      : {}),
+    target: value.target,
+    contextBudgetBytes: value.contextBudgetBytes,
+    ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
   };
+}
+
+function isCompleteTestGenerationRequest(
+  value: CapturedEditorTestGenerationWireRequest,
+): value is EditorTestGenerationWireRequest {
+  return (
+    isNonEmptyString(value.root) &&
+    isCompleteTarget(value.target) &&
+    isNonNegativeInteger(value.contextBudgetBytes) &&
+    (value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId))
+  );
+}
+
+function isCompleteTarget(value: unknown): value is EditorTestGenerationWireTarget {
+  if (!isRecord(value)) return false;
+  if (value.kind === "changed-file-set") return isOverlayArray(value.documents);
+  if (!isLanguageDocumentOverlay(value.document)) return false;
+  switch (value.kind) {
+    case "file":
+      return true;
+    case "selection":
+      return isWireRange(value.range);
+    case "symbol":
+      return isWireSymbol(value.symbol);
+    case "frontend-component":
+      return (
+        isNonEmptyString(value.componentName) &&
+        (value.range === undefined || isWireRange(value.range))
+      );
+    default:
+      return false;
+  }
+}
+
+function collectFrontendRangeErrors(
+  kind: string,
+  target: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (kind === "frontend-component" && target.range !== undefined && !isWireRange(target.range)) {
+    errors.push("target.range must be { start, end } when present for a frontend-component target");
+  }
 }

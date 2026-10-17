@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import * as publicPrimitives from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import * as publicTrust from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import {
   CODING_WORKBENCH_MODES,
   compareCodingWorkbenchModeAuthority,
@@ -304,4 +306,125 @@ describe("canonical workspace trust", () => {
       }),
     ).toBe(true);
   });
+});
+
+function pinPublicTrustStatus(input: unknown): void {
+  if (!publicTrust.isWorkspaceTrustStatus(input)) return;
+  expectTypeOf(input.trust).toEqualTypeOf<"trusted" | "restricted">();
+  expectTypeOf(input.reason).toEqualTypeOf<
+    | "human-grant"
+    | "derived-from-trusted-root"
+    | "human-revocation"
+    | "identity-changed"
+    | "manifest-changed"
+    | "trust-basis-changed"
+    | "policy"
+    | "state-unavailable"
+  >();
+  expectTypeOf(input.revision).toEqualTypeOf<number | null>();
+  expectTypeOf(input.projectId).toEqualTypeOf<string>();
+}
+
+describe.each([
+  ["source", isWorkspaceTrustStatus, validateWorkspaceTrustRecord],
+  ["public", publicTrust.isWorkspaceTrustStatus, publicTrust.validateWorkspaceTrustRecord],
+] as const)("%s trust membership preservation", (_entrypoint, statusGuard, recordGuard) => {
+  it("preserves healthy trusted and restricted vocabulary controls", () => {
+    for (const reason of WORKSPACE_TRUST_REASONS) {
+      const trusted = reason === "human-grant" || reason === "derived-from-trusted-root";
+      const status = { ...trustedStatus(), trust: trusted ? "trusted" : "restricted", reason };
+      expect(statusGuard(status)).toBe(true);
+      pinPublicTrustStatus(status);
+      expect(recordGuard({ ...trustedRecord(), trust: status.trust, reason })).toEqual({
+        ok: true,
+      });
+    }
+  });
+
+  it.each([null, undefined, 0, Symbol("enum"), "TRUSTED", "future", {}, Object("trusted")])(
+    "refuses non-members without coercion %s",
+    (value: unknown) => {
+      expect(statusGuard({ ...trustedStatus(), trust: value })).toBe(false);
+      expect(statusGuard({ ...trustedStatus(), reason: value })).toBe(false);
+      expect(recordGuard({ ...trustedRecord(), trust: value })).toEqual({
+        ok: false,
+        reasons: ["workspace trust record invalid"],
+      });
+    },
+  );
+
+  it("does not coerce an enum candidate and revalidates changed status", () => {
+    const value = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(statusGuard({ ...trustedStatus(), trust: value })).toBe(false);
+    const status = { ...trustedStatus(), reason: "human-grant" };
+    expect(statusGuard(status)).toBe(true);
+    status.reason = "policy";
+    expect(statusGuard(status)).toBe(false);
+  });
+
+  it("preserves getter reads and exact-key refusal", () => {
+    const reads: string[] = [];
+    const status = new Proxy(trustedStatus(), {
+      get(target, key, receiver): unknown {
+        reads.push(String(key));
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(statusGuard(status)).toBe(true);
+    expect(reads).toEqual([
+      "projectId",
+      "projectId",
+      "projectId",
+      "projectId",
+      "kind",
+      "schemaVersion",
+      "trust",
+      "decidedBy",
+      "reason",
+      "revision",
+      "revision",
+      "trust",
+      "reason",
+      "trust",
+      "reason",
+    ]);
+    expect(statusGuard({ ...trustedStatus(), extra: true })).toBe(false);
+  });
+});
+
+function publicBinding(): publicTrust.WorkspaceTrustBinding {
+  return {
+    manifestRef: checked(MANIFEST, publicPrimitives.isWorkspaceManifestRef),
+    manifestRevision: 4,
+    manifestDigest: checked(MANIFEST_DIGEST, publicPrimitives.isWorkspaceManifestDigest),
+    rootRef: checked(ROOT, publicPrimitives.isWorkspaceRootRef),
+    rootIdentityDigest: checked(ROOT_DIGEST, publicPrimitives.isWorkspaceRootIdentityDigest),
+    trustBasisDigest: {
+      outcome: "known",
+      value: checked(TRUST_BASIS, publicPrimitives.isWorkspaceTrustBasisDigest),
+    },
+  };
+}
+
+it("preserves actual public root-bound projection with public validated brands", () => {
+  const expected = publicBinding();
+  const assessment: publicTrust.WorkspaceTrustAssessment = {
+    outcome: "known",
+    value: { ...trustedRecord(), binding: expected },
+  };
+  expect(publicTrust.projectCommandTaskTrustState(assessment, expected)).toBe("trusted");
+  expect(publicTrust.projectCommandTaskTrustState({ outcome: "unknown" }, expected)).toBe(
+    "approval-required",
+  );
+  const otherRoot = checked(OTHER_ROOT, publicPrimitives.isWorkspaceRootRef);
+  expect(
+    publicTrust.projectCommandTaskTrustState(assessment, { ...expected, rootRef: otherRoot }),
+  ).toBe("approval-required");
+  expect(
+    publicTrust.projectCommandTaskTrustState(assessment, { ...expected, manifestRevision: 9 }),
+  ).toBe("trusted");
 });

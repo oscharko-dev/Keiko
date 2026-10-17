@@ -408,7 +408,8 @@ export interface ObjectReference {
 // transform to/from INTEGER epoch-ms in the SQL row. Etag is a monotonic integer used
 // by the API layer for optimistic concurrency (#539).
 //
-// `metadata` is OPTIONAL and strictly bounded by the validator: any key matching a
+// `metadata` is OPTIONAL; null and explicit undefined preserve existing validation semantics.
+// Object metadata is strictly bounded by the validator: any key matching a
 // FORBIDDEN substring (audit-events.md §8.3) is rejected with
 // `denied/payload-content-not-permitted` so a client cannot accidentally smuggle a
 // prompt or document excerpt past the redactor.
@@ -420,7 +421,7 @@ export interface Relationship {
   readonly target: ObjectReference;
   readonly type: RelationshipType;
   readonly lifecycleState: RelationshipLifecycleState;
-  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly metadata?: Readonly<Record<string, unknown>> | null | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly etag: number;

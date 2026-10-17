@@ -55,3 +55,48 @@ describe("shared bounded provider observation contract", () => {
       expect(isGitDeliveryReadCompleteness(bad)).toBe(false);
   });
 });
+
+import * as g2PublicObservation from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+
+describe("G2 final observation reason lookup", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryObservationFailure],
+    ["public", g2PublicObservation.isGitDeliveryObservationFailure],
+  ] as const) {
+    it(`${surface} admits the actual closed observation producer`, () => {
+      const input = gitDeliveryObservationFailure("authority-denied");
+      expect(validate(input)).toBe(true);
+      expect(input.state).toBe("blocked");
+    });
+    it(`${surface} refuses an unknown final reason even when its mapped state is undefined`, () => {
+      let reads = 0;
+      const input = {
+        get reason(): unknown {
+          reads += 1;
+          return reads < 3 ? "authority-denied" : "not-a-reason";
+        },
+        state: undefined,
+      };
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(3);
+    });
+  }
+});
+
+it("G2 source/public preserve a valid later observation reason", () => {
+  for (const validate of [
+    isGitDeliveryObservationFailure,
+    g2PublicObservation.isGitDeliveryObservationFailure,
+  ]) {
+    let reads = 0;
+    const input = {
+      get reason(): unknown {
+        reads += 1;
+        return reads < 3 ? "authority-denied" : "provider-unavailable";
+      },
+      state: "pending",
+    };
+    expect(validate(input)).toBe(true);
+    expect(reads).toBe(3);
+  }
+});

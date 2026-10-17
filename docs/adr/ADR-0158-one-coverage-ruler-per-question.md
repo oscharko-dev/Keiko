@@ -106,6 +106,11 @@ condition are now the same number by construction.
 job's `npm run test:coverage:ui` and `npm run check:coverage:ui` steps are removed. The suite is
 measured once, by `coverage-ui`, and judged once, by `coverage-sonar`.
 
+ADR-0157's #3918 topology amendment distributes the package suite across five native shards and
+the script suite across two. Each scope still executes its complete test set once. Native blob
+merges reconstruct both complete coverage scopes before this same single evaluation; no test,
+instrumentation scope, floor or tolerance is removed by the scheduling change.
+
 The removed ratchet was keiko-ui lines at floor 85. The 88-strict release target binds the same
 metric of the same package more strictly and continues to execute on every pull request inside
 `check:coverage:quality`, in the required `Coverage and SonarCloud` context — so no keiko-ui lines

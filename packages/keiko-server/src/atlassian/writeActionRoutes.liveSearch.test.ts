@@ -19,6 +19,7 @@ import type {
   CodingWorkbenchMode,
   JiraLiveSearchResult,
 } from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_LIVE_SEARCH_MAX_RESULTS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -274,9 +275,12 @@ async function postLiveSearch(
 }
 
 function liveSearchOf(body: Record<string, unknown>): JiraLiveSearchResult {
-  const liveSearch = body.liveSearch as JiraLiveSearchResult | undefined;
+  const liveSearch = body.liveSearch;
   if (liveSearch === undefined) throw new Error("expected liveSearch payload on the response");
-  return liveSearch;
+  const checked = validateJiraLiveSearchResult(liveSearch);
+  if (!checked.ok) throw new TypeError("actual route live result failed public validation");
+  expect(checked.value).toBe(liveSearch);
+  return checked.value;
 }
 
 beforeEach(() => {
@@ -624,6 +628,34 @@ describe("live-search route — bounds and degradation (AC6)", () => {
     expect(result.status).toBe(400);
     expect(counter.count).toBe(0);
   });
+
+  it.each([
+    { jql: "1=1) OR (project = PRIVATE", maxResults: 1, expectedCap: "1" },
+    { jql: " ", maxResults: undefined, expectedCap: String(ATLASSIAN_LIVE_SEARCH_MAX_RESULTS) },
+  ])(
+    "preserves opaque live JQL and its requested/default cap through the checked route: $expectedCap",
+    async ({ jql, maxResults, expectedCap }) => {
+      const counter: FetchCounter = { count: 0, requests: [] };
+      const guard = guardWith(counter);
+      const authority = registerEnvelope("autonomous-delivery", READ_SCOPE);
+      const { status, body } = await postLiveSearch(
+        { type: "search-issues-live", jql, maxResults },
+        authority,
+        deps(guard, "autonomous-delivery"),
+      );
+      expect(status).toBe(200);
+      expect(body.disposition).toBe("allowed");
+      const live = liveSearchOf(body);
+      const first = counter.requests[0];
+      if (first === undefined)
+        throw new TypeError("admitted live request never reached fixture transport");
+      const url = new URL(first.url);
+      expect(url.searchParams.get("jql")).toBe(jql);
+      expect(url.searchParams.get("maxResults")).toBe(expectedCap);
+      expect(live.issues).toHaveLength(maxResults ?? FIXTURE_ISSUES.length);
+      expect(live.truncated).toBe(maxResults === 1);
+    },
+  );
 
   it("enforces maxResults at the boundary through the route", async () => {
     const counter: FetchCounter = { count: 0, requests: [] };

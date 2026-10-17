@@ -43,20 +43,21 @@ import type {
   GitSyncPreview,
   GitSyncExecuteResponse,
   GitRepositoryValidation,
+  GitRepositoryParseResult,
 } from "@oscharko-dev/keiko-contracts";
-import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import { parseGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
-  validateGitSyncPreview,
-  validateGitSyncExecuteResponse,
+  parseGitSyncPreview,
+  parseGitSyncExecuteResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import {
-  validateGitRemotesResponse,
-  validateGitRepositorySummary,
+  parseGitRemotesResponse,
+  parseGitRepositorySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
   isSafeGitRefName,
-  validateGitRepositoryDiffResponse,
-  validateGitRepositoryStatusResponse,
+  parseGitRepositoryDiffResponse,
+  parseGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
@@ -103,6 +104,13 @@ export type ApiFetchJson = <T>(
   path: string,
   init?: RequestInit,
   validator?: (value: unknown) => GitRepositoryValidation,
+  correlationId?: string,
+) => Promise<T>;
+
+export type ApiFetchParsedJson = <T>(
+  path: string,
+  init: RequestInit | undefined,
+  parser: (value: unknown) => GitRepositoryParseResult<T>,
   correlationId?: string,
 ) => Promise<T>;
 
@@ -502,7 +510,7 @@ function gitDeliverySyncPath(
 }
 
 export async function fetchGitSyncPreview(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
@@ -513,12 +521,12 @@ export async function fetchGitSyncPreview(
       body: gitDeliverySyncBody(input),
       ...(signal === undefined ? {} : { signal }),
     },
-    validateGitSyncPreview,
+    parseGitSyncPreview,
   );
 }
 
 export async function fetchGitSyncExecute(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
@@ -529,7 +537,7 @@ export async function fetchGitSyncExecute(
       body: gitDeliverySyncBody(input),
       ...(signal === undefined ? {} : { signal }),
     },
-    validateGitSyncExecuteResponse,
+    parseGitSyncExecuteResponse,
   );
 }
 
@@ -546,18 +554,18 @@ export async function fetchGitSyncApprove(
 }
 
 export async function fetchGitHistory(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: Parameters<typeof import("./api").fetchGitHistory>[0],
 ): Promise<GitHistoryResponse> {
   const params = new URLSearchParams();
   params.set("root", input.root);
   if (input.limit !== undefined) params.set("limit", input.limit.toString());
   if (input.skip !== undefined) params.set("skip", input.skip.toString());
-  return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
+  return fetchJson(`/api/git/history?${params.toString()}`, undefined, parseGitHistoryResponse);
 }
 
 export async function fetchGitStatus(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   root: string,
   options?: Parameters<typeof import("./api").fetchGitStatus>[1],
 ): Promise<GitRepositoryStatusResponse> {
@@ -567,13 +575,13 @@ export async function fetchGitStatus(
   return fetchJson(
     `/api/git/status?${params.toString()}`,
     undefined,
-    validateGitRepositoryStatusResponse,
+    parseGitRepositoryStatusResponse,
     options?.correlationId,
   );
 }
 
 export async function fetchGitSummary(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   root: string,
   options?: Parameters<typeof import("./api").fetchGitSummary>[1],
 ): Promise<GitRepositorySummary> {
@@ -582,22 +590,22 @@ export async function fetchGitSummary(
   return fetchJson(
     `/api/git/summary?${params.toString()}`,
     undefined,
-    validateGitRepositorySummary,
+    parseGitRepositorySummary,
     options?.correlationId,
   );
 }
 
 export async function fetchGitRemotes(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   root: string,
 ): Promise<GitRemotesResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
-  return fetchJson(`/api/git/remotes?${params.toString()}`, undefined, validateGitRemotesResponse);
+  return fetchJson(`/api/git/remotes?${params.toString()}`, undefined, parseGitRemotesResponse);
 }
 
 export async function fetchGitDiff(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: {
     readonly root: string;
     readonly path?: string;
@@ -608,11 +616,7 @@ export async function fetchGitDiff(
   params.set("root", input.root);
   if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
   if (input.scope !== undefined) params.set("scope", input.scope);
-  return fetchJson(
-    `/api/git/diff?${params.toString()}`,
-    undefined,
-    validateGitRepositoryDiffResponse,
-  );
+  return fetchJson(`/api/git/diff?${params.toString()}`, undefined, parseGitRepositoryDiffResponse);
 }
 
 // Git-to-Chat comparison connections use the same deferred, validated request boundary.

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GIT_HISTORY_SCHEMA_VERSION, validateGitHistoryResponse } from "./git-history.js";
+import {
+  GIT_HISTORY_SCHEMA_VERSION,
+  validateGitHistoryResponse,
+  parseGitHistoryResponse,
+} from "./git-history.js";
 
 function validEntry(): Record<string, unknown> {
   return {
@@ -291,4 +295,137 @@ describe("entries bounded by limit, with truncated consistency (KEIKO-0310)", ()
     input.truncated = false;
     expect(validateGitHistoryResponse(input)).toEqual({ ok: true });
   });
+});
+
+import {
+  validateGitHistoryResponse as validatePublicHistory,
+  parseGitHistoryResponse as parsePublicHistory,
+} from "@oscharko-dev/keiko-contracts/runtime/git-history";
+
+function invalidHistoryArray(kind: string): unknown[] {
+  if (kind === "sparse") {
+    const items: unknown[] = [];
+    items.length = 1;
+    return items;
+  }
+  return Object.assign([null], { forEach: (): undefined => undefined, every: (): boolean => true });
+}
+
+describe("Git history actual array admission (#3918)", () => {
+  for (const { surface, validate } of [
+    { surface: "source", validate: validateGitHistoryResponse },
+    { surface: "public", validate: validatePublicHistory },
+  ]) {
+    it.each(["sparse", "spoofed"])(`${surface}: refuses %s entries`, (kind) => {
+      expect(validate({ ...validResponse(), entries: invalidHistoryArray(kind) })).toEqual({
+        ok: false,
+        reasons: ["entries[0] must be an object"],
+      });
+    });
+    it.each(["sparse", "spoofed"])(`${surface}: refuses %s refs`, (kind) => {
+      expect(
+        validate({
+          ...validResponse(),
+          entries: [{ ...validEntry(), refs: invalidHistoryArray(kind) }],
+        }),
+      ).toEqual({
+        ok: false,
+        reasons: ["entries[0].refs must contain only strings"],
+      });
+    });
+  }
+});
+
+export function parsePublicGitHistory(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitHistoryResponse
+> {
+  const result = parsePublicHistory(input);
+  return result;
+}
+
+describe("Git history typed parser (#3918)", () => {
+  for (const { surface, parse } of [
+    { surface: "source", parse: parseGitHistoryResponse },
+    { surface: "public", parse: parsePublicGitHistory },
+  ]) {
+    it(`${surface}: preserves original entries refs and omitted optionals`, () => {
+      const entry = validEntry();
+      const input: Record<string, unknown> = {
+        ...validResponse(),
+        entries: [entry],
+        message: undefined,
+      };
+      delete input.repositoryRoot;
+      const result = parse(input);
+      if (!result.ok) throw new TypeError("valid history fixture refused");
+      expect(result.value).toBe(input);
+      expect(result.value.entries).toBe(input.entries);
+      expect(result.value.entries[0]).toBe(entry);
+      expect(result.value.entries[0]?.refs).toBe(entry.refs);
+      expect(Object.hasOwn(result.value, "repositoryRoot")).toBe(false);
+      expect(Object.hasOwn(result.value, "message")).toBe(true);
+    });
+    it(`${surface}: refuses primitive and bypass input and retains eager ordered reasons`, () => {
+      for (const input of [null, undefined, 1, true, [], "input"])
+        expect(parse(input)).toEqual({ ok: false, reasons: ["response must be an object"] });
+      for (const kind of ["sparse", "spoofed"]) {
+        expect(parse({ ...validResponse(), entries: invalidHistoryArray(kind) }).ok).toBe(false);
+        expect(
+          parse({
+            ...validResponse(),
+            entries: [{ ...validEntry(), refs: invalidHistoryArray(kind) }],
+          }).ok,
+        ).toBe(false);
+      }
+      const input = {
+        ...validResponse(),
+        schemaVersion: 0,
+        state: [],
+        message: 1,
+        available: 1,
+        entries: [null],
+      };
+      expect(parse(input)).toEqual({
+        ok: false,
+        reasons: [
+          "schemaVersion invalid",
+          "state invalid",
+          "message must be a bounded string when present",
+          "available must be a boolean",
+          "entries[0] must be an object",
+        ],
+      });
+      expect(parse(input)).toEqual(validateGitHistoryResponse(input));
+    });
+    it(`${surface}: retains date and pagination admission`, () => {
+      expect(
+        parse({ ...validResponse(), entries: [{ ...validEntry(), date: "2023-02-30T10:00:00Z" }] })
+          .ok,
+      ).toBe(false);
+      expect(parse({ ...validResponse(), limit: 1, truncated: false }).ok).toBe(false);
+      expect(parse({ ...validResponse(), limit: 1, truncated: true }).ok).toBe(true);
+      expect(
+        parse({
+          ...validResponse(),
+          entries: [{ ...validEntry(), date: "2026-06-27T10:00:00-03:30" }],
+        }).ok,
+      ).toBe(true);
+    });
+  }
+});
+
+it("public history output retains its concrete domain and refusal types", () => {
+  const result = parsePublicHistory(validResponse());
+  if (result.ok) {
+    const value: import("@oscharko-dev/keiko-contracts").GitHistoryResponse = result.value;
+    expect(value.entries).toHaveLength(1);
+    // @ts-expect-error History is not a summary DTO.
+    const wrong: import("@oscharko-dev/keiko-contracts").GitRepositorySummary = result.value;
+    expect(wrong).toBe(value);
+  } else {
+    // @ts-expect-error Refusal carries reasons, never a value.
+    expect(result.value).toBeUndefined();
+  }
 });

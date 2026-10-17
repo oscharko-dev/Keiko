@@ -113,7 +113,7 @@ export interface EditorM11SettingsSnapshot extends Omit<
   readonly profiles?: EditorM11ProfilesSnapshot | undefined;
 }
 
-export const EDITOR_M11_DEFAULT_PROFILE_REF = "profile-default" as WorkspaceProfileRef;
+export const EDITOR_M11_DEFAULT_PROFILE_REF: WorkspaceProfileRef = defaultProfileRef();
 
 export interface EditorM11ProfileSummary {
   readonly profileRef: WorkspaceProfileRef;
@@ -209,7 +209,8 @@ const ROOT_LAYER_KEYS = [
 ] as const;
 
 function isRevision(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+  const integer = Number.isSafeInteger(value);
+  return typeof value === "number" && integer && value >= 0;
 }
 
 function valuesPassM7Scope(scope: "user" | "workspace", value: unknown): boolean {
@@ -411,7 +412,8 @@ function isM11EventScope(value: unknown): value is EditorM11SettingScope {
 }
 
 function isNonnegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+  const integer = Number.isSafeInteger(value);
+  return typeof value === "number" && integer && value >= 0;
 }
 
 function isSettingId(value: unknown): value is EditorM7SettingId {
@@ -445,7 +447,7 @@ function hasValidEventRevisions(value: Readonly<Record<string, unknown>>): boole
 }
 
 function hasValidEventSettingIds(value: unknown): boolean {
-  if (!Array.isArray(value) || !value.every(isSettingId)) return false;
+  if (!Array.isArray(value) || !physicalSettingIds(value)) return false;
   return new Set(value).size === value.length;
 }
 
@@ -482,4 +484,18 @@ export function resolveEditorM11Settings(
       resolveSetting(entry, input),
     ),
   );
+}
+
+function defaultProfileRef(): WorkspaceProfileRef {
+  const value = "profile-default";
+  if (!isWorkspaceProfileRef(value)) throw new TypeError("Default profile reference is invalid");
+  return value;
+}
+function physicalSettingIds(value: readonly unknown[]): boolean {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isSettingId(value[index])) return false;
+  }
+  return true;
 }

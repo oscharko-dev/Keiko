@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type {
   ChunkId,
@@ -260,3 +260,175 @@ describe("enumerations", () => {
 
 // Keep the policy type import referenced so the type-only import is not pruned.
 const _policyTypeWitness: LargeDocumentResourcePolicy = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
+
+// The emitted public boundary promises the same complete nested checkpoint shape.
+import { validateExtractionCheckpointRecord as publicValidateCheckpoint } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation";
+
+for (const [entry, validate] of [
+  ["source", validateExtractionCheckpointRecord],
+  ["public", publicValidateCheckpoint],
+] as const) {
+  describe(`${entry} complete checkpoint admission`, () => {
+    it("rejects a fingerprint with an incomplete embedding identity", () => {
+      const input = {
+        ...baseCheckpoint(),
+        fingerprint: { ...baseFingerprint(), embeddingIdentity: {} },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors).toContain(
+        "checkpoint.fingerprint.embeddingIdentity.provider must be a non-empty string",
+      );
+    });
+    it.each([
+      null,
+      {},
+      { severity: "fatal", code: "C", message: "M" },
+      { severity: "error", code: 2, message: "M" },
+      { severity: "warning", code: "C", message: 2 },
+      { severity: "info", code: "C", message: "M", documentId: 2 },
+      { severity: "info", code: "C", message: "M", pageNumber: "1" },
+    ])("rejects malformed diagnostic %#", (diagnostic) => {
+      expect(validate({ ...baseCheckpoint(), terminalDiagnostics: [diagnostic] }).ok).toBe(false);
+    });
+    it("preserves complete checkpoint and diagnostic references", () => {
+      const diagnostic = {
+        severity: "info",
+        code: "fixture",
+        message: "fixture",
+        documentId: "non-uuid",
+        pageNumber: 0,
+      };
+      const input = { ...baseCheckpoint(), terminalDiagnostics: [diagnostic] };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.fingerprint).toBe(input.fingerprint);
+      expect(result.value.terminalDiagnostics).toBe(input.terminalDiagnostics);
+      expect(result.value.terminalDiagnostics[0]).toBe(diagnostic);
+    });
+  });
+}
+
+type CheckpointAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicCheckpoint(input: unknown): void {
+  const result = publicValidateCheckpoint(input);
+  if (result.ok) {
+    const cursor: number = result.value.pageCursor;
+    const provider: string = result.value.fingerprint.embeddingIdentity.provider;
+    const strategy: "standard-buffer" | "progressive-pdf" | "unsupported" | "oversized" =
+      result.value.strategy;
+    const _concrete: CheckpointAny<typeof result.value> = false;
+    const _concreteIdentity: CheckpointAny<typeof result.value.fingerprint.embeddingIdentity> =
+      false;
+    for (const diagnostic of result.value.terminalDiagnostics) {
+      const severity: "info" | "warning" | "error" = diagnostic.severity;
+      const code: string = diagnostic.code;
+      const page: number | undefined = diagnostic.pageNumber;
+      expect(["info", "warning", "error"]).toContain(severity);
+      expect(typeof code).toBe("string");
+      expect(page).toBe(12);
+    }
+    expect(result.value).toBe(input);
+    expect(cursor).toBe(12);
+    expect(provider).toBe(IDENTITY.provider);
+    expect(strategy).toBe("progressive-pdf");
+  }
+}
+it("public checkpoint consumer retains independent nested primitive declarations", () => {
+  consumePublicCheckpoint(baseCheckpoint());
+  consumePublicCheckpoint({
+    ...baseCheckpoint(),
+    terminalDiagnostics: [
+      { severity: "warning", code: "page-skipped", message: "Page skipped", pageNumber: 12 },
+    ],
+  });
+});
+
+import type { LocalKnowledgeValidation as PublicKnowledgeValidation } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import type { ExtractionCheckpointRecord as PublicCheckpoint } from "@oscharko-dev/keiko-contracts";
+
+export function parsePublicKnowledgeCheckpoint(
+  input: unknown,
+): PublicKnowledgeValidation<PublicCheckpoint> {
+  const result = publicValidateCheckpoint(input);
+  return result;
+}
+
+describe("Knowledge checkpoint public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateExtractionCheckpointRecord).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateCheckpoint).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeCheckpoint).parameter(0).toBeUnknown();
+    expectTypeOf(validateExtractionCheckpointRecord).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateCheckpoint).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeCheckpoint).parameter(0).not.toBeAny();
+    expectTypeOf(validateExtractionCheckpointRecord).returns.toEqualTypeOf<
+      LocalKnowledgeValidation<ExtractionCheckpointRecord>
+    >();
+    expectTypeOf(validateExtractionCheckpointRecord).returns.not.toBeAny();
+    expectTypeOf(publicValidateCheckpoint).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicCheckpoint>
+    >();
+    expectTypeOf(parsePublicKnowledgeCheckpoint).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicCheckpoint>
+    >();
+    expectTypeOf(publicValidateCheckpoint).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeCheckpoint).returns.not.toBeAny();
+    const result = parsePublicKnowledgeCheckpoint(baseCheckpoint());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicCheckpoint>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.capsuleId).not.toBeAny();
+      expectTypeOf(result.value.capsuleId).not.toBeUnknown();
+      expectTypeOf(result.value.fingerprint).not.toBeAny();
+      expectTypeOf(result.value.fingerprint).not.toBeUnknown();
+      expectTypeOf(result.value.fingerprint.embeddingIdentity).not.toBeAny();
+      expectTypeOf(result.value.fingerprint.embeddingIdentity).not.toBeUnknown();
+      expectTypeOf(result.value.terminalDiagnostics).not.toBeAny();
+      expectTypeOf(result.value.terminalDiagnostics).not.toBeUnknown();
+      expectTypeOf(result.value.pageCursor).not.toBeAny();
+      expectTypeOf(result.value.pageCursor).not.toBeUnknown();
+    }
+  });
+});
+
+describe("Knowledge checkpoint public responsibility (#3918)", () => {
+  it("preserves checkpoint fingerprint diagnostics and admitted scalar identities", () => {
+    const input = baseCheckpoint();
+    const result = parsePublicKnowledgeCheckpoint(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.fingerprint).toBe(input.fingerprint);
+    expect(result.value.fingerprint.embeddingIdentity).toBe(input.fingerprint.embeddingIdentity);
+    expect(result.value.terminalDiagnostics).toBe(input.terminalDiagnostics);
+    expectTypeOf(result.value.pageCursor).toEqualTypeOf<number>();
+    expectTypeOf(result.value.fingerprint.embeddingIdentity.provider).toEqualTypeOf<string>();
+    expectTypeOf<(typeof result.value.terminalDiagnostics)[number]>().not.toBeAny();
+  });
+  it("refuses malformed checkpoint lineage fingerprint cursors and diagnostics", () => {
+    for (const input of [
+      null,
+      { ...baseCheckpoint(), capsuleId: "" },
+      { ...baseCheckpoint(), strategy: "unknown" },
+      { ...baseCheckpoint(), phase: "unknown" },
+      { ...baseCheckpoint(), coverage: "unknown" },
+      { ...baseCheckpoint(), fingerprint: { ...baseFingerprint(), sourceContentHash: "not hex!" } },
+      { ...baseCheckpoint(), pageCursor: -1 },
+      { ...baseCheckpoint(), fingerprint: { ...baseFingerprint(), embeddingIdentity: {} } },
+      {
+        ...baseCheckpoint(),
+        terminalDiagnostics: [{ severity: "fatal", code: "fixture", message: "fixture" }],
+      },
+      { ...baseCheckpoint(), terminalDiagnostics: [null] },
+    ])
+      expect(parsePublicKnowledgeCheckpoint(input).ok).toBe(false);
+  });
+});
+
+import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";

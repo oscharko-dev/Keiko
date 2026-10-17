@@ -126,3 +126,41 @@ describe("typed asynchronous failure propagation", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("closed Activity Log metadata refusals", () => {
+  const path = "packages/keiko-contracts/src/observability.ts";
+  it.each([
+    ["completeRegistrationShape", "false"],
+    ["rejectedActivityLogEventKind", '"registration-mismatch"'],
+  ])("admits only the reviewed closed fallback for %s", (owner, fallback) => {
+    expect(unregisteredFailurePathViolations(readFileSync(path, "utf8"), path)).not.toContainEqual(
+      expect.objectContaining({ owner }),
+    );
+    const source = `function ${owner}() { try { observe(); } catch { return ${fallback}; } }`;
+    expect(unregisteredFailurePathViolations(source, path)).toEqual([]);
+    expect(unregisteredFailurePathViolations(source, "packages/fixture/src/other.ts")).toHaveLength(
+      1,
+    );
+    expect(
+      unregisteredFailurePathViolations(source.replace(owner, "anotherOwner"), path),
+    ).toHaveLength(1);
+    expect(
+      unregisteredFailurePathViolations(
+        source.replace(`return ${fallback};`, "return true;"),
+        path,
+      ),
+    ).toHaveLength(1);
+    expect(
+      unregisteredFailurePathViolations(source.replace(`return ${fallback};`, ""), path),
+    ).toHaveLength(1);
+    expect(
+      unregisteredFailurePathViolations(source.replace(`return ${fallback};`, "return;"), path),
+    ).toHaveLength(1);
+    expect(
+      unregisteredFailurePathViolations(
+        source.replace(`return ${fallback};`, `discard(); return ${fallback};`),
+        path,
+      ),
+    ).toHaveLength(1);
+  });
+});

@@ -11,6 +11,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { validateCodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { toolCallingConfigurationFingerprint } from "@oscharko-dev/keiko-model-gateway";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 export const CODING_PERFORMANCE_WORKLOAD = Object.freeze({ chunks: 64, chunkChars: 32 });
@@ -21,13 +22,22 @@ const PAIR_SECRET = "coding-performance-2952-launcher-fixture-secret";
 
 async function runtimeModules() {
   const prefix = "../tests/e2e/servers/dist/packages/keiko-server/src/";
-  const [deps, server, pairing, fixture] = await Promise.all([
+  const [deps, server, pairing, fixture, readiness, admission] = await Promise.all([
     import(`${prefix}deps.js`),
     import(`${prefix}server.js`),
     import(`${prefix}coding-app-session/launcherSessionPairingPort.js`),
     import(`${prefix}coding-runtime/productionOpenCodeBackend.functional/_support.js`),
+    import(`${prefix}gateway-readiness.js`),
+    import(`${prefix}coding-sidecar-gateway.js`),
   ]);
-  return { ...deps, ...server, ...pairing, ...fixture };
+  return {
+    ...deps,
+    ...server,
+    ...pairing,
+    ...fixture,
+    awaitInitializedConversationReadiness: readiness.awaitInitializedConversationReadiness,
+    admitCodingRunModel: admission.admitCodingRunModel,
+  };
 }
 
 function initialize(root, config) {
@@ -95,6 +105,56 @@ async function listen(server) {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("fixture-port-missing");
   return address.port;
+}
+
+// The startup probe uses real HTTP independently of the measured scripted answer factories.
+export async function startCodingPerformanceProvider(config, status = 200) {
+  let requests = 0;
+  const listener = createServer((request, reply) => {
+    request.resume();
+    requests += 1;
+    const accepted =
+      request.method === "POST" &&
+      request.url?.split("?").at(0)?.endsWith("/chat/completions") === true;
+    reply.writeHead(accepted ? status : 404, { "Content-Type": "application/json" });
+    reply.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  });
+  try {
+    const port = await listen(listener);
+    const provider = { ...config.providers[0], baseUrl: `http://127.0.0.1:${String(port)}/v1` };
+    return {
+      config: {
+        ...config,
+        providers: [provider],
+        capabilities: config.capabilities.map((capability) => ({
+          ...capability,
+          ...(capability.toolCallingVerification === undefined
+            ? {}
+            : {
+                toolCallingVerification: {
+                  ...capability.toolCallingVerification,
+                  configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+                },
+              }),
+        })),
+      },
+      requests: () => requests,
+      close: () => closeListener(listener),
+    };
+  } catch (error) {
+    if (listener.listening) await closeListener(listener);
+    throw error;
+  }
+}
+
+export async function prepareCodingPerformanceReadiness(deps, modules) {
+  await modules.awaitInitializedConversationReadiness(deps, "functional-model");
+  return modules.admitCodingRunModel(
+    deps.gatewayConfig?.current(),
+    "functional-model",
+    undefined,
+    deps.gatewayConfig,
+  );
 }
 
 function runtimeDependencies(root, modules, port) {
@@ -332,16 +392,23 @@ export async function measureCodingRuntimeSample() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-coding-perf-")));
   const observed = { calls: 0, chunks: 0, chars: 0, firstYieldAt: 0 };
   let context;
+  let provider;
   try {
-    const repository = initialize(root, modules.functionalGatewayConfig());
+    provider = await startCodingPerformanceProvider(modules.functionalGatewayConfig());
+    const repository = initialize(root, provider.config);
     context = await boot(root, modules, observed);
     await prepare(context, repository, modules);
+    await prepareCodingPerformanceReadiness(context.deps, modules);
     return await measure(context, observed);
   } finally {
     try {
       if (context !== undefined) await close(context);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      try {
+        await provider?.close();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     }
   }
 }

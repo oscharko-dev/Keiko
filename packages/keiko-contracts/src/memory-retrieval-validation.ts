@@ -23,14 +23,27 @@ import {
   validateTags,
 } from "./memory-internal.js";
 
-function validateRetrievalScopes(input: unknown, errors: string[]): void {
+function validateRetrievalScopes(input: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(input) || input.length === 0) {
     errors.push("retrieval.scopes must be a non-empty array");
-    return;
+    valid = false;
+    return valid;
   }
-  for (const candidate of input) {
-    pushNestedErrors("retrieval", validateMemoryScope(candidate), errors);
+  const extent = input.length;
+  if (!Number.isSafeInteger(extent) || extent < 1) {
+    errors.push("retrieval.scopes must be a non-empty array");
+    return false;
   }
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in input)) {
+      pushNestedErrors("retrieval", validateMemoryScope(undefined), errors);
+      return false;
+    }
+    const candidate: unknown = input[index];
+    valid = pushNestedErrors("retrieval", validateMemoryScope(candidate), errors) && valid;
+  }
+  return valid;
 }
 
 function validateRetrievalEnumFilter(
@@ -38,20 +51,30 @@ function validateRetrievalEnumFilter(
   values: unknown,
   allowed: readonly string[],
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (values === undefined) {
-    return;
+    return valid;
   }
   if (!Array.isArray(values) || values.length === 0) {
     errors.push(`retrieval.${field} must be a non-empty array when set`);
-    return;
+    valid = false;
+    return valid;
   }
-  for (const value of values) {
+  const extent = values.length;
+  if (!Number.isSafeInteger(extent) || extent < 1) {
+    errors.push(`retrieval.${field} must be a non-empty array when set`);
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const value: unknown = values[index];
     if (!isMember(value, allowed)) {
       errors.push(`retrieval.${field} entry must be one of ${allowed.join("|")}`);
-      return;
+      valid = false;
+      return valid;
     }
   }
+  return valid;
 }
 
 // KEIKO-1027: enforce contract-level ceilings on the two retrieval budget hints so a hostile
@@ -66,49 +89,84 @@ function validateRetrievalNumericLimit(
   value: unknown,
   errors: string[],
   ceiling: number,
-): void {
+): boolean {
+  let valid = true;
   if (value === undefined) {
-    return;
+    return valid;
   }
   if (!isFinitePositiveInteger(value)) {
     errors.push(`retrieval.${field} must be a positive integer when set`);
-    return;
+    valid = false;
+    return valid;
   }
   if (value > ceiling) {
     errors.push(`retrieval.${field} must be <= ${String(ceiling)} when set`);
+    valid = false;
   }
+  return valid;
 }
 
-function validateRetrievalFilters(input: Record<string, unknown>, errors: string[]): void {
-  validateRetrievalEnumFilter("typeFilter", input.typeFilter, MEMORY_TYPES, errors);
-  validateRetrievalEnumFilter("statusFilter", input.statusFilter, MEMORY_STATUSES, errors);
+function validateRetrievalFilters(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid =
+    validateRetrievalEnumFilter("typeFilter", input.typeFilter, MEMORY_TYPES, errors) && valid;
+  valid =
+    validateRetrievalEnumFilter("statusFilter", input.statusFilter, MEMORY_STATUSES, errors) &&
+    valid;
   if (input.textQuery !== undefined && !isSafeText(input.textQuery, MEMORY_BODY_MAX_CHARS)) {
     errors.push("retrieval.textQuery must be a bounded control-free string when set");
+    valid = false;
   }
   if (input.tagsFilter !== undefined) {
-    validateTags("retrieval.tagsFilter", input.tagsFilter, errors);
+    valid = validateTags("retrieval.tagsFilter", input.tagsFilter, errors) && valid;
   }
+  return valid;
 }
 
-function validateRetrievalBudgetAndToggles(input: Record<string, unknown>, errors: string[]): void {
-  validateRetrievalNumericLimit(
-    "maxResults",
-    input.maxResults,
-    errors,
-    MEMORY_RETRIEVAL_MAX_RESULTS,
-  );
-  validateRetrievalNumericLimit(
-    "maxBodyChars",
-    input.maxBodyChars,
-    errors,
-    MEMORY_RETRIEVAL_MAX_BODY_CHARS,
-  );
+function validateRetrievalBudgetAndToggles(
+  input: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid =
+    validateRetrievalNumericLimit(
+      "maxResults",
+      input.maxResults,
+      errors,
+      MEMORY_RETRIEVAL_MAX_RESULTS,
+    ) && valid;
+  valid =
+    validateRetrievalNumericLimit(
+      "maxBodyChars",
+      input.maxBodyChars,
+      errors,
+      MEMORY_RETRIEVAL_MAX_BODY_CHARS,
+    ) && valid;
   if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean") {
     errors.push("retrieval.includeArchived must be a boolean when set");
+    valid = false;
   }
   if (input.includeSuperseded !== undefined && typeof input.includeSuperseded !== "boolean") {
     errors.push("retrieval.includeSuperseded must be a boolean when set");
+    valid = false;
   }
+  return valid;
+}
+
+function admitMemoryRetrievalRequest(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & MemoryRetrievalRequest {
+  let valid = true;
+  valid = validateSchemaVersionLiteral(input, errors) && valid;
+  if (!isFiniteNonNegativeNumber(input.requestedAt)) {
+    errors.push("retrieval.requestedAt must be a finite non-negative number");
+    valid = false;
+  }
+  valid = validateRetrievalScopes(input.scopes, errors) && valid;
+  valid = validateRetrievalFilters(input, errors) && valid;
+  valid = validateRetrievalBudgetAndToggles(input, errors) && valid;
+  return valid;
 }
 
 export function validateMemoryRetrievalRequest(
@@ -118,17 +176,8 @@ export function validateMemoryRetrievalRequest(
     return { ok: false, errors: ["retrieval must be an object"] };
   }
   const errors: string[] = [];
-  validateSchemaVersionLiteral(input, errors);
-  if (!isFiniteNonNegativeNumber(input.requestedAt)) {
-    errors.push("retrieval.requestedAt must be a finite non-negative number");
-  }
-  validateRetrievalScopes(input.scopes, errors);
-  validateRetrievalFilters(input, errors);
-  validateRetrievalBudgetAndToggles(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as MemoryRetrievalRequest };
+  if (!admitMemoryRetrievalRequest(input, errors)) return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
 // A canonical coordinate string per scope. Distinct scope kinds always produce strings

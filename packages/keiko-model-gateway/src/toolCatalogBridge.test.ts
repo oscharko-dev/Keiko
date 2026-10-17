@@ -16,7 +16,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
 import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import { withCorrelationId } from "./observability.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
@@ -316,7 +316,7 @@ function removedLegacyRequest(): GatewayRequest {
 }
 function adapter(
   fetchImpl: typeof fetch,
-  log: ModelGatewayLogEvent[] = [],
+  log: ModelGatewayLogTransport[] = [],
   now = (): number => NOW,
 ): OpenAiAdapter {
   return new OpenAiAdapter({
@@ -453,7 +453,7 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     expect(JSON.stringify(result)).not.toContain(CONFIG.apiKey);
   });
   it("emits correlated body-free projection, binding and rejection activity", async () => {
-    const log: ModelGatewayLogEvent[] = [];
+    const log: ModelGatewayLogTransport[] = [];
     await adapter(() => Promise.resolve(response()), log).call(
       { ...request(), toolCatalog: advertisement() },
       CONFIG,
@@ -651,7 +651,7 @@ describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
   });
 
   it("logs a body-free passthrough event instead of a catalog bind for a native extension call", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
@@ -718,7 +718,7 @@ describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
     // Production wires every adapter's log sink through `withCorrelationId` before it ever
     // reaches this bridge (see OpenAiAdapter's constructor) -- exercising that same wrapper here
     // is what proves the id is threaded, rather than merely asserting the op name.
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const sink = withCorrelationId(
       {
         write: (event): void => {
@@ -802,7 +802,7 @@ describe("provider invocation batch bounds", () => {
         type: "function",
         function: { name: "read_file", arguments: '{"path":"src/example.ts"}' },
       }));
-      const log: ModelGatewayLogEvent[] = [];
+      const log: ModelGatewayLogTransport[] = [];
       const subject = adapter(
         () =>
           Promise.resolve(
@@ -961,7 +961,7 @@ describe("inactive native Code Mode provider advertisement", () => {
   });
 
   it("keeps execute unbound and logs no JavaScript body", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: codeModeAdvertisement() },
       () => NOW,

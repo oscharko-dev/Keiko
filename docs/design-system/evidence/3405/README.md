@@ -6,19 +6,20 @@ window is backgrounded or minimized and remains available while the foreground u
 or contains only a load error. Keyboard modality is established with a real Tab press before moving
 focus; programmatic focus after a pointer click must not steal the foreground.
 
-This set was regenerated on 2026-10-12 (UTC) from PR #3913 signed source head
-`2eb5752bc9f5192b19a79117df4a5964d9707c57` in the main macOS arm64 checkout using Node 24.18.0,
-npm 11.16.0, Next.js 16.3.8, and Playwright 1.63.0. The unchanged eight-test Chromium suite passed
-in 41.6 seconds, including the real-BFF outage journey. The unchanged evidence freshness gate and
-its three focused contract controls also passed. All eight UI source hashes and four harness
-hashes match that inspected source head.
+This set was regenerated on 2026-10-16 UTC from PR #4013 signed source head
+`823c661568dfa7efad06ea12d187332ed5733f4a`, after repairing Git parser diagnostic
+correlation in the existing UI API layer. The run used macOS arm64, Node 24.18.0,
+npm 11.16.0, Next.js 16.3.8 and Playwright 1.63.0. The unchanged eight-test Chromium
+suite passed in 55.1 seconds, including the real-BFF outage journey. All eight UI
+source hashes and four harness hashes bind the measured source.
 
 The original producer recreated all 17 tracked artifacts: 14 screenshots and three JSON records.
-`11-progress-state.png` and `13-reconnecting-state-mocked.png` changed PNG bytes relative to the
-previous committed set; the other 12 screenshots remained
-byte-identical. All three JSON records now bind the actual inspected
-sources. This is macOS browser and fixture qualification; it does not claim Linux execution,
-production update success, native N−1→N replacement, or final integrated-head acceptance.
+All fourteen screenshots are byte-identical to the preceding committed captures; the three JSON
+records now bind the repaired API source. No new visual difference required a capture comparison.
+The existing native `ButtonText` behavior for both startup-notice actions in forced-colors mode
+remains unchanged. This is macOS browser and fixture qualification; it does not claim Linux updater
+execution, production update success, native N−1→N replacement, provider readiness or final
+integrated-head acceptance.
 
 The current suite includes the real-BFF outage journey. Both the main server and the outage
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source

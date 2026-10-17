@@ -1629,6 +1629,8 @@ export type {
   GitRepositoryValidationOk,
   GitRepositoryValidationFail,
   GitRepositoryValidation,
+  GitRepositoryParseOk,
+  GitRepositoryParseResult,
 } from "./git-repository.js";
 export type {
   GIT_REPOSITORY_SCHEMA_VERSION,
@@ -1637,6 +1639,8 @@ export type {
   GIT_STATUS_CODES,
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
+  parseGitRepositoryStatusResponse,
+  parseGitRepositoryDiffResponse,
 } from "./git-repository.js";
 
 // ─── Immutable base-to-head Git change snapshot (Issue #3397, Epic #3384, ADR-0174) ───
@@ -1774,13 +1778,19 @@ export type {
   GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
   validateGitRepositorySummary,
   validateGitRemotesResponse,
+  parseGitRepositorySummary,
+  parseGitRemotesResponse,
 } from "./git-repository-summary.js";
 
 // ─── Git commit history BFF (Issue #1573, Epic #1572) ─────────────────────────────
 // Read-only, paginated commit history (sha/subject/author/ISO date/refs/parent and changed-file
 // counts). Bounded entries with limit/skip/truncated; all Git process execution stays server-side.
 export type { GitHistoryEntry, GitHistoryResponse } from "./git-history.js";
-export type { GIT_HISTORY_SCHEMA_VERSION, validateGitHistoryResponse } from "./git-history.js";
+export type {
+  GIT_HISTORY_SCHEMA_VERSION,
+  validateGitHistoryResponse,
+  parseGitHistoryResponse,
+} from "./git-history.js";
 
 // ─── Git fetch/pull sync BFF (Issue #1573, Epic #1572) ────────────────────────────
 // Read-only sync preview (readiness/executable gate + block reason) and the governed execute
@@ -1803,6 +1813,8 @@ export type {
   isGitSyncOutcome,
   validateGitSyncPreview,
   validateGitSyncExecuteResponse,
+  parseGitSyncPreview,
+  parseGitSyncExecuteResponse,
 } from "./git-sync.js";
 
 // ─── Agent repository operation facade (Issue #1577, Epic #1571) ─────────────
@@ -3270,6 +3282,10 @@ export type {
   KnowledgePodSetReadinessSummary,
   KnowledgePodSourceKind,
   KnowledgePodSummary,
+  KnowledgePodCatalogSummary,
+  LegacyKnowledgePodCatalogSummary,
+  LocalKnowledgeCapsulesCatalogResponse,
+  LocalKnowledgeCapsuleSetsCatalogResponse,
   KnowledgePodSummaryKind,
   LocalKnowledgeCapsuleListEntry,
   LocalKnowledgeCapsuleSetListEntry,
@@ -3281,6 +3297,8 @@ export type {
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,
+  parseLocalKnowledgeCapsulesResponse,
+  parseLocalKnowledgeCapsuleSetsResponse,
 } from "./local-knowledge-pods.js";
 export type {
   KnowledgePodRetrievalActivity,

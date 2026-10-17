@@ -7,6 +7,7 @@ import {
   type ActivityLogEventEnvelope,
   type ActivityLogFields,
   type RegisteredActivityLogEvent,
+  type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
@@ -62,8 +63,11 @@ export type InstallLayoutNormalizedActivityLogEvent = RegisteredActivityLogEvent
     readonly extra: ActivityLogFields<typeof INSTALL_LAYOUT_NORMALIZED_OPERATION>;
   };
 
+export type InstallLayoutActivityLogTransport =
+  InstallLayoutNormalizedActivityLogEvent | RejectedActivityLogEvent;
+
 interface InstallLayoutEvidenceSink {
-  readonly write: (event: InstallLayoutNormalizedActivityLogEvent) => void;
+  readonly write: (event: InstallLayoutActivityLogTransport) => void;
 }
 
 type InstallLayoutEvidenceSinkFactory = (stateDir: string) => InstallLayoutEvidenceSink;
@@ -104,7 +108,7 @@ export function installLayoutOverrideEvidence(
 
 export function installLayoutOverrideActivityLogEvent(
   evidence: InstallLayoutOverrideEvidence,
-): InstallLayoutNormalizedActivityLogEvent {
+): InstallLayoutActivityLogTransport {
   return activityLogEvent(
     INSTALL_LAYOUT_NORMALIZED_OPERATION,
     { level: "info", correlationId: evidence.correlationId },
@@ -179,11 +183,16 @@ interface RootPackageJson {
   readonly name?: unknown;
 }
 
+function isRootPackageJson(value: unknown): value is RootPackageJson {
+  return typeof value === "object" && value !== null;
+}
+
 function readRootPackageName(cwd: string): string | undefined {
   const packageJsonPath = join(cwd, "package.json");
   if (!existsSync(packageJsonPath)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as RootPackageJson;
+    const parsed: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    if (!isRootPackageJson(parsed)) return undefined;
     return typeof parsed.name === "string" ? parsed.name : undefined;
   } catch {
     return undefined;

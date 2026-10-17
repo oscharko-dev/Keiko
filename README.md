@@ -90,7 +90,15 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
-## What's new in 1.2.2
+## What's new in 1.2.3
+
+- **Reliable dictation through LiteLLM.** Browser recordings are normalized to mono PCM16 WAV for compatible Whisper deployments. Click the microphone to record, follow the subtle input waveform, and click the same control to stop. The transcript is inserted directly into your editable draft; it is never sent automatically.
+- **Skills and drafts that recover correctly.** The Skills dialog refreshes when the normal launcher session becomes available. Private Chat drafts survive reload and restart; simultaneous edits require an explicit choice. Deleted selected skills stop the turn rather than silently sending without the chosen instructions.
+- **Better source fidelity.** Generated skill references must match the actual admitted source. History recovery after compaction retains complementary relevant sections, and maximized Chat windows fit the current tab's viewport.
+
+The local UI store advances to schema V44 for private drafts. Keep a backup before changing versions; older binaries cannot read the newer schema. Existing manual-update eligibility and platform qualification limits remain unchanged.
+
+## Previous additions in 1.2.2
 
 - **Private skills in Chat.** Open **Skills** beside the Composer, upload a Markdown file and select it for that chat. The active skill is visible beside the context meter. Preview, replace, download or delete a skill in the same dialog; uploading alone does not activate it.
 - **Instructions that survive compaction.** The complete selected revision counts toward the context budget and remains intact when conversation history is summarized. If it cannot fit or its revision is unavailable, Chat explains the correction instead of silently dropping it.

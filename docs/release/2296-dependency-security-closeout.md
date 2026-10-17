@@ -35,6 +35,19 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
+On 2026-10-13, the required OSV scan reported two newly published Microsoft cryptography
+advisories against the Windows RFC 3161 native-quality project's
+`System.Security.Cryptography.Pkcs` 10.0.9:
+[GHSA-2fmv-rv2c-59x7](https://github.com/advisories/GHSA-2fmv-rv2c-59x7) and
+[GHSA-846f-f764-76mx](https://github.com/advisories/GHSA-846f-f764-76mx). The project now selects
+the patched 10.0.13 release, and an unlocked .NET 8 restore regenerated its committed NuGet
+lockfile, including the cryptography and ASN.1 transitive dependencies. The native-quality
+invocation retains `RestoreLockedMode=true`; neither an OSV waiver nor a gate bound changed.
+The repository-wide OSV Scanner 2.6.0 scan and the local locked quality build qualify this
+dependency repair. The native Windows integration remains required CI evidence; a macOS
+cross-targeted build does not replace it. These NuGet records are governed by the committed
+project/lock and Windows native-quality gate, separately from the npm currency rows below.
+
 | Source                     | Result                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |

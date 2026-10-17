@@ -60,17 +60,17 @@ export const QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS: Readonly<
   "plain-text": "portable",
 });
 
+function isClassifiedExportAdapter(value: string): value is QualityIntelligenceExportAdapter {
+  return Object.hasOwn(QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS, value);
+}
+
 /** Adapters whose target is an external TMS — they require a redaction attestation. */
 export const QUALITY_INTELLIGENCE_TMS_ADAPTERS: ReadonlySet<QualityIntelligenceExportAdapter> =
   new Set<QualityIntelligenceExportAdapter>(
-    (
-      Object.entries(QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS) as readonly (readonly [
-        QualityIntelligenceExportAdapter,
-        "tms" | "portable",
-      ])[]
-    )
-      .filter(([, target]) => target === "tms")
-      .map(([adapter]) => adapter),
+    Object.entries(QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS).flatMap(
+      ([adapter, target]): QualityIntelligenceExportAdapter[] =>
+        target === "tms" && isClassifiedExportAdapter(adapter) ? [adapter] : [],
+    ),
   );
 
 export interface QualityIntelligenceExportBundleEntry {

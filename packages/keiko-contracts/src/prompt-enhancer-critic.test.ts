@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   EnhancedPrompt,
   PromptCandidateScorecard,
@@ -15,6 +15,7 @@ import {
 import {
   validatePromptCandidateScorecard,
   validatePromptCandidateSelection,
+  type PromptEnhancerValidation,
 } from "./prompt-enhancer-validation.js";
 import {
   PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
@@ -418,5 +419,250 @@ describe("shared ranking-order fixture (KEIKO-1026)", () => {
     swapped[0] = b;
     swapped[1] = a;
     expect(validatePromptCandidateSelection(selectionOf(swapped)).ok).toBe(false);
+  });
+});
+
+// The original sparse-array observations are tested at the actual selection boundary.
+describe("complete prompt selection member admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy selection references through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptCandidateSelection
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validatePromptCandidateSelection;
+      const input = validSelection();
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    },
+  );
+  it.each([
+    ["ranked", "source"],
+    ["ranked", "public"],
+    ["rankedPrompts", "source"],
+    ["rankedPrompts", "public"],
+    ["rankedSafetyAssessments", "source"],
+    ["rankedSafetyAssessments", "public"],
+    ["rejected", "source"],
+    ["rejected", "public"],
+  ] as const)("refuses absent %s members through %s", async (field, surface) => {
+    const validate =
+      surface === "source"
+        ? validatePromptCandidateSelection
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptCandidateSelection;
+    const input = { ...validSelection(), [field]: Array<unknown>(1) };
+    expect(validate(input).ok).toBe(false);
+  });
+});
+
+import { PROMPT_CANDIDATE_RANKING_FIXTURE as publicRankingFixture } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-ranking-fixture";
+import type {
+  PromptCriticDimension,
+  PromptCandidateScorecard as PublicPromptScorecard,
+  PromptCandidateSelection as PublicPromptSelection,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+
+it("preserves the public ranking fixture data and closed dimension values (#3918)", () => {
+  expect(publicRankingFixture).toEqual(PROMPT_CANDIDATE_RANKING_FIXTURE);
+  expect(Object.isFrozen(publicRankingFixture)).toBe(true);
+  expect(publicRankingFixture.length).toBeGreaterThan(0);
+  for (const card of publicRankingFixture) {
+    expect(card.dimensionScores.map(({ dimension }) => dimension)).toEqual(
+      PROMPT_CRITIC_DIMENSIONS,
+    );
+    for (const score of card.dimensionScores) {
+      expectTypeOf(score.dimension).toEqualTypeOf<PromptCriticDimension>();
+      expectTypeOf(score.score).toEqualTypeOf<number>();
+      expect(Number.isFinite(score.score)).toBe(true);
+    }
+  }
+});
+
+import {
+  validatePromptCandidateScorecard as publicPromptScorecard,
+  validatePromptCandidateSelection as publicPromptSelection,
+  type PromptEnhancerValidation as PublicPromptValidation,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+
+describe("Prompt documented nonthrowing admission (#3918)", () => {
+  for (const seam of ["source", "public"]) {
+    it(`${seam} scorecard inspection returns only the fixed refusal`, () => {
+      const validate = seam === "source" ? validatePromptCandidateScorecard : publicPromptScorecard;
+      const input = {
+        get schemaVersion(): never {
+          throw new TypeError("fixture-private-prompt-inspection");
+        },
+      };
+      expect(validate(input)).toEqual({ ok: false, errors: ["payload could not be inspected"] });
+    });
+    it(`${seam} selection inspection returns only the fixed refusal`, () => {
+      const validate = seam === "source" ? validatePromptCandidateSelection : publicPromptSelection;
+      const input = {
+        get schemaVersion(): never {
+          throw new TypeError("fixture-private-prompt-inspection");
+        },
+      };
+      expect(validate(input)).toEqual({ ok: false, errors: ["payload could not be inspected"] });
+    });
+  }
+});
+
+import type { EnhancedPromptId as PublicEnhancedId } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+
+export function parsePublicPromptScorecard(
+  input: unknown,
+): PublicPromptValidation<PublicPromptScorecard> {
+  const result = publicPromptScorecard(input);
+  return result;
+}
+
+describe("Prompt scorecard public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(validatePromptCandidateScorecard).parameter(0).toBeUnknown();
+    expectTypeOf(validatePromptCandidateScorecard).parameter(0).not.toBeAny();
+    expectTypeOf(validatePromptCandidateScorecard).returns.not.toBeAny();
+    expectTypeOf(validatePromptCandidateScorecard).returns.toEqualTypeOf<
+      PromptEnhancerValidation<PromptCandidateScorecard>
+    >();
+    expectTypeOf(publicPromptScorecard).parameter(0).toBeUnknown();
+    expectTypeOf(publicPromptScorecard).parameter(0).not.toBeAny();
+    expectTypeOf(publicPromptScorecard).returns.not.toBeAny();
+    expectTypeOf(publicPromptScorecard).returns.not.toBeUnknown();
+    expectTypeOf(publicPromptScorecard).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptScorecard>
+    >();
+    expectTypeOf(parsePublicPromptScorecard).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicPromptScorecard).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicPromptScorecard).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptScorecard>
+    >();
+  });
+  it("pins independent public nested output fields", () => {
+    const result = publicPromptScorecard(validScorecard());
+    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
+    if (!result.ok) {
+      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
+      return;
+    }
+    expectTypeOf(result.value).not.toBeAny();
+    expectTypeOf(result.value).not.toBeUnknown();
+    expectTypeOf(result.value.candidateId).toEqualTypeOf<string>();
+    expectTypeOf(result.value.aggregateScore).toEqualTypeOf<number>();
+    expectTypeOf(result.value.estimatedTokens).toEqualTypeOf<number>();
+    expectTypeOf(result.value.dimensionScores).not.toBeAny();
+    for (const score of result.value.dimensionScores) {
+      expectTypeOf(score).not.toBeAny();
+      expectTypeOf(score.dimension).not.toBeAny();
+      expectTypeOf(score.dimension).toEqualTypeOf<PromptCriticDimension>();
+      expectTypeOf(score.score).toEqualTypeOf<number>();
+      expectTypeOf(score.rationale).toEqualTypeOf<string>();
+    }
+  });
+  it("preserves healthy public identity and owned nested fields", () => {
+    const input = validScorecard();
+    const result = parsePublicPromptScorecard(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public prompt scorecard refused");
+    expect(result.value).toBe(input);
+    expect(result.value.dimensionScores).toBe(input.dimensionScores);
+    expect(result.value.dimensionScores[0]).toBe(input.dimensionScores[0]);
+  });
+  it("refuses malformed public input and physical members", () => {
+    for (const input of [
+      null,
+      { ...validScorecard(), dimensionScores: Array<unknown>(1) },
+      { ...validScorecard(), dimensionScores: [...validScorecard().dimensionScores].reverse() },
+      { ...validScorecard(), aggregateScore: 2 },
+      { ...validScorecard(), estimatedTokens: 1.5 },
+    ]) {
+      expect(validatePromptCandidateScorecard(input).ok).toBe(false);
+      expect(publicPromptScorecard(input).ok).toBe(false);
+      expect(parsePublicPromptScorecard(input).ok).toBe(false);
+    }
+  });
+});
+
+export function parsePublicPromptSelection(
+  input: unknown,
+): PublicPromptValidation<PublicPromptSelection> {
+  const result = publicPromptSelection(input);
+  return result;
+}
+
+describe("Prompt selection public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(validatePromptCandidateSelection).parameter(0).toBeUnknown();
+    expectTypeOf(validatePromptCandidateSelection).parameter(0).not.toBeAny();
+    expectTypeOf(validatePromptCandidateSelection).returns.not.toBeAny();
+    expectTypeOf(validatePromptCandidateSelection).returns.toEqualTypeOf<
+      PromptEnhancerValidation<PromptCandidateSelection>
+    >();
+    expectTypeOf(publicPromptSelection).parameter(0).toBeUnknown();
+    expectTypeOf(publicPromptSelection).parameter(0).not.toBeAny();
+    expectTypeOf(publicPromptSelection).returns.not.toBeAny();
+    expectTypeOf(publicPromptSelection).returns.not.toBeUnknown();
+    expectTypeOf(publicPromptSelection).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptSelection>
+    >();
+    expectTypeOf(parsePublicPromptSelection).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicPromptSelection).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicPromptSelection).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptSelection>
+    >();
+  });
+  it("pins independent public nested output fields", () => {
+    const result = publicPromptSelection(validSelection());
+    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
+    if (!result.ok) {
+      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
+      return;
+    }
+    expectTypeOf(result.value).not.toBeAny();
+    expectTypeOf(result.value).not.toBeUnknown();
+    expectTypeOf(result.value.winner).not.toBeAny();
+    expectTypeOf(result.value.winner.aggregateScore).toEqualTypeOf<number>();
+    expectTypeOf(result.value.bounds).not.toBeAny();
+    expectTypeOf(result.value.bounds.tokenBudget).toEqualTypeOf<number>();
+    expectTypeOf(result.value.tokensConsumed).toEqualTypeOf<number>();
+    expectTypeOf(result.value.rankedPrompts).not.toBeAny();
+    expectTypeOf<string>().not.toExtend<PublicEnhancedId>();
+    for (const prompt of result.value.rankedPrompts) {
+      expectTypeOf(prompt).not.toBeAny();
+      expectTypeOf(prompt.promptId).toEqualTypeOf<PublicEnhancedId>();
+      expectTypeOf(prompt.promptId).not.toBeAny();
+    }
+    expectTypeOf(result.value.winnerSafetyAssessment).not.toBeAny();
+    expectTypeOf(result.value.winnerSafetyAssessment.requiresHumanReview).toEqualTypeOf<boolean>();
+  });
+  it("preserves healthy public identity and owned nested fields", () => {
+    const input = validSelection();
+    const result = parsePublicPromptSelection(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public prompt selection refused");
+    expect(result.value).toBe(input);
+    expect(result.value.winner).toBe(input.winner);
+    expect(result.value.ranked).toBe(input.ranked);
+    expect(result.value.rankedPrompts).toBe(input.rankedPrompts);
+    expect(result.value.winnerSafetyAssessment).toBe(input.winnerSafetyAssessment);
+    expect(result.value.bounds).toBe(input.bounds);
+  });
+  it("refuses malformed public input and physical members", () => {
+    const selection = validSelection();
+    for (const input of [
+      null,
+      { ...validSelection(), rankedPrompts: Array<unknown>(1) },
+      { ...validSelection(), rankedSafetyAssessments: Array<unknown>(1) },
+      { ...validSelection(), tokensConsumed: -1 },
+      { ...selection, bounds: { ...selection.bounds, tokenBudget: 0 } },
+      { ...selection, tokensConsumed: selection.bounds.tokenBudget + 1 },
+      { ...validSelection(), winner: validScorecard("foreign-candidate") },
+    ]) {
+      expect(validatePromptCandidateSelection(input).ok).toBe(false);
+      expect(publicPromptSelection(input).ok).toBe(false);
+      expect(parsePublicPromptSelection(input).ok).toBe(false);
+    }
   });
 });

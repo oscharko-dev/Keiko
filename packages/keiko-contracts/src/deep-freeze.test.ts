@@ -100,3 +100,23 @@ describe("security-relevant constant tables are deeply immutable", () => {
     }).toThrow(TypeError);
   });
 });
+
+import { deepFreeze as publicDeepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+
+it("preserves public structural identity, symbol data, cycles and getter nonexecution", () => {
+  let reads = 0;
+  const symbol = Symbol("data");
+  const nested = { value: 1 };
+  const input: { self?: unknown; [symbol]: typeof nested; readonly observed: number } = {
+    [symbol]: nested,
+    get observed(): number {
+      reads++;
+      return 2;
+    },
+  };
+  input.self = input;
+  expect(publicDeepFreeze(input)).toBe(input);
+  expect(Object.isFrozen(input)).toBe(true);
+  expect(Object.isFrozen(nested)).toBe(true);
+  expect(reads).toBe(0);
+});

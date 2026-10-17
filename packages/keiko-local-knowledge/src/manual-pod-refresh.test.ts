@@ -22,7 +22,15 @@ import { listPersistedDocumentsForSource } from "./discovery/persist.js";
 import { createHtmlManualPod, type CreateHtmlManualPodDeps } from "./manual-pod.js";
 import { refreshHtmlManualPod, type RefreshHtmlManualPodDeps } from "./manual-pod-refresh.js";
 import { readManualPageFingerprints } from "./manual-page-fingerprints.js";
-import { readHtmlManualSourceMetadata } from "./manual-source-metadata.js";
+import {
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import type { KnowledgeLogEvent } from "./knowledge-log.js";
+import {
+  persistHtmlManualSourceMetadata,
+  readHtmlManualSourceMetadata,
+} from "./manual-source-metadata.js";
 import { countVectorsForDocument } from "./indexing/vector-persist.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import { addSourceToCapsule, updateSourceScopeInCapsule } from "./source-lifecycle.js";
@@ -449,11 +457,13 @@ describe("refreshHtmlManualPod", () => {
     await createBasePod();
     const mutated = baseManual();
     mutated.set(GUIDE, manualPage("Guide Rewritten", ["/"]));
-    await refreshHtmlManualPod(refreshDeps(mutated));
+    const result = await refreshHtmlManualPod(refreshDeps(mutated));
 
     const metadata = readHtmlManualSourceMetadata(store, CAPSULE_ID, SOURCE_ID);
     expect(metadata?.lastRefreshedAt).toBeGreaterThan(0);
     expect(metadata?.lastCrawlRunId).toBeTruthy();
+    expect(metadata?.lastChangeSummaryJson).toBe(JSON.stringify(result.changeSummary));
+    expect(metadata?.lastRefreshedAt).toBe(result.changeSummary.refreshedAt);
     const persisted = JSON.parse(metadata?.lastChangeSummaryJson ?? "{}") as unknown;
     expect(validateManualRefreshChangeSummary(persisted).ok).toBe(true);
   });
@@ -552,8 +562,67 @@ describe("refreshHtmlManualPod", () => {
       )
       .run({ c: CAPSULE_ID, s: SOURCE_ID });
 
-    await expect(refreshHtmlManualPod(refreshDeps(baseManual()))).rejects.toThrow(
-      /persisted manual source is invalid/u,
+    const deps = refreshDeps(baseManual());
+    let fetches = 0;
+    const fetcher = deps.fetcher;
+    await expect(
+      refreshHtmlManualPod({
+        ...deps,
+        fetcher: {
+          fetchManualPage: (...args) => {
+            fetches += 1;
+            return fetcher.fetchManualPage(...args);
+          },
+        },
+      }),
+    ).rejects.toThrow(/persisted manual source is invalid/u);
+    expect(fetches).toBe(0);
+  });
+});
+
+describe("manual refresh summary evidence", () => {
+  it("forwards the existing job correlation while retaining a later healthy summary", async () => {
+    await createBasePod();
+    const olderSource = "older-manual" as KnowledgeSourceId;
+    addSourceToCapsule(store, CAPSULE_ID, {
+      id: olderSource,
+      displayName: "Fixture older manual",
+      tags: [
+        htmlManualSourceKindTag("html-manual-http"),
+        htmlManualSourceFingerprintTag("fp-older"),
+      ],
+      scope: { kind: "folder", rootPath: "/fixture/manual", recursive: true },
+    });
+    persistHtmlManualSourceMetadata(
+      store,
+      CAPSULE_ID,
+      olderSource,
+      source({ sourceFingerprint: "fp-older" }),
     );
+    // Historical/corrupt earlier source; preserve the reader's actual persisted ordering.
+    store._internal.db
+      .prepare("UPDATE capsule_sources SET created_at = 0 WHERE id = :id")
+      .run({ id: olderSource });
+    store._internal.db
+      .prepare(
+        "UPDATE html_manual_sources SET last_change_summary_json = :bytes WHERE source_id = :id",
+      )
+      .run({ bytes: "{fixture-corrupt", id: olderSource });
+    const events: KnowledgeLogEvent[] = [];
+    const result = await refreshHtmlManualPod(
+      refreshDeps(baseManual(), {
+        correlationId: "manual-refresh-job-proof",
+        logSink: { write: (event) => events.push(event) },
+      }),
+    );
+    expect(result.summary.manualRefresh).toEqual(result.changeSummary);
+    const rejected = events.filter(
+      (event) => event.op === "knowledge.manual-refresh-summary.rejected",
+    );
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      correlationId: "manual-refresh-job-proof",
+      extra: { summaryReturned: true, invalidJsonCount: 1 },
+    });
   });
 });

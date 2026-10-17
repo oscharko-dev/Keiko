@@ -4,7 +4,6 @@ import {
   invalid,
   isOneOf,
   isRecord,
-  result,
   validateSafeId,
 } from "./coding-workbench-runtime-api-validation.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
@@ -203,12 +202,28 @@ export function validateCodingSafeActivityFeed(
 function validateFeed(value: unknown): CodingWorkbenchValidationResult<CodingSafeActivityFeed> {
   if (!isRecord(value)) return invalid("safe activity feed must be an object");
   const errors = exactKeys(value, feedKeys(value.availability), "safeActivityFeed");
-  validateFeedBase(value, errors);
-  if (value.availability === "available") validateAvailableFeed(value, errors);
+  const admitted = checkFeed(value, errors);
   if (errors.length === 0 && serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES) {
     errors.push("safeActivityFeed exceeds the aggregate UTF-8 byte budget");
   }
-  return result(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkFeed(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingSafeActivityFeed {
+  const base = validateFeedBase(value, errors);
+  const availability: unknown = value.availability;
+  const variant =
+    availability === "available"
+      ? validateAvailableFeed(value, errors)
+      : availability === "unavailable";
+  if (availability !== "available" && availability !== "unavailable") {
+    const diagnostic = "safeActivityFeed.availability is invalid";
+    if (!errors.includes(diagnostic)) errors.push(diagnostic);
+  }
+  return base && variant;
 }
 
 function feedKeys(availability: unknown): readonly string[] {
@@ -216,56 +231,94 @@ function feedKeys(availability: unknown): readonly string[] {
   return availability === "available" ? [...base, "turns", "truncated", "plan"] : base;
 }
 
-function validateFeedBase(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== CODING_SAFE_ACTIVITY_CONTRACT_VERSION) {
+function validateFeedBase(value: Record<string, unknown>, errors: string[]): boolean {
+  const version = value.schemaVersion === CODING_SAFE_ACTIVITY_CONTRACT_VERSION;
+  if (!version) {
     errors.push("safeActivityFeed.schemaVersion is invalid");
   }
-  if (value.availability !== "available" && value.availability !== "unavailable") {
+  const availability = value.availability === "available" || value.availability === "unavailable";
+  if (!availability) {
     errors.push("safeActivityFeed.availability is invalid");
   }
-  validateSafeId(value.runId, "safeActivityFeed.runId", errors, 128);
-  validateUtcMilliseconds(value.updatedAt, "safeActivityFeed.updatedAt", errors);
-  if (
-    !Number.isSafeInteger(value.droppedEventCount) ||
-    Number(value.droppedEventCount) < 0 ||
-    Number(value.droppedEventCount) > CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT
-  ) {
+  const run = validateSafeId(value.runId, "safeActivityFeed.runId", errors, 128);
+  const updated = validateUtcMilliseconds(value.updatedAt, "safeActivityFeed.updatedAt", errors);
+  const dropped = validDroppedEventCount(value);
+  if (!dropped) {
     errors.push("safeActivityFeed.droppedEventCount is invalid");
   }
+  return version && availability && run && updated && dropped;
 }
 
-function validateAvailableFeed(value: Record<string, unknown>, errors: string[]): void {
+function validDroppedEventCount(value: Record<string, unknown>): boolean {
+  if (!Number.isSafeInteger(value.droppedEventCount)) return false;
+  const lower: unknown = value.droppedEventCount;
+  if (typeof lower !== "number" || !Number.isSafeInteger(lower) || lower < 0) return false;
+  const upper: unknown = value.droppedEventCount;
+  return (
+    typeof upper === "number" &&
+    Number.isSafeInteger(upper) &&
+    upper <= CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT &&
+    upper >= 0
+  );
+}
+
+function validPlanRevision(value: Record<string, unknown>): boolean {
+  if (!Number.isSafeInteger(value.revision)) return false;
+  const revision: unknown = value.revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 1;
+}
+
+function validateAvailableFeed(value: Record<string, unknown>, errors: string[]): boolean {
+  const turns = validateFeedTurns(value, errors);
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) errors.push("safeActivityFeed.truncated must be a boolean");
+  const plan = !("plan" in value) || validatePlan(value.plan, errors);
+  return turns && truncated && plan;
+}
+
+function validateFeedTurns(value: Record<string, unknown>, errors: string[]): boolean {
   if (!Array.isArray(value.turns) || value.turns.length > CODING_SAFE_ACTIVITY_MAX_TURNS) {
     errors.push("safeActivityFeed.turns must be a bounded array");
-  } else {
-    const ids = { turns: new Set<string>(), messages: new Set<string>(), tools: new Set<string>() };
-    value.turns.forEach((turn, index) => {
-      validateTurn(turn, index, ids, errors);
-    });
+    return false;
   }
-  if (typeof value.truncated !== "boolean") {
-    errors.push("safeActivityFeed.truncated must be a boolean");
+  const turns: unknown = value.turns;
+  if (!Array.isArray(turns)) {
+    errors.push("safeActivityFeed.turns must be a bounded array");
+    return false;
   }
-  if ("plan" in value) validatePlan(value.plan, errors);
+  const ids = { turns: new Set<string>(), messages: new Set<string>(), tools: new Set<string>() };
+  const count = turns.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    if (!(index in turns)) {
+      errors.push(`safeActivityFeed.turns[${String(index)}] must be an object`);
+      return false;
+    }
+    const turn: unknown = turns[index];
+    admitted = validateTurn(turn, index, ids, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validatePlan(value: unknown, errors: string[]): void {
+function validatePlan(value: unknown, errors: string[]): value is CodingSafeActivityPlan {
   const before = errors.length;
   const path = "safeActivityFeed.plan";
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(
     ...exactKeys(value, ["revision", "anchorMessageId", "updatedAt", "steps", "truncated"], path),
   );
-  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1) {
+  const revision = validPlanRevision(value);
+  if (!revision) {
     errors.push(`${path}.revision must be a positive safe integer`);
   }
-  validateSafeId(value.anchorMessageId, `${path}.anchorMessageId`, errors, 128);
-  validateUtcMilliseconds(value.updatedAt, `${path}.updatedAt`, errors);
-  validatePlanSteps(value.steps, path, errors);
-  if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
+  const anchor = validateSafeId(value.anchorMessageId, `${path}.anchorMessageId`, errors, 128);
+  const updated = validateUtcMilliseconds(value.updatedAt, `${path}.updatedAt`, errors);
+  const steps = validatePlanSteps(value.steps, path, errors);
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (planHasTruncatedStep(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated steps`);
   }
@@ -278,46 +331,74 @@ function validatePlan(value: unknown, errors: string[]): void {
   ) {
     errors.push(`${path} exceeds the plan UTF-8 byte budget`);
   }
+  return [revision, anchor, updated, steps, truncated].every(Boolean);
 }
 
-function validatePlanSteps(value: unknown, path: string, errors: string[]): void {
+function validatePlanSteps(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is readonly CodingSafeActivityPlanStep[] {
   if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS) {
     errors.push(`${path}.steps must be a bounded array`);
-    return;
+    return false;
   }
-  value.forEach((step, index) => {
-    validatePlanStep(step, `${path}.steps[${String(index)}]`, errors);
-  });
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const memberPath = `${path}.steps[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${memberPath} must be an object`);
+      return false;
+    }
+    const member: unknown = value[index];
+    admitted = validatePlanStep(member, memberPath, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validatePlanStep(value: unknown, path: string, errors: string[]): void {
+function validatePlanStep(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is CodingSafeActivityPlanStep {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["text", "state", "truncated"], path));
+  let text = true;
   if (
     typeof value.text !== "string" ||
     value.text.length < 1 ||
     value.text.length > CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS
   ) {
+    text = false;
     errors.push(`${path}.text must be a bounded non-empty string`);
   } else if (stripUnsafeFormatChars(value.text) !== value.text) {
     errors.push(`${path}.text contains unsafe format characters`);
+    text = false;
   }
-  if (!isOneOf(value.state, CODING_SAFE_ACTIVITY_PLAN_STEP_STATES)) {
-    errors.push(`${path}.state is invalid`);
-  }
-  if (typeof value.truncated !== "boolean") {
+  const state = isOneOf(value.state, CODING_SAFE_ACTIVITY_PLAN_STEP_STATES);
+  if (!state) errors.push(`${path}.state is invalid`);
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) {
     errors.push(`${path}.truncated must be a boolean`);
   }
+  return text && state && truncated;
 }
 
 function planHasTruncatedStep(value: Record<string, unknown>): boolean {
-  return (
-    Array.isArray(value.steps) &&
-    value.steps.some((step) => isRecord(step) && step.truncated === true)
-  );
+  if (!Array.isArray(value.steps)) return false;
+  const entries: unknown = value.steps;
+  if (!Array.isArray(entries)) return false;
+  const count = entries.length;
+  for (let index = 0; index < count; index += 1) {
+    if (!(index in entries)) continue;
+    const step: unknown = entries[index];
+    if (isRecord(step) && step.truncated === true) return true;
+  }
+  return false;
 }
 
 interface FeedIdentities {
@@ -326,18 +407,24 @@ interface FeedIdentities {
   readonly tools: Set<string>;
 }
 
-function validateTurn(value: unknown, index: number, ids: FeedIdentities, errors: string[]): void {
+function validateTurn(
+  value: unknown,
+  index: number,
+  ids: FeedIdentities,
+  errors: string[],
+): value is CodingSafeActivityTurn {
   const before = errors.length;
   const path = `safeActivityFeed.turns[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["turnId", "messages", "tools", "truncated"], path));
-  validateUniqueId(value.turnId, `${path}.turnId`, ids.turns, errors);
-  validateMessages(value.messages, path, ids.messages, errors);
-  validateTools(value.tools, path, ids.tools, errors);
-  if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
+  const turn = validateUniqueId(value.turnId, `${path}.turnId`, ids.turns, errors);
+  const messages = validateMessages(value.messages, path, ids.messages, errors);
+  const tools = validateTools(value.tools, path, ids.tools, errors);
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (turnHasTruncatedMessage(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated messages`);
   }
@@ -349,23 +436,43 @@ function validateTurn(value: unknown, index: number, ids: FeedIdentities, errors
   ) {
     errors.push(`${path} exceeds the turn UTF-8 byte budget`);
   }
+  return turn && messages && tools && truncated;
 }
 
-function validateMessages(value: unknown, path: string, ids: Set<string>, errors: string[]): void {
+function validateMessages(
+  value: unknown,
+  path: string,
+  ids: Set<string>,
+  errors: string[],
+): value is readonly CodingSafeActivityMessage[] {
   if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN) {
     errors.push(`${path}.messages must be a bounded array`);
-    return;
+    return false;
   }
-  value.forEach((message, index) => {
-    validateMessage(message, `${path}.messages[${String(index)}]`, ids, errors);
-  });
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const memberPath = `${path}.messages[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${memberPath} must be an object`);
+      return false;
+    }
+    const member: unknown = value[index];
+    admitted = validateMessage(member, memberPath, ids, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validateMessage(value: unknown, path: string, ids: Set<string>, errors: string[]): void {
+function validateMessage(
+  value: unknown,
+  path: string,
+  ids: Set<string>,
+  errors: string[],
+): value is CodingSafeActivityMessage {
   const before = errors.length;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(
     ...exactKeys(
@@ -374,14 +481,16 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
       path,
     ),
   );
-  validateUniqueId(value.messageId, `${path}.messageId`, ids, errors);
-  if (!isOneOf(value.role, CODING_SAFE_ACTIVITY_MESSAGE_ROLES)) {
+  const message = validateUniqueId(value.messageId, `${path}.messageId`, ids, errors);
+  const role = isOneOf(value.role, CODING_SAFE_ACTIVITY_MESSAGE_ROLES);
+  if (!role) {
     errors.push(`${path}.role is invalid`);
   }
-  validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
-  validateSegments(value.segments, path, errors);
-  if ("reasoning" in value) validateReasoning(value, path, errors);
-  if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
+  const occurred = validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
+  const segments = validateSegments(value.segments, path, errors);
+  const reasoning = !("reasoning" in value) || validateReasoning(value, path, errors);
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
   }
@@ -392,105 +501,176 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   ) {
     errors.push(`${path} exceeds the message UTF-8 byte budget`);
   }
+  return [message, role, occurred, segments, reasoning, truncated].every(Boolean);
 }
 
-function validateSegments(value: unknown, path: string, errors: string[]): void {
+function validateSegments(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is readonly CodingSafeActivityTextSegment[] {
   if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE) {
     errors.push(`${path}.segments must be a bounded array`);
-    return;
+    return false;
   }
-  value.forEach((segment, index) => {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
     const segmentPath = `${path}.segments[${String(index)}]`;
-    if (!isRecord(segment)) {
+    if (!(index in value)) {
       errors.push(`${segmentPath} must be an object`);
-      return;
+      return false;
     }
-    errors.push(...exactKeys(segment, ["kind", "text", "truncated"], segmentPath));
-    if (segment.kind !== "text") errors.push(`${segmentPath}.kind is invalid`);
-    if (
-      typeof segment.text !== "string" ||
-      segment.text.length < 1 ||
-      segment.text.length > CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS
-    ) {
-      errors.push(`${segmentPath}.text must be a bounded non-empty string`);
-    } else if (stripUnsafeFormatChars(segment.text) !== segment.text) {
-      errors.push(`${segmentPath}.text contains unsafe format characters`);
-    }
-    if (typeof segment.truncated !== "boolean") {
-      errors.push(`${segmentPath}.truncated must be a boolean`);
-    }
-  });
+    const segment: unknown = value[index];
+    admitted = validateSegment(segment, segmentPath, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validateReasoning(message: Record<string, unknown>, path: string, errors: string[]): void {
+function validateSegment(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is CodingSafeActivityTextSegment {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
+  errors.push(...exactKeys(value, ["kind", "text", "truncated"], path));
+  const kind = value.kind === "text";
+  if (!kind) errors.push(`${path}.kind is invalid`);
+  let text = true;
+  if (
+    typeof value.text !== "string" ||
+    value.text.length < 1 ||
+    value.text.length > CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS
+  ) {
+    text = false;
+    errors.push(`${path}.text must be a bounded non-empty string`);
+  } else if (stripUnsafeFormatChars(value.text) !== value.text) {
+    errors.push(`${path}.text contains unsafe format characters`);
+    text = false;
+  }
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) errors.push(`${path}.truncated must be a boolean`);
+  return kind && text && truncated;
+}
+
+function validateReasoning(
+  message: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): boolean {
   const reasoningPath = `${path}.reasoning`;
   const value = message.reasoning;
   if (message.role !== "assistant") errors.push(`${reasoningPath} is only allowed on assistant`);
   if (!isRecord(value)) {
     errors.push(`${reasoningPath} must be an object`);
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["text", "truncated"], reasoningPath));
+  let text = true;
   if (
     typeof value.text !== "string" ||
     value.text.length < 1 ||
     utf8Bytes(value.text) > CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES
   ) {
+    text = false;
     errors.push(`${reasoningPath}.text must be a bounded non-empty string`);
   } else if (stripUnsafeFormatChars(value.text) !== value.text) {
     errors.push(`${reasoningPath}.text contains unsafe format characters`);
+    text = false;
   }
-  if (typeof value.truncated !== "boolean") {
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) {
     errors.push(`${reasoningPath}.truncated must be a boolean`);
   }
+  return text && truncated;
 }
 
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
-function validateTools(value: unknown, path: string, ids: Set<string>, errors: string[]): void {
+function validateTools(
+  value: unknown,
+  path: string,
+  ids: Set<string>,
+  errors: string[],
+): value is readonly CodingSafeActivityTool[] {
   if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN) {
     errors.push(`${path}.tools must be a bounded array`);
-    return;
+    return false;
   }
-  value.forEach((tool, index) => {
-    validateTool(tool, `${path}.tools[${String(index)}]`, ids, errors);
-  });
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const memberPath = `${path}.tools[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${memberPath} must be an object`);
+      return false;
+    }
+    const member: unknown = value[index];
+    admitted = validateTool(member, memberPath, ids, errors) && admitted;
+  }
+  return admitted;
 }
 
 function messageHasTruncatedSegment(value: Record<string, unknown>): boolean {
-  return (
-    Array.isArray(value.segments) &&
-    value.segments.some((segment) => isRecord(segment) && segment.truncated === true)
-  );
+  if (!Array.isArray(value.segments)) return false;
+  const entries: unknown = value.segments;
+  if (!Array.isArray(entries)) return false;
+  const count = entries.length;
+  for (let index = 0; index < count; index += 1) {
+    if (!(index in entries)) continue;
+    const segment: unknown = entries[index];
+    if (isRecord(segment) && segment.truncated === true) return true;
+  }
+  return false;
 }
 
 function turnHasTruncatedMessage(value: Record<string, unknown>): boolean {
-  return (
-    Array.isArray(value.messages) &&
-    value.messages.some((message) => isRecord(message) && message.truncated === true)
-  );
+  if (!Array.isArray(value.messages)) return false;
+  const entries: unknown = value.messages;
+  if (!Array.isArray(entries)) return false;
+  const count = entries.length;
+  for (let index = 0; index < count; index += 1) {
+    if (!(index in entries)) continue;
+    const message: unknown = entries[index];
+    if (isRecord(message) && message.truncated === true) return true;
+  }
+  return false;
 }
 
-function validateTool(value: unknown, path: string, ids: Set<string>, errors: string[]): void {
+function validateTool(
+  value: unknown,
+  path: string,
+  ids: Set<string>,
+  errors: string[],
+): value is CodingSafeActivityTool {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["callId", "tool", "state", "occurredAt", "presentation"], path));
-  validateUniqueId(value.callId, `${path}.callId`, ids, errors);
-  validateSafeId(value.tool, `${path}.tool`, errors, CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS);
-  if (!isOneOf(value.state, CODING_SAFE_ACTIVITY_TOOL_STATES)) {
+  const call = validateUniqueId(value.callId, `${path}.callId`, ids, errors);
+  const tool = validateSafeId(
+    value.tool,
+    `${path}.tool`,
+    errors,
+    CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS,
+  );
+  const state = isOneOf(value.state, CODING_SAFE_ACTIVITY_TOOL_STATES);
+  if (!state) {
     errors.push(`${path}.state is invalid`);
   }
-  validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
-  if (
-    value.presentation !== undefined &&
-    !isCodingSafeActivityToolPresentation(value.presentation)
-  ) {
+  const occurred = validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
+  const presentation =
+    value.presentation === undefined || isCodingSafeActivityToolPresentation(value.presentation);
+  if (!presentation) {
     errors.push(`${path}.presentation is invalid`);
   }
+  return call && tool && state && occurred && presentation;
 }
 
 export function isCodingSafeActivityToolPresentation(
@@ -549,23 +729,30 @@ function displayPathHasNoControls(value: string): boolean {
   return true;
 }
 
-function validateUniqueId(value: unknown, path: string, ids: Set<string>, errors: string[]): void {
-  const before = errors.length;
-  validateSafeId(value, path, errors, 128);
-  if (errors.length !== before || typeof value !== "string") return;
+function validateUniqueId(
+  value: unknown,
+  path: string,
+  ids: Set<string>,
+  errors: string[],
+): value is string {
+  const admitted = validateSafeId(value, path, errors, 128);
+  if (!admitted || typeof value !== "string") return false;
   if (ids.has(value)) errors.push(`${path} must be unique`);
   else ids.add(value);
+  return true;
 }
 
-function validateUtcMilliseconds(value: unknown, path: string, errors: string[]): void {
+function validateUtcMilliseconds(value: unknown, path: string, errors: string[]): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) {
     errors.push(`${path} must be a strict UTC millisecond instant`);
-    return;
+    return false;
   }
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed) || new Date(parsed).toISOString() !== value) {
     errors.push(`${path} must be a strict UTC millisecond instant`);
+    return false;
   }
+  return true;
 }
 
 function serializedBytes(value: object): number {

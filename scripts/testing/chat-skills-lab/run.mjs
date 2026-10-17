@@ -318,7 +318,7 @@ try {
   const selectedCase = process.argv[2] ?? "setup";
   const task = CASES.find((item) => item.id === selectedCase);
   runtime = await startRuntime(join(runDir, "runtime"), {
-    contextWindow: task?.scenario === "automatic" ? 8192 : 131072,
+    contextWindow: new Set(["manual", "automatic"]).has(task?.scenario) ? 8192 : 131072,
     skillBody: SKILL,
     source: SOURCE,
   });

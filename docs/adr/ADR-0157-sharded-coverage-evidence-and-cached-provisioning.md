@@ -58,10 +58,19 @@ kind of evidence.
 ## Decision
 
 **D1 — A coverage shard measures; the finalizing job judges.** The package coverage suite runs as
-three parallel shards that each write a vitest blob report and reach no verdict. The
-`coverage-sonar` job merges the blobs with vitest's own `--mergeReports` — which merges the shards'
-coverage maps and re-runs the reporters — so every floor is evaluated exactly once, on complete
-coverage.
+five parallel shards; the script suite runs as two parallel shards. Each writes a native Vitest
+blob report and reaches no verdict. `coverage-sonar` downloads package and script blobs into
+separate directories, requires every expected native filename and the exact counts of five and two,
+then merges each scope with Vitest's own `--mergeReports`. Both merges finish before evaluation;
+every floor is evaluated exactly once on complete coverage. Missing, stale, foreign and extra blobs
+fail admission. The exact-tree evidence resolver requires all seven named coverage legs to succeed.
+
+The topology was amended for #3918 after run 38628140259 exceeded both unchanged 30-minute job
+bounds. Equal-file-count native sharding placed the two largest script test files together in
+package shard 2/3; five is the smallest inspected package count that separates them. Two script
+shards distribute the complete script suite. This changes scheduling, not a coverage scope, test
+selection, worker cap, heap bound, timeout, floor or tolerance. Both scopes still execute their
+complete test-file sets once, including the script files shared between the two measuring scopes.
 
 > **Amended by [ADR-0158](ADR-0158-one-coverage-ruler-per-question.md) D5 — read this before the
 > paragraph below.** As adopted, this decision achieved "a shard must not judge" with a second
@@ -81,8 +90,10 @@ coverage.
 The obstacle that made the split necessary is recorded in Context above and remains the reason no
 vitest configuration may declare `coverage.thresholds` again.
 
-The keiko-ui and script suites declare no thresholds and therefore need no measure/judge split. They
-run as their own jobs and hand their finished LCOV and summary to the finalizer unchanged.
+The keiko-ui suite hands its finished LCOV and summary to the finalizer unchanged. Script shards
+use their existing script configuration, with no thresholds, and the native merge reconstructs
+`coverage/scripts/lcov.info` and its summary. Intermediate blobs from both scopes are removed before
+Sonar scans the workspace.
 
 **D2 — Merge before evaluate is structural, not conventional.** The finalizer depends on all three
 suites through `needs:`, and downloads and reassembles their evidence before the first gate runs. A
@@ -102,6 +113,28 @@ The claim is about job results, and one pre-existing exception is worth stating 
 three suites shared one step. On a pull request against that branch the jobs still run and still
 report `success` with no suite executed. That lane's semantics are unchanged by this record, and no
 lane targeting `dev` has that property.
+
+The Firefox smoke matrix applies the same fail-closed scheduling rule. Two legs run on separate
+`ubuntu-latest` runner VMs, each with its own immutable candidate checkout, locked dependencies,
+sandbox, build, server, durable state and output directory. Playwright's native `--shard=1/2` and
+`--shard=2/2` partition the existing complete smoke selection with one worker and unchanged test,
+expect and smoke-step limits. Each matrix job is bounded to 20 minutes including setup. The
+existing required `ui` job retains its 60-minute limit and all other work, depends on the complete
+matrix and rejects any non-success matrix result before executing candidate code. `ci` continues
+to require `ui`. No protected context is added.
+
+The existing Editor fast path remains step-scoped: Firefox browser installation and smoke execution
+skip on pull requests against `feat/keiko-editor`; the matrix jobs still execute their preparation
+and report their actual result. A skipped matrix job is never accepted by `ui`. Exact-tree reuse
+skips both the matrix and `ui` only through ADR-0178's existing guard. Cancellation uses
+`!cancelled()` throughout, not `always()`, so superseded runs do not retain their runner work.
+
+This is a scheduling-capacity change after repeated aggregate Firefox deadlines, alongside
+successful serial observations on the same immutable tree; it establishes no browser defect or
+product-performance regression. Native collection must prove a nonempty, disjoint, complete union,
+including whole-file recovery-case grouping. Local qualification retains its actual platform and
+isolation limits; complete hosted evidence on the new candidate remains required. Previously
+withdrawn local isolation experiments supply no qualification evidence.
 
 ADR-0135 D3 is unaffected. `Coverage and SonarCloud` is not itself a required status check; the
 14 required contexts are listed in `CONTRIBUTING.md`, and `ci` — the in-workflow fail-closed
@@ -184,9 +217,10 @@ of one, `ci-sonar-<run_id>`, for the reason the previous paragraph gives.
 ## Consequences
 
 The critical path is set by the slowest coverage job plus the finalizer, instead of by their sum.
-Three shards put the package suite at roughly the keiko-ui suite's duration, which is where further
-package sharding stops paying without also splitting keiko-ui — deliberate headroom left to the
-child that owns coverage-truth consolidation.
+The original three-package-shard topology put the package suite at roughly the keiko-ui suite's
+duration. The current five-package/two-script topology addresses the later measured overload;
+hosted completion and complete merged evidence remain required, rather than being inferred from
+the number of runners.
 
 Nothing about the verdict changed. The same test files execute, at the same `maxWorkers: 2` per
 process (GEN-TEST-FLAKE-002 is a per-process guarantee and a shard is a process), with the same 15 s
@@ -208,7 +242,7 @@ document moves, so there is no state to migrate back.
 
 Two properties the single job got for free are now explicit. All four jobs check out the run's
 immutable `github.sha` rather than the moving ref one checkout could safely use: the lane now has
-six checkouts across four job definitions, and `refs/pull/N/merge` is rewritten whenever the head or
+multiple checkouts across four job definitions, and `refs/pull/N/merge` is rewritten whenever the head or
 base moves, so the shards could otherwise measure one tree while the gates and the scanner judge
 another, with nothing to detect the skew. And blobs key coverage by absolute path,
 so the design assumes all four jobs share a workspace root — true on GitHub-hosted runners, and

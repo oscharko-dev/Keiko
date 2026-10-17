@@ -349,7 +349,13 @@ function isBoolean(value: unknown): value is boolean {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every(isString);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isString(value[index])) return false;
+  }
+  return true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -361,7 +367,8 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 }
 
 function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 const POLICY_OUTCOMES: readonly GitDeliveryPolicyDecision["outcome"][] = [
@@ -532,6 +539,16 @@ function isDispositionCounts(
   );
 }
 
+function isEvidenceRecordArray(value: unknown): value is readonly GitDeliveryEvidenceRecord[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryEvidenceRecord(value[index])) return false;
+  }
+  return true;
+}
+
 export function isGitDeliveryAuditPacket(value: unknown): value is GitDeliveryAuditPacket {
   return (
     isRecord(value) &&
@@ -540,7 +557,7 @@ export function isGitDeliveryAuditPacket(value: unknown): value is GitDeliveryAu
     isFiniteNumber(value.recordCount) &&
     Array.isArray(value.records) &&
     value.recordCount === value.records.length &&
-    value.records.every(isGitDeliveryEvidenceRecord) &&
+    isEvidenceRecordArray(value.records) &&
     isOutcomeClassCounts(value.outcomeClassCounts) &&
     isDispositionCounts(value.recoveryDispositionCounts) &&
     isStringArray(value.knownLimitations)

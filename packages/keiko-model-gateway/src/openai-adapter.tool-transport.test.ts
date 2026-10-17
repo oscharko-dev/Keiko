@@ -3,7 +3,7 @@ import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { Gateway } from "./gateway.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const NOW = Date.parse("2026-10-07T00:00:00Z");
@@ -73,9 +73,9 @@ function adapter(
   streamed = false,
 ): {
   readonly value: OpenAiAdapter;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     value: new OpenAiAdapter({
       fetchImpl: (): Promise<Response> =>
@@ -162,7 +162,7 @@ describe("native tool-call transport", () => {
 
   it("steers a bounded native-call correction without quoting the rejected arguments", async () => {
     const bodies: string[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gateway = new Gateway(
       {
         providers: [PROVIDER],

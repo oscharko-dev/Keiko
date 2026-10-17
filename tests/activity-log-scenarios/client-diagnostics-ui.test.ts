@@ -62,6 +62,14 @@ import {
   type ScenarioIncidentRecorders,
 } from "../support/activity-log-scenario.js";
 import { fixtureEvent } from "../support/activity-log-segments.js";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import {
+  GIT_EDITOR_SCHEMA_VERSION,
+  GIT_EDITOR_DIFF_MAX_BYTES,
+  GIT_EDITOR_DIFF_MAX_FILES,
+  GIT_EDITOR_BLAME_MAX_BYTES,
+  GIT_EDITOR_BLAME_MAX_LINES,
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 
 // The ui scenarios write through the built package, so their incidents come from it too: one
 // Activity Log writer instance per process (activity-log-scenario.ts).
@@ -69,6 +77,614 @@ const PACKAGED_INCIDENTS: ScenarioIncidentRecorders = {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
 };
+
+interface GitApiFixture {
+  readonly fetchGitStructuredDiff: (input: {
+    readonly root: string;
+    readonly scope: "staged";
+  }) => Promise<unknown>;
+  readonly fetchGitBlame: (input: {
+    readonly root: string;
+    readonly path: string;
+    readonly startLine: number;
+    readonly maxLines: number;
+  }) => Promise<unknown>;
+  readonly fetchGitDiff: (input: { readonly root: string }) => Promise<unknown>;
+  readonly fetchGitDeliverySyncExecute: (input: {
+    readonly operation: "fetch";
+    readonly projectId: string;
+    readonly userInitiated: true;
+  }) => Promise<unknown>;
+}
+interface CommandApiFixture {
+  readonly fetchCommandCatalog: (projectId: string) => Promise<unknown>;
+  readonly createCommandRun: (input: {
+    readonly projectId: string;
+    readonly taskId: string;
+  }) => Promise<unknown>;
+}
+interface ClientDiagnosticsFixture {
+  readonly resetClientDiagnosticWriter: () => void;
+  readonly setClientDiagnosticWriter: (writer: (message: string, meta?: unknown) => void) => void;
+}
+interface DiagnosticTransportFixture {
+  readonly fanOutClientDiagnostic: (message: string, meta?: unknown) => void;
+  readonly resetClientDiagnosticPostStateForTests: () => void;
+}
+let resetGitDiagnosticFixture = (): void => undefined;
+
+// The UI is compiled under Next's Bundler resolver. Load its actual modules through Vitest rather
+// than importing that separate compiler graph into the root NodeNext project. These fixture ports
+// promise no response/domain type; the real wire producer and UI's own typed tests remain authoritative.
+async function loadGitDiagnosticFixture(): Promise<{
+  api: GitApiFixture;
+  diagnostics: ClientDiagnosticsFixture;
+  transport: DiagnosticTransportFixture;
+}> {
+  const api = await vi.importActual<GitApiFixture>("../../packages/keiko-ui/src/lib/api.js");
+  const diagnostics = await vi.importActual<ClientDiagnosticsFixture>(
+    "../../packages/keiko-ui/src/lib/client-diagnostics.js",
+  );
+  const transport = await vi.importActual<DiagnosticTransportFixture>(
+    "../../packages/keiko-ui/src/lib/install-client-diagnostics.js",
+  );
+  if (
+    ![
+      api.fetchGitDiff,
+      api.fetchGitStructuredDiff,
+      api.fetchGitBlame,
+      api.fetchGitDeliverySyncExecute,
+      diagnostics.resetClientDiagnosticWriter,
+      diagnostics.setClientDiagnosticWriter,
+      transport.fanOutClientDiagnostic,
+      transport.resetClientDiagnosticPostStateForTests,
+    ].every((value) => typeof value === "function")
+  )
+    throw new TypeError("actual UI fixture exports required");
+  resetGitDiagnosticFixture = (): void => {
+    diagnostics.resetClientDiagnosticWriter();
+    transport.resetClientDiagnosticPostStateForTests();
+  };
+  return { api, diagnostics, transport };
+}
+
+function gitScopeResponse(malformed: boolean): Response {
+  return new Response(
+    JSON.stringify({
+      schemaVersion: "1",
+      root: "/private-git-root",
+      state: "available",
+      available: true,
+      scope: malformed ? ["all"] : "all",
+      diff: "private git diff body",
+      truncated: false,
+      maxBytes: 128,
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-Correlation-Id": "git-scope-response-scenario",
+      },
+    },
+  );
+}
+
+async function driveGitScopeRefusal(context: (body: string) => RouteContext): Promise<void> {
+  let malformed = false;
+  let delivery: Promise<Response> | undefined;
+  const bodies: string[] = [];
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      if (input.startsWith("/api/git/diff?")) return gitScopeResponse(malformed);
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  await expect(api.fetchGitDiff({ root: "/private-git-root" })).resolves.toMatchObject({
+    scope: "all",
+  });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  await expect(api.fetchGitDiff({ root: "/private-git-root" })).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "git-scope-response-scenario",
+  });
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(bodies[0]).not.toContain("private-git-root");
+  expect(bodies[0]).not.toContain("private git diff body");
+  expect(bodies[0]).not.toContain("scope invalid");
+}
+
+function structuredGitResponse(kind: "structured-diff" | "blame", malformed: boolean): Response {
+  const payload =
+    kind === "structured-diff"
+      ? {
+          schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+          scope: "staged",
+          files: [],
+          truncated: false,
+          totalFiles: 0,
+          totalBytes: 0,
+          maxBytes: GIT_EDITOR_DIFF_MAX_BYTES,
+          maxFiles: GIT_EDITOR_DIFF_MAX_FILES,
+        }
+      : {
+          schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+          path: "private-git-file",
+          startLine: 1,
+          lines: [],
+          truncated: false,
+          totalLines: 0,
+          totalBytes: 0,
+          maxBytes: GIT_EDITOR_BLAME_MAX_BYTES,
+          maxLines: GIT_EDITOR_BLAME_MAX_LINES,
+        };
+  return new Response(JSON.stringify(malformed ? "private-git-json-body" : payload), {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-Correlation-Id": `git-${kind}-response-scenario`,
+    },
+  });
+}
+
+async function driveStructuredGitRefusal(
+  context: (body: string) => RouteContext,
+  kind: "structured-diff" | "blame",
+): Promise<void> {
+  let malformed = false;
+  let delivery: Promise<Response> | undefined;
+  const bodies: string[] = [];
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      const prefix = kind === "structured-diff" ? "/api/git/diff/structured?" : "/api/git/blame?";
+      if (input.startsWith(prefix)) return structuredGitResponse(kind, malformed);
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  const read = (): Promise<unknown> =>
+    kind === "structured-diff"
+      ? api.fetchGitStructuredDiff({ root: "/private-git-root", scope: "staged" })
+      : api.fetchGitBlame({
+          root: "/private-git-root",
+          path: "private-git-file",
+          startLine: 1,
+          maxLines: 1,
+        });
+  await expect(read()).resolves.toMatchObject({ schemaVersion: GIT_EDITOR_SCHEMA_VERSION });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  const failure = await read().catch((error: unknown): unknown => error);
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(failure).toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: `git-${kind}-response-scenario`,
+  });
+  for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
+    expect(bodies[0]).not.toContain(value);
+}
+
+function commandResponse(kind: "catalog" | "run", malformed: boolean): Response {
+  const payload =
+    kind === "catalog"
+      ? { schemaVersion: "1", projectId: "/private-command-project", tasks: [] }
+      : {
+          schemaVersion: "1",
+          runId: "command-scenario",
+          taskId: "npm-script:test",
+          kind: "test",
+          exitCode: 0,
+          durationMs: 1,
+          truncated: false,
+          timedOut: false,
+          failureReason: "none",
+          stdout: "private-command-output",
+          stderr: "",
+        };
+  return new Response(JSON.stringify(malformed ? "private-command-body" : payload), {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-Correlation-Id": `command-${kind}-response-scenario`,
+    },
+  });
+}
+
+async function loadCommandDiagnosticFixture(): Promise<CommandApiFixture> {
+  const api = await vi.importActual<CommandApiFixture>(
+    "../../packages/keiko-ui/src/lib/commands-api.js",
+  );
+  if (typeof api.fetchCommandCatalog !== "function" || typeof api.createCommandRun !== "function")
+    throw new TypeError("actual command exports required");
+  const { diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  return api;
+}
+
+async function driveCommandRefusal(
+  context: (body: string) => RouteContext,
+  kind: "catalog" | "run",
+): Promise<void> {
+  const api = await loadCommandDiagnosticFixture();
+  let malformed = false;
+  let delivery: Promise<Response> | undefined;
+  let commandCalls = 0;
+  const bodies: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      if (input.startsWith("/api/commands/")) {
+        commandCalls += 1;
+        return commandResponse(kind, malformed);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  const read = (): Promise<unknown> =>
+    kind === "catalog"
+      ? api.fetchCommandCatalog("/private-command-project")
+      : api.createCommandRun({ projectId: "/private-command-project", taskId: "npm-script:test" });
+  await expect(read()).resolves.toMatchObject({ schemaVersion: "1" });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  const failure = await read().catch((error: unknown): unknown => error);
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(failure).toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: `command-${kind}-response-scenario`,
+  });
+  expect(commandCalls).toBe(2);
+  expect(bodies[0]).not.toContain("private-command");
+}
+
+function gitSyncResponse(malformed: boolean): Response {
+  return new Response(
+    JSON.stringify({
+      schemaVersion: "1",
+      operation: "fetch",
+      status: "succeeded",
+      available: true,
+      truncated: false,
+      branch: "private-sync-branch",
+      upstream: { ref: malformed ? 123 : "private-sync-ref" },
+    }),
+    { headers: { "X-Keiko-Correlation-Id": "git-sync-response-scenario" } },
+  );
+}
+
+async function driveGitSyncRefusal(context: (body: string) => RouteContext): Promise<void> {
+  let executions = 0;
+  let delivery: Promise<Response> | undefined;
+  const bodies: string[] = [];
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (input === "/api/git-delivery/fetch/execute") {
+        expect(init?.method).toBe("POST");
+        executions += 1;
+        return gitSyncResponse(executions > 1);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  const request = {
+    operation: "fetch",
+    projectId: "private-sync-project",
+    userInitiated: true,
+  } as const;
+  await expect(api.fetchGitDeliverySyncExecute(request)).resolves.toMatchObject({
+    upstream: { ref: "private-sync-ref" },
+  });
+  expect(bodies).toEqual([]);
+  await expect(api.fetchGitDeliverySyncExecute(request)).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "git-sync-response-scenario",
+  });
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(executions).toBe(2);
+  for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
+    expect(bodies[0]).not.toContain(privateValue);
+}
+
+interface WorkspaceTrustFixture {
+  readonly fetchWorkspaceTrustStatus: (projectId: string) => Promise<unknown>;
+  readonly mutateWorkspaceTrust: (projectId: string, mutation: "grant") => Promise<unknown>;
+  readonly WORKSPACE_TRUST_CHANGED_EVENT: string;
+}
+
+function trustStatusResponse(empty: boolean): Response {
+  return new Response(
+    empty
+      ? null
+      : JSON.stringify({
+          kind: "workspace-trust-status",
+          schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+          projectId: "private-trust-project",
+          trust: "trusted",
+          decidedBy: "server",
+          reason: "human-grant",
+          revision: 1,
+        }),
+    {
+      status: empty ? 204 : 200,
+      headers: { "X-Keiko-Correlation-Id": "trust-204-response-scenario" },
+    },
+  );
+}
+
+async function driveTrust204Refusal(context: (body: string) => RouteContext): Promise<void> {
+  const api = await vi.importActual<WorkspaceTrustFixture>(
+    "../../packages/keiko-ui/src/lib/workspace-trust-api.js",
+  );
+  const { diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  const browser = new EventTarget();
+  vi.stubGlobal("window", browser);
+  const changes = vi.fn();
+  browser.addEventListener(api.WORKSPACE_TRUST_CHANGED_EVENT, changes);
+  let empty = false;
+  let requests = 0;
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input === "string" && input.startsWith("/api/editor/verification/trust")) {
+        requests += 1;
+        return trustStatusResponse(empty);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      deliveries.push(delivery);
+      return delivery;
+    },
+  );
+  await expect(api.fetchWorkspaceTrustStatus("private-trust-project")).resolves.toMatchObject({
+    trust: "trusted",
+  });
+  expect(bodies).toEqual([]);
+  empty = true;
+  for (const action of [
+    (): Promise<unknown> => api.fetchWorkspaceTrustStatus("private-trust-project"),
+    (): Promise<unknown> => api.mutateWorkspaceTrust("private-trust-project", "grant"),
+  ])
+    await expect(action()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+      correlationId: "trust-204-response-scenario",
+    });
+  expect(requests).toBe(3);
+  expect(changes).not.toHaveBeenCalled();
+  expect(bodies).toHaveLength(2);
+  expect((await Promise.all(deliveries)).map((response) => response.status)).toEqual([204, 204]);
+  for (const body of bodies) {
+    expect(body).toContain('"errorClass":"ApiError"');
+    expect(body).toContain('"frames":[]');
+    expect(body).toContain('"causeChain":[]');
+  }
+  expect(bodies.join("\n")).not.toContain("private-trust-project");
+}
+
+interface CatalogApiFixture {
+  readonly fetchCapsules: (options: { readonly includeKnowledgePods: true }) => Promise<unknown>;
+  readonly fetchCapsuleSets: (options: { readonly includeKnowledgePods: true }) => Promise<unknown>;
+}
+
+function catalogScenarioResponse(sets: boolean, malformed: boolean): Response {
+  const headers = {
+    "X-Keiko-Correlation-Id": sets
+      ? "catalog-sets-response-scenario"
+      : "catalog-capsules-response-scenario",
+  };
+  if (malformed && sets) return new Response(null, { status: 204, headers });
+  const body = sets
+    ? { capsuleSets: [] }
+    : {
+        capsules: malformed
+          ? [{ id: "private-catalog-id", displayName: "private-catalog-label" }]
+          : [],
+      };
+  return new Response(JSON.stringify(body), { headers });
+}
+
+async function driveCatalogRefusals(context: (body: string) => RouteContext): Promise<void> {
+  const api = await vi.importActual<CatalogApiFixture>(
+    "../../packages/keiko-ui/src/lib/local-knowledge-api.js",
+  );
+  const { diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  let malformed = false;
+  let requests = 0;
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input === "string" && input.startsWith("/api/local-knowledge/")) {
+        requests += 1;
+        expect(input).toMatch(/includeKnowledgePods=1$/u);
+        return catalogScenarioResponse(input.includes("capsule-sets"), malformed);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      deliveries.push(delivery);
+      return delivery;
+    },
+  );
+  await expect(api.fetchCapsules({ includeKnowledgePods: true })).resolves.toEqual({
+    capsules: [],
+  });
+  await expect(api.fetchCapsuleSets({ includeKnowledgePods: true })).resolves.toEqual({
+    capsuleSets: [],
+  });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  await expect(api.fetchCapsules({ includeKnowledgePods: true })).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "catalog-capsules-response-scenario",
+  });
+  await expect(api.fetchCapsuleSets({ includeKnowledgePods: true })).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "catalog-sets-response-scenario",
+  });
+  expect(requests).toBe(4);
+  expect(bodies).toHaveLength(2);
+  expect((await Promise.all(deliveries)).map((response) => response.status)).toEqual([204, 204]);
+  expect(bodies.join("\n")).not.toContain("private-catalog");
+}
+
+interface ShellRecoveryFixture {
+  readonly resetPersistedShortcutOverrides: () => Promise<void>;
+}
+
+async function loadShellRecoveryFixture(): Promise<{
+  recovery: ShellRecoveryFixture;
+  diagnostics: ClientDiagnosticsFixture;
+  transport: DiagnosticTransportFixture;
+}> {
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  const summary = await vi.importActual("../../packages/keiko-ui/src/lib/client-error-summary.js");
+  const evidence = await vi.importActual(
+    "../../packages/keiko-ui/src/lib/client-error-evidence.js",
+  );
+  vi.doMock("@/lib/api", () => api);
+  vi.doMock("@/lib/client-diagnostics", () => diagnostics);
+  vi.doMock("@/lib/client-error-summary", () => summary);
+  vi.doMock("@/lib/client-error-evidence", () => evidence);
+  vi.doMock("@oscharko-dev/keiko-contracts/runtime/editor-m7", () => {
+    throw new TypeError("private-shell-module endpoint unavailable");
+  });
+  const recovery = await vi.importActual<ShellRecoveryFixture>(
+    "../../packages/keiko-ui/src/app/components/desktop/shellRecovery.js",
+  );
+  return { recovery, diagnostics, transport };
+}
+
+async function driveShellRecoveryLoadRefusal(
+  context: (body: string) => RouteContext,
+): Promise<readonly string[]> {
+  const { recovery, diagnostics, transport } = await loadShellRecoveryFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  const requests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      requests.push(input);
+      if (input === "/api/editor/settings")
+        return new Response(
+          JSON.stringify({ userRevision: 4, workspaceRevision: 7, etag: "etag-1" }),
+        );
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      deliveries.push(delivery);
+      return delivery;
+    },
+  );
+  try {
+    await expect(recovery.resetPersistedShortcutOverrides()).rejects.toThrow(
+      /refused by 2 setting layers/u,
+    );
+    expect(requests.filter((path) => path !== "/api/diagnostics/client")).toEqual([
+      "/api/editor/settings",
+    ]);
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) {
+      const payload = parsedLine(body);
+      expect(payload.correlationId).toEqual(expect.any(String));
+      expect(payload).toMatchObject({
+        errorKind: "unavailable",
+        errorEvidence: { errorClass: "Error", frames: [], causeChain: ["TypeError"] },
+      });
+    }
+    expect((await Promise.all(deliveries)).map((response) => response.status)).toEqual([204, 204]);
+    expect(bodies.join("\n")).not.toContain("private-shell-module");
+    return bodies;
+  } finally {
+    for (const name of [
+      "@/lib/api",
+      "@/lib/client-diagnostics",
+      "@/lib/client-error-summary",
+      "@/lib/client-error-evidence",
+      "@oscharko-dev/keiko-contracts/runtime/editor-m7",
+    ])
+      vi.doUnmock(name);
+  }
+}
 
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
@@ -106,6 +722,9 @@ describe("Activity Log scenario: client-diagnostics", () => {
     setSupportIncidentTriggerForTests(undefined);
     resetServerLogger();
     resetClientDiagnosticsIngestStateForTests();
+    resetGitDiagnosticFixture();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
   });
@@ -204,6 +823,222 @@ describe("Activity Log scenario: client-diagnostics", () => {
     });
     expect(activityLogLossCounters()["client-post-failed"]).toBe(1);
     expect(activityLogLossCounters()["client-buffer-evicted"]).toBe(2);
+  });
+
+  it("persists actual Git response contract refusal through the browser transport and analyzer", async () => {
+    const startedAtMs = Date.now();
+    await driveGitScopeRefusal(context);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "client.diagnostic",
+    );
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-scope-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private-git-root");
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private git diff body");
+  });
+
+  it("reconstructs actual structured-diff JSON refusal with its response correlation", async () => {
+    const startedAtMs = Date.now();
+    await driveStructuredGitRefusal(context, "structured-diff");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-structured-diff-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
+      expect(log).not.toContain(value);
+  });
+
+  it("reconstructs actual blame JSON refusal with its response correlation", async () => {
+    const startedAtMs = Date.now();
+    await driveStructuredGitRefusal(context, "blame");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-blame-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
+      expect(log).not.toContain(value);
+  });
+
+  it("reconstructs actual command catalog JSON refusal without replay", async () => {
+    const startedAtMs = Date.now();
+    await driveCommandRefusal(context, "catalog");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "command-catalog-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-command");
+  });
+
+  it("reconstructs actual command run JSON refusal without replay", async () => {
+    const startedAtMs = Date.now();
+    await driveCommandRefusal(context, "run");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "command-run-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-command");
+  });
+
+  it("persists a malformed Git sync response without replaying the mutation", async () => {
+    const startedAtMs = Date.now();
+    await driveGitSyncRefusal(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-sync-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
+      expect(log).not.toContain(privateValue);
+  });
+
+  it("persists each actual 204 trust refusal without a false change announcement or replay", async () => {
+    const startedAtMs = Date.now();
+    await driveTrust204Refusal(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(2);
+    for (const line of lines)
+      expect(parsedLine(line)).toMatchObject({
+        correlationId: "trust-204-response-scenario",
+        clientKind: "other",
+        errorKind: "validation-failed",
+        completeness: "complete",
+        loss: "none",
+        errorClass: "ApiError",
+      });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-trust-project");
+    expect(log).not.toContain("/api/editor/verification/trust");
+  });
+
+  it("persists actual catalog malformed-200 and empty-204 refusals exactly once per request", async () => {
+    const startedAtMs = Date.now();
+    await driveCatalogRefusals(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(2);
+    for (const [index, correlationId] of [
+      "catalog-capsules-response-scenario",
+      "catalog-sets-response-scenario",
+    ].entries()) {
+      expect(parsedLine(lines[index])).toMatchObject({
+        correlationId,
+        errorClass: "ApiError",
+        errorKind: "validation-failed",
+        completeness: "complete",
+        loss: "none",
+      });
+    }
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-catalog");
+    expect(log).not.toContain("/api/local-knowledge/");
+  });
+
+  it("persists each actual shell recovery contract-load refusal without a reset request", async () => {
+    const startedAtMs = Date.now();
+    const bodies = await driveShellRecoveryLoadRefusal(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(2);
+    for (const [index, line] of lines.entries())
+      expect(parsedLine(line)).toMatchObject({
+        correlationId: parsedLine(bodies[index]).correlationId,
+        errorKind: "unavailable",
+        errorClass: "Error",
+        completeness: "complete",
+        loss: "none",
+      });
+    expect(new Set(bodies.map((body) => parsedLine(body).correlationId)).size).toBe(2);
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-shell-module");
+    expect(log).not.toContain("/api/editor/settings");
   });
 
   // Fault injection: four refused reports (two sharing a refusal reason within the same throttle

@@ -10,6 +10,7 @@ import {
   GIT_EDITOR_DIFF_MAX_LINE_CHARS,
   GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK,
   GIT_EDITOR_SCHEMA_VERSION,
+  GIT_EDITOR_PATH_MAX_BYTES,
   isGitEditorBlameLine,
   isGitEditorDiffFile,
   isGitEditorDiffFileStatus,
@@ -22,6 +23,11 @@ import {
   parseGitEditorBlameResponse,
   parseGitEditorDiffRequest,
   parseGitEditorDiffResponse,
+  type GitEditorDiffRequest,
+  type GitEditorDiffResponse,
+  type GitEditorBlameRequest,
+  type GitEditorBlameResponse,
+  type GitEditorParseResult,
   type GitEditorDiffFile,
   type GitEditorDiffHunk,
   type GitEditorDiffLine,
@@ -372,5 +378,710 @@ describe("parseGitEditorBlameResponse", () => {
     cyclic.self = cyclic;
     expect(() => parseGitEditorBlameResponse(cyclic)).not.toThrow();
     expect(parseGitEditorBlameResponse(cyclic)).toMatchObject({ ok: false });
+  });
+});
+
+import {
+  parseGitEditorDiffRequest as publicDiffRequest,
+  parseGitEditorDiffResponse as publicDiffResponse,
+  parseGitEditorBlameRequest as publicBlameRequest,
+  parseGitEditorBlameResponse as publicBlameResponse,
+  type GitEditorDiffRequest as PublicGitEditorDiffRequest,
+  type GitEditorDiffResponse as PublicGitEditorDiffResponse,
+  type GitEditorBlameRequest as PublicGitEditorBlameRequest,
+  type GitEditorBlameResponse as PublicGitEditorBlameResponse,
+  type GitEditorParseResult as PublicGitEditorParseResult,
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+
+describe("G1 physical Git read collections", () => {
+  for (const [name, parseDiff, parseBlame] of [
+    ["source", parseGitEditorDiffResponse, parseGitEditorBlameResponse],
+    ["public", publicDiffResponse, publicBlameResponse],
+  ] as const) {
+    it(`${name} preserves healthy original diff and blame references`, () => {
+      const diff = diffResponse();
+      const blame = blameResponse();
+      const diffResult = parseDiff(diff);
+      const blameResult = parseBlame(blame);
+      expect(diffResult.ok).toBe(true);
+      expect(blameResult.ok).toBe(true);
+      if (!diffResult.ok || !blameResult.ok) throw new Error("healthy read fixture was refused");
+      expect(diffResult.value).toBe(diff);
+      expect(blameResult.value).toBe(blame);
+    });
+    it(`${name} preserves an inherited present line and its original array reference`, () => {
+      const lines = new Array<GitEditorDiffLine>(1);
+      Object.setPrototypeOf(lines, [diffLine()]);
+      const input = diffResponse({ files: [diffFile({ hunks: [diffHunk({ lines })] })] });
+      const result = parseDiff(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy inherited line was refused");
+      expect(result.value.files[0]?.hunks[0]?.lines).toBe(lines);
+    });
+    it(`${name} refuses an absent file`, () => {
+      expect(parseDiff(diffResponse({ files: new Array<unknown>(1) }))).toEqual({
+        ok: false,
+        errors: ["files contain an invalid entry"],
+      });
+    });
+    it(`${name} refuses an absent nested hunk`, () => {
+      expect(
+        parseDiff(diffResponse({ files: [diffFile({ hunks: new Array<GitEditorDiffHunk>(1) })] })),
+      ).toEqual({ ok: false, errors: ["files contain an invalid entry"] });
+    });
+    it(`${name} refuses an absent nested line`, () => {
+      expect(
+        parseDiff(
+          diffResponse({
+            files: [diffFile({ hunks: [diffHunk({ lines: new Array<GitEditorDiffLine>(1) })] })],
+          }),
+        ),
+      ).toEqual({ ok: false, errors: ["files contain an invalid entry"] });
+    });
+    it(`${name} refuses an absent blame line`, () => {
+      expect(parseBlame(blameResponse({ lines: new Array<unknown>(1) }))).toEqual({
+        ok: false,
+        errors: ["lines contain an invalid entry"],
+      });
+    });
+    it(`${name} refuses a physical malformed file even with overridden every`, () => {
+      const files = [{}];
+      Object.defineProperty(files, "every", { value: (): boolean => true });
+      expect(parseDiff(diffResponse({ files }))).toEqual({
+        ok: false,
+        errors: ["files contain an invalid entry"],
+      });
+    });
+  }
+});
+
+describe("G1 final Editor collection observation", () => {
+  for (const [name, parse] of [
+    ["source", parseGitEditorDiffResponse],
+    ["public", publicDiffResponse],
+  ] as const) {
+    it(`${name} preserves healthy changing final files observation and input reference`, () => {
+      const input = diffResponse();
+      if (typeof input !== "object" || input === null)
+        throw new TypeError("fixture is not an object");
+      const original = [diffFile()];
+      const later = [diffFile({ path: "src/later.ts" })];
+      let reads = 0;
+      Object.defineProperty(input, "files", {
+        enumerable: true,
+        get: (): unknown => (++reads === 4 ? later : original),
+      });
+      const result = parse(input);
+      expect(reads).toBe(6);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy changing files were refused");
+      expect(result.value).toBe(input);
+    });
+    it(`${name} refuses incomplete member at the final files observation`, () => {
+      const input = diffResponse();
+      if (typeof input !== "object" || input === null)
+        throw new TypeError("fixture is not an object");
+      const original = [diffFile()];
+      let reads = 0;
+      Object.defineProperty(input, "files", {
+        enumerable: true,
+        get: (): unknown => (++reads === 4 ? [{ layer: "staged" }] : original),
+      });
+      const result = parse(input);
+      expect(reads).toBe(6);
+      expect(result).toEqual({ ok: false, errors: ["files contain an invalid entry"] });
+    });
+  }
+});
+
+export function parsePublicGitEditorDiffRequest(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorDiffRequest> {
+  const result = publicDiffRequest(input);
+  return result;
+}
+
+export function parsePublicGitEditorDiffResponse(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorDiffResponse> {
+  const result = publicDiffResponse(input);
+  return result;
+}
+
+export function parsePublicGitEditorBlameRequest(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorBlameRequest> {
+  const result = publicBlameRequest(input);
+  return result;
+}
+
+export function parsePublicGitEditorBlameResponse(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorBlameResponse> {
+  const result = publicBlameResponse(input);
+  return result;
+}
+
+function hostileInspectionFailures(): readonly { thrown: unknown; errorClass: string }[] {
+  const privateName = Object.defineProperty(new Error(), "name", { value: "fixture-private-name" });
+  const hostileFields = Object.defineProperties(new Error(), {
+    name: {
+      get: (): never => {
+        throw new Error("fixture-private-name-read");
+      },
+    },
+    message: {
+      get: (): never => {
+        throw new Error("fixture-private-message-read");
+      },
+    },
+    stack: {
+      get: (): never => {
+        throw new Error("fixture-private-stack-read");
+      },
+    },
+  });
+  const privateTypeName = Object.defineProperty(new TypeError(), "name", {
+    value: "fixture-private-type-name",
+  });
+  const hostilePrototype = new Proxy(new Error(), {
+    getPrototypeOf: (): never => {
+      throw new Error("fixture-private-prototype-read");
+    },
+  });
+  const opaquePrototype: unknown = Object.create(hostilePrototype);
+  const revoked = Proxy.revocable(new Error(), {});
+  revoked.revoke();
+  return [
+    { thrown: privateName, errorClass: "Error" },
+    { thrown: hostileFields, errorClass: "Error" },
+    { thrown: privateTypeName, errorClass: "TypeError" },
+    { thrown: hostilePrototype, errorClass: "unknown error" },
+    { thrown: revoked.proxy, errorClass: "unknown error" },
+    { thrown: opaquePrototype, errorClass: "unknown error" },
+    { thrown: "fixture-private-thrown-value", errorClass: "unknown error" },
+    { thrown: null, errorClass: "unknown error" },
+  ];
+}
+
+describe("Git DiffRequest public parser (#3918)", () => {
+  it("closes hostile thrown values without reading private error fields", () => {
+    for (const failure of hostileInspectionFailures()) {
+      const input = Object.defineProperty({}, "schemaVersion", {
+        get: (): never => {
+          throw failure.thrown;
+        },
+      });
+      const expected = {
+        ok: false,
+        errors: [`payload could not be inspected: ${failure.errorClass}`],
+      };
+      expect(parseGitEditorDiffRequest(input)).toEqual(expected);
+      expect(parsePublicGitEditorDiffRequest(input)).toEqual(expected);
+    }
+  });
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(parseGitEditorDiffRequest).parameter(0).toBeUnknown();
+    expectTypeOf(publicDiffRequest).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicGitEditorDiffRequest).parameter(0).toBeUnknown();
+    expectTypeOf(parseGitEditorDiffRequest).parameter(0).not.toBeAny();
+    expectTypeOf(publicDiffRequest).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicGitEditorDiffRequest).parameter(0).not.toBeAny();
+    expectTypeOf(parseGitEditorDiffRequest).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorDiffRequest>
+    >();
+    expectTypeOf(publicDiffRequest).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorDiffRequest>
+    >();
+    expectTypeOf(parsePublicGitEditorDiffRequest).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorDiffRequest>
+    >();
+    expectTypeOf(publicDiffRequest).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorDiffRequest>
+    >();
+    expectTypeOf(parsePublicGitEditorDiffRequest).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorDiffRequest>
+    >();
+    expectTypeOf(parseGitEditorDiffRequest).returns.not.toBeAny();
+    expectTypeOf(publicDiffRequest).returns.not.toBeAny();
+    expectTypeOf(parsePublicGitEditorDiffRequest).returns.not.toBeAny();
+  });
+
+  it("retains original staged unstaged and optional-path presence", () => {
+    const inputs: readonly GitEditorDiffRequest[] = [
+      { schemaVersion: GIT_EDITOR_SCHEMA_VERSION, scope: "staged" },
+      { schemaVersion: GIT_EDITOR_SCHEMA_VERSION, scope: "unstaged", path: "src/app.ts" },
+      { schemaVersion: GIT_EDITOR_SCHEMA_VERSION, scope: "staged", path: undefined },
+    ];
+    for (const input of inputs) {
+      const result = parsePublicGitEditorDiffRequest(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy public diff request refused");
+      expect(result.value).toBe(input);
+      expect(Object.hasOwn(result.value, "path")).toBe(Object.hasOwn(input, "path"));
+    }
+  });
+
+  it("preserves ordered schema scope and path refusals", () => {
+    expect(
+      parsePublicGitEditorDiffRequest({ schemaVersion: "2", scope: "all", path: "../x" }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "schemaVersion invalid",
+        "scope must be staged or unstaged",
+        "path must be a bounded workspace-relative path when present",
+      ],
+    });
+  });
+
+  it("enforces the owning path byte cap and refuses traversal", () => {
+    const input = { schemaVersion: GIT_EDITOR_SCHEMA_VERSION, scope: "staged" };
+    expect(
+      parsePublicGitEditorDiffRequest({ ...input, path: "x".repeat(GIT_EDITOR_PATH_MAX_BYTES) }),
+    ).toMatchObject({ ok: true });
+    for (const path of [
+      "x".repeat(GIT_EDITOR_PATH_MAX_BYTES + 1),
+      "é".repeat(GIT_EDITOR_PATH_MAX_BYTES),
+      "../x",
+      "/x",
+      "x\\y",
+      "x//y",
+    ]) {
+      expect(parsePublicGitEditorDiffRequest({ ...input, path })).toEqual({
+        ok: false,
+        errors: ["path must be a bounded workspace-relative path when present"],
+      });
+    }
+  });
+
+  it("refuses unknown fields and getter failures without retaining private text", () => {
+    expect(
+      parsePublicGitEditorDiffRequest({
+        schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+        scope: "staged",
+        extra: "fixture-private-body",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: ["request has unknown fields"],
+    });
+    const input = Object.defineProperty({}, "schemaVersion", {
+      get: (): never => {
+        throw new TypeError("fixture-private-body");
+      },
+    });
+    expect(parsePublicGitEditorDiffRequest(input)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+    expect(parsePublicGitEditorDiffRequest(null)).toEqual({
+      ok: false,
+      errors: ["request must be an object"],
+    });
+  });
+});
+
+describe("Git DiffResponse public parser (#3918)", () => {
+  it("closes hostile thrown values without reading private error fields", () => {
+    for (const failure of hostileInspectionFailures()) {
+      const input = Object.defineProperty({}, "schemaVersion", {
+        get: (): never => {
+          throw failure.thrown;
+        },
+      });
+      const expected = {
+        ok: false,
+        errors: [`payload could not be inspected: ${failure.errorClass}`],
+      };
+      expect(parseGitEditorDiffResponse(input)).toEqual(expected);
+      expect(parsePublicGitEditorDiffResponse(input)).toEqual(expected);
+    }
+  });
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(parseGitEditorDiffResponse).parameter(0).toBeUnknown();
+    expectTypeOf(publicDiffResponse).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicGitEditorDiffResponse).parameter(0).toBeUnknown();
+    expectTypeOf(parseGitEditorDiffResponse).parameter(0).not.toBeAny();
+    expectTypeOf(publicDiffResponse).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicGitEditorDiffResponse).parameter(0).not.toBeAny();
+    expectTypeOf(parseGitEditorDiffResponse).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorDiffResponse>
+    >();
+    expectTypeOf(publicDiffResponse).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorDiffResponse>
+    >();
+    expectTypeOf(parsePublicGitEditorDiffResponse).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorDiffResponse>
+    >();
+    expectTypeOf(publicDiffResponse).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorDiffResponse>
+    >();
+    expectTypeOf(parsePublicGitEditorDiffResponse).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorDiffResponse>
+    >();
+    expectTypeOf(parseGitEditorDiffResponse).returns.not.toBeAny();
+    expectTypeOf(publicDiffResponse).returns.not.toBeAny();
+    expectTypeOf(parsePublicGitEditorDiffResponse).returns.not.toBeAny();
+  });
+
+  it("retains original response and nested collection references", () => {
+    const lines = [diffLine()];
+    const hunks = [diffHunk({ lines })];
+    const files = [diffFile({ hunks })];
+    const input = diffResponse({ files });
+    const result = parsePublicGitEditorDiffResponse(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public diff response refused");
+    expect(result.value).toBe(input);
+    expect(result.value.files).toBe(files);
+    expect(result.value.files[0]?.hunks).toBe(hunks);
+    expect(result.value.files[0]?.hunks[0]?.lines).toBe(lines);
+  });
+
+  it("enforces the owning file cap and exact scope layer separation", () => {
+    const files = Array.from({ length: GIT_EDITOR_DIFF_MAX_FILES }, () => diffFile());
+    expect(
+      parsePublicGitEditorDiffResponse(diffResponse({ files, totalFiles: files.length })),
+    ).toMatchObject({ ok: true });
+    files.push(diffFile());
+    expect(
+      parsePublicGitEditorDiffResponse(diffResponse({ files, totalFiles: files.length })),
+    ).toEqual({
+      ok: false,
+      errors: [`files must be an array of at most ${String(GIT_EDITOR_DIFF_MAX_FILES)} entries`],
+    });
+    expect(parsePublicGitEditorDiffResponse(diffResponse({ scope: "unstaged" }))).toEqual({
+      ok: false,
+      errors: ["file layers must match the response scope"],
+    });
+    expect(
+      parsePublicGitEditorDiffResponse(
+        diffResponse({ scope: "unstaged", files: [diffFile({ layer: "worktree" })] }),
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("requires truthful totals and explicit byte truncation", () => {
+    expect(parsePublicGitEditorDiffResponse(diffResponse({ totalFiles: 0 }))).toEqual({
+      ok: false,
+      errors: ["totalFiles must not be smaller than files.length"],
+    });
+    expect(
+      parsePublicGitEditorDiffResponse(diffResponse({ totalBytes: GIT_EDITOR_DIFF_MAX_BYTES + 1 })),
+    ).toEqual({ ok: false, errors: ["truncated must be true when totalBytes exceeds maxBytes"] });
+    expect(
+      parsePublicGitEditorDiffResponse(
+        diffResponse({ totalBytes: GIT_EDITOR_DIFF_MAX_BYTES + 1, truncated: true }),
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("retains nested structural cap edges and refuses one over", () => {
+    const edgeHunk = diffHunk({
+      header: "@".repeat(GIT_EDITOR_DIFF_MAX_HEADER_CHARS),
+      lines: Array.from({ length: GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK }, () => diffLine()),
+    });
+    const edgeHunks = Array.from({ length: GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE }, () => diffHunk());
+    const edgeLine = diffLine({ text: "x".repeat(GIT_EDITOR_DIFF_MAX_LINE_CHARS) });
+    for (const file of [
+      diffFile({ hunks: [edgeHunk] }),
+      diffFile({ hunks: edgeHunks }),
+      diffFile({ hunks: [diffHunk({ lines: [edgeLine] })] }),
+    ]) {
+      expect(parsePublicGitEditorDiffResponse(diffResponse({ files: [file] }))).toMatchObject({
+        ok: true,
+      });
+    }
+    const invalidFiles = [
+      diffFile({ hunks: [diffHunk({ ...edgeHunk, header: `${edgeHunk.header}@` })] }),
+      diffFile({ hunks: [diffHunk({ ...edgeHunk, lines: [...edgeHunk.lines, diffLine()] })] }),
+      diffFile({ hunks: [...edgeHunks, diffHunk()] }),
+      diffFile({ hunks: [diffHunk({ lines: [diffLine({ text: `${edgeLine.text}x` })] })] }),
+    ];
+    for (const file of invalidFiles) {
+      expect(parsePublicGitEditorDiffResponse(diffResponse({ files: [file] }))).toEqual({
+        ok: false,
+        errors: ["files contain an invalid entry"],
+      });
+    }
+  });
+
+  it("refuses contradictory coordinates rename and binary payloads", () => {
+    const invalidFiles = [
+      diffFile({ hunks: [diffHunk({ lines: [diffLine({ kind: "add", oldLine: 1 })] })] }),
+      diffFile({ status: "renamed" }),
+      diffFile({ binary: true }),
+      diffFile({ path: "../secret" }),
+    ];
+    for (const file of invalidFiles) {
+      expect(parsePublicGitEditorDiffResponse(diffResponse({ files: [file] }))).toEqual({
+        ok: false,
+        errors: ["files contain an invalid entry"],
+      });
+    }
+  });
+
+  it("refuses unknown response fields and closed getter failures", () => {
+    expect(
+      parsePublicGitEditorDiffResponse(diffResponse({ extra: "fixture-private-body" })),
+    ).toEqual({ ok: false, errors: ["response has unknown fields"] });
+    const input = Object.defineProperty({}, "files", {
+      get: (): never => {
+        throw new TypeError("fixture-private-body");
+      },
+    });
+    expect(parsePublicGitEditorDiffResponse(input)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+  });
+});
+
+describe("Git BlameRequest public parser (#3918)", () => {
+  it("closes hostile thrown values without reading private error fields", () => {
+    for (const failure of hostileInspectionFailures()) {
+      const input = Object.defineProperty({}, "schemaVersion", {
+        get: (): never => {
+          throw failure.thrown;
+        },
+      });
+      const expected = {
+        ok: false,
+        errors: [`payload could not be inspected: ${failure.errorClass}`],
+      };
+      expect(parseGitEditorBlameRequest(input)).toEqual(expected);
+      expect(parsePublicGitEditorBlameRequest(input)).toEqual(expected);
+    }
+  });
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(parseGitEditorBlameRequest).parameter(0).toBeUnknown();
+    expectTypeOf(publicBlameRequest).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicGitEditorBlameRequest).parameter(0).toBeUnknown();
+    expectTypeOf(parseGitEditorBlameRequest).parameter(0).not.toBeAny();
+    expectTypeOf(publicBlameRequest).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicGitEditorBlameRequest).parameter(0).not.toBeAny();
+    expectTypeOf(parseGitEditorBlameRequest).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorBlameRequest>
+    >();
+    expectTypeOf(publicBlameRequest).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorBlameRequest>
+    >();
+    expectTypeOf(parsePublicGitEditorBlameRequest).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorBlameRequest>
+    >();
+    expectTypeOf(publicBlameRequest).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorBlameRequest>
+    >();
+    expectTypeOf(parsePublicGitEditorBlameRequest).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorBlameRequest>
+    >();
+    expectTypeOf(parseGitEditorBlameRequest).returns.not.toBeAny();
+    expectTypeOf(publicBlameRequest).returns.not.toBeAny();
+    expectTypeOf(parsePublicGitEditorBlameRequest).returns.not.toBeAny();
+  });
+
+  it("retains original request at the positive range and cap boundaries", () => {
+    for (const maxLines of [1, GIT_EDITOR_BLAME_MAX_LINES]) {
+      const input = {
+        schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+        path: "src/app.ts",
+        startLine: 1,
+        maxLines,
+      };
+      const result = parsePublicGitEditorBlameRequest(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy public blame request refused");
+      expect(result.value).toBe(input);
+    }
+  });
+
+  it("preserves exact ordered invalid range and path errors", () => {
+    expect(
+      parsePublicGitEditorBlameRequest({
+        schemaVersion: "2",
+        path: "../x",
+        startLine: 0,
+        maxLines: GIT_EDITOR_BLAME_MAX_LINES + 1,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "schemaVersion invalid",
+        "path must be a bounded workspace-relative path",
+        "startLine must be a positive integer",
+        `maxLines must be between 1 and ${String(GIT_EDITOR_BLAME_MAX_LINES)}`,
+      ],
+    });
+  });
+
+  it("refuses noninteger nonfinite and nonpositive ranges", () => {
+    const input = {
+      schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+      path: "src/app.ts",
+      startLine: 1,
+      maxLines: 1,
+    };
+    for (const startLine of [0, 0.5, Number.POSITIVE_INFINITY, "1"]) {
+      expect(parsePublicGitEditorBlameRequest({ ...input, startLine })).toEqual({
+        ok: false,
+        errors: ["startLine must be a positive integer"],
+      });
+    }
+    for (const maxLines of [0, 0.5, Number.POSITIVE_INFINITY, GIT_EDITOR_BLAME_MAX_LINES + 1]) {
+      expect(parsePublicGitEditorBlameRequest({ ...input, maxLines })).toEqual({
+        ok: false,
+        errors: [`maxLines must be between 1 and ${String(GIT_EDITOR_BLAME_MAX_LINES)}`],
+      });
+    }
+  });
+
+  it("refuses unknown fields and getter failures without retaining private text", () => {
+    const input = {
+      schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+      path: "src/app.ts",
+      startLine: 1,
+      maxLines: 1,
+    };
+    expect(parsePublicGitEditorBlameRequest({ ...input, extra: "fixture-private-body" })).toEqual({
+      ok: false,
+      errors: ["request has unknown fields"],
+    });
+    const hostile = Object.defineProperty({}, "path", {
+      get: (): never => {
+        throw new TypeError("fixture-private-body");
+      },
+    });
+    expect(parsePublicGitEditorBlameRequest(hostile)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+    expect(parsePublicGitEditorBlameRequest(null)).toEqual({
+      ok: false,
+      errors: ["request must be an object"],
+    });
+  });
+});
+
+describe("Git BlameResponse public parser (#3918)", () => {
+  it("closes hostile thrown values without reading private error fields", () => {
+    for (const failure of hostileInspectionFailures()) {
+      const input = Object.defineProperty({}, "schemaVersion", {
+        get: (): never => {
+          throw failure.thrown;
+        },
+      });
+      const expected = {
+        ok: false,
+        errors: [`payload could not be inspected: ${failure.errorClass}`],
+      };
+      expect(parseGitEditorBlameResponse(input)).toEqual(expected);
+      expect(parsePublicGitEditorBlameResponse(input)).toEqual(expected);
+    }
+  });
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(parseGitEditorBlameResponse).parameter(0).toBeUnknown();
+    expectTypeOf(publicBlameResponse).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicGitEditorBlameResponse).parameter(0).toBeUnknown();
+    expectTypeOf(parseGitEditorBlameResponse).parameter(0).not.toBeAny();
+    expectTypeOf(publicBlameResponse).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicGitEditorBlameResponse).parameter(0).not.toBeAny();
+    expectTypeOf(parseGitEditorBlameResponse).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorBlameResponse>
+    >();
+    expectTypeOf(publicBlameResponse).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorBlameResponse>
+    >();
+    expectTypeOf(parsePublicGitEditorBlameResponse).returns.toEqualTypeOf<
+      PublicGitEditorParseResult<PublicGitEditorBlameResponse>
+    >();
+    expectTypeOf(publicBlameResponse).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorBlameResponse>
+    >();
+    expectTypeOf(parsePublicGitEditorBlameResponse).returns.toEqualTypeOf<
+      GitEditorParseResult<GitEditorBlameResponse>
+    >();
+    expectTypeOf(parseGitEditorBlameResponse).returns.not.toBeAny();
+    expectTypeOf(publicBlameResponse).returns.not.toBeAny();
+    expectTypeOf(parsePublicGitEditorBlameResponse).returns.not.toBeAny();
+  });
+
+  it("retains original response and blame line collection references", () => {
+    const lines = [blameLine()];
+    const input = blameResponse({ lines });
+    const result = parsePublicGitEditorBlameResponse(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public blame response refused");
+    expect(result.value).toBe(input);
+    expect(result.value.lines).toBe(lines);
+    expect(result.value.lines[0]).toBe(lines[0]);
+  });
+
+  it("enforces the owning line cap and explicit byte truncation", () => {
+    const lines = Array.from({ length: GIT_EDITOR_BLAME_MAX_LINES }, (_unused, index) =>
+      blameLine({ line: index + 1 }),
+    );
+    expect(
+      parsePublicGitEditorBlameResponse(blameResponse({ lines, totalLines: lines.length })),
+    ).toMatchObject({ ok: true });
+    lines.push(blameLine());
+    expect(
+      parsePublicGitEditorBlameResponse(blameResponse({ lines, totalLines: lines.length })),
+    ).toEqual({
+      ok: false,
+      errors: [`lines must be an array of at most ${String(GIT_EDITOR_BLAME_MAX_LINES)} entries`],
+    });
+    expect(
+      parsePublicGitEditorBlameResponse(
+        blameResponse({ totalBytes: GIT_EDITOR_BLAME_MAX_BYTES + 1 }),
+      ),
+    ).toEqual({ ok: false, errors: ["truncated must be true when totalBytes exceeds maxBytes"] });
+    expect(
+      parsePublicGitEditorBlameResponse(
+        blameResponse({ totalBytes: GIT_EDITOR_BLAME_MAX_BYTES + 1, truncated: true }),
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("refuses email source bodies and malformed blame metadata", () => {
+    expect(
+      parsePublicGitEditorBlameResponse(
+        blameResponse({
+          lines: [blameLine({ summary: "x".repeat(GIT_EDITOR_BLAME_SUMMARY_MAX_CHARS) })],
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+
+    for (const patch of [
+      { authorEmail: "fixture-private-body" },
+      { sourceLine: "fixture-private-body" },
+      { line: 0 },
+      { commitHash: "A".repeat(40) },
+      { summary: "x".repeat(GIT_EDITOR_BLAME_SUMMARY_MAX_CHARS + 1) },
+    ]) {
+      expect(
+        parsePublicGitEditorBlameResponse(blameResponse({ lines: [blameLine(patch)] })),
+      ).toEqual({ ok: false, errors: ["lines contain an invalid entry"] });
+    }
+  });
+
+  it("requires consistent totals and refuses hostile response getters", () => {
+    expect(parsePublicGitEditorBlameResponse(blameResponse({ totalLines: 0 }))).toEqual({
+      ok: false,
+      errors: ["totalLines must not be smaller than lines.length"],
+    });
+    expect(parsePublicGitEditorBlameResponse(blameResponse({ path: "/outside" }))).toEqual({
+      ok: false,
+      errors: ["path must be a bounded workspace-relative path"],
+    });
+    const input = Object.defineProperty({}, "lines", {
+      get: (): never => {
+        throw new TypeError("fixture-private-body");
+      },
+    });
+    expect(parsePublicGitEditorBlameResponse(input)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
   });
 });

@@ -60,10 +60,7 @@ export const VOICE_RECAP_CANDIDATE_STATUSES: readonly VoiceRecapCandidateStatus[
 ] as const;
 
 export function isVoiceRecapCandidateStatus(value: unknown): value is VoiceRecapCandidateStatus {
-  return (
-    typeof value === "string" &&
-    (VOICE_RECAP_CANDIDATE_STATUSES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(VOICE_RECAP_CANDIDATE_STATUSES).has(value);
 }
 
 // ─── Content-free committed-span descriptor ───────────────────────────────────
@@ -156,7 +153,7 @@ const VOICE_PROFILES: readonly VoiceProfile[] = [
 ] as const;
 
 function isVoiceProfile(value: unknown): value is VoiceProfile {
-  return typeof value === "string" && (VOICE_PROFILES as readonly string[]).includes(value);
+  return typeof value === "string" && new Set<string>(VOICE_PROFILES).has(value);
 }
 
 const AUDIT_COUNT_FIELDS = [

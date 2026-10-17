@@ -39,6 +39,7 @@ import {
   classifyErrorKind,
   defineActivityLogOperation,
   recordActivityLogLoss,
+  type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
@@ -92,12 +93,15 @@ export interface MemoryVaultLogEvent {
   readonly extra?: Readonly<MemoryVaultLogExtra> | undefined;
 }
 
+/** Normal producer vocabulary plus the exact rejected transport arm. */
+export type MemoryVaultLogTransport = MemoryVaultLogEvent | RejectedActivityLogEvent;
+
 export interface MemoryVaultLogSink {
-  readonly write: (event: MemoryVaultLogEvent) => void;
+  readonly write: (event: MemoryVaultLogTransport) => void;
 }
 
 const NULL_SINK: MemoryVaultLogSink = {
-  write(_event: MemoryVaultLogEvent): void {
+  write(_event: MemoryVaultLogTransport): void {
     // Explicit no-op: the default whenever no caller wired a sink.
   },
 };
@@ -129,7 +133,7 @@ export function startMemoryVaultLogTimer(): () => number {
 function errorKindProperty(error: object, key: string): string | undefined {
   let value: unknown;
   try {
-    value = (error as Record<string, unknown>)[key];
+    value = Reflect.get(error, key);
   } catch {
     return undefined;
   }
@@ -181,13 +185,13 @@ const MEMORY_VAULT_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function operationDigest(op: MemoryVaultLogOp): string {
+function operationDigest(op: MemoryVaultLogTransport["op"]): string {
   return createHash("sha256").update(op).digest("hex").slice(0, 16);
 }
 
 export function emitMemoryVaultLogEvent(
   sink: MemoryVaultLogSink | undefined,
-  event: MemoryVaultLogEvent,
+  event: MemoryVaultLogTransport,
 ): void {
   if (sink === undefined) {
     // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
@@ -206,7 +210,7 @@ export function emitMemoryVaultLogEvent(
 
 function reportFailedMemoryVaultLogSink(
   sink: MemoryVaultLogSink,
-  droppedOp: MemoryVaultLogOp,
+  droppedOp: MemoryVaultLogTransport["op"],
   cause: unknown,
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;

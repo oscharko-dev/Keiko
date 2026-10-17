@@ -9,7 +9,10 @@ import {
   requestOpenAIEmbeddingBatch,
   resetStrictGatewayMemoForTests,
 } from "../packages/keiko-model-gateway/src/openai-embedding-adapter.js";
-import type { ModelGatewayLogEvent } from "../packages/keiko-model-gateway/src/observability.js";
+import type {
+  ModelGatewayLogTransport,
+  ModelGatewayLogEvent,
+} from "../packages/keiko-model-gateway/src/observability.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   runSupportQuery,
@@ -52,10 +55,10 @@ async function batch(
   inputs: readonly string[],
   replies: readonly (() => Response)[],
 ): Promise<{
-  readonly events: readonly ModelGatewayLogEvent[];
+  readonly events: readonly ModelGatewayLogTransport[];
   readonly outcome: Awaited<ReturnType<typeof requestOpenAIEmbeddingBatch>>;
 }> {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const outcome = await requestOpenAIEmbeddingBatch({
     ...CONFIG,
     inputs,
@@ -132,7 +135,7 @@ describe("manual support selection of actual embedding compatibility producers",
     resetStrictGatewayMemoForTests();
   });
 
-  function selected(events: readonly ModelGatewayLogEvent[]): SupportQueryResult["events"] {
+  function selected(events: readonly ModelGatewayLogTransport[]): SupportQueryResult["events"] {
     for (const event of events) sink.write(event);
     sink.flush?.();
     return query(stateDir).events;
@@ -153,9 +156,9 @@ describe("manual support selection of actual embedding compatibility producers",
         loss: "none",
       },
     });
-    expect(items[0]?.errorKind).toBeUndefined();
+    expect(normalFixtureEvent(items[0])?.errorKind).toBeUndefined();
     expect(items[1]?.extra).toMatchObject({ inputChars: 1, sentChars: 1 });
-    expect(items[1]?.extra?.truncated).toBeUndefined();
+    expect(normalFixtureEvent(items[1])?.extra?.truncated).toBeUndefined();
     expect(activityLogEventRegistration(items[0] ?? {})).toMatchObject({
       causal: "none",
       diagnosticWhen: [{ field: "truncated", values: [true] }],
@@ -181,7 +184,9 @@ describe("manual support selection of actual embedding compatibility producers",
     expect(outcome.ok).toBe(true);
     const items = events.filter((event) => event.op === ITEM);
     expect(items).toHaveLength(2);
-    expect(items.every((event) => event.extra?.truncated === undefined)).toBe(true);
+    expect(items.every((event) => normalFixtureEvent(event).extra?.truncated === undefined)).toBe(
+      true,
+    );
     const ops = selected(events).map((event) => event.parsed.view.op);
     expect(ops).toContain("embedding.batch.degrading-to-scalar");
     expect(ops).toContain("embedding.batch.degraded-to-scalar");
@@ -208,7 +213,7 @@ describe("manual support selection of actual embedding compatibility producers",
   });
 
   it("retains the actual scalar shape refusal and leaves successful dispatch metadata optional", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestOpenAIEmbedding({
       ...CONFIG,
       input: "scalar document",
@@ -253,3 +258,15 @@ describe("manual support selection of actual embedding compatibility producers",
     expect(result.some((event) => event.parsed.view.op === ITEM)).toBe(false);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

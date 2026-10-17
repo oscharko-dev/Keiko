@@ -2,8 +2,13 @@
 // Covers happy-path acceptance, per-invariant rejection, and the Ok|Fail discriminated result so
 // downstream packages can rely on the wire-shape guarantees without re-validating.
 
-import { describe, it, expect } from "vitest";
-import type { EnhancedPrompt, GroundingPlan, PromptEnhancementRequest } from "./index.js";
+import { describe, it, expect, expectTypeOf } from "vitest";
+import type {
+  EnhancedPrompt,
+  GroundingPlan,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+} from "./index.js";
 import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
   asEnhancedPromptId,
@@ -11,6 +16,7 @@ import {
   validatePromptEnhancerIdString,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   RAG_EVALUATION_DIMENSIONS,
+  PROMPT_SIGNAL_DIMENSIONS,
 } from "./prompt-enhancer.js";
 import { planGrounding } from "./prompt-enhancer-grounding.js";
 import {
@@ -19,6 +25,7 @@ import {
   validatePromptEnhancementRequest,
   validatePromptTaskAnalysis,
   PROMPT_REQUEST_TEXT_MAX_CHARS,
+  type PromptEnhancerValidation,
 } from "./prompt-enhancer-validation.js";
 // Imported from the producing module, not re-exported through index.js: these tables are internal
 // to the prompt-enhancer pair and adding them to the package's public surface would be a surface
@@ -547,5 +554,665 @@ describe("grounding plan validator agrees with its producer (KEIKO-0267)", () =>
     const analysis = analyzePrompt(validRequest());
     const plan = planGrounding(analysis);
     expect(validateGroundingPlan(plan).ok).toBe(true);
+  });
+});
+
+// Family6 preparation: physical-member hypotheses are unexecuted original-first obligations.
+describe("family6 analysis physical member admission", () => {
+  it.each(["source", "public"])("refuses a missing risk position through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? validatePromptTaskAnalysis
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptTaskAnalysis;
+    const analysis = analyzePrompt(validRequest());
+    const input = { ...analysis, riskFlags: Array<string>(1) };
+    const result = validate(input);
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors).toContain("analysis.riskFlags must be an array of known risk classes");
+  });
+  it.each(["source", "public"])("retains actual producer identity through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? validatePromptTaskAnalysis
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptTaskAnalysis;
+    const analysis = analyzePrompt(validRequest());
+    const result = validate(analysis);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(analysis);
+      expect(result.value.riskFlags).toBe(analysis.riskFlags);
+    }
+  });
+});
+
+// SOURCE-ONLY preparation: these finite physical-member hypotheses require original-first proof.
+describe("complete prompt field admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves the enhanced producer fixture reference through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      const input = validEnhancedPrompt();
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(result.value.groundingPlan).toBe(input.groundingPlan);
+        expect(result.value.context).toBe(input.context);
+      }
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses a missing enhanced context member through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      const input = { ...validEnhancedPrompt(), context: Array<string>(1) };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["enhancedPrompt.context must be a bounded array of control-free strings"],
+      });
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses a missing source-policy member through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateGroundingPlan
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateGroundingPlan;
+      const produced = planFor("Explain why the sky is blue.");
+      expect(validate(produced).ok).toBe(true);
+      const input = { ...produced, sourcePriority: Array<unknown>(produced.sourcePriority.length) };
+      const result = validate(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok)
+        expect(result.errors[0]).toBe(
+          "groundingPlan.sourcePriority must match strategy ordering, 1-based priorities, and required-source rules",
+        );
+    },
+  );
+});
+
+// Conditional finite observation repairs: execute original source/public controls before activation.
+describe("prompt scalar observations used by admission", () => {
+  it.each(["source", "public"] as const)(
+    "refuses the invalid second raw text through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validatePromptEnhancementRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validatePromptEnhancementRequest;
+      let reads = 0;
+      const input = {
+        ...validRequest(),
+        input: {
+          get text(): unknown {
+            reads += 1;
+            return reads === 1 ? "healthy draft" : 42;
+          },
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: [
+          `request.input.text must be a string of at most ${String(PROMPT_REQUEST_TEXT_MAX_CHARS)} characters`,
+        ],
+      });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "preserves changing valid raw text through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validatePromptEnhancementRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validatePromptEnhancementRequest;
+      let reads = 0;
+      const raw = {
+        get text(): string {
+          reads += 1;
+          return reads === 1 ? "first draft" : "second draft";
+        },
+      };
+      const input = { ...validRequest(), input: raw };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(result.value.input).toBe(raw);
+      }
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses the invalid fourth output format through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      let reads = 0;
+      const input = {
+        ...validEnhancedPrompt(),
+        outputSchema: {
+          structured: false,
+          hints: [],
+          get format(): string {
+            reads += 1;
+            return reads < 4 ? "code" : "foreign-format";
+          },
+        },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]).toMatch(/^outputSchema\.format must be one of /);
+      }
+      expect(reads).toBe(4);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "preserves a stable healthy output format through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      let reads = 0;
+      const input = {
+        ...validEnhancedPrompt(),
+        outputSchema: {
+          structured: false,
+          hints: [],
+          get format(): string {
+            reads += 1;
+            return "code";
+          },
+        },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+      expect(reads).toBe(4);
+    },
+  );
+});
+
+// Source-only healthy changing output-format observation; UNEXECUTED.
+describe("family6 healthy changing output schema", () => {
+  it.each(["source", "public"])(
+    "retains a fourth valid format observation through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      let reads = 0;
+      const input = {
+        ...validEnhancedPrompt(),
+        outputSchema: {
+          structured: false,
+          hints: [],
+          get format(): string {
+            return ++reads < 4 ? "code" : "prose";
+          },
+        },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+      expect(reads).toBe(4);
+    },
+  );
+});
+
+describe("complete prompt nested member admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy analysis and grounding through %s",
+    async (surface) => {
+      const api =
+        surface === "source"
+          ? { validatePromptTaskAnalysis, validateGroundingPlan }
+          : await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation");
+      const analysis = analyzePrompt(validRequest());
+      expect(api.validatePromptTaskAnalysis(analysis).ok).toBe(true);
+      const plan = planFor("Explain why the sky is blue.");
+      expect(api.validateGroundingPlan(plan).ok).toBe(true);
+    },
+  );
+  it.each([
+    ["missingContext", "source"],
+    ["missingContext", "public"],
+    ["signals", "source"],
+    ["signals", "public"],
+  ] as const)("refuses an absent %s member through %s", async (field, surface) => {
+    const validate =
+      surface === "source"
+        ? validatePromptTaskAnalysis
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptTaskAnalysis;
+    const input = { ...analyzePrompt(validRequest()), [field]: Array<unknown>(1) };
+    expect(validate(input).ok).toBe(false);
+  });
+  it.each(["source", "public"] as const)(
+    "refuses missing fixed RAG hint members through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validateGroundingPlan
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateGroundingPlan;
+      const input = {
+        ...planFor("Explain why the sky is blue."),
+        ragEvaluation: Array<unknown>(RAG_EVALUATION_DIMENSIONS.length),
+      };
+      expect(validate(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves inherited-present context members through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      const context = Array<string>(1);
+      const prototype = { 0: "Inherited healthy context" };
+      Object.setPrototypeOf(prototype, Array.prototype);
+      Object.setPrototypeOf(context, prototype);
+      const input = { ...validEnhancedPrompt(), context };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value.context).toBe(context);
+    },
+  );
+});
+
+import {
+  validatePromptTaskAnalysis as publicSignalAnalysis,
+  validatePromptEnhancementRequest as publicPromptRequest,
+  validateGroundingPlan as publicGroundingPlan,
+  validateEnhancedPrompt as publicEnhancedPrompt,
+  type PromptEnhancerValidation as PublicPromptValidation,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+import {
+  asPromptEnhancementRequestId as publicRequestId,
+  asEnhancedPromptId as publicEnhancedId,
+  type PromptSignalDimension,
+  type PromptEnhancementRequest as PublicPromptRequest,
+  type PromptTaskAnalysis as PublicPromptAnalysis,
+  type GroundingPlan as PublicGroundingPlan,
+  type EnhancedPrompt as PublicEnhancedPrompt,
+  type PromptEnhancementRequestId as PublicRequestId,
+  type EnhancedPromptId as PublicEnhancedId,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+
+it("admits actual analyzer signals across all six public dimensions and refuses foreign keys (#3918)", () => {
+  const seen = new Set<PromptSignalDimension>();
+  for (const text of ["do it", "Run this command to fetch the latest results."]) {
+    const input = analyzePrompt({ ...validRequest(), input: { text, hasConnectedContext: false } });
+    const parsed = publicSignalAnalysis(input);
+    if (!parsed.ok) throw new TypeError("actual public analyzer signal fixture refused");
+    expect(parsed.value).toBe(input);
+    expect(parsed.value.signals).toBe(input.signals);
+    for (const signal of parsed.value.signals) {
+      expectTypeOf(signal.dimension).toEqualTypeOf<PromptSignalDimension>();
+      seen.add(signal.dimension);
+    }
+    const refused = publicSignalAnalysis({
+      ...input,
+      signals: [{ dimension: "constructor", code: "invalid" }],
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok)
+      expect(refused.errors).toContain(
+        "analysis.signals must be an array of {dimension, code} records",
+      );
+  }
+  expect([...seen].sort()).toEqual([...PROMPT_SIGNAL_DIMENSIONS].sort());
+});
+
+export function parsePublicPromptRequest(
+  input: unknown,
+): PublicPromptValidation<PublicPromptRequest> {
+  const result = publicPromptRequest(input);
+  return result;
+}
+
+describe("Prompt request public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(validatePromptEnhancementRequest).parameter(0).toBeUnknown();
+    expectTypeOf(validatePromptEnhancementRequest).parameter(0).not.toBeAny();
+    expectTypeOf(validatePromptEnhancementRequest).returns.not.toBeAny();
+    expectTypeOf(validatePromptEnhancementRequest).returns.toEqualTypeOf<
+      PromptEnhancerValidation<PromptEnhancementRequest>
+    >();
+    expectTypeOf(publicPromptRequest).parameter(0).toBeUnknown();
+    expectTypeOf(publicPromptRequest).parameter(0).not.toBeAny();
+    expectTypeOf(publicPromptRequest).returns.not.toBeAny();
+    expectTypeOf(publicPromptRequest).returns.not.toBeUnknown();
+    expectTypeOf(publicPromptRequest).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptRequest>
+    >();
+    expectTypeOf(parsePublicPromptRequest).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicPromptRequest).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicPromptRequest).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptRequest>
+    >();
+  });
+  it("pins independent public nested output fields", () => {
+    const result = publicPromptRequest(validRequest());
+    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
+    if (!result.ok) {
+      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
+      return;
+    }
+    expectTypeOf(result.value).not.toBeAny();
+    expectTypeOf(result.value).not.toBeUnknown();
+    expectTypeOf(result.value.requestId).not.toBeAny();
+    expectTypeOf(result.value.requestId).toEqualTypeOf<PublicRequestId>();
+    expectTypeOf<string>().not.toExtend<PublicRequestId>();
+    expectTypeOf<PublicRequestId>().not.toExtend<PublicEnhancedId>();
+    expectTypeOf(result.value.input).not.toBeAny();
+    expectTypeOf(result.value.input.text).toEqualTypeOf<string>();
+    expectTypeOf(result.value.input.attachmentCount).toEqualTypeOf<number | undefined>();
+    expectTypeOf(result.value.locale).toEqualTypeOf<string | undefined>();
+    expectTypeOf(result.value.missingInformationStrategy).toEqualTypeOf<"clarify" | "assume">();
+  });
+  it("preserves healthy public identity and owned nested fields", () => {
+    const input = { ...validRequest(), locale: undefined };
+    const result = parsePublicPromptRequest(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public prompt request refused");
+    expect(result.value).toBe(input);
+    expect(result.value.input).toBe(input.input);
+    expect(Object.hasOwn(result.value, "locale")).toBe(true);
+    expect(result.value.locale).toBeUndefined();
+    expect(Object.hasOwn(result.value, "profilePreference")).toBe(false);
+    expect(publicRequestId("request-public")).toBe("request-public");
+  });
+  it("refuses malformed public input and physical members", () => {
+    for (const input of [
+      null,
+      { ...validRequest(), requestId: "../escape" },
+      { ...validRequest(), input: { text: 42 } },
+      { ...validRequest(), missingInformationStrategy: "invent" },
+      { ...validRequest(), toolAuthority: true },
+    ]) {
+      expect(validatePromptEnhancementRequest(input).ok).toBe(false);
+      expect(publicPromptRequest(input).ok).toBe(false);
+      expect(parsePublicPromptRequest(input).ok).toBe(false);
+    }
+  });
+});
+
+export function parsePublicPromptAnalysis(
+  input: unknown,
+): PublicPromptValidation<PublicPromptAnalysis> {
+  const result = publicSignalAnalysis(input);
+  return result;
+}
+
+describe("Prompt analysis public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(validatePromptTaskAnalysis).parameter(0).toBeUnknown();
+    expectTypeOf(validatePromptTaskAnalysis).parameter(0).not.toBeAny();
+    expectTypeOf(validatePromptTaskAnalysis).returns.not.toBeAny();
+    expectTypeOf(validatePromptTaskAnalysis).returns.toEqualTypeOf<
+      PromptEnhancerValidation<PromptTaskAnalysis>
+    >();
+    expectTypeOf(publicSignalAnalysis).parameter(0).toBeUnknown();
+    expectTypeOf(publicSignalAnalysis).parameter(0).not.toBeAny();
+    expectTypeOf(publicSignalAnalysis).returns.not.toBeAny();
+    expectTypeOf(publicSignalAnalysis).returns.not.toBeUnknown();
+    expectTypeOf(publicSignalAnalysis).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptAnalysis>
+    >();
+    expectTypeOf(parsePublicPromptAnalysis).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicPromptAnalysis).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicPromptAnalysis).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicPromptAnalysis>
+    >();
+  });
+  it("pins independent public nested output fields", () => {
+    const result = publicSignalAnalysis(analyzePrompt(validRequest()));
+    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
+    if (!result.ok) {
+      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
+      return;
+    }
+    expectTypeOf(result.value).not.toBeAny();
+    expectTypeOf(result.value).not.toBeUnknown();
+    expectTypeOf(result.value.requestId).not.toBeAny();
+    expectTypeOf(result.value.requestId).toEqualTypeOf<PublicRequestId>();
+    expectTypeOf<string>().not.toExtend<PublicRequestId>();
+    expectTypeOf(result.value.groundingNeed).not.toBeAny();
+    expectTypeOf(result.value.groundingNeed.volatile).toEqualTypeOf<boolean>();
+    expectTypeOf(result.value.outputSchema).not.toBeAny();
+    expectTypeOf(result.value.outputSchema.structured).toEqualTypeOf<boolean>();
+    expectTypeOf(result.value.normalizedInputLength).toEqualTypeOf<number>();
+    expectTypeOf(result.value.signals).not.toBeAny();
+    for (const signal of result.value.signals) {
+      expectTypeOf(signal).not.toBeAny();
+      expectTypeOf(signal.dimension).not.toBeAny();
+      expectTypeOf(signal.dimension).toEqualTypeOf<PromptSignalDimension>();
+      expectTypeOf(signal.code).toEqualTypeOf<string>();
+    }
+  });
+  it("preserves healthy public identity and owned nested fields", () => {
+    const input = analyzePrompt({
+      ...validRequest(),
+      input: { text: "do it", hasConnectedContext: false },
+    });
+    const result = parsePublicPromptAnalysis(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public prompt analysis refused");
+    expect(result.value).toBe(input);
+    expect(result.value.groundingNeed).toBe(input.groundingNeed);
+    expect(result.value.outputSchema).toBe(input.outputSchema);
+    expect(result.value.signals).toBe(input.signals);
+    expect(result.value.missingContext).toBe(input.missingContext);
+  });
+  it("refuses malformed public input and physical members", () => {
+    const analysis = analyzePrompt(validRequest());
+    for (const input of [
+      null,
+      { ...analyzePrompt(validRequest()), requestId: "../escape" },
+      {
+        ...analysis,
+        groundingNeed: { ...analysis.groundingNeed, volatile: "no" },
+      },
+      { ...analyzePrompt(validRequest()), signals: Array<unknown>(1) },
+      { ...analyzePrompt(validRequest()), riskFlags: ["foreign"] },
+      { ...analyzePrompt(validRequest()), normalizedInputLength: -1 },
+    ]) {
+      expect(validatePromptTaskAnalysis(input).ok).toBe(false);
+      expect(publicSignalAnalysis(input).ok).toBe(false);
+      expect(parsePublicPromptAnalysis(input).ok).toBe(false);
+    }
+  });
+});
+
+export function parsePublicPromptGrounding(
+  input: unknown,
+): PublicPromptValidation<PublicGroundingPlan> {
+  const result = publicGroundingPlan(input);
+  return result;
+}
+
+describe("Prompt grounding public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(validateGroundingPlan).parameter(0).toBeUnknown();
+    expectTypeOf(validateGroundingPlan).parameter(0).not.toBeAny();
+    expectTypeOf(validateGroundingPlan).returns.not.toBeAny();
+    expectTypeOf(validateGroundingPlan).returns.toEqualTypeOf<
+      PromptEnhancerValidation<GroundingPlan>
+    >();
+    expectTypeOf(publicGroundingPlan).parameter(0).toBeUnknown();
+    expectTypeOf(publicGroundingPlan).parameter(0).not.toBeAny();
+    expectTypeOf(publicGroundingPlan).returns.not.toBeAny();
+    expectTypeOf(publicGroundingPlan).returns.not.toBeUnknown();
+    expectTypeOf(publicGroundingPlan).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicGroundingPlan>
+    >();
+    expectTypeOf(parsePublicPromptGrounding).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicPromptGrounding).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicPromptGrounding).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicGroundingPlan>
+    >();
+  });
+  it("pins independent public nested output fields", () => {
+    const result = publicGroundingPlan(planFor("Explain the latest security guidance."));
+    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
+    if (!result.ok) {
+      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
+      return;
+    }
+    expectTypeOf(result.value).not.toBeAny();
+    expectTypeOf(result.value).not.toBeUnknown();
+    expectTypeOf(result.value.untrustedContent).toEqualTypeOf<true>();
+    expectTypeOf(result.value.required).toEqualTypeOf<boolean>();
+    expectTypeOf(result.value.citation).not.toBeAny();
+    expectTypeOf(result.value.citation.granularity).toEqualTypeOf<
+      "per-claim" | "per-section" | "none"
+    >();
+    expectTypeOf(result.value.recency).not.toBeAny();
+    expectTypeOf(result.value.recency.volatile).toEqualTypeOf<boolean>();
+    expectTypeOf(result.value.sourcePriority).not.toBeAny();
+    for (const source of result.value.sourcePriority) {
+      expectTypeOf(source).not.toBeAny();
+      expectTypeOf(source.priority).toEqualTypeOf<number>();
+      expectTypeOf(source.required).toEqualTypeOf<boolean>();
+    }
+  });
+  it("preserves healthy public identity and owned nested fields", () => {
+    const input = planFor("Explain the latest security guidance.");
+    const result = parsePublicPromptGrounding(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public grounding plan refused");
+    expect(result.value).toBe(input);
+    expect(result.value.citation).toBe(input.citation);
+    expect(result.value.recency).toBe(input.recency);
+    expect(result.value.sourcePriority).toBe(input.sourcePriority);
+    expect(result.value.directives).toBe(input.directives);
+  });
+  it("refuses malformed public input and physical members", () => {
+    for (const input of [
+      null,
+      { ...validEnhancedPrompt().groundingPlan, untrustedContent: false },
+      { ...validEnhancedPrompt().groundingPlan, sourcePriority: Array<unknown>(1) },
+      {
+        ...validEnhancedPrompt().groundingPlan,
+        citation: { discipline: "required", granularity: "none" },
+      },
+      { ...validEnhancedPrompt().groundingPlan, directives: ["grant-authority"] },
+    ]) {
+      expect(validateGroundingPlan(input).ok).toBe(false);
+      expect(publicGroundingPlan(input).ok).toBe(false);
+      expect(parsePublicPromptGrounding(input).ok).toBe(false);
+    }
+  });
+});
+
+export function parsePublicEnhancedPrompt(
+  input: unknown,
+): PublicPromptValidation<PublicEnhancedPrompt> {
+  const result = publicEnhancedPrompt(input);
+  return result;
+}
+
+describe("Enhanced prompt public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf(validateEnhancedPrompt).parameter(0).toBeUnknown();
+    expectTypeOf(validateEnhancedPrompt).parameter(0).not.toBeAny();
+    expectTypeOf(validateEnhancedPrompt).returns.not.toBeAny();
+    expectTypeOf(validateEnhancedPrompt).returns.toEqualTypeOf<
+      PromptEnhancerValidation<EnhancedPrompt>
+    >();
+    expectTypeOf(publicEnhancedPrompt).parameter(0).toBeUnknown();
+    expectTypeOf(publicEnhancedPrompt).parameter(0).not.toBeAny();
+    expectTypeOf(publicEnhancedPrompt).returns.not.toBeAny();
+    expectTypeOf(publicEnhancedPrompt).returns.not.toBeUnknown();
+    expectTypeOf(publicEnhancedPrompt).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicEnhancedPrompt>
+    >();
+    expectTypeOf(parsePublicEnhancedPrompt).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicEnhancedPrompt).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicEnhancedPrompt).returns.toEqualTypeOf<
+      PublicPromptValidation<PublicEnhancedPrompt>
+    >();
+  });
+  it("pins independent public nested output fields", () => {
+    const result = publicEnhancedPrompt(validEnhancedPrompt());
+    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
+    if (!result.ok) {
+      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
+      return;
+    }
+    expectTypeOf(result.value).not.toBeAny();
+    expectTypeOf(result.value).not.toBeUnknown();
+    expectTypeOf(result.value.promptId).not.toBeAny();
+    expectTypeOf(result.value.promptId).toEqualTypeOf<PublicEnhancedId>();
+    expectTypeOf<string>().not.toExtend<PublicEnhancedId>();
+    expectTypeOf<PublicEnhancedId>().not.toExtend<PublicRequestId>();
+    expectTypeOf(result.value.context).toEqualTypeOf<readonly string[]>();
+    expectTypeOf(result.value.groundingPlan).not.toBeAny();
+    expectTypeOf(result.value.groundingPlan.untrustedContent).toEqualTypeOf<true>();
+    expectTypeOf(result.value.outputSchema).not.toBeAny();
+    expectTypeOf(result.value.outputSchema.structured).toEqualTypeOf<boolean>();
+  });
+  it("preserves healthy public identity and owned nested fields", () => {
+    const input = validEnhancedPrompt();
+    const result = parsePublicEnhancedPrompt(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public enhanced prompt refused");
+    expect(result.value).toBe(input);
+    expect(result.value.groundingPlan).toBe(input.groundingPlan);
+    expect(result.value.context).toBe(input.context);
+    expect(result.value.outputSchema).toBe(input.outputSchema);
+    expect(publicEnhancedId("prompt-public")).toBe("prompt-public");
+  });
+  it("refuses malformed public input and physical members", () => {
+    for (const input of [
+      null,
+      { ...validEnhancedPrompt(), promptId: "../escape" },
+      { ...validEnhancedPrompt(), context: Array<unknown>(1) },
+      {
+        ...validEnhancedPrompt(),
+        groundingPlan: { ...validEnhancedPrompt().groundingPlan, untrustedContent: false },
+      },
+      {
+        ...validEnhancedPrompt(),
+        outputSchema: { format: "foreign", structured: false, hints: [] },
+      },
+    ]) {
+      expect(validateEnhancedPrompt(input).ok).toBe(false);
+      expect(publicEnhancedPrompt(input).ok).toBe(false);
+      expect(parsePublicEnhancedPrompt(input).ok).toBe(false);
+    }
   });
 });

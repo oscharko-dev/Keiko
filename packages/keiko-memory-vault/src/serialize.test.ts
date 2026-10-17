@@ -7,6 +7,12 @@ import type {
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { randomBytes } from "node:crypto";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { createMemoryVault } from "./vault.js";
+import { MEMORY_DB_FILENAME } from "./paths.js";
 import { MemoryStorageError } from "./errors.js";
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
 import { createMemoryContentCipher } from "./cipher.js";
@@ -196,5 +202,108 @@ describe("rowToMemoryRecord — defensive parsing", () => {
     };
     expect(() => rowToMemoryRecord(row, cipher)).toThrow(MemoryStorageError);
     expect(() => rowToMemoryRecord(row, cipher)).toThrow(/scope kind is not recognized/i);
+  });
+});
+
+describe("stored Memory contract admission (#3918)", () => {
+  it.each([
+    ["schema_version", "2"],
+    ["type", "private-type-canary"],
+    ["status", "private-status-canary"],
+    ["sensitivity", "private-sensitivity-canary"],
+    ["source_kind", "private-source-canary"],
+    ["confidence", 2],
+    ["captured_at", -1],
+    ["created_at", -1],
+    ["updated_at", 1],
+    ["scope_coordinate", ""],
+  ])("refuses the independently malformed %s field", (column, value) => {
+    const row = { ...memoryRecordToRow(baseRecord(), cipher), [column]: value };
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(
+      expect.objectContaining({ code: "schema-mismatch" }),
+    );
+  });
+
+  it.each([
+    { kind: "string-list", items: [12] },
+    { kind: "string-list" },
+    { kind: "key-value", entries: [{ key: "ok", value: 12 }] },
+    { kind: "private-payload-kind-canary", items: [] },
+  ])("refuses correctly sealed malformed structured payload %#", (payload) => {
+    const row = {
+      ...memoryRecordToRow(baseRecord(), cipher),
+      payload_json: cipher.sealString(JSON.stringify(payload)),
+    };
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(
+      expect.objectContaining({ code: "schema-mismatch" }),
+    );
+  });
+
+  it("preserves legacy plaintext, exact pinned and ignored optional-column semantics", () => {
+    const record = { ...baseRecord(), scope: { kind: "global" } } satisfies MemoryRecord;
+    const row = {
+      ...memoryRecordToRow(record, cipher),
+      body: record.body,
+      tags_json: JSON.stringify(record.tags),
+      pinned: 2,
+      scope_coordinate: "ignored-global-coordinate",
+      model_provider: "partial-provider",
+      model_id: null,
+      model_revision: "ignored-partial-revision",
+      retention_policy_key: null,
+      retention_retain_until: -1,
+      retention_notes: "ignored-orphan-note",
+    };
+    const decoded = rowToMemoryRecord(row, cipher);
+    expect(decoded).toEqual(record);
+    expect(decoded.provenance).not.toHaveProperty("modelIdentity");
+    expect(decoded).not.toHaveProperty("retentionHint");
+    expect(rowToMemoryRecord({ ...row, pinned: 1 }, cipher).pinned).toBe(true);
+    expect(
+      rowToMemoryRecord({ ...row, model_provider: null, model_id: "partial-model" }, cipher),
+    ).not.toHaveProperty("provenance.modelIdentity");
+  });
+
+  it.each([
+    ["schema_version", "2"],
+    ["type", "private-type-canary"],
+    ["status", "private-status-canary"],
+    ["source_kind", "private-source-canary"],
+    ["sensitivity", "private-sensitivity-canary"],
+  ])("refuses a single %s mutation after actual writer close and vault reopen", (column, value) => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-admission-"));
+    const open = (): ReturnType<typeof createMemoryVault> =>
+      createMemoryVault({ memoryDir, cipher, redactString: (text) => text });
+    try {
+      const writer = open();
+      try {
+        writer.insertMemory(baseRecord());
+        expect(writer.getMemory(baseRecord().id)).toEqual(baseRecord());
+        expect(writer.listMemoriesByScope(baseRecord().scope)).toEqual([baseRecord()]);
+      } finally {
+        writer.close();
+      }
+      const database = new DatabaseSync(join(memoryDir, MEMORY_DB_FILENAME));
+      try {
+        database
+          .prepare(`UPDATE memories SET ${column} = ? WHERE id = ?`)
+          .run(value, baseRecord().id);
+      } finally {
+        database.close();
+      }
+      const reopened = open();
+      try {
+        expect(() => reopened.getMemory(baseRecord().id)).toThrow(
+          expect.objectContaining({ code: "internal" }),
+        );
+        expect(() => reopened.listMemoriesByScope(baseRecord().scope)).toThrow(
+          /m-1 is unreadable/u,
+        );
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(memoryDir, { recursive: true, force: true });
+    }
   });
 });
