@@ -2360,7 +2360,11 @@
       "id": "coding-runtime-question-answer-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
@@ -2419,7 +2423,11 @@
       "id": "coding-runtime-questions-response-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
@@ -2474,7 +2482,11 @@
       "id": "coding-runtime-questions-channel-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
@@ -2533,7 +2545,11 @@
       "id": "coding-runtime-research-channel-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research",

@@ -718,9 +718,14 @@ trust boundaries. Test-only public wrappers pin source/public return types, orig
 identity, optional presence, exact eager errors and existing getter phases. The actual runtime
 list port rejects malformed projections; coordinator and route proofs retain revision/replay,
 live authority, authenticated reads and content-free unpaired projections. Validating research
-payload structure grants no network, model or approval authority. No production API, resolver,
-rule scope or optional dictionary/typeof adaptation is added. Qualification of these exact roots
-does not establish domain zero or discharge the remaining accepted-owner obligations.
+payload structure grants no network, model or approval authority. These four existing records also
+declare the optional raw-origin typeof and dictionary rules through the existing public-parser
+checker. Only exact eligible checker slots backed by executed public proofs may qualify; declaring
+a rule does not grant body-wide coverage, foreign/shared helpers, narrowed operands or overloaded
+callables. Runtime API and approval-review validators have no records in this cohort. The 107-record
+register, every other record and rule scope remain unchanged. No production API, resolver or
+authority changes. Qualification of these exact roots does not establish domain zero or discharge
+the remaining accepted-owner obligations.
 
 Two governance public validators extend the register from 49 to 51 mandatory unknown-parameter
 obligations: GovernedActionV1 and CodeTaskExecutionV1. Their unknown input remains a genuine

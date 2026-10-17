@@ -803,7 +803,11 @@ describe("Workbench question and research responsibility wiring (#3918)", () => 
     ]);
     for (const record of records) {
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input.parameterIndex).toBe(0);
       expect(record.transform).toEqual(record.output);
       expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
