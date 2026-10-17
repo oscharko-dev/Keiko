@@ -16,6 +16,20 @@ import {
   qualifiedDeclarationBytes,
 } from "./code-quality-provenance.mjs";
 
+// Only these module-created cardinality refusals may withhold a collective group.
+const collectiveHelperBudgetErrors = new WeakMap();
+
+function collectiveHelperBudgetError(limit, observedCount) {
+  const error = new TypeError("symbol-alias-budget");
+  collectiveHelperBudgetErrors.set(error, { limit, observedCount });
+  return error;
+}
+
+export function collectiveHelperBudgetDetails(error) {
+  const details = collectiveHelperBudgetErrors.get(error);
+  return details ? { ...details } : null;
+}
+
 function typeFacts(type) {
   const flags = type.flags;
   if ((flags & ts.TypeFlags.Unknown) !== 0) return { kind: "unknown" };
@@ -2328,7 +2342,7 @@ function rawCallArguments(state, target, call, states, queue) {
     const { candidate, origin } = edge;
     if (!states.has(candidate.key)) {
       if (state.collective && states.size >= state.compiler.state.limits.aliases)
-        throw new TypeError("symbol-alias-budget");
+        throw collectiveHelperBudgetError(state.compiler.state.limits.aliases, states.size + 1);
       states.set(candidate.key, candidate);
       queue.push(candidate);
     }
@@ -2612,7 +2626,7 @@ function collectiveRawGraph(compiler, requests) {
     const state = collectiveRawRoot(compiler, request);
     if (!state) continue;
     if (!states.has(state.key) && states.size >= compiler.state.limits.aliases)
-      throw new TypeError("symbol-alias-budget");
+      throw collectiveHelperBudgetError(compiler.state.limits.aliases, states.size + 1);
     states.set(state.key, state);
     roots.set(state.key, [...(roots.get(state.key) ?? []), request.recordId]);
   }
@@ -2660,7 +2674,8 @@ function collectiveStateSlots(state) {
 function collectiveRawCheckingSlots(compiler, requests, rule) {
   compiler.assertCurrent();
   if (requests.length === 0) return [];
-  if (requests.length > compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  if (requests.length > compiler.state.limits.aliases)
+    throw collectiveHelperBudgetError(compiler.state.limits.aliases, requests.length);
   const { states, roots } = collectiveRawGraph(compiler, requests);
   if (roots.size === 0) return [];
   const first = states.get(roots.keys().next().value);

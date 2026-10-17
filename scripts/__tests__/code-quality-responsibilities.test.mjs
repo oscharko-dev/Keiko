@@ -3191,3 +3191,171 @@ describe("raw canonical JSON decoder fresh semantic qualification (#3918)", () =
     195_000,
   );
 });
+
+async function collectiveCapacityFixture() {
+  const own = createCollectiveParserFixture("cardinality", ["anti-slop/no-runtime-typeof"]);
+  roots.push(own.root);
+  const subject = await collectPolicySubject(own.root);
+  const resolver = createSymbolResolver(subject, {}, [
+    { owner: "packages/alpha", paths: [own.records[0].consumer.consumerPath] },
+  ]);
+  try {
+    const legacy = own.records.map((record) => {
+      const identity = resolver.resolveProofExport(record.input).identities[0];
+      return resolver
+        .rawCheckingSlots(identity, 0)
+        .filter((slot) => record.rules.includes(slot.rule));
+    });
+    return { own, subject, legacy };
+  } finally {
+    resolver.close();
+  }
+}
+
+function expectWithheldCapacity(assessment) {
+  expect(assessment.helperClosures).toEqual(
+    ["anti-slop/no-runtime-typeof", "anti-slop/no-unknown-parameters"].map((rule) => ({
+      status: "withheld",
+      reason: "collective-helper-budget-exhausted",
+      owner: "alpha",
+      sourcePath: "packages/alpha/src/owner.ts",
+      rule,
+      rootCount: 2,
+      limit: 64,
+      observedCount: 65,
+    })),
+  );
+}
+
+async function interceptCollectiveAttempt(intercept) {
+  const symbols = await import("../lib/code-quality-symbols.mjs");
+  const original = symbols.createSymbolResolver;
+  vi.spyOn(symbols, "createSymbolResolver").mockImplementation((...args) => {
+    const resolver = original(...args);
+    const collect = resolver.collectiveRawCheckingSlots;
+    resolver.collectiveRawCheckingSlots = (...call) => intercept(collect, call);
+    return resolver;
+  });
+}
+
+describe("collective capacity partial applicability (#3918)", () => {
+  it("retains independent roots and every legacy slot when the finite group exceeds 64", async () => {
+    const { own, subject, legacy } = await collectiveCapacityFixture();
+    expect(legacy.every((slots) => slots.length > 32)).toBe(true);
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.counts).toMatchObject({ ready: 2, pending: 2, qualified: 0 });
+    expect(report.assessments.map((record) => record.slots)).toEqual(legacy);
+    for (const assessment of report.assessments) {
+      expect(assessment.reasons).toEqual([]);
+      expect(assessment.obligations).toEqual([
+        "runtime-proof-not-evaluated",
+        "consumer-proof-not-evaluated",
+      ]);
+      expectWithheldCapacity(assessment);
+      expect(
+        assessment.slots.every((slot) => !Object.hasOwn(slot, "contributingResponsibilityIds")),
+      ).toBe(true);
+    }
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+  }, 60_000);
+
+  it("keeps real helper and downstream native violations active with deterministic omissions", async () => {
+    const { own } = await collectiveCapacityFixture();
+    const report = await executeCodeQualityPolicy(
+      { mode: "enforce", scope: "repository", json: true },
+      own.root,
+    );
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const downstream =
+      source.split("\n").findIndex((line) => line.includes("function downstream")) + 1;
+    expect(report.violations).toContainEqual(
+      expect.objectContaining({ rule: "anti-slop/no-unknown-parameters", line: downstream }),
+    );
+    expect(report.violations).toContainEqual(
+      expect.objectContaining({ rule: "anti-slop/no-runtime-typeof", line: downstream }),
+    );
+    expect(report.enforcementOutcome).toBe("failed");
+    for (const assessment of report.responsibilities.assessments)
+      expectWithheldCapacity(assessment);
+    own.policy.responsibilities.reverse();
+    own.put("scripts/code-quality-policy.json", own.policy);
+    const reversed = await executeCodeQualityPolicy(
+      { mode: "enforce", scope: "repository", json: true },
+      own.root,
+    );
+    expect(reversed.violations).toEqual(report.violations);
+    expect(reversed.adaptations).toEqual(report.adaptations);
+    const byId = (records) =>
+      Object.fromEntries(records.map((record) => [record.id, record.helperClosures]));
+    expect(byId(reversed.responsibilities.assessments)).toEqual(
+      byId(report.responsibilities.assessments),
+    );
+  }, 90_000);
+
+  it.each([new TypeError("symbol-alias-budget"), new Error("unexpected collector failure")])(
+    "propagates an untagged collective exception rather than matching its message",
+    async (error) => {
+      const own = createCollectiveParserFixture();
+      roots.push(own.root);
+      const subject = await collectPolicySubject(own.root);
+      await interceptCollectiveAttempt(() => {
+        throw error;
+      });
+      expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(error);
+    },
+    30_000,
+  );
+
+  it("rechecks actual source currentness after an owned capacity refusal", async () => {
+    const { own, subject } = await collectiveCapacityFixture();
+    await interceptCollectiveAttempt((collect, args) => {
+      try {
+        return collect(...args);
+      } catch (error) {
+        const path = join(own.root, "packages/alpha/src/owner.ts");
+        writeFileSync(path, readFileSync(path, "utf8") + "\n");
+        throw error;
+      }
+    });
+    expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 60_000);
+
+  it("does not add optional omission metadata to unaffected existing records", async () => {
+    const own = createCollectiveParserFixture();
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.counts.ready).toBe(2);
+    expect(report.assessments.every((record) => !Object.hasOwn(record, "helperClosures"))).toBe(
+      true,
+    );
+  }, 30_000);
+
+  it.skipIf(process.platform === "win32")(
+    "preserves omission diagnostics through actual semantic completion without clearing violations",
+    async () => {
+      const own = await collectiveSemanticFixture("cardinality");
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(report.responsibilities.counts).toMatchObject({ ready: 2, qualified: 2, pending: 0 });
+      for (const assessment of report.responsibilities.assessments) {
+        expect(assessment.reasons).toEqual([]);
+        expect(assessment.obligations).toEqual([]);
+        expect(assessment.proofs.every((proof) => proof.executed)).toBe(true);
+        expect(assessment.helperClosures).toHaveLength(3);
+        expect(
+          assessment.helperClosures.every(
+            (closure) =>
+              closure.reason === "collective-helper-budget-exhausted" && closure.limit === 64,
+          ),
+        ).toBe(true);
+      }
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.violations.length).toBeGreaterThan(0);
+      const roundTrip = JSON.parse(JSON.stringify(report));
+      expect(roundTrip.responsibilities).toEqual(report.responsibilities);
+    },
+    195_000,
+  );
+});

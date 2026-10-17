@@ -2770,3 +2770,55 @@ describe("qualified value-star public declaration entries (#3918)", () => {
     expect(() => resolver.resolveProofExport(starRequest)).toThrow("symbol-subject-changed");
   }, 30_000);
 });
+
+describe("owner-tagged collective cardinality errors (#3918)", () => {
+  it("preserves low-level TypeError refusal and exposes only copied factory-owned counts", async () => {
+    const own = await collectiveSymbolFixture("cardinality");
+    const { collectiveHelperBudgetDetails } = await import("../lib/code-quality-symbols.mjs");
+    let refusal;
+    try {
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters");
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal.message).toBe("symbol-alias-budget");
+    expect(collectiveHelperBudgetDetails(refusal)).toEqual({ limit: 64, observedCount: 65 });
+    const copy = collectiveHelperBudgetDetails(refusal);
+    copy.limit = 999;
+    expect(collectiveHelperBudgetDetails(refusal)).toEqual({ limit: 64, observedCount: 65 });
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(
+        Array(65).fill(own.rawRoots[0]),
+        "anti-slop/no-unknown-parameters",
+      ),
+    ).toThrow("symbol-alias-budget");
+  }, 30_000);
+
+  it("does not inspect counterfeit exception properties or confuse source and cycle errors", async () => {
+    const { collectiveHelperBudgetDetails } = await import("../lib/code-quality-symbols.mjs");
+    const counterfeit = new Proxy(new TypeError("symbol-alias-budget"), {
+      get: () => {
+        throw new Error("exception property inspected");
+      },
+      getPrototypeOf: () => {
+        throw new Error("exception prototype inspected");
+      },
+    });
+    for (const error of [
+      counterfeit,
+      new TypeError("symbol-alias-budget"),
+      null,
+      "symbol-alias-budget",
+    ])
+      expect(collectiveHelperBudgetDetails(error)).toBeNull();
+    const cycle = await collectiveSymbolFixture("cycle");
+    try {
+      cycle.resolver.collectiveRawCheckingSlots(cycle.rawRoots, "anti-slop/no-unknown-parameters");
+      throw new Error("cycle unexpectedly accepted");
+    } catch (error) {
+      expect(error.message).toBe("unsupported-raw-helper-cycle");
+      expect(collectiveHelperBudgetDetails(error)).toBeNull();
+    }
+  }, 30_000);
+});

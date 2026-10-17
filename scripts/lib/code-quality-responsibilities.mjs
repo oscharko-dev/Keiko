@@ -2,7 +2,11 @@ import {
   executeResponsibilityProofs,
   responsibilityProofToolIdentity,
 } from "./code-quality-responsibility-proofs.mjs";
-import { createSymbolResolver, exportFactKey } from "./code-quality-symbols.mjs";
+import {
+  createSymbolResolver,
+  exportFactKey,
+  collectiveHelperBudgetDetails,
+} from "./code-quality-symbols.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
 function inventoryFile(subject, path) {
@@ -430,7 +434,16 @@ function joinPublicParserSlots(policy, assessments, resolver) {
   for (const { roots, rule } of groups.values()) {
     // A single root already has the unchanged legacy closure; only a join needs another graph.
     if (roots.length < 2) continue;
-    const slots = resolver.collectiveRawCheckingSlots(roots, rule);
+    let slots;
+    try {
+      slots = resolver.collectiveRawCheckingSlots(roots, rule);
+    } catch (error) {
+      const capacity = collectiveHelperBudgetDetails(error);
+      if (!capacity) throw error;
+      resolver.assertCurrent();
+      withholdCollectiveGroup(assessments, roots, rule, capacity);
+      continue;
+    }
     for (const slot of slots) {
       const assessment = assessments.find(
         (entry) => entry.id === slot.contributingResponsibilityIds[0],
@@ -442,6 +455,26 @@ function joinPublicParserSlots(policy, assessments, resolver) {
       if (existing === -1) assessment.slots.push(slot);
       else assessment.slots[existing] = slot;
     }
+  }
+}
+
+function withholdCollectiveGroup(assessments, roots, rule, capacity) {
+  const identity = roots[0].identity;
+  const closure = {
+    status: "withheld",
+    reason: "collective-helper-budget-exhausted",
+    owner: identity.owner,
+    sourcePath: identity.producer.path,
+    rule,
+    rootCount: roots.length,
+    limit: capacity.limit,
+    observedCount: capacity.observedCount,
+  };
+  for (const { recordId } of roots) {
+    const assessment = assessments.find((entry) => entry.id === recordId);
+    assessment.helperClosures = [...(assessment.helperClosures ?? []), { ...closure }].sort(
+      (left, right) => compareStrings(JSON.stringify(left), JSON.stringify(right)),
+    );
   }
 }
 

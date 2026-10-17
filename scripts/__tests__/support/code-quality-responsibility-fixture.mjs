@@ -91,6 +91,7 @@ ${third}`;
 
 function collectiveParserVariant(source, variant) {
   const variants = {
+    cardinality: collectiveCardinalityOwner(source),
     "public-alias": source,
     "public-const-alias": source
       .replace(
@@ -126,6 +127,29 @@ function collectiveParserVariant(source, variant) {
     deferred: source + "\nconst delayed = (): boolean => isRecord({});\n",
   };
   return variants[variant] ?? collectiveParserMutation(source, variant);
+}
+
+function collectiveCardinalityOwner(source) {
+  const helpers = [];
+  for (const name of ["first", "second"]) {
+    const checks = [];
+    for (let index = 0; index < 32; index += 1) {
+      const helper = `${name}Gate${String(index)}`;
+      checks.push(`${helper}(input)`);
+      helpers.push(`function ${helper}(input: unknown): boolean { return downstream(input); }`);
+    }
+    source = source.replace(
+      `export function ${name}(input: unknown): ParseResult {`,
+      `export function ${name}(input: unknown): ParseResult {
+` + `  if (!(${checks.join(" && ")})) return { ok: false, errors: ["invalid"] };`,
+    );
+  }
+  return (
+    source +
+    "\n" +
+    helpers.join("\n") +
+    '\nfunction downstream(input: unknown): boolean { return typeof input === "object"; }\n'
+  );
 }
 
 function collectiveParserMutation(source, variant) {

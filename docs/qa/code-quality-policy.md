@@ -394,6 +394,22 @@ diagnostics stay enforced. Helper state identity includes the canonical owner/so
 and parameter, not only a source offset. Shared slots retain all contributing responsibility ids
 in sorted order and use deterministic attribution independent of record order.
 
+A collective cardinality refusal preserves the independently assessed legacy root slots and adds
+no slots from the entire failed collective group, including its first 64 states. Only the three
+owner-created request/root/discovered-state cardinality errors are eligible; their low-level
+`TypeError("symbol-alias-budget")` and the existing limit remain unchanged. The join rechecks source
+currentness before recording the omission. General alias traversal, depth, cycles, source drift and
+unexpected exceptions still propagate.
+
+Affected records carry optional `helperClosures` entries with the closed fields `status: "withheld"`,
+`reason: "collective-helper-budget-exhausted"`, canonical `owner`, `sourcePath`, `rule`, `rootCount`,
+`limit` and `observedCount`. Counts come only from the module-owned refusal factory, never arbitrary
+exception properties. `observedCount` is the attempted cardinality at refusal, not a census of the
+unexplored remainder. Entries are deterministically ordered, survive semantic completion/report
+round-trips, and are absent when no group is withheld. They do not change root `reasons` or semantic
+`obligations`: a qualified root does not establish complete helper coverage. Unmatched helper and
+downstream diagnostics remain enforced; a capacity refusal cannot authorize scope activation.
+
 This is structural applicability: default static reports still have pending semantics, zero
 qualified records and unexecuted proofs. Fresh actual public runtime qualification remains required
 before scope activation or acceptance. The legacy single-root closure and its second-caller refusal
