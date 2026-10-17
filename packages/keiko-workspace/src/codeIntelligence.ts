@@ -5668,7 +5668,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
 
 // Request-local callers already share one promise. Yield between bounded source batches and
 // graph stages without splitting the index or weakening the descriptor/authority checks.
-export async function buildCodeIntelligenceIndexFromCandidatesAsync(
+export function buildCodeIntelligenceIndexFromCandidatesAsync(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
@@ -5676,17 +5676,30 @@ export async function buildCodeIntelligenceIndexFromCandidatesAsync(
   deps?: InternalBuildDeps,
 ): Promise<CodeIntelligenceIndex> {
   const steps = codeIntelligenceBuildSteps(scope, limits, fs, candidateSet, deps);
+  return new Promise((resolve, reject) => {
+    const advance = (): void => {
+      try {
+        const step = advanceCodeIntelligenceBatch(steps);
+        if (step.done) resolve(step.value);
+        else setImmediate(advance);
+      } catch (error) {
+        reject(
+          error instanceof Error ? error : new Error("Code index build failed", { cause: error }),
+        );
+      }
+    };
+    advance();
+  });
+}
+
+function advanceCodeIntelligenceBatch(
+  steps: Generator<"source" | "stage", CodeIntelligenceIndex, void>,
+): IteratorResult<"source" | "stage", CodeIntelligenceIndex> {
   let step = steps.next();
-  let batchSize = 0;
-  while (!step.done) {
-    batchSize += 1;
-    if (step.value === "stage" || batchSize >= 32) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      batchSize = 0;
-    }
+  for (let size = 1; !step.done && step.value !== "stage" && size < 32; size += 1) {
     step = steps.next();
   }
-  return step.value;
+  return step;
 }
 
 function* codeIntelligenceBuildSteps(
