@@ -2140,25 +2140,79 @@ function consumerParticipatingCalls(compiler, state) {
   return calls;
 }
 
-function consumerStates(compiler, implementation) {
-  const nodes = [];
-  visitCompilerNodes(compiler.state, implementation.source, (node) => nodes.push(node));
+function consumerIndexTarget(compiler, source, node) {
+  const initializer = aliasInitializer(node);
+  const callable = initializer ? rawParentheses(initializer) : node;
+  return runtimeCallable(callable) ? rawCallableTarget(compiler, source, node, callable) : null;
+}
+
+function consumerStateIndex(compiler, implementation) {
+  const nodes = sourceNodes(compiler, implementation.source);
   const root = {
     ...implementation,
     compiler,
     nodes,
     declaration: implementation.callable,
     incoming: [],
+    outgoing: [],
   };
   root.key = root.identity.producer.start;
   const states = new Map([[root.key, root]]);
+  for (const node of nodes) {
+    const target = consumerIndexTarget(compiler, root.source, node);
+    if (!target || exportedDeclaration(target.declaration)) continue;
+    const key = target.identity.producer.start;
+    if (!states.has(key)) states.set(key, { ...root, ...target, key, incoming: [], outgoing: [] });
+  }
   for (const state of states.values()) {
     state.calls = consumerParticipatingCalls(compiler, state);
     for (const call of state.calls) consumerEdge(state, call, states);
   }
+  return { root, states };
+}
+
+function consumerReachableKeys(root, states) {
+  const reachable = new Set([root.key]);
+  for (const key of reachable) for (const target of states.get(key).outgoing) reachable.add(target);
+  return reachable;
+}
+
+function consumerWitnessKeys(compiler, states, reachable, producer) {
+  return [...states.values()]
+    .filter((state) => reachable.has(state.key))
+    .filter((state) =>
+      state.calls.some((call) => canonicalCall(compiler, state.context, call.expression, producer)),
+    )
+    .map((state) => state.key);
+}
+
+function consumerContributingKeys(root, states, reachable, witnesses) {
+  const keys = new Set(witnesses).add(root.key);
+  for (const key of keys)
+    for (const edge of states.get(key).incoming)
+      if (reachable.has(edge.state)) keys.add(edge.state);
+  return keys;
+}
+
+function consumerWitnessStates(root, index, keys) {
+  if (keys.size > root.compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  const states = new Map(
+    [...keys].map((key) => {
+      const state = index.get(key);
+      return [key, { ...state, incoming: state.incoming.filter((edge) => keys.has(edge.state)) }];
+    }),
+  );
   const complete = new Set();
   for (const key of states.keys()) assertConsumerAcyclic(states, key, new Set(), complete);
   return { root, states, qualified: qualifiedRawStates(root, states) };
+}
+
+function consumerStates(compiler, implementation, producer) {
+  const { root, states } = consumerStateIndex(compiler, implementation);
+  const reachable = consumerReachableKeys(root, states);
+  const witnesses = consumerWitnessKeys(compiler, states, reachable, producer);
+  const keys = consumerContributingKeys(root, states, reachable, witnesses);
+  return consumerWitnessStates(root, states, keys);
 }
 
 function knownConsumerTarget(state, expression, states) {
@@ -2218,13 +2272,10 @@ function consumerEdge(state, call, states) {
     knownConsumerTarget(state, call.expression, states);
   if (!target) return;
   const key = target.identity.producer.start;
-  if (exportedDeclaration(target.declaration) && !states.has(key)) return;
-  if (!states.has(key)) {
-    if (states.size >= state.compiler.state.limits.aliases)
-      throw new TypeError("symbol-alias-budget");
-    states.set(key, { ...state, ...target, key, incoming: [], calls: [] });
-  }
-  states.get(key).incoming.push({ state: state.key, call });
+  const candidate = states.get(key);
+  if (!candidate) return;
+  candidate.incoming.push({ state: state.key, call });
+  state.outgoing.push(key);
 }
 
 function assertConsumerAcyclic(states, key, active, complete) {
@@ -2240,7 +2291,7 @@ function consumerCalls(compiler, identity, producer, expectedOwner) {
   const implementation = consumerImplementation(compiler, identity);
   if (implementation.identity.owner !== expectedOwner)
     throw new TypeError("foreign-responsibility-consumer-implementation");
-  const { states, qualified } = consumerStates(compiler, implementation);
+  const { states, qualified } = consumerStates(compiler, implementation, producer);
   const calls = [];
   for (const state of states.values()) {
     if (!qualified.has(state.key)) continue;

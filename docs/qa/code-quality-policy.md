@@ -1143,3 +1143,44 @@ Four canonical JavaScript success bypasses fail public refusal/count assertions 
 and refusal anchors pass; all artifacts are restored before identical first positive controls. Fresh
 complete-cohort qualification remains mandatory. Raw typeof/dictionary obligations are not granted,
 and no universal getter or throw-free behavior is asserted.
+
+### Diagnostics ingress eligibility preparation (#3918)
+
+Two source-prepared `validator` records select the existing diagnostic and binding ingest predicates
+through the canonical `runtime/diagnostics` export and the actual exported server ingest handler.
+They declare only `no-unknown-parameters`; the original111 records and every active scope remain
+unchanged. The standalone prospective count is113; serialized integration must also preserve any
+independently accepted cohort before deriving its final count.
+
+The existing contract owner adds independent source/public predicate-target, raw-input and nested
+field pins plus healthy identity and malformed admission controls. Existing server route proofs cover
+registered restoration formatting and binding admission/refusal. These are real handler consumers,
+not invented public-parser witnesses; formatter evidence is not a claim of physical disk persistence.
+
+The two records use actual default eligibility and the existing semantic proof producer. No native
+root-slot count or general helper coverage is inferred. In particular, the nine captured unknown
+known-widening observations remain unchanged and unadapted. A possible later direct Offer2 precision
+capability is separate; the exported Git terminal and optional restoration traversal are deferred,
+not waived. No production validator, writer, logging, upstream plugin or rule scope changes accompany
+this cohort. Its separate consumer-binding repair is described below.
+
+The existing consumer binding indexes its owned source under the original node/source limits, then
+selects the complete selected-root ancestry of actual canonical producer-call witnesses. It validates
+all source references of included helpers, excludes outside callers and escapes, and applies the
+unchanged64-state budget once to the union of contributing states, including the root. Target-unrelated
+logging descendants consume no witness-state grant. Alias-hop, cycle, currentness and raw-checker
+closure rules remain unchanged. This is a consumer-binding capability repair, not a native rule or
+raw-slot applicability change; incomplete helpers never contribute their producer calls. The actual
+short-witness regression first refused on the original engine, then passed unchanged after the repair.
+Finite capacity, complete incoming-reference, escape, cycle and currentness controls preserve the
+original refusal boundaries and regression pins. Both real ingress records then passed default
+eligibility; their declared unknown-parameter slots are not native diagnostic counts.
+
+The private fe68 qualification then completed both records through the existing default semantic
+producer, with five selected assertions each and both complete proof-owner files executed in one
+closed, drained child invocation. Independent canonical public predicate-target erasures and
+always-true runtime controls failed their intended public proofs; source anchors remained healthy,
+and exact restoration passed the same checks. The scoped tooling run passed874 cases with only the
+five unchanged Linux-only fallback cases skipped on macOS; the existing new-code ruler covered all
+52 new line/condition units. These are source-bound cohort results, not a complete integrated
+repository qualification or a replacement for current-head CI.

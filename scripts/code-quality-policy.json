@@ -6133,6 +6133,114 @@
           "testName": "workspace apply diagnostic public proof refuses malformed input with ordered reasons and numeric counts"
         }
       ]
+    },
+    {
+      "id": "client-diagnostic-ingress-route-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",
+        "exportName": "isClientDiagnosticIngestRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",
+        "exportName": "isClientDiagnosticIngestRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",
+        "exportName": "isClientDiagnosticIngestRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-server/src/routes.ts",
+        "specifier": "./client-diagnostics-routes.js",
+        "exportName": "handleClientDiagnosticIngest",
+        "owner": "@oscharko-dev/keiko-server"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/diagnostics.test.ts",
+        "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+          "testName": "diagnostic ingress responsibility pins independent source and public predicate targets"
+        },
+        {
+          "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+          "testName": "diagnostic ingress responsibility preserves admitted restoration identity through both predicates"
+        },
+        {
+          "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+          "testName": "diagnostic ingress responsibility refuses malformed root and restoration fields through public"
+        },
+        {
+          "path": "packages/keiko-server/src/client-diagnostics-routes.test.ts",
+          "testName": "POST /api/diagnostics/client persists a restored coding run's counts as client.coding-run.restored"
+        },
+        {
+          "path": "packages/keiko-server/src/client-diagnostics-routes.test.ts",
+          "testName": "POST /api/diagnostics/client refuses a restored coding run's report whose counts cannot describe one restoration"
+        }
+      ]
+    },
+    {
+      "id": "client-binding-ingress-route-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",
+        "exportName": "isClientBindingIngestRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",
+        "exportName": "isClientBindingIngestRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",
+        "exportName": "isClientBindingIngestRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-server/src/routes.ts",
+        "specifier": "./client-diagnostics-routes.js",
+        "exportName": "handleClientDiagnosticIngest",
+        "owner": "@oscharko-dev/keiko-server"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/diagnostics.test.ts",
+        "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+          "testName": "binding ingress responsibility pins independent source and public predicate targets"
+        },
+        {
+          "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+          "testName": "binding ingress responsibility preserves admitted offer and related correlation identities"
+        },
+        {
+          "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+          "testName": "binding ingress responsibility refuses malformed closed offers through public"
+        },
+        {
+          "path": "packages/keiko-server/src/client-diagnostics-routes.test.ts",
+          "testName": "POST /api/diagnostics/client binding evidence logs an offer at info under the list load that decided it, with its count"
+        },
+        {
+          "path": "packages/keiko-server/src/client-diagnostics-routes.test.ts",
+          "testName": "POST /api/diagnostics/client binding evidence refuses a target fingerprint on a missing binding"
+        }
+      ]
     }
   ]
 }

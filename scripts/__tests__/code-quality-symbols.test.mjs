@@ -1302,6 +1302,166 @@ describe("canonical consumer implementation call binding (#3918)", () => {
     );
   });
 
+  it("binds a short canonical witness without budgeting unrelated logging descendants", async () => {
+    const helpers = Array.from(
+      { length: 70 },
+      (_, index) => `function noise${index}(input: number): unknown { return input; }`,
+    ).join("\n");
+    const calls = Array.from({ length: 70 }, (_, index) => `noise${index}(input);`).join(" ");
+    const own = await consumerFixture(
+      `function checked(input: number): unknown { return validate(input); } ${helpers}
+      export function consume(input: number): unknown { ${calls} return checked(input); }`,
+    );
+    const runtime = await import(
+      pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+    );
+    expect(runtime.consume(1)).toEqual({ ok: true, value: 1 });
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    const binding = own.resolver.consumerCalls(consumer, producer, "alpha");
+    expect(binding.bound).toBe(true);
+    expect(binding.calls).toHaveLength(1);
+  }, 15_000);
+
+  function witnessBinding(own) {
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    return own.resolver.consumerCalls(consumer, producer, "alpha");
+  }
+
+  function witnessChain(prefix, count) {
+    return Array.from({ length: count }, (_, index) => {
+      const next = index + 1 === count ? "validate(input)" : `${prefix}${index + 1}(input)`;
+      return `function ${prefix}${index}(input: number): unknown { return ${next}; }`;
+    }).join("\n");
+  }
+
+  it("keeps exactly64 contributing states inside the unchanged consumer budget", async () => {
+    const own = await consumerFixture(
+      `${witnessChain("hop", 63)} export function consume(input: number): unknown { return hop0(input); }`,
+    );
+    expect(witnessBinding(own).calls).toHaveLength(1);
+  }, 15_000);
+
+  it("refuses an actual65-state contributing consumer witness", async () => {
+    const own = await consumerFixture(
+      `${witnessChain("hop", 64)} export function consume(input: number): unknown { return hop0(input); }`,
+    );
+    expect(() => witnessBinding(own)).toThrow("symbol-alias-budget");
+  }, 15_000);
+
+  it("counts the union of contributing branches once rather than granting64 per branch", async () => {
+    const own = await consumerFixture(
+      `${witnessChain("left", 32)} ${witnessChain("right", 32)}
+      export function consume(input: number): unknown { left0(input); return right0(input); }`,
+    );
+    expect(() => witnessBinding(own)).toThrow("symbol-alias-budget");
+  }, 15_000);
+
+  it("includes both real caller branches of one shared canonical witness", async () => {
+    const own = await consumerFixture(
+      `function checked(input: number): unknown { return validate(input); }
+      function left(input: number): unknown { return checked(input); }
+      function right(input: number): unknown { return checked(input); }
+      export function consume(input: number): unknown { left(input); return right(input); }`,
+    );
+    expect(witnessBinding(own).calls).toHaveLength(1);
+  }, 15_000);
+
+  it.each([
+    ["private-outside", "function outside(input: number): unknown { return checked(input); }"],
+    [
+      "exported-outside",
+      "export function outside(input: number): unknown { return checked(input); }",
+    ],
+    ["returned", "function outside(): unknown { return checked; }"],
+    ["container", "const holder = { checked };"],
+    [
+      "callback",
+      "function invoke(action: (input: number) => unknown): unknown { return action(1); } const outcome = invoke(checked);",
+    ],
+  ])(
+    "refuses incomplete incoming witness references: %s",
+    async (_variant, outside) => {
+      const own = await consumerFixture(
+        `function checked(input: number): unknown { return validate(input); } ${outside}
+      export function consume(input: number): unknown { return checked(input); }`,
+      );
+      expect(witnessBinding(own).bound).toBe(false);
+    },
+    15_000,
+  );
+
+  it.each([
+    ["mutable", "let call = checked;"],
+    ["opaque", "const call = checked as (input: number) => unknown;"],
+  ])(
+    "keeps %s callee aliases outside a closed consumer witness",
+    async (_variant, alias) => {
+      const own = await consumerFixture(
+        `function checked(input: number): unknown { return validate(input); } ${alias}
+      export function consume(input: number): unknown { return call(input); }`,
+      );
+      expect(witnessBinding(own).bound).toBe(false);
+    },
+    15_000,
+  );
+
+  it("retains an independent qualified witness without claiming a separate escaped helper", async () => {
+    const own = await consumerFixture(
+      `function first(input: number): unknown { return validate(input); }
+      function escaped(input: number): unknown { return validate(input); }
+      const holder = { escaped };
+      export function consume(input: number): unknown { escaped(input); return first(input); }`,
+    );
+    const binding = witnessBinding(own);
+    expect(binding.bound).toBe(true);
+    expect(binding.calls).toHaveLength(1);
+    expect(
+      readFileSync(join(own.root, binding.calls[0].path), "utf8").slice(
+        binding.calls[0].start,
+        binding.calls[0].end,
+      ),
+    ).toBe("validate(input)");
+  }, 15_000);
+
+  it("refuses a contributing cycle even when a canonical producer call is present", async () => {
+    const own = await consumerFixture(
+      `function first(input: number): unknown { if (input < 0) return second(input); return validate(input); }
+      function second(input: number): unknown { return first(input); }
+      export function consume(input: number): unknown { return first(input); }`,
+    );
+    expect(() => witnessBinding(own)).toThrow("unsupported-consumer-helper-cycle");
+  }, 15_000);
+
+  it("refuses a counterfeit producer in an otherwise direct consumer", async () => {
+    const own = await consumerFixture(
+      `export function consume(input: number): unknown {
+        const validate = (value: number): unknown => value;
+        return validate(input);
+      }`,
+    );
+    expect(witnessBinding(own).bound).toBe(false);
+  }, 15_000);
+
+  it("rechecks the current config before reusing a target-directed witness", async () => {
+    const own = await consumerFixture(
+      "function checked(input: number): unknown { return validate(input); } export function consume(input: number): unknown { return checked(input); }",
+    );
+    expect(witnessBinding(own).bound).toBe(true);
+    const path = "packages/alpha/tsconfig.json";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+    expect(() => witnessBinding(own)).toThrow("symbol-subject-changed");
+  }, 15_000);
+
   it("uses the actual alias budget for exported implementation chains", async () => {
     const own = await consumerFixture(
       "function handle(input: number): unknown { return validate(input); } const second = handle; const first = second; export const consume = first;",

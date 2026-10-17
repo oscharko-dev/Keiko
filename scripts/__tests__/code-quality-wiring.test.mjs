@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(115);
+    expect(production.responsibilities).toHaveLength(117);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -848,7 +848,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 115, incomplete: 0, invalid: 0, qualified: 115, pending: 0, rejected: 0 },
+      counts: { ready: 117, incomplete: 0, invalid: 0, qualified: 117, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -903,7 +903,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 115;
+        r.responsibilities.counts.pending = 117;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -1343,6 +1343,38 @@ describe("Connected primitive validator responsibility wiring", () => {
         exportName: "isWorkspaceSearchResultMatch",
         owner: "@oscharko-dev/keiko-contracts",
       });
+    }
+  });
+});
+
+describe("diagnostics ingress route responsibility wiring (#3918)", () => {
+  it("binds only the two real ingress validators to the actual exported route handler", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const records = policy.responsibilities.filter(
+      (record) =>
+        record.id === "client-diagnostic-ingress-route-validator" ||
+        record.id === "client-binding-ingress-route-validator",
+    );
+    expect(records.map((record) => record.transform.exportName)).toEqual([
+      "isClientDiagnosticIngestRequest",
+      "isClientBindingIngestRequest",
+    ]);
+    for (const record of records) {
+      expect(record.kind).toBe("validator");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+      expect(record.output).toEqual(record.transform);
+      expect(record.consumer).toEqual({
+        consumerPath: "packages/keiko-server/src/routes.ts",
+        specifier: "./client-diagnostics-routes.js",
+        exportName: "handleClientDiagnosticIngest",
+        owner: "@oscharko-dev/keiko-server",
+      });
+      expect(record.proofs).toEqual([
+        "packages/keiko-contracts/src/diagnostics.test.ts",
+        "packages/keiko-server/src/client-diagnostics-routes.test.ts",
+      ]);
+      expect(record.proofAssertions).toHaveLength(5);
     }
   });
 });

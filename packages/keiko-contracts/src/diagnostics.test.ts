@@ -49,6 +49,9 @@ import {
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
   type ClientGitRetryOperation,
+  type ClientDiagnosticIngestRequest as SourceDiagnosticReport,
+  type ClientBindingIngestRequest as SourceBindingReport,
+  type ClientDiagnosticCodingRunRestore as SourceRunRestore,
 } from "./diagnostics.js";
 
 function validRequest(): Record<string, unknown> {
@@ -2352,7 +2355,14 @@ it("accepts only stage-specific closed gateway profile outcomes", () => {
   expect(isClientStageIngestRequest({ ...report, phase: "started" })).toBe(false);
 });
 
-import { isClientDiagnosticKind as publicDiagnosticKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  isClientDiagnosticKind as publicDiagnosticKind,
+  isClientBindingIngestRequest as publicBindingReport,
+  isClientDiagnosticIngestRequest as publicDiagnosticReport,
+  type ClientDiagnosticIngestRequest as PublicDiagnosticReport,
+  type ClientBindingIngestRequest as PublicBindingReport,
+  type ClientDiagnosticCodingRunRestore as PublicRunRestore,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 describe.each([
   ["source", isClientDiagnosticKind],
@@ -2370,8 +2380,6 @@ describe.each([
     expect(check(value)).toBe(false);
   });
 });
-
-import { isClientBindingIngestRequest as publicBindingReport } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 describe.each([
   ["source", isClientBindingIngestRequest],
@@ -2413,4 +2421,151 @@ it("retains the public binding predicate's closed outcome guarantee", () => {
       "resolved" | "target-missing" | "candidates-offered" | "choice-kept" | "choice-withdrawn"
     >();
   }
+});
+
+it("diagnostic ingress responsibility pins independent source and public predicate targets", () => {
+  expectTypeOf<typeof isClientDiagnosticIngestRequest>().toEqualTypeOf<
+    (value: unknown) => value is SourceDiagnosticReport
+  >();
+  expectTypeOf<typeof publicDiagnosticReport>().toEqualTypeOf<
+    (value: unknown) => value is PublicDiagnosticReport
+  >();
+  expectTypeOf<Parameters<typeof isClientDiagnosticIngestRequest>[0]>().not.toBeAny();
+  expectTypeOf<Parameters<typeof publicDiagnosticReport>[0]>().not.toBeAny();
+  expectTypeOf<SourceDiagnosticReport>().not.toBeAny();
+  expectTypeOf<PublicDiagnosticReport>().not.toBeAny();
+  expectTypeOf<SourceDiagnosticReport["message"]>().toEqualTypeOf<string>();
+  expectTypeOf<PublicDiagnosticReport["message"]>().toEqualTypeOf<string>();
+  expectTypeOf<PublicDiagnosticReport["message"]>().not.toBeAny();
+  expectTypeOf<SourceDiagnosticReport["codingRunRestore"]>().toEqualTypeOf<
+    SourceRunRestore | undefined
+  >();
+  expectTypeOf<PublicDiagnosticReport["codingRunRestore"]>().toEqualTypeOf<
+    PublicRunRestore | undefined
+  >();
+  expectTypeOf<SourceRunRestore["timelineCount"]>().toEqualTypeOf<number>();
+  expectTypeOf<PublicRunRestore["timelineCount"]>().not.toBeAny();
+  expectTypeOf<PublicRunRestore["timelineCount"]>().toEqualTypeOf<number>();
+  expectTypeOf<SourceRunRestore["historyTruncated"]>().toEqualTypeOf<boolean>();
+  expectTypeOf<PublicRunRestore["historyTruncated"]>().toEqualTypeOf<boolean>();
+});
+
+it("diagnostic ingress responsibility preserves admitted restoration identity through both predicates", () => {
+  const restoration = {
+    timelineCount: 4,
+    transcriptCount: 2,
+    cutCount: 1,
+    turnCount: 2,
+    feedBytes: 50_000,
+    transcriptChars: 24_000,
+    historyTruncated: false,
+  };
+  const input: unknown = { ...validRequest(), codingRunRestore: restoration };
+  expect(isClientDiagnosticIngestRequest(input)).toBe(true);
+  expect(publicDiagnosticReport(input)).toBe(true);
+  if (!isClientDiagnosticIngestRequest(input) || !publicDiagnosticReport(input)) {
+    throw new Error("Both canonical diagnostic predicates must admit the restoration");
+  }
+  expect(input.codingRunRestore).toBe(restoration);
+  expect(input.codingRunRestore?.timelineCount).toBe(4);
+  expect(input.codingRunRestore?.historyTruncated).toBe(false);
+});
+
+it("diagnostic ingress responsibility refuses malformed root and restoration fields through public", () => {
+  const restoration = {
+    timelineCount: 4,
+    transcriptCount: 2,
+    cutCount: 1,
+    turnCount: 2,
+    feedBytes: 50_000,
+    transcriptChars: 24_000,
+    historyTruncated: false,
+  };
+  for (const input of [
+    null,
+    [],
+    { ...validRequest(), message: 0 },
+    { ...validRequest(), clientTs: "not-an-instant" },
+    { ...validRequest(), codingRunRestore: { ...restoration, timelineCount: -1 } },
+    { ...validRequest(), codingRunRestore: { ...restoration, feedBytes: "50000" } },
+    { ...validRequest(), codingRunRestore: { ...restoration, historyTruncated: undefined } },
+    { ...validRequest(), codingRunRestore: { ...restoration, privatePath: "not-admitted" } },
+  ])
+    expect(publicDiagnosticReport(input)).toBe(false);
+});
+
+it("binding ingress responsibility pins independent source and public predicate targets", () => {
+  expectTypeOf<typeof isClientBindingIngestRequest>().toEqualTypeOf<
+    (value: unknown) => value is SourceBindingReport
+  >();
+  expectTypeOf<typeof publicBindingReport>().toEqualTypeOf<
+    (value: unknown) => value is PublicBindingReport
+  >();
+  expectTypeOf<Parameters<typeof isClientBindingIngestRequest>[0]>().not.toBeAny();
+  expectTypeOf<Parameters<typeof publicBindingReport>[0]>().not.toBeAny();
+  expectTypeOf<SourceBindingReport>().not.toBeAny();
+  expectTypeOf<PublicBindingReport>().not.toBeAny();
+  expectTypeOf<SourceBindingReport["candidateCount"]>().toEqualTypeOf<number | undefined>();
+  expectTypeOf<PublicBindingReport["candidateCount"]>().toEqualTypeOf<number | undefined>();
+  expectTypeOf<PublicBindingReport["candidateCount"]>().not.toBeAny();
+  expectTypeOf<SourceBindingReport["relatedCorrelationIds"]>().toEqualTypeOf<
+    readonly string[] | undefined
+  >();
+  expectTypeOf<PublicBindingReport["relatedCorrelationIds"]>().toEqualTypeOf<
+    readonly string[] | undefined
+  >();
+  expectTypeOf<
+    NonNullable<SourceBindingReport["relatedCorrelationIds"]>[number]
+  >().toEqualTypeOf<string>();
+  expectTypeOf<NonNullable<PublicBindingReport["relatedCorrelationIds"]>[number]>().not.toBeAny();
+  expectTypeOf<
+    NonNullable<PublicBindingReport["relatedCorrelationIds"]>[number]
+  >().toEqualTypeOf<string>();
+});
+
+it("binding ingress responsibility preserves admitted offer and related correlation identities", () => {
+  const relatedCorrelationIds = ["ui_list-offer-0002"];
+  const input: unknown = {
+    kind: "binding",
+    surface: "chat-window",
+    outcome: "candidates-offered",
+    referenceShape: "redacted",
+    heuristicFlagged: false,
+    windowRef: "chat-under-test",
+    candidateCount: 2,
+    disambiguatedCount: 1,
+    relatedCorrelationIds,
+  };
+  expect(isClientBindingIngestRequest(input)).toBe(true);
+  expect(publicBindingReport(input)).toBe(true);
+  if (!isClientBindingIngestRequest(input) || !publicBindingReport(input)) {
+    throw new Error("Both canonical binding predicates must admit the offer");
+  }
+  expect(input.relatedCorrelationIds).toBe(relatedCorrelationIds);
+  expect(input.candidateCount).toBe(2);
+  expect(input.disambiguatedCount).toBe(1);
+});
+
+it("binding ingress responsibility refuses malformed closed offers through public", () => {
+  const offer = {
+    kind: "binding",
+    surface: "chat-window",
+    outcome: "candidates-offered",
+    referenceShape: "redacted",
+    heuristicFlagged: false,
+    windowRef: "chat-under-test",
+    candidateCount: 2,
+    disambiguatedCount: 1,
+  };
+  for (const input of [
+    null,
+    [],
+    { ...offer, candidateCount: -1 },
+    { ...offer, candidateCount: CLIENT_BINDING_CANDIDATES_MAX + 1 },
+    { ...offer, disambiguatedCount: 3 },
+    { ...offer, relatedCorrelationIds: [0] },
+    { ...offer, outcome: "target-missing" },
+    { ...offer, privatePath: "not-admitted" },
+  ])
+    expect(publicBindingReport(input)).toBe(false);
 });
