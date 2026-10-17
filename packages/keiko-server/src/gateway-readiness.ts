@@ -13,7 +13,10 @@ import {
   type ModelProviderConfig,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-model-gateway";
-import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import {
+  GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+  GATEWAY_SILENCE_FLOOR_MS,
+} from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   GatewayReadinessOptions,
@@ -42,7 +45,6 @@ import type {
   VerifiedModelCapabilityObservation,
 } from "./deps.js";
 import {
-  CONVERSATION_READINESS_MAX_AGE_MS,
   conversationReadinessAgeMs,
   currentConversationReady,
   currentGatewayConfig,
@@ -1017,6 +1019,22 @@ function providerWarning(errorValue: unknown): string {
   );
 }
 
+function nativeProbeAbortReason(error: unknown): unknown {
+  // Node's native HTTP transport wraps the signal reason in Error(ABORT_ERR), not DOMException.
+  // Preserve that deadline/cancellation reason so a slow gateway does not refute readiness (#4038).
+  if (
+    error instanceof Error &&
+    error.name === "AbortError" &&
+    "code" in error &&
+    error.code === "ABORT_ERR"
+  ) {
+    return error.cause instanceof DOMException
+      ? error.cause
+      : new DOMException("Gateway readiness probe cancelled.", "AbortError");
+  }
+  return error;
+}
+
 // Every probe's `catch` used to collapse an actionable cause — an auth rejection, a DNS/TLS failure,
 // a missing model — into the same two operator-facing sentences, and nothing anywhere else recorded
 // it. A readiness run is the product's ONLY live evidence about the gateway (F-01), so an
@@ -1033,18 +1051,19 @@ function reportProbeFailure(
   evidence: string,
   probeError: unknown,
 ): GatewayReadinessProbeResult {
+  const failure = nativeProbeAbortReason(probeError);
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       correlationId,
       operation: "gateway.readiness",
       source: `gateway-readiness.${name}`,
-      error: probeError,
+      error: failure,
       summary: "A gateway readiness probe could not be completed.",
       redact: (message): string => String(deps.redactor(message)),
     }),
   );
-  return result(name, "failed", start, evidence, providerWarning(probeError));
+  return result(name, "failed", start, evidence, providerWarning(failure));
 }
 
 function unsupportedStatus(response: Response): boolean {
@@ -1665,7 +1684,8 @@ async function probeLongContext(
 // budget, and a probe that abandons a slow gateway proves nothing and used to lock the Workbench
 // out for six hours. The floors below are lower bounds on the configured provider timeout.
 export const LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS = 300_000;
-export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = 120_000;
+// Automatic readiness must tolerate the same initial silence as the interactive answer it gates.
+export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 function probeTimeoutFloorMs(
   name: GatewayReadinessProbeName,
@@ -2618,7 +2638,9 @@ function monitorConversationInitialization(
 
 const MAX_CONVERSATION_RECOVERY_DELAY_MS = 5 * 60_000;
 function conversationReadinessRenewAfterMs(): number {
-  return CONVERSATION_READINESS_MAX_AGE_MS - WORKBENCH_PROBE_TIMEOUT_FLOOR_MS - 60_000;
+  // Renewal cadence is independent of the provider deadline. Subtracting a longer deadline
+  // from freshness can make this negative and cause continuous successful re-probes (#4038).
+  return 2 * 60_000;
 }
 
 function conversationRecoveryDelay(
@@ -2998,7 +3020,9 @@ async function runOnDemandReadinessProbe(
 // 0.3.11 embedding ladder, applied here). A probe that outlives the budget keeps running in
 // the shared in-flight map — its observation lands for the NEXT attempt — but this request
 // stops waiting.
-export const CHAT_MODEL_WALK_BUDGET_MS = 45_000;
+// Admission must not stop waiting before the supported interactive silence window (#4038).
+// This remains one aggregate budget across all candidates, never a per-model allowance.
+export const CHAT_MODEL_WALK_BUDGET_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;

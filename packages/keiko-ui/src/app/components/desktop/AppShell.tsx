@@ -46,8 +46,6 @@ import {
   removeConnectedScope,
   boundScopeOf,
   filesChatBindScope,
-  pinnedFilesScope,
-  KEEP_FILES_FOLDER_CFG_KEY,
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   totalSourceCap,
@@ -2462,13 +2460,7 @@ function AppShellInner(): ReactNode {
     const visibleScope = filesChatBindScope(a, b, Date.now());
     if (visibleScope === null) return;
     const chatWindow = a.type === "chat" ? a : b;
-    const runtime = chatWindowRuntimeTarget(chatWindowId);
-    const nextScope = pinnedFilesScope(
-      visibleScope,
-      runtime?.connectedScopes,
-      chatWindow.cfg[KEEP_FILES_FOLDER_CFG_KEY] === true,
-    );
-    if (nextScope === null) return;
+    const nextScope = visibleScope;
     const previousScope = boundScopeOf(conn);
     if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) return;
     const conversationId =

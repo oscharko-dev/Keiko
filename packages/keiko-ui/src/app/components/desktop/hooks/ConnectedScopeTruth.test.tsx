@@ -9,20 +9,20 @@ import { workspaceApiFixture } from "@/test-utils/workspace-api-fixture";
 
 const root = "/repo";
 const cases: readonly [ChatConnectedScope["kind"], string[], string, string, string][] = [
-  ["workspace-root", [], "Folder: repo", "uses repo/", "connected root folder"],
-  ["directory", ["src/feature"], "Folder: repo/src/feature", "uses feature/", "connected folder"],
+  ["workspace-root", [], "Folder: repo", "uses repo/", "/repo"],
+  ["directory", ["src/feature"], "Folder: repo/src/feature", "uses feature/", "/repo/src/feature"],
   [
     "files",
     ["src/feature/validation.ts"],
     "File: validation.ts",
     "uses validation.ts",
-    "connected file scope",
+    "/repo/src/feature/validation.ts",
   ],
 ];
 describe("one acknowledged scope", () => {
   it.each(cases)(
-    "renders agreeing pill, edge, and boundary for %s",
-    (kind, relativePaths, label, edge, boundary) => {
+    "renders agreeing pill, edge, and complete path for %s",
+    (kind, relativePaths, label, edge, fullPath) => {
       const scope: ChatConnectedScope = { kind, root, relativePaths, connectedAtMs: 1 };
       const chat: Chat = {
         id: "a",
@@ -72,7 +72,9 @@ describe("one acknowledged scope", () => {
           "title",
           expect.stringContaining(relativePaths[0] ?? root),
         );
-        expect(screen.getByText(new RegExp(boundary, "u"))).toBeInTheDocument();
+        expect(screen.getByText(label)).toHaveAttribute("title", fullPath);
+        expect(screen.getByText(label)).toHaveAttribute("aria-label", `${label} (${fullPath})`);
+        expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
       } finally {
         unregister();
       }

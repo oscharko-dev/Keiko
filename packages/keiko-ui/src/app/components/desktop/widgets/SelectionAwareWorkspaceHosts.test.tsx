@@ -97,6 +97,7 @@ const chatSessionState = vi.hoisted(() => ({
   projects: [] as ProjectWithAvailability[],
   loading: false,
   error: undefined as string | undefined,
+  clearError: vi.fn(),
   memoryEnabled: true,
   openChat: vi.fn(async (_chat: Chat): Promise<void> => undefined),
   openNewChat: vi.fn(async (): Promise<Chat | undefined> => undefined),
@@ -287,6 +288,22 @@ function chatFixture(id: string, title: string, timestamp: number): Chat {
   };
 }
 
+function ChatCreationRetryHarness({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
+  const [cfg, setCfg] = useState<Record<string, unknown>>({ newChatRequestId: "failed-creation" });
+  const updateCfg = useCallback<WindowRenderContext["updateCfg"]>(
+    (patch): void => {
+      ctx.updateCfg(patch);
+      setCfg((previous) => ({ ...previous, ...patch }));
+    },
+    [ctx],
+  );
+  return (
+    <I18nProvider>
+      <ChatWindowSessionHost cfg={cfg} ctx={{ ...ctx, updateCfg }} />
+    </I18nProvider>
+  );
+}
+
 // `boundRoot` is what `resolveBoundRoot` hands the host: the ACTIVE task workspace overrides the
 // window's own cfg root (ADR-0090 D4), so the two differ exactly while a binding is in effect.
 function editorHost(
@@ -342,6 +359,7 @@ afterEach(() => {
   chatSessionState.projects = [];
   chatSessionState.loading = false;
   chatSessionState.error = undefined;
+  chatSessionState.clearError.mockReset();
   chatSessionState.memoryEnabled = true;
   useChatSessionMock.mockReset();
   useChatSessionMock.mockImplementation(() => chatSessionState);
@@ -1304,6 +1322,77 @@ describe("ChatWindowSessionHost target missing", () => {
       newChatRequestId: undefined,
     });
   });
+
+  it.each([undefined, "The selected model is temporarily unavailable."])(
+    "retries a failed new chat once without reloading the window (%s)",
+    async (sessionError): Promise<void> => {
+      const pending = deferred<Chat | undefined>();
+      const created = chatFixture("chat-retried", "Recovered chat", 2);
+      defaultOpenNewChat.mockResolvedValueOnce(undefined).mockReturnValueOnce(pending.promise);
+      chatSessionState.error = sessionError;
+      chatSessionState.clearError.mockImplementation((): void => {
+        chatSessionState.error = undefined;
+      });
+      const ctx = context();
+      render(<ChatCreationRetryHarness ctx={ctx} />);
+      const retry = await screen.findByRole("button", { name: "Retry" });
+      reportClientDiagnosticMock.mockClear();
+      await userEvent.setup().click(retry);
+      await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledTimes(2));
+      expect(chatSessionState.clearError).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Opening chat...");
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          stageReport: expect.objectContaining({ stage: "chat bind", phase: "started" }),
+        }),
+      );
+      await act(async (): Promise<void> => {
+        chatSessionState.activeChat = created;
+        chatSessionState.chats = [created];
+        pending.resolve(created);
+        await pending.promise;
+      });
+      await waitFor((): void =>
+        expect(ctx.updateCfg).toHaveBeenCalledWith(expect.objectContaining({ chatId: created.id })),
+      );
+      expect(defaultOpenNewChat).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([undefined, "explicit-request"])(
+    "keeps one pending creation when the model catalog replaces its callback (%s)",
+    async (newChatRequestId): Promise<void> => {
+      const pending = deferred<Chat | undefined>();
+      const created = chatFixture("chat-slow", "Slow chat", 2);
+      chatSessionState.openNewChat.mockReturnValueOnce(pending.promise);
+      const ctx = context();
+      const cfg = { title: created.title, newChatRequestId };
+      const view = render(
+        <I18nProvider>
+          <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
+        </I18nProvider>,
+      );
+      await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledOnce());
+      const refreshedOpenNewChat = vi.fn(async (): Promise<Chat | undefined> => created);
+      chatSessionState.openNewChat = refreshedOpenNewChat;
+      view.rerender(
+        <I18nProvider>
+          <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
+        </I18nProvider>,
+      );
+      expect(refreshedOpenNewChat).not.toHaveBeenCalled();
+      expect(ctx.updateCfg).not.toHaveBeenCalled();
+      await act(async (): Promise<void> => {
+        pending.resolve(created);
+        await pending.promise;
+      });
+      await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
+      expect(ctx.updateCfg).toHaveBeenCalledWith(expect.objectContaining({ chatId: created.id }));
+      expect(refreshedOpenNewChat).not.toHaveBeenCalled();
+    },
+  );
 
   it("creates and binds one canonical chat while the old composer stays unavailable", async (): Promise<void> => {
     const existing = chatFixture("chat-existing", "Existing chat", 1);

@@ -228,7 +228,6 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
@@ -2369,6 +2368,16 @@ function sendButtonTip(noEligibleModels: boolean, loading: boolean, t: I18nTrans
   return t("chat.send.label");
 }
 
+function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void {
+  // Cancellation can synchronously turn this same DOM button into a submit button. Prevent the
+  // click's default activation before that render so it cannot submit a waiting draft (#4038).
+  event.preventDefault();
+  cancelSend();
+  reportClientDiagnostic("Keiko composer cancellation requested.", {
+    composerActivity: "send-cancel-requested",
+  });
+}
+
 // Extracted from ComposerBar (SonarCloud S3776) — the primary action button, which flips between
 // "cancel in-flight send" and "submit" (Issue #152). Same markup/behavior, now isolated so the
 // sending/type/data-tip branching lives in one small component instead of inline in ComposerBar.
@@ -2400,7 +2409,7 @@ function ComposerSendButton({
         data-on
         aria-label={t("chat.send.cancel")}
         data-tip={t("chat.send.cancel")}
-        onClick={cancelSend}
+        onClick={(event) => cancelComposerSend(event, cancelSend)}
       >
         <CloseIcon size={16} />
       </button>
@@ -4432,7 +4441,7 @@ function LocalKnowledgeScopeControl({
       />
       <GroundingCatalogStatus
         loading={loading}
-        empty={catalogEmpty}
+        empty={catalogEmpty && !connected}
         error={displayedError}
         onRetry={error === null && loadFailure !== null ? refresh : undefined}
         t={t}
@@ -4459,19 +4468,8 @@ function connectorScopeLabels(
   return labels;
 }
 
-function ChatGroundingHelp({ chat }: { readonly chat: Chat }): ReactNode {
-  const t = useTranslate();
-  if (effectiveConnectedScopes(chat).length === 0) return null;
-  return (
-    <p className={scopeNoticeStyles.cmpHelp} data-testid="grounding-help" tabIndex={-1}>
-      {t("chat.grounding.help")}
-    </p>
-  );
-}
-
 interface ChatScopeHeaderProps {
   readonly chat: Chat;
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly onChatChanged: (chat: Chat) => void;
   readonly memoryControl?: ReactNode;
   readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
@@ -4482,7 +4480,6 @@ function ChatScopeHeaderImpl({
   onChatChanged,
   memoryControl,
   pendingGitChangeComparisons,
-  onKeepFolderChange,
 }: ChatScopeHeaderProps): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
@@ -4506,12 +4503,7 @@ function ChatScopeHeaderImpl({
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}
-      <ChatGroundingHelp chat={chat} />
-      <ChatScopeNotice
-        chat={chat}
-        onChatChanged={onChatChanged}
-        onKeepFolderChange={onKeepFolderChange}
-      />
+      <ChatScopeNotice chat={chat} />
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
       <ConnectorScopePill
         chat={chat}
@@ -5294,7 +5286,6 @@ function composerPlaceholder(visibleCount: number, loading: boolean, t: I18nTran
 // Extracted from ChatWindow (SonarCloud S3776) — the chat-scope header, memory panel, and
 // no-model/loading alerts that sit above the scrollable log.
 function ChatWindowStatusHeader({
-  onKeepFolderChange,
   activeChat,
   replaceChat,
   memoryControl,
@@ -5309,7 +5300,6 @@ function ChatWindowStatusHeader({
   noEligibleModels,
   loading,
 }: {
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
@@ -5330,7 +5320,6 @@ function ChatWindowStatusHeader({
         <ChatScopeHeader
           chat={activeChat}
           onChatChanged={replaceChat}
-          onKeepFolderChange={onKeepFolderChange}
           memoryControl={memoryControl}
           pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
@@ -5688,7 +5677,6 @@ function ChatWindowComposerFooter({
 }
 
 export function ChatWindow({
-  onKeepFolderChange,
   windowId,
   suspended = false,
   mini = false,
@@ -5876,7 +5864,6 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       <ChatWindowStatusHeader
-        onKeepFolderChange={onKeepFolderChange}
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "119d8d14bc63dc3e9ef898cbcb37401716d2b747868555d80da5051492d8ad5f" as const;
+  "b9f8b200288b2472539fc3ad23f20cda5a9e34da4811e1b6a1ff2014a942e6b2" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -1778,6 +1778,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "cancelledGenerationCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "connectedSourceCount",

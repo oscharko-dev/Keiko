@@ -2484,9 +2484,10 @@ describe("handleGroundedAsk", () => {
     const serializer = createChatTurnSerializer();
     let serializationEntries = 0;
     const observingSerializer: ChatTurnSerializer = {
-      runExclusive: (chat, signal, operation) => {
+      ...serializer,
+      runExclusive: (chat, signal, operation, generation) => {
         serializationEntries += 1;
-        return serializer.runExclusive(chat, signal, operation);
+        return serializer.runExclusive(chat, signal, operation, generation);
       },
     };
     const sharedDeps = deps(model, {}, { chatTurnSerializer: observingSerializer });
@@ -3087,7 +3088,7 @@ describe("handleGroundedAsk", () => {
     }
   });
 
-  it("linearizes a scope PATCH after the active grounded turn", async () => {
+  it("cancels on scope change while retaining the gate until the old grounded runner settles", async () => {
     const { chatId } = await setupChatWithScope();
     const started = deferred<undefined>();
     const answer = deferred<OrchestratorOutput>();
@@ -3121,14 +3122,14 @@ describe("handleGroundedAsk", () => {
     expect(patchSettled).toBe(false);
     expect(store.findChatById(chatId)?.connectedScope).toBeDefined();
 
+    await expect(grounded).resolves.toMatchObject({ status: 499 });
+    expect(patchSettled).toBe(false);
     answer.resolve({ pack: emptyPack(), assistantContent: "linearized answer", elapsedMs: 1 });
 
-    await expect(grounded).resolves.toMatchObject({ status: 200 });
     await expect(patch).resolves.toMatchObject({ status: 200 });
     expect(store.findChatById(chatId)?.connectedScope).toBeUndefined();
     expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
       "linearized scope request",
-      "linearized answer",
     ]);
   });
 

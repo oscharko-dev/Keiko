@@ -729,11 +729,6 @@ export const EN_MESSAGES = {
   "connection.armTitle": "Click once to arm removal.",
   "connection.removeQuestion": "Remove?",
   "connection.cancelled": "Removal cancelled — the connection was not removed.",
-  "scope.notice.narrowed": "The connected scope changed to {scope}.",
-  "scope.notice.widened": "The connected scope expanded to {scope}.",
-  "scope.notice.keepFolder": "Keep folder",
-  "scope.notice.ok": "OK",
-  "scope.notice.failed": "The folder could not be kept.",
   "chat.grounding.help":
     "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment. The model has no file tools. Open a file in Files or mention it with @ to include it in the scope.",
   "scope.missing.add": "Add file to scope",
@@ -747,11 +742,6 @@ export const EN_MESSAGES = {
   "scope.missing.failed": "The file could not be added to the scope.",
   "scope.pill.filesInFolder": "{count} files in {name}",
   "scope.pill.accessibleWithPath": "{label} ({path})",
-  "scope.boundary.noun.repository": "the connected root folder",
-  "scope.boundary.noun.folder": "the connected folder",
-  "scope.boundary.noun.fileScope": "the connected file scope",
-  "scope.boundary.description":
-    "Keiko may inspect only {noun}; safe-read exclusions and context budget limits apply before each answer.",
   "scope.disconnect.error": "Unable to disconnect scope.",
   "scope.disconnect.aria": "Disconnect {label} from chat",
   "scope.disconnect.title": "Disconnect {label} from chat",

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "119d8d14bc63dc3e9ef898cbcb37401716d2b747868555d80da5051492d8ad5f"
+    "catalogDigest": "b9f8b200288b2472539fc3ad23f20cda5a9e34da4811e1b6a1ff2014a942e6b2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1792,7 +1792,10 @@
     "gateway.readiness.compatibility-retry.skipped.line": [
       "packages/keiko-model-gateway/src/readiness-probe.test.ts"
     ],
-    "gateway.readiness.completed.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
+    "gateway.readiness.completed.line": [
+      "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
+      "packages/keiko-server/src/gateway-readiness.test.ts"
+    ],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.reranker.setup.resolved.line": [
       "packages/keiko-server/src/gateway-discovery-roles.test.ts"
@@ -2284,6 +2287,7 @@
     ],
     "search.connected-context.completed.line": [
       "packages/keiko-server/src/grounded-case-sensitive.test.ts",
+      "packages/keiko-server/src/grounded-lockfile-context.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
       "packages/keiko-server/src/grounded-portable-coverage.test.ts",

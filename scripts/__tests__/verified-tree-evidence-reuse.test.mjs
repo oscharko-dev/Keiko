@@ -448,14 +448,16 @@ describe("the aggregator still fails closed", () => {
     }
   });
 
-  it("keeps every original OpenCode host suite reachable from the required command", () => {
+  it("keeps every original OpenCode host suite reachable with bounded startup concurrency", () => {
     const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
     const suites = readdirSync(join(repoRoot, "native/opencode-service-host"))
       .filter((name) => name.endsWith(".test.mjs"))
       .sort()
       .map((name) => `native/opencode-service-host/${name}`);
     expect(suites.length).toBeGreaterThan(0);
-    expect(manifest.scripts["test:opencode-service-host"]).toBe(`node --test ${suites.join(" ")}`);
+    expect(manifest.scripts["test:opencode-service-host"]).toBe(
+      `node --test --test-concurrency=1 ${suites.join(" ")}`,
+    );
   });
 
   it("accepts a complete reuse claim whose gates were skipped by the guard", () => {

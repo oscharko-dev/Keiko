@@ -22,7 +22,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["applied", "conflict"],
+      values: ["applied", "conflict", "cancellation-requested"],
     },
     expectedScopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     actualScopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -30,6 +30,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
     connectedSourceCount: { type: "integer", dataClass: "count", required: true },
     localKnowledgeSourceCount: { type: "integer", dataClass: "count", required: true },
     gitChangeSourceCount: { type: "integer", dataClass: "count", required: true },
+    cancelledGenerationCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -42,11 +43,12 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
 });
 
 export function logChatScopeUpdate(
-  outcome: "applied" | "conflict",
+  outcome: "applied" | "conflict" | "cancellation-requested",
   existing: Chat,
   result: Chat,
   patch: UpdateChatPatch,
   correlationId: string | undefined,
+  cancelledGenerationCount?: number,
 ): void {
   const expected = patch.expectedGroundingScopeIdentity;
   processServerLogSink().write(
@@ -54,10 +56,11 @@ export function logChatScopeUpdate(
       CHAT_SCOPE_UPDATE,
       {
         correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        status: outcome === "applied" ? 200 : 409,
+        status: outcome === "conflict" ? 409 : 200,
       },
       {
         outcome,
+        ...(cancelledGenerationCount === undefined ? {} : { cancelledGenerationCount }),
         ...(expected === undefined
           ? {}
           : { expectedScopeDigest: expected.slice("gsi-v1:".length) }),

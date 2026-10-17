@@ -1817,7 +1817,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["applied", "conflict"],
+        values: ["applied", "conflict", "cancellation-requested"],
       },
       expectedScopeDigest: {
         type: "string",
@@ -1851,6 +1851,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      cancelledGenerationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -3173,6 +3178,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "send-failure-skipped-owner",
           "send-failure-skipped-draft",
           "send-failure-skipped-unproven",
+          "send-cancel-requested",
           "equivalent-edit-ignored",
           "stale-draft-echo-ignored",
           "non-text-paste-ignored",

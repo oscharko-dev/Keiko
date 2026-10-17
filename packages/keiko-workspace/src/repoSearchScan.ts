@@ -11,6 +11,7 @@ import type {
   EvidenceAtom,
   EvidenceEdge,
   EvidenceAtomProvenanceKind,
+  EvidenceAtomMetrics,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -143,6 +144,7 @@ export interface AtomShape {
   readonly queryFingerprint: string;
   readonly edge?: EvidenceEdge | undefined;
   readonly score: number;
+  readonly metrics?: EvidenceAtomMetrics | undefined;
   readonly emittedAtMs: number;
 }
 
@@ -162,6 +164,7 @@ export function buildAtom(shape: AtomShape): EvidenceAtom {
     scopePath: shape.scopePath,
     lineRange: shape.lineRange,
     score: shape.score,
+    ...(shape.metrics === undefined ? {} : { metrics: shape.metrics }),
     provenance: {
       kind: shape.provenanceKind,
       tool: shape.tool,
@@ -1213,6 +1216,9 @@ function emitBestLines(
         tool: "repo.searchText",
         queryFingerprint: runner.fingerprint,
         score: match.score,
+        ...(match.queryGroupKey === undefined
+          ? {}
+          : { metrics: { lexicalQueryGroupKey: match.queryGroupKey } }),
         emittedAtMs: runner.nowMs(),
       }),
     );

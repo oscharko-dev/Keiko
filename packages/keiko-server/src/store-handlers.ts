@@ -47,7 +47,11 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
-import { MAX_GIT_CHANGE_SCOPES, parseChatGitChangeScope } from "./store/chats.js";
+import {
+  MAX_GIT_CHANGE_SCOPES,
+  parseChatGitChangeScope,
+  previewChatScopeUpdate,
+} from "./store/chats.js";
 import { gitChangeObjectId } from "./gitChangeRoutes.js";
 import type { StoredRelationship } from "./store/relationships.js";
 import {
@@ -73,7 +77,12 @@ import {
   clearGroundedTurnsForWorkspace,
 } from "./grounded-turn-registry.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
-import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
+import {
+  CHAT_TURN_WAIT_CANCELLED,
+  interruptChangedChatGenerations,
+  hasChatGenerations,
+  runSerializedChatTurn,
+} from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -1245,6 +1254,10 @@ export async function handleUpdateChat(
       const expected = parseExpectedGroundingScopeIdentity(body.expectedGroundingScopeIdentity);
       if (expected !== undefined && typeof expected !== "string") return expected;
       const patch = buildChatPatch(deps, body, expected);
+      if (cancellation.signal.aborted)
+        return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+      const denial = interruptChangedScopeTurn(deps, id, patch, ctx.req, ctx.correlationId);
+      if (denial !== undefined) return denial;
       const apply = (): RouteResult => applyChatUpdate(deps, id, patch, ctx.req, ctx.correlationId);
       if (
         !patchTouchesGroundingScope(patch) &&
@@ -1260,6 +1273,29 @@ export async function handleUpdateChat(
   } finally {
     cancellation.dispose();
   }
+}
+
+function interruptChangedScopeTurn(
+  deps: UiHandlerDeps,
+  id: string,
+  patch: UpdateChatPatch,
+  req: IncomingMessage,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (!patchTouchesGroundingScope(patch) || !hasChatGenerations(deps, id)) return undefined;
+  const existing = findChatById(deps, id);
+  if (existing === undefined) return notFoundResult("Chat not found.");
+  const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
+  if (conflict !== undefined) return conflict;
+  const safePatch = canonicalizeGitChangeScopePatch(
+    deps,
+    existing,
+    req,
+    canonicalizeConnectedScopePatch(deps, existing, patch),
+  );
+  const preview = previewChatScopeUpdate(existing, safePatch, currentGroundingLimits(deps));
+  interruptChangedChatGenerations(deps, existing, preview, correlationId, patch);
+  return undefined;
 }
 
 function groundingPatchConflict(

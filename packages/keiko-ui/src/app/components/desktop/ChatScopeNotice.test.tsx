@@ -1,6 +1,5 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { axe } from "jest-axe";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
 import { ChatScopeNotice } from "./ChatScopeNotice";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -35,166 +34,109 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("acknowledged scope notice", () => {
-  it("keeps the acknowledged narrowing notice and folder controls accessible", async () => {
-    const changed = vi.fn();
-    const keep = vi.fn();
-    const view = render(
-      <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={keep} />,
-    );
-    view.rerender(
-      <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={keep} />,
-    );
-    expect(await screen.findByRole("status")).toHaveTextContent("File: validation.ts");
-    expect(screen.getByRole("button", { name: "Keep folder" })).toBeEnabled();
-    expect(await axe(view.container)).toHaveNoViolations();
-  });
-  it.each([false, true])(
-    "restores the replaced same-root folder in either order (%s)",
-    async (reverse) => {
-      vi.useFakeTimers();
-      const alpha = { ...folder, relativePaths: ["Alpha"] };
-      const beta = { ...folder, relativePaths: ["Beta"] };
-      const narrowed = { ...file, relativePaths: ["Beta/validation.ts"] };
-      const before = reverse ? [beta, alpha] : [alpha, beta];
-      const after = [alpha, narrowed];
-      const restored = { ...chat(alpha), connectedScopes: [alpha, beta] };
-      const updateScopes = vi.fn().mockResolvedValue({ chat: restored });
-      const changed = vi.fn();
-      const keep = vi.fn();
-      const view = render(
-        <ChatScopeNotice
-          chat={{ ...chat(alpha), connectedScopes: before }}
-          onChatChanged={changed}
-          onKeepFolderChange={keep}
-          updateScopes={updateScopes}
-        />,
-      );
-      view.rerender(
-        <ChatScopeNotice
-          chat={{ ...chat(alpha), connectedScopes: after }}
-          onChatChanged={changed}
-          onKeepFolderChange={keep}
-          updateScopes={updateScopes}
-        />,
-      );
-      settle();
-      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep folder" })));
-      expect(updateScopes).toHaveBeenCalledWith("chat-a", [alpha, beta], "identity");
-      expect(changed).toHaveBeenCalledWith(restored);
-    },
-  );
-  it.each([true, false])(
-    "invalidates a %s-settled file notice and saved pin after disconnect ACK",
-    (settled) => {
-      vi.useFakeTimers();
-      const keep = vi.fn();
-      const changed = vi.fn();
-      const view = render(
-        <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={keep} />,
-      );
-      view.rerender(
-        <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={keep} />,
-      );
-      if (settled) settle();
-      view.rerender(
-        <ChatScopeNotice
-          chat={{ ...chat(file), connectedScopes: [] }}
-          onChatChanged={changed}
-          onKeepFolderChange={keep}
-        />,
-      );
-      settle();
-      expect(screen.queryByRole("status")).toBeNull();
-      expect(screen.queryByRole("button", { name: "Keep folder" })).toBeNull();
-      expect(keep).toHaveBeenCalledWith(false);
-    },
-  );
-  it("coalesces previews, announces the new file and restores the prior folder with body-free evidence", async () => {
+describe("automatic source transition evidence", () => {
+  it("renders no confirmation or folder pin after narrowing", () => {
     vi.useFakeTimers();
     const diagnostic = vi.fn();
     setClientDiagnosticWriter(diagnostic);
-    const changed = vi.fn();
-    const keep = vi.fn();
-    const updateScopes = vi.fn().mockResolvedValue({ chat: chat(folder) });
-    const view = render(
-      <ChatScopeNotice
-        chat={chat(folder)}
-        onChatChanged={changed}
-        onKeepFolderChange={keep}
-        updateScopes={updateScopes}
-      />,
-    );
-    expect(screen.queryByRole("status")).toBeNull();
-    view.rerender(
-      <ChatScopeNotice
-        chat={chat(file)}
-        onChatChanged={changed}
-        onKeepFolderChange={keep}
-        updateScopes={updateScopes}
-      />,
-    );
-    view.rerender(
-      <ChatScopeNotice
-        chat={chat({ ...file, relativePaths: ["src/b.ts"] })}
-        onChatChanged={changed}
-        onKeepFolderChange={keep}
-        updateScopes={updateScopes}
-      />,
-    );
+    const view = render(<ChatScopeNotice chat={chat(folder)} />);
+    view.rerender(<ChatScopeNotice chat={chat(file)} />);
     settle();
-    expect(screen.getByRole("status").textContent).toContain("File: b.ts");
-    expect(diagnostic).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("/repo");
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep folder" })));
-    expect(updateScopes).toHaveBeenCalledWith("chat-a", [folder], "identity");
-    expect(keep).toHaveBeenCalledWith(true);
-    expect(changed).toHaveBeenCalledWith(chat(folder));
-  });
-  it("retains a pending notice when the pin callback changes on an unrelated render", () => {
-    vi.useFakeTimers();
-    const changed = vi.fn();
-    const view = render(
-      <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={vi.fn()} />,
-    );
-    view.rerender(
-      <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={vi.fn()} />,
-    );
-    view.rerender(
-      <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={vi.fn()} />,
-    );
-    settle();
-    expect(screen.getByRole("status")).toHaveTextContent("File: validation.ts");
-  });
-  it("announces widening, dismisses politely and never replays a folder across chats", () => {
-    vi.useFakeTimers();
-    const changed = vi.fn();
-    const view = render(<ChatScopeNotice chat={chat(file)} onChatChanged={changed} />);
-    view.rerender(<ChatScopeNotice chat={chat(folder)} onChatChanged={changed} />);
-    settle();
-    expect(screen.getByRole("status").textContent).toContain("expanded");
-    fireEvent.click(screen.getByRole("button", { name: "OK" }));
-    expect(screen.queryByRole("status")).toBeNull();
-    view.rerender(<ChatScopeNotice chat={chat(file, "chat-b")} onChatChanged={changed} />);
-    settle();
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-  it("releases the pin on root change and does not offer the former folder", () => {
-    vi.useFakeTimers();
-    const keep = vi.fn();
-    const changed = vi.fn();
-    const view = render(
-      <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={keep} />,
-    );
-    view.rerender(
-      <ChatScopeNotice
-        chat={chat({ ...file, root: "/other" })}
-        onChatChanged={changed}
-        onKeepFolderChange={keep}
-      />,
-    );
-    settle();
-    expect(keep).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("button", { name: "OK" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Keep folder" })).toBeNull();
+    expect(view.container).toBeEmptyDOMElement();
+    expect(diagnostic).toHaveBeenCalledOnce();
+    expect(diagnostic.mock.calls[0]?.[1]).toMatchObject({
+      scopeNotice: { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 },
+    });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("/repo");
   });
+  it("coalesces rapid navigation and ignores timestamps and another chat", () => {
+    vi.useFakeTimers();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const view = render(<ChatScopeNotice chat={chat(folder)} />);
+    view.rerender(<ChatScopeNotice chat={chat(file)} />);
+    view.rerender(<ChatScopeNotice chat={chat({ ...file, relativePaths: ["src/next.ts"] })} />);
+    settle();
+    expect(diagnostic).toHaveBeenCalledOnce();
+    view.rerender(
+      <ChatScopeNotice
+        chat={chat({ ...file, relativePaths: ["src/next.ts"], connectedAtMs: 99 })}
+      />,
+    );
+    settle();
+    view.rerender(<ChatScopeNotice chat={chat(folder, "chat-b")} />);
+    settle();
+    expect(diagnostic).toHaveBeenCalledOnce();
+  });
+  it("records independent changed sources and widening without source bodies", () => {
+    vi.useFakeTimers();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const view = render(<ChatScopeNotice chat={chat(file)} />);
+    view.rerender(
+      <ChatScopeNotice
+        chat={{
+          ...chat(folder),
+          connectedScopes: [
+            folder,
+            { ...folder, kind: "workspace-root", root: "/other", relativePaths: [] },
+          ],
+        }}
+      />,
+    );
+    settle();
+    expect(diagnostic).toHaveBeenCalledTimes(2);
+    for (const call of diagnostic.mock.calls)
+      expect(call[1]).toMatchObject({ scopeNotice: { reason: "widened" } });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("/other");
+  });
+  it("drops pending evidence when the source is removed or observer unmounts", () => {
+    vi.useFakeTimers();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const view = render(<ChatScopeNotice chat={chat(folder)} />);
+    view.rerender(<ChatScopeNotice chat={chat(file)} />);
+    view.rerender(<ChatScopeNotice chat={{ ...chat(file), connectedScopes: [] }} />);
+    settle();
+    expect(diagnostic).not.toHaveBeenCalled();
+    view.rerender(<ChatScopeNotice chat={chat(folder)} />);
+    view.unmount();
+    settle();
+    expect(diagnostic).not.toHaveBeenCalled();
+  });
+});
+
+it.each([false, true])(
+  "attributes directory narrowing only to its replaced source (%s)",
+  (reverse) => {
+    vi.useFakeTimers();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const unchanged = { ...file, relativePaths: ["docs/readme.md"] };
+    const before = reverse ? [unchanged, folder] : [folder, unchanged];
+    const narrowed = { ...folder, relativePaths: ["src/nested"] };
+    const view = render(<ChatScopeNotice chat={{ ...chat(folder), connectedScopes: before }} />);
+    view.rerender(
+      <ChatScopeNotice chat={{ ...chat(narrowed), connectedScopes: [narrowed, unchanged] }} />,
+    );
+    settle();
+    expect(diagnostic).toHaveBeenCalledOnce();
+    expect(diagnostic.mock.calls[0]?.[1]).toMatchObject({
+      scopeNotice: { reason: "narrowed-to-directory" },
+    });
+  },
+);
+
+it("records widening from a nested directory to its parent", () => {
+  vi.useFakeTimers();
+  const diagnostic = vi.fn();
+  setClientDiagnosticWriter(diagnostic);
+  const view = render(
+    <ChatScopeNotice chat={chat({ ...folder, relativePaths: ["src/nested"] })} />,
+  );
+  view.rerender(<ChatScopeNotice chat={chat(folder)} />);
+  settle();
+  expect(diagnostic.mock.calls[0]?.[1]).toMatchObject({ scopeNotice: { reason: "widened" } });
 });

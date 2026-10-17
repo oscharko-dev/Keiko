@@ -8,6 +8,7 @@ import {
   connectedInspectionManifest,
 } from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
+import { flushSync } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CapsuleSetId,
@@ -1090,6 +1091,57 @@ describe("ChatWindow cancel button", () => {
     );
     await user.click(screen.getByRole("button", { name: "Cancel grounded request" }));
     expect(cancelGrounded).toHaveBeenCalledOnce();
+  });
+
+  it("does not submit a waiting draft when cancellation changes the button into Send", async () => {
+    const user = userEvent.setup();
+    const cancelSend = vi.fn();
+    const sendMessage = vi.fn();
+    function CancellingWindow(): React.JSX.Element {
+      const [sending, setSending] = useState(true);
+      const session = makeSession({
+        activeChat: makeChat(),
+        draft: "Keep this draft unsent",
+        sending,
+        sendStatus: sending ? "streaming" : "cancelled",
+        sendMessage,
+        cancelSend: () => {
+          cancelSend();
+          // Match the native browser's discrete-event commit before click default activation.
+          flushSync(() => setSending(false));
+        },
+      });
+      return (
+        <ChatSessionProvider value={session}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      );
+    }
+    render(<CancellingWindow />);
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      await user.click(screen.getByRole("button", { name: "Cancel response" }));
+
+      expect(cancelSend).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+        "Keep this draft unsent",
+      );
+      const cancellations = reports.filter(
+        (report) => report.meta?.composerActivity === "send-cancel-requested",
+      );
+      expect(cancellations).toEqual([
+        {
+          message: "Keiko composer cancellation requested.",
+          meta: { composerActivity: "send-cancel-requested" },
+        },
+      ]);
+      await expectDiagnosticWireAccepted(cancellations);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 });
 
@@ -5201,23 +5253,6 @@ function copyTestGroundedAnswer(content: string, sentReferenceCount: number): Gr
   };
 }
 
-it("explains repository grounding whenever a folder scope is connected", () => {
-  renderWindow(
-    makeSession({
-      activeChat: makeChat({
-        connectedScopes: [
-          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
-        ],
-      }),
-    }),
-  );
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent(
-    "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment.",
-  );
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent("The model has no file tools.");
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
-});
-
 it("loads answer-bound read metadata before opening evidence and again after reload", async () => {
   const answer = connectedInspectionAnswer();
   vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: connectedInspectionManifest() });
@@ -5508,4 +5543,25 @@ describe("ChatWindow private draft and skill recovery", () => {
     await userEvent.click(screen.getByRole("button", { name: "Keep this draft" }));
     expect(keepLocal).toHaveBeenCalledOnce();
   });
+});
+
+it("keeps connected Files sources visible without explanatory paragraphs", async () => {
+  const sources = [
+    {
+      kind: "files" as const,
+      root: "/repo-a",
+      relativePaths: ["src/example.ts"],
+      connectedAtMs: 1,
+    },
+    { kind: "workspace-root" as const, root: "/repo-b", relativePaths: [], connectedAtMs: 2 },
+  ];
+  renderWindow(makeSession({ activeChat: makeChat({ connectedScopes: sources }) }));
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toBeEnabled(),
+  );
+  expect(screen.getByTitle("/repo-a/src/example.ts")).toBeVisible();
+  expect(screen.getByTitle("/repo-b")).toBeVisible();
+  expect(screen.queryByTestId("grounding-help")).toBeNull();
+  expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
+  expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
 });

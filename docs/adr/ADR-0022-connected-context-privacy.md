@@ -73,6 +73,42 @@ and bind final source-warning decisions to canonical scope/query digests. Unknow
 observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
 observations even when a separate labelled assessment is allowed.
 
+### D1.1 — Changing sources cancels the current answer
+
+A validated change to the canonical grounding identity cancels the current generation and any
+already queued generation for that chat. This includes adding, removing, narrowing or widening
+Files or Knowledge sources, and successfully connecting or refreshing a Git comparison. Identity
+comparison excludes source timestamps, list order, duplicates and Git description metadata.
+Malformed, inaccessible, conflicting, over-budget or effectively unchanged patches do not cancel
+an answer. PATCH revalidates its precondition and access at the serialized write boundary.
+
+Cancellation belongs to the existing per-chat turn serializer. It reaches grounded, buffered,
+streaming and regeneration requests, including requests waiting for shared gateway readiness.
+Cancelling one readiness waiter must not cancel the configuration-owned probe used by other chats.
+The underlying turn retains its gate until it actually settles; an uncooperative provider cannot
+publish a late assistant answer or admit a stale queued generation. A pending PATCH is not an
+acknowledged source update. Successful Git comparison mutations keep their existing transactional
+relationship compensation and notify the same cancellation owner only after success.
+
+Completed messages and learned findings remain in the conversation and follow normal history
+compaction. Connected Files excerpts are assembled separately for each question, not inserted as
+a persistent document lane into history compaction. Historical answers, including quoted code,
+remain historical conversation; they do not grant current filesystem authority. Existing
+`chat.scope.update` evidence records cancellation requests with canonical identity digests and
+counts only, never source bodies, user text or paths.
+
+Connected Files windows follow their resolved visible selection independently: the displayed root,
+subdirectory or open file. Existing acknowledgement ownership still determines the canonical
+source label. Opening a file never preserves a former folder through a saved pin; retired
+`keepFilesFolder` preferences are discarded on workspace restoration. Navigation requires neither
+confirmation nor a folder-restoration action. Same-root background tree reads preserve the
+currently displayed file; a delayed refresh cannot restore a closed preview or cross a root
+change. A different resolved root clears the old preview and directory before either can supply
+source authority. The header retains compact source labels,
+disambiguating paths, disconnect controls and actual pending/error feedback. Generic explanation
+is available only on demand in the missing-evidence action. The existing `client.scope.notice`
+observer records body-free transitions without a duplicate live-region announcement.
+
 ### D2 — Per-answer summary is wire-only
 
 The wire response carries `contextPack: GroundedAnswerContextPackSummary` on every
@@ -371,6 +407,11 @@ The unchanged admission contract rejects relative paths over 4096 UTF-8 bytes, b
 absolute or drive-prefixed paths, an initial `~`, and empty, `.` or `..` segments. The initial-tilde
 rule is positional: root `~notes.md` is excluded, while `src/~notes.md` is eligible.
 Optional structural and Git-history enrichment are separate from lexical coverage. Their planner
+requests Git history for explicit history/relationship questions and repository-wide diagnostics,
+including diagnostic follow-ups. A workspace-root selection alone does not request history: current
+policy and other factual questions must not acquire unrelated commit recency/churn evidence merely
+because the same files live in Git. Existing source-details/completion events retain the planned,
+executed and skipped-ring observations; diagnostic candidate scoping remains in force. Their planner
 slices retain finite scan counts (currently 614 and 307 files respectively) and finite returned
 matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced
 across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
@@ -853,6 +894,15 @@ bounded failure parser and an independent six-reference channel, leaving eight u
 available. Within that unchanged cap, the primary local diagnostic frame precedes explicit
 question paths and supplied query references; secondary frames and conversation referents follow.
 A long trace therefore cannot consume every slot before the user's separately named file.
+The six-reference planning channel is not a cap on explicit source admission. Admission retains
+the primary diagnostic frame first, then every unique path explicitly named in the independent
+question, followed by the remaining planned references. It uses the existing extraction metadata
+bound, selected-scope policy, classification/search reservations, deadline and file/byte/token
+grants. It does not admit additional diagnostic frames or conversation referents beyond the planned
+channel. A seventh requested file must not silently lose explicit-file priority merely because
+the planning preview is full. The existing source-detail counters distinguish the bounded
+`referenceChannelCount` from actual admitted/rejected paths; exhausted grants remain visible as
+budget omissions/uncertainty rather than an assertion that the requested source is absent.
 External runtime/generated frames are removed before the reference cap. Original path
 casing and numeric source locations survive admission; the primary frame and its existing
 structural test/source pair receive the same eligibility and read-budget checks. Ordinary lexical
@@ -909,6 +959,10 @@ The observation carries no memory content or answer text.
 Citation repair is decided from the current answer: a substantive source answer without markers
 may use the single bounded repair even if earlier answers from the same model cited reliably.
 Historical citation observations remain descriptive and cannot waive current source validation.
+The repair dispatcher and validator share the same 131,072 UTF-16-code-unit text limit. An
+original answer above that supported size skips the extra model call as `skipped-capability`;
+it retains its original content, usage and uncited uncertainty. File and numeric citation paths
+use the same eligibility check, and the bound is not an additional token grant.
 The existing Activity Log records the actual repair disposition and final citation behaviour;
 clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
@@ -970,6 +1024,24 @@ topic, even without a quoted or typed identifier, retains recursive discovery. A
 file cannot stop discovery for that independent topic. Sole named-file requests retain
 focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
+Structural import suffix resolution indexes each immutable, admitted source-path inventory once.
+Reversed, case-folded paths support binary prefix lookup while preserving the existing shortest-path
+and original-case lexical tie break, including partial-segment suffixes. Results and misses stay
+inside a weakly held inventory cache; another workspace or rebuild receives its own inventory.
+No source eligibility, retained-file budget, or resolved/heuristic classification changes. Existing
+retrieval completion timing and structural-build counters remain the body-free operational evidence.
+DTO contract pairing excludes same-language candidates before pair traversal, with one candidate
+projection per encountered language. It preserves original source/target order, same-scope exclusion,
+name/field confidence rules and shared execution-control checks for eligible pairs.
+Import and re-export binding projection groups resolved edges once per immutable edge inventory,
+then visits only the current source file's edges. Original edge order, kind filtering and final
+specifier precedence remain unchanged; a new inventory cannot inherit targets or misses.
+The request-local code index retains one shared promise and drains the same build steps as the
+synchronous compatibility entry point, yielding to the event loop after at most 32 source visits
+and between graph stages. Descriptor reads, root containment, source admission, shared cancellation
+and the absolute deadline remain the owners. Expiration after the final stage is checked before
+reporting coverage or caching an index. Existing completion/truncation diagnostics describe the
+actual outcome; yielding does not widen intake or claim complete corpus coverage.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget or retained query-result allowance, preserving primary root manifests
@@ -1118,12 +1190,30 @@ recorded as failed, rather than applied. Attempted calls still consume the call 
 deadline stops subsequent reads, including when a late reranker result would otherwise arrive;
 identity fallback is pinned on the preselection producer, and orchestration pins enforce no
 post-deadline work. For contextual natural-language requests without semantic evidence or an
-applied reranker, the ordinary keep-one fallback preserves the first lexical producer's ordering
+applied reranker, the ordinary below-floor fallback preserves the first lexical producer's ordering
 among eligible content candidates. Each retained position must still match the actual atom's
 stable identity, path and query fingerprint. This changes neither relevance scores nor floors,
 exclusions, read grants or source authority. Successful reranking retains its own score order.
-The existing selection-details event records the closed fallback ranking source. Ordinary keep-one
-fallback records low selection confidence and the
+The first eligible fallback may retain at most two additional eligible sources whose current
+same-query content atoms carry the same matched-query-group key. This optional, body-free
+peer identity is captured from retained lexical content even when a peer falls outside the
+25-entry ranking diagnostic preview. Reported seeds retain their producer priority; supplemental
+peers retain their search-result order. Missing/malformed group keys, a different captured query,
+absent/replaced atoms and semantic results cannot extend that preview. The diagnostic display
+limit is not an evidence-admission limit, and the existing final peer/file/byte grants still apply.
+The canonical hexadecimal bitset identifies at least two query groups observed in the admitted lexical range; it does not
+certify source authority, factual agreement or answer completeness. Equal numeric scores alone do
+not establish group identity. The validated captured atoms must share one query fingerprint before
+their positional group keys can grant peers; mixed-query captures retain only the ordinary fallback.
+Missing/invalid metadata, a changed atom/query identity, semantic
+evidence or successful reranking cannot grant peers. The persistent match identity advances, and
+both live and cached lexical producers preserve the bounded key. Exclusions, the absolute and
+relative scoring floors, and read/byte/time grants remain unchanged; peers share the existing
+below-floor fallback and remain low confidence. A higher-confidence ordinary selection does not
+admit them. The existing selected-file count records actual retained size, while
+`keepOneFallbackApplied` is true only for a single retained fallback source.
+The existing selection-details event records the closed fallback ranking source. Ordinary fallback
+records low selection confidence and the
 `low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
 and log. Selection-details carries the calibrated floor, confidence, disposition, failed-call,
 and safe platform failure evidence. Wire semantic/scope dispositions are actual observations,
@@ -1149,8 +1239,8 @@ not prevent listing readable siblings. Combined diagnostics preserve both operat
 coverage reasons and search-work counts, so an earlier read failure cannot become complete coverage.
 These counts describe work across the two searches, not unique files: a path examined by each is
 counted twice. Planned rings are never presented as executed work in the diagnostic audit.
-Git-history discovery is not attempted for a folder without Git unless the question requests
-history or relationships. Requested definition, relationship, and history evidence retains its
+Git-history discovery is not dispatched for a folder without Git. Requested definition,
+relationship, and history evidence retains its
 existing retrieval path and reports genuine unavailability.
 Existing path denials, explicit ignore policy, output/model budgets and redaction remain enforced.
 Filesystem resource exhaustion remains a technical failure: for example, an installation's
@@ -1178,6 +1268,29 @@ priority, independently admitted ranges and sole-listing header fallback remain 
 Metadata-only siblings keep their original scores.
 Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
+
+When relevant ordinary sources are available, final context selection omits incidental dependency
+lockfiles with the existing `low-relevance` reason instead of appending their bodies after source
+files. A shared directory name is not explicit lockfile intent. Named or selected lockfiles,
+dependency/version questions, and a relevant lockfile-only fallback remain eligible within their
+existing policy and budgets. When concrete sources are addressed, incidental lockfiles must belong
+to an ancestor module; explicitly selected lockfiles remain eligible. Dependency/version intent
+reuses canonical planner terms, including German. Validated query-origin source selections can seed
+ancestor metadata roots through the existing discovery path, but each added root must pass the
+selected-scope and denial predicate before directory IO. All roots share the existing traversal,
+deadline and retention controls. Assistant or diagnostic references do not seed those roots.
+Classification reuses the workspace ecosystem registry. This selection
+rule applies to Git repositories and ordinary folders without applying Git-specific directory
+exclusions to ordinary documents. The existing connected-context completion records actual selected
+and omitted counts and charged usage; no path or body enters that evidence.
+
+Dependency intent excludes preservation constraints and source data in quoted text, code, paths or
+diagnostic frames. A separate affirmative dependency question remains eligible alongside a
+constraint, while a negated reporting request does not promote metadata. The planner owns this
+predicate and reuses its existing request-command grammar. Explicit canonical dotted metadata and
+lockfile basenames are references through the ecosystem registry, not a general JSON-file rule;
+existing extensionless selectors retain their meaning. Basename discovery still obeys selected
+scope, exclusions, its finite match grant and the shared search/read budgets before source IO.
 
 Canonical omission order and cache identity are independent of caller ordering. A successful
 selected-file read replaces an earlier omission for that exact file; invalid parent/child overlaps

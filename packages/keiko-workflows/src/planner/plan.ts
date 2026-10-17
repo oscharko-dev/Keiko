@@ -39,6 +39,7 @@ import {
   type SearchReference,
 } from "./references.js";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
+import { REQUEST_COMMAND_PATTERNS } from "./request-command-patterns.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -426,10 +427,6 @@ const INDEPENDENT_REQUEST_GRAMMAR_PATTERNS = [
   /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus)\b/iu,
   /\b(?:then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während)\b/iu,
   /\b(?:außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu,
-];
-const REQUEST_COMMAND_PATTERNS = [
-  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b/iu,
-  /\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu,
 ];
 
 function matchesQueryPattern(text: string, patterns: readonly RegExp[]): boolean {
@@ -1041,11 +1038,13 @@ interface PlannedRings {
 
 function composeRings(
   anchors: readonly SearchAnchor[],
-  scope: SelectedScope,
-  query: RetrievalQuery,
+  input: CreatePlanInput,
   budget: ExplorationBudget,
   targetDecision: QueryTargetDecision,
+  classification: RetrievalIntentClassification,
 ): PlannedRings {
+  const { scope, query } = input;
+  const intent = classification.effectiveIntent ?? classification.intent;
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
   const directLookup =
     isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors, targetDecision);
@@ -1054,7 +1053,8 @@ function composeRings(
   }
   if (
     !directLookup &&
-    (scope.relativePaths.length === 0 || requiresRelationshipOrHistoryRings(query))
+    ((scope.relativePaths.length === 0 && intent === "diagnostic-search") ||
+      requiresRelationshipOrHistoryRings(query))
   ) {
     rings.push(buildRing("git-history", anchors, budget));
   }
@@ -1265,31 +1265,25 @@ function buildSelectedScopePlan(
   resolved: ResolvedInputs,
   classification: RetrievalIntentClassification,
 ): ExplorationPlan {
-  const extraction = extractRetrievalChannels(
+  const channels = extractRetrievalChannels(
     input.query.text,
     resolved.maxAnchors,
     input.references,
   );
-  const searchAnchors = [...extraction.anchors, ...searchReferenceAnchors(extraction.references)];
-  const targetDecision = resolveQueryTargetDecision(input.query, searchAnchors, input.maxAnchors);
+  const anchors = [...channels.anchors, ...searchReferenceAnchors(channels.references)];
+  const targetDecision = resolveQueryTargetDecision(input.query, anchors, input.maxAnchors);
   const { classification: plannedClassification, decision } = plannedRequestDecision(
     targetDecision,
-    extraction.references,
+    channels.references,
     classification,
-    searchAnchors,
+    anchors,
     input.scope,
   );
   const { rings, directEvidenceLookup } =
     decision.state === "ready"
-      ? composeRings(searchAnchors, input.scope, input.query, resolved.budget, targetDecision)
+      ? composeRings(anchors, input, resolved.budget, targetDecision, plannedClassification)
       : { rings: [], directEvidenceLookup: false };
-  const seed = readyPlanSeed(
-    input,
-    plannedClassification,
-    searchAnchors,
-    extraction.references,
-    rings,
-  );
+  const seed = readyPlanSeed(input, plannedClassification, anchors, channels.references, rings);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),
@@ -1301,8 +1295,8 @@ function buildSelectedScopePlan(
     directEvidenceLookup,
     scope: input.scope,
     query: input.query,
-    anchors: extraction.anchors,
-    references: extraction.references,
+    anchors: channels.anchors,
+    references: channels.references,
     targetDecision,
     rings,
     budget: resolved.budget,

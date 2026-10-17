@@ -3393,34 +3393,42 @@ async function executeGroundedAsk(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
-  const result = await runSerializedChatTurn(deps, prepared.chat.id, prepared.signal, () => {
-    const chat = findChatById(deps, prepared.chat.id);
-    if (chat === undefined) return notFound("Chat not found.");
-    const frozen = freezeGroundedTurn({ ...prepared, chat }, deps);
-    if (isRouteResult(frozen)) return frozen;
-    if (frozen.input.clientTurnId !== undefined) {
-      const inspection = deps.store.inspectChatTurn(
-        chat.id,
-        frozen.input.clientTurnId,
-        frozenGroundedTurnIdentity(frozen),
-      );
-      if (inspection.kind === "replay") {
-        return inspection.assistantMessage.groundedAnswer === undefined
-          ? groundedTurnConflict("CHAT_TURN_IDEMPOTENCY_CONFLICT")
-          : { status: 200, body: inspection.assistantMessage.groundedAnswer };
+  const generation = new AbortController();
+  prepared = { ...prepared, signal: AbortSignal.any([prepared.signal, generation.signal]) };
+  const result = await runSerializedChatTurn(
+    deps,
+    prepared.chat.id,
+    prepared.signal,
+    () => {
+      const chat = findChatById(deps, prepared.chat.id);
+      if (chat === undefined) return notFound("Chat not found.");
+      const frozen = freezeGroundedTurn({ ...prepared, chat }, deps);
+      if (isRouteResult(frozen)) return frozen;
+      if (frozen.input.clientTurnId !== undefined) {
+        const inspection = deps.store.inspectChatTurn(
+          chat.id,
+          frozen.input.clientTurnId,
+          frozenGroundedTurnIdentity(frozen),
+        );
+        if (inspection.kind === "replay") {
+          return inspection.assistantMessage.groundedAnswer === undefined
+            ? groundedTurnConflict("CHAT_TURN_IDEMPOTENCY_CONFLICT")
+            : { status: 200, body: inspection.assistantMessage.groundedAnswer };
+        }
       }
-    }
-    const closed = chatClosedResult(chat);
-    if (closed !== undefined) return closed;
-    if (
-      frozen.input.expectedGroundingScopeIdentity === undefined &&
-      buildConnectedScopes(chat).length === 0 &&
-      buildLocalKnowledgeScopes(chat).length === 0
-    ) {
-      return badRequest("Chat has no connected scope.");
-    }
-    return executeGroundedAskInTurn(frozen, deps, runner, multiSource, hybrid);
-  });
+      const closed = chatClosedResult(chat);
+      if (closed !== undefined) return closed;
+      if (
+        frozen.input.expectedGroundingScopeIdentity === undefined &&
+        buildConnectedScopes(chat).length === 0 &&
+        buildLocalKnowledgeScopes(chat).length === 0
+      ) {
+        return badRequest("Chat has no connected scope.");
+      }
+      return executeGroundedAskInTurn(frozen, deps, runner, multiSource, hybrid);
+    },
+    generation,
+  );
   return result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result;
 }
 
