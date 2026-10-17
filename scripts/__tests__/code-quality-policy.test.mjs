@@ -447,7 +447,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -487,7 +491,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -535,7 +543,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -580,7 +592,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -668,7 +684,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -708,7 +728,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -846,7 +870,11 @@ describe("remaining Memory public parser obligations (#3918)", () => {
       expect(record.rules).toEqual(
         unknownOnly.has(record.id)
           ? ["anti-slop/no-unknown-parameters"]
-          : ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+          : [
+              "anti-slop/no-unknown-parameters",
+              "anti-slop/no-runtime-typeof",
+              "anti-slop/no-unsafe-dictionary-type",
+            ],
       );
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual(["packages/keiko-contracts/src/memory.test.ts"]);
@@ -1206,7 +1234,11 @@ describe("Knowledge family raw input responsibilities (#3918)", () => {
       const record = policy.responsibilities.find((entry) => entry.id === id);
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input).toEqual({
         consumerPath: path,
         specifier,

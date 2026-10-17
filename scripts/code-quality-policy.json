@@ -972,7 +972,11 @@
       "id": "knowledge-catalog-capsules-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
@@ -1016,7 +1020,11 @@
       "id": "knowledge-catalog-capsule-sets-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
@@ -1060,7 +1068,11 @@
       "id": "memory-record-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1104,7 +1116,11 @@
       "id": "memory-scope-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1148,7 +1164,11 @@
       "id": "memory-payload-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1192,7 +1212,11 @@
       "id": "atlassian-sync-change-summary-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1236,7 +1260,11 @@
       "id": "atlassian-sync-job-state-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1280,7 +1308,11 @@
       "id": "atlassian-connector-pod-source-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1324,7 +1356,11 @@
       "id": "atlassian-connector-descriptor-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1368,7 +1404,11 @@
       "id": "atlassian-sync-bounds-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1412,7 +1452,11 @@
       "id": "atlassian-sync-scope-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1456,7 +1500,11 @@
       "id": "atlassian-connector-activity-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1500,7 +1548,11 @@
       "id": "atlassian-connector-pending-approval-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1544,7 +1596,11 @@
       "id": "atlassian-connector-action-execution-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1588,7 +1644,11 @@
       "id": "jira-live-search-request-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1632,7 +1692,11 @@
       "id": "jira-live-search-result-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
@@ -1676,7 +1740,11 @@
       "id": "memory-proposal-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1732,7 +1800,11 @@
       "id": "memory-acceptance-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1780,7 +1852,11 @@
       "id": "memory-rejection-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1828,7 +1904,11 @@
       "id": "memory-update-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -1880,7 +1960,11 @@
       "id": "memory-supersession-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -2024,7 +2108,11 @@
       "id": "memory-archive-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -2072,7 +2160,11 @@
       "id": "memory-forget-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -2120,7 +2212,11 @@
       "id": "memory-audit-record-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -2188,7 +2284,11 @@
       "id": "memory-retrieval-request-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
@@ -4102,7 +4202,11 @@
       "id": "knowledge-capsule-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
@@ -4150,7 +4254,11 @@
       "id": "knowledge-capsule-set-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
@@ -4194,7 +4302,11 @@
       "id": "knowledge-reindex-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
@@ -4238,7 +4350,11 @@
       "id": "knowledge-graph-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
@@ -4286,7 +4402,11 @@
       "id": "knowledge-checkpoint-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation",
@@ -4334,7 +4454,11 @@
       "id": "knowledge-pod-summary-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
@@ -4382,7 +4506,11 @@
       "id": "knowledge-retrieval-activity-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity",

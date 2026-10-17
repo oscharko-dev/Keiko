@@ -698,10 +698,11 @@ Optional dictionary or typeof slots require the existing exact same-source check
 executed public proofs. Numeric patch counters and already narrowed operands remain outside it.
 No rule scope, authority, persistence decoder or logging surface changes in this batch.
 
-The actual Memory checker retains pin/unpin as public unknown-parameter obligations only; its
-shared overloaded helper receives no dictionary adaptation. Retrieval's two narrowed typeof
-operands and the numeric countUpdatePatches helper remain unadapted. The other nine new roots
-may qualify only the exact dictionary slots admitted by their original same-source closure.
+Pin/unpin retain their public unknown-parameter obligations only; their shared overloaded helper
+receives no optional dictionary or typeof declaration. Retrieval's two narrowed typeof operands
+and the numeric countUpdatePatches helper remain outside the existing raw-checker contract.
+The optional-rule expansion below changes only explicit declarations on supported existing roots;
+it does not erase those omissions or claim that every raw annotation is covered.
 
 The documentation navigation and manual-proposal request parsers add two mandatory public
 unknown-parameter obligations, bringing the register to 45. Their public wrappers prove normalized
@@ -1042,3 +1043,50 @@ single captured bound reads. All prior105 records, rule dispositions, scopes and
 remain intact. These two additional records still require default assessment, actual helper
 accounting and fresh107-record qualification. Typed connected-context diagnostics and other
 raw-helper obligations are not adapted by this registration.
+
+### Existing Memory and Atlassian raw-checker rule declarations (#3918)
+
+Twenty-three existing qualified public-parser records in the Memory/Atlassian family additionally
+declare `anti-slop/no-runtime-typeof` and `anti-slop/no-unsafe-dictionary-type` alongside their
+original unknown-parameter obligation. The two pin/unpin records retain unknown-only declarations
+because their shared overloaded helper is outside the existing bounded checker. No record identity,
+role, selector, proof, public signature, rule scope or registry count changes: the inventory remains107.
+
+These declarations permit only the existing rawCheckingSlots filter, not whole-file coverage. A typeof operand must have a real raw origin and actual checker-unknown type. A dictionary
+must be the canonical standard-library Record<string,unknown> annotation in a qualified boolean or
+predicate checker; domain collectors, counterfeits, foreign/erased origins, already-narrowed operands,
+unsupported callbacks and withheld closures remain unadmitted. Prompt's existing64/65 WITHHELD
+helper evidence and every unrelated family remain unchanged.
+
+The actual default-family assessment retains all 75 prior slot memberships and exposes 55 additional
+distinct native coordinates: 52 dictionary annotations and three typeof guards. All 25 roots bind
+ready with semantic proofs pending; this is structural eligibility, not complete-cohort qualification.
+The new coordinates match the actual native scan of the six unchanged production owners. Existing
+raw diagnostics outside those coordinates remain visible, and nine already-dictionary-enabled Memory
+records gain no additional typeof slot. Pin/unpin remain unchanged.
+
+Existing canonical nominal/result, physical-member, optional-presence and refusal pins are retained.
+One additive public Jira malformed-truncated case strengthens the existing selector. Held canonical
+emitted pinned/truncated guard controls each fail the owning public assertion while the same-field
+source refusal and healthy anchors pass, then pass immediately after exact restoration. Existing
+counterfeit, escape, erasure and domain-origin authority controls retain their independent native
+refusals. These controls support the changed obligations without a per-root replay grid; the fresh
+complete-cohort gate remains required. Actual Memory physical INSERT/UPDATE/persistence closure is
+separate evidence.
+
+### Existing Knowledge raw-checker rule declarations (#3918)
+
+The nine existing Knowledge public-parser records additionally declare the raw-origin typeof and
+canonical dictionary rules alongside their unknown-parameter obligation. This source-prepared
+metadata change leaves all 107 identities, roles, selectors, proof bindings, scopes and runtime
+behavior unchanged. It uses the existing bounded checker; declaration alone establishes neither
+additional slot eligibility nor semantic qualification. Foreign/shared origins, exported or
+escaping helpers, unsupported callbacks, already-narrowed operands and non-checker dictionaries
+retain the existing exclusions. Actual default-family assessment and matching controls must
+establish the additional slots and retained omissions before this candidate is qualified.
+
+Existing nominal/public parser, original-reference, optional-presence, physical-member, eager
+diagnostic and read-phase proofs remain unchanged. Matching historical evidence can be adopted
+only with exact source/runtime/proof equivalence; contract parser qualification does not replace
+physical persistence or complete integration evidence. No whole Knowledge or contracts scope is
+activated by these declarations.

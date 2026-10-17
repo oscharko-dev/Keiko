@@ -2110,6 +2110,9 @@ describe("Atlassian live-query public parsers (#3918)", () => {
       ok: false,
       errors: ["liveResult.totalMatched is only allowed for a complete (not truncated) result"],
     });
+    expect(
+      parsePublicJiraLiveSearchResult(liveResult({ truncated: "no", totalMatched: undefined })),
+    ).toEqual({ ok: false, errors: ["liveResult.truncated must be a boolean"] });
     assertLivePublicTypes();
   });
 });
