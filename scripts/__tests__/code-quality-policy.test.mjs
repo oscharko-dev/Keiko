@@ -258,6 +258,16 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "command-request-public-parser",
       "command-catalog-public-parser",
       "command-result-public-parser",
+      "knowledge-capsule-public-parser",
+      "knowledge-capsule-set-public-parser",
+      "knowledge-reindex-public-parser",
+      "knowledge-graph-public-parser",
+      "knowledge-checkpoint-public-parser",
+      "knowledge-pod-summary-public-parser",
+      "knowledge-retrieval-activity-public-parser",
+      "workbench-authority-public-parser",
+      "workbench-permission-public-parser",
+      "workbench-runtime-event-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1104,6 +1114,143 @@ describe("Command parser unknown input obligations (#3918)", () => {
       expect(record.proofAssertions.every((proof) => proof.path === record.proofs[0])).toBe(true);
       expect(record.transform.exportName).toBe(producer);
       expect(record.output.exportName).toBe(producer);
+    },
+  );
+});
+
+describe("Knowledge family raw input responsibilities (#3918)", () => {
+  it.each([
+    {
+      id: "knowledge-capsule-public-parser",
+      producer: "validateKnowledgeCapsule",
+      witness: "parsePublicKnowledgeCapsule",
+      path: "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+      assertions: 4,
+    },
+    {
+      id: "knowledge-capsule-set-public-parser",
+      producer: "validateCapsuleSet",
+      witness: "parsePublicKnowledgeSet",
+      path: "packages/keiko-contracts/src/local-knowledge.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+      assertions: 3,
+    },
+    {
+      id: "knowledge-reindex-public-parser",
+      producer: "validateCapsuleReindexRequest",
+      witness: "parsePublicKnowledgeReindex",
+      path: "packages/keiko-contracts/src/local-knowledge.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+      assertions: 3,
+    },
+    {
+      id: "knowledge-graph-public-parser",
+      producer: "validateConnectorGraphState",
+      witness: "parsePublicKnowledgeGraph",
+      path: "packages/keiko-contracts/src/local-knowledge.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+      assertions: 4,
+    },
+    {
+      id: "knowledge-checkpoint-public-parser",
+      producer: "validateExtractionCheckpointRecord",
+      witness: "parsePublicKnowledgeCheckpoint",
+      path: "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation",
+      assertions: 4,
+    },
+    {
+      id: "knowledge-pod-summary-public-parser",
+      producer: "validateKnowledgePodSummary",
+      witness: "parsePublicKnowledgeSummary",
+      path: "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+      assertions: 4,
+    },
+    {
+      id: "knowledge-retrieval-activity-public-parser",
+      producer: "validateKnowledgePodRetrievalActivity",
+      witness: "parsePublicKnowledgeActivity",
+      path: "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity",
+      assertions: 4,
+    },
+  ])(
+    "preserves the declared producer and proof owner for $producer",
+    ({ id, producer, witness, path, specifier, assertions }) => {
+      const record = policy.responsibilities.find((entry) => entry.id === id);
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({
+        consumerPath: path,
+        specifier,
+        exportName: producer,
+        parameterIndex: 0,
+      });
+      expect(record.transform).toEqual({ consumerPath: path, specifier, exportName: producer });
+      expect(record.output).toEqual(record.transform);
+      expect(record.consumer).toEqual({
+        consumerPath: path,
+        specifier,
+        exportName: witness,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toEqual([path]);
+      expect(record.proofAssertions).toHaveLength(assertions);
+      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
+      expect(validatePolicy(policy)).toEqual([]);
+    },
+  );
+});
+
+describe("Workbench family raw input responsibilities (#3918)", () => {
+  it.each([
+    {
+      id: "workbench-authority-public-parser",
+      producer: "validateCodingWorkbenchAuthorityEnvelope",
+      witness: "parsePublicWorkbenchAuthority",
+    },
+    {
+      id: "workbench-permission-public-parser",
+      producer: "validateCodingWorkbenchPermissionRequest",
+      witness: "parsePublicWorkbenchPermission",
+    },
+    {
+      id: "workbench-runtime-event-public-parser",
+      producer: "validateCodingWorkbenchRuntimeEvent",
+      witness: "parsePublicWorkbenchEvent",
+    },
+  ])(
+    "preserves the declared producer and canonical proof for $producer",
+    ({ id, producer, witness }) => {
+      const record = policy.responsibilities.find((entry) => entry.id === id);
+      const consumerPath = "packages/keiko-contracts/src/coding-workbench.test.ts";
+      const specifier = "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({
+        consumerPath,
+        specifier,
+        exportName: producer,
+        parameterIndex: 0,
+      });
+      expect(record.transform).toEqual({ consumerPath, specifier, exportName: producer });
+      expect(record.output).toEqual(record.transform);
+      expect(record.consumer).toEqual({
+        consumerPath,
+        specifier,
+        exportName: witness,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toEqual([consumerPath]);
+      expect(record.proofAssertions).toHaveLength(3);
+      expect(record.proofAssertions.every((proof) => proof.path === consumerPath)).toBe(true);
+      expect(validatePolicy(policy)).toEqual([]);
     },
   );
 });

@@ -20,7 +20,7 @@
 // behaviorally (the retained private copy is exercised through its real production entry point and
 // must still agree with the canonical implementation on the exact rejection message).
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ import {
   validateConnectorGraphState,
   validateKnowledgeCapsule,
   validateOnlyKeys,
+  type LocalKnowledgeValidation,
 } from "./local-knowledge-validation.js";
 import {
   standardPodModelUsePolicy,
@@ -38,6 +39,7 @@ import {
 import {
   validateConnectorGraphState as publicValidateGraph,
   validateKnowledgeCapsule as publicValidateKnowledgeCapsule,
+  type LocalKnowledgeValidation as PublicKnowledgeValidation,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -304,7 +306,11 @@ for (const [entry, validate] of [
 }
 
 type CapsuleAny<T> = 0 extends 1 & T ? true : false;
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  KnowledgeCapsule as PublicKnowledgeCapsule,
+} from "@oscharko-dev/keiko-contracts";
 
 function consumePublicCapsule(input: unknown): void {
   const result = publicValidateKnowledgeCapsule(input);
@@ -351,3 +357,84 @@ for (const [entry, validate] of [
     });
   });
 }
+
+export function parsePublicKnowledgeCapsule(
+  input: unknown,
+): PublicKnowledgeValidation<PublicKnowledgeCapsule> {
+  const result = publicValidateKnowledgeCapsule(input);
+  return result;
+}
+
+describe("Knowledge capsule public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateKnowledgeCapsule).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateKnowledgeCapsule).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeCapsule).parameter(0).toBeUnknown();
+    expectTypeOf(validateKnowledgeCapsule).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateKnowledgeCapsule).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeCapsule).parameter(0).not.toBeAny();
+    expectTypeOf(validateKnowledgeCapsule).returns.toEqualTypeOf<
+      LocalKnowledgeValidation<SourceKnowledgeCapsule>
+    >();
+    expectTypeOf(validateKnowledgeCapsule).returns.not.toBeAny();
+    expectTypeOf(publicValidateKnowledgeCapsule).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicKnowledgeCapsule>
+    >();
+    expectTypeOf(parsePublicKnowledgeCapsule).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicKnowledgeCapsule>
+    >();
+    expectTypeOf(publicValidateKnowledgeCapsule).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeCapsule).returns.not.toBeAny();
+    const result = parsePublicKnowledgeCapsule(capsuleInput());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicKnowledgeCapsule>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.id).not.toBeAny();
+      expectTypeOf(result.value.id).not.toBeUnknown();
+      expectTypeOf(result.value.sourceIds).not.toBeAny();
+      expectTypeOf(result.value.sourceIds).not.toBeUnknown();
+      expectTypeOf(result.value.embeddingModelIdentity).not.toBeAny();
+      expectTypeOf(result.value.embeddingModelIdentity).not.toBeUnknown();
+      expectTypeOf(result.value.embeddingModelIdentity.vectorDimensions).not.toBeAny();
+      expectTypeOf(result.value.embeddingModelIdentity.vectorDimensions).not.toBeUnknown();
+      expectTypeOf(result.value.alwaysQuery).not.toBeAny();
+      expectTypeOf(result.value.alwaysQuery).not.toBeUnknown();
+    }
+  });
+});
+
+describe("Knowledge capsule public responsibility (#3918)", () => {
+  it("preserves admitted identity optional presence and nested references", () => {
+    for (const state of ["omitted", "undefined", "true", "false"]) {
+      const input = capsuleInput();
+      if (state !== "omitted")
+        input.alwaysQuery = state === "undefined" ? undefined : state === "true";
+      const result = parsePublicKnowledgeCapsule(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.sourceIds).toBe(input.sourceIds);
+      expect(result.value.embeddingModelIdentity).toBe(input.embeddingModelIdentity);
+      expect(Object.hasOwn(result.value, "alwaysQuery")).toBe(state !== "omitted");
+      expect(result.value.alwaysQuery).toBe(input.alwaysQuery);
+    }
+  });
+  it("refuses malformed concrete fields and physical collection members", () => {
+    for (const input of [
+      null,
+      [],
+      { ...capsuleInput(), displayName: "" },
+      { ...capsuleInput(), metadata: { fixture: 1 } },
+      { ...capsuleInput(), sourceIds: [0] },
+      { ...capsuleInput(), tags: new Array<unknown>(1) },
+      { ...capsuleInput(), embeddingModelIdentity: {} },
+      { ...capsuleInput(), alwaysQuery: "yes" },
+      { ...capsuleInput(), createdAt: Number.NaN },
+    ])
+      expect(parsePublicKnowledgeCapsule(input).ok).toBe(false);
+  });
+});
+
+import type { KnowledgeCapsule as SourceKnowledgeCapsule } from "./local-knowledge.js";

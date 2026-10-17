@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
@@ -1018,3 +1018,82 @@ for (const { field, entry, parse, surface } of [
         expect(parse({ [field]: [{ ...entry(), ...changed }] }).ok).toBe(false);
     });
   });
+
+import type { LocalKnowledgeValidation as PublicKnowledgeValidation } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import type { KnowledgePodSummary as PublicPodSummary } from "@oscharko-dev/keiko-contracts";
+
+export function parsePublicKnowledgeSummary(
+  input: unknown,
+): PublicKnowledgeValidation<PublicPodSummary> {
+  const result = publicValidateSummary(input);
+  return result;
+}
+
+describe("Knowledge pod summary public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateKnowledgePodSummary).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateSummary).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeSummary).parameter(0).toBeUnknown();
+    expectTypeOf(validateKnowledgePodSummary).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateSummary).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeSummary).parameter(0).not.toBeAny();
+    expectTypeOf(validateKnowledgePodSummary).returns.toEqualTypeOf<
+      LocalKnowledgeValidation<KnowledgePodSummary>
+    >();
+    expectTypeOf(validateKnowledgePodSummary).returns.not.toBeAny();
+    expectTypeOf(publicValidateSummary).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicPodSummary>
+    >();
+    expectTypeOf(parsePublicKnowledgeSummary).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicPodSummary>
+    >();
+    expectTypeOf(publicValidateSummary).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeSummary).returns.not.toBeAny();
+    const result = parsePublicKnowledgeSummary(happySummary());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicPodSummary>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.id).not.toBeAny();
+      expectTypeOf(result.value.id).not.toBeUnknown();
+      expectTypeOf(result.value.counts).not.toBeAny();
+      expectTypeOf(result.value.counts).not.toBeUnknown();
+      expectTypeOf(result.value.privacy.rawContentExposed).not.toBeAny();
+      expectTypeOf(result.value.privacy.rawContentExposed).not.toBeUnknown();
+      expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).not.toBeAny();
+      expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).not.toBeUnknown();
+    }
+  });
+});
+
+describe("Knowledge pod summary public responsibility (#3918)", () => {
+  it("preserves strict summary privacy policy counts and compatibility references", () => {
+    const input = happySummary();
+    const result = parsePublicKnowledgeSummary(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.counts).toBe(input.counts);
+    expect(result.value.modelUsePolicy).toBe(input.modelUsePolicy);
+    expect(result.value.compatibility).toBe(input.compatibility);
+    expectTypeOf(result.value.privacy.rawContentExposed).toEqualTypeOf<false>();
+    expectTypeOf(result.value.counts.capsuleCount).toEqualTypeOf<number>();
+    expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).toEqualTypeOf<
+      "allow" | "deny"
+    >();
+  });
+  it("refuses malformed strict summary privacy counts and missing model policy", () => {
+    for (const input of [
+      null,
+      { ...happySummary(), schemaVersion: "unsupported" },
+      { ...happySummary(), privacy: { ...happySummary().privacy, rawContentExposed: true } },
+      { ...happySummary(), counts: { ...happySummary().counts, vectorCount: -1 } },
+      { ...happySummary(), modelUsePolicy: undefined },
+      { ...happySummary(), displayName: "https://fixture.invalid/private" },
+    ])
+      expect(parsePublicKnowledgeSummary(input).ok).toBe(false);
+  });
+});
+
+import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";

@@ -878,3 +878,44 @@ original source controls remain healthy. This uses the existing helper-inclusive
 changing an engine capability or manufacturing a separate grant. No scopes, exports, authority,
 logging ports or optional argument/dictionary/typeof grants change. Actual reader eligibility and fresh full-cohort
 qualification remain required; source preparation does not activate the unknown-parameter scope.
+
+### Seven Knowledge validator responsibilities (#3918)
+
+Seven existing capsule, capsule-set, reindex, connector-graph, extraction-checkpoint, pod-summary and
+retrieval-activity validators extend the declared cohort from 73 to 80 using the existing
+`public-parser` kind and only `anti-slop/no-unknown-parameters` parameter zero. All earlier records,
+rule scopes and proof selectors remain intact. This source declaration does not establish that the
+seven records are structurally assessed or runtime-qualified; actual early owner-API assessment and
+fresh complete-cohort qualification remain mandatory. Existing helper-inclusive closure may account
+for additional private raw inputs, while cross-file, exported collector and unsupported roles remain
+actual reader obligations. No optional typeof/dictionary/known-value grant or engine change is made.
+
+Canonical public forwarding witnesses use the existing result generic with canonical public domain
+types. Source and emitted public nominal brands have independent expected types; a source-domain
+brand is not substituted for a public one. Strict unknown/result/nested-field pins and normative
+identity/refusal proofs preserve the seven guarded representation casts. Concrete field admission
+precedes those casts, which attach erased IDs without copying values or weakening brand separation.
+Existing physical-member, sparse/inherited collection, optional-presence, endpoint reread, policy,
+privacy, caps and nested identity assertions remain unchanged. No product code or public export is
+changed, and this qualification-only addition does not invent a universal hostile-accessor promise.
+
+The reindex route, Knowledge Pod projection/server revalidation, and grounded-answer/store admission
+remain the active production consumers where they exist. Other validators retain their same-owner
+canonical public API proof rather than claiming a fabricated store consumer. These contract proofs
+do not by themselves certify physical SQLite persistence, product logging or final domain activation.
+
+### Batched Workbench admission responsibilities (#3918)
+
+Three existing Workbench authority-envelope, permission-request and runtime-event validators join the
+seven Knowledge roots in one declared 83-record cohort. The existing `public-parser` kind selects
+only each root's unknown parameter zero. All prior 73 records and the seven Knowledge records stay
+intact; no optional rule, engine capability, authority or activation changes. All ten additions are
+unassessed and unqualified until actual early owner-API assessment and one genuine full83 run. A
+separate full80 result is neither required nor implied by batching.
+
+One canonical static named validation import and public result/domain type imports from the existing
+runtime Workbench owner support direct result-forwarding witnesses. Independent source expectations
+and public root/nested pins preserve actual generic alias provenance. Existing dynamic public and
+source tests remain unchanged, including physical arrays, identity, optional presence, eager error
+order and calendar-date refusal. During artifact controls those old dynamic public cases must not
+be mislabeled as independent source controls. No production runtime or public exports change.

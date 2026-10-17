@@ -4081,6 +4081,466 @@
           "testName": "Command result public parser (#3918) closes hostile getters undefined throws and revoked proxies without private error inspection"
         }
       ]
+    },
+    {
+      "id": "knowledge-capsule-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateKnowledgeCapsule",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateKnowledgeCapsule"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateKnowledgeCapsule"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "parsePublicKnowledgeCapsule",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+          "testName": "Knowledge capsule public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+          "testName": "Knowledge capsule public responsibility (#3918) preserves admitted identity optional presence and nested references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+          "testName": "Knowledge capsule public responsibility (#3918) refuses malformed concrete fields and physical collection members"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+          "testName": "public capsule consumer retains primitives and nominal separation after revalidation"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-capsule-set-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateCapsuleSet",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateCapsuleSet"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateCapsuleSet"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "parsePublicKnowledgeSet",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge capsule set public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge capsule set public responsibility (#3918) preserves set identity optional presence and nominal capsule lineage"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge capsule set public responsibility (#3918) refuses malformed set fields and checks physical collection positions"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-reindex-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateCapsuleReindexRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateCapsuleReindexRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateCapsuleReindexRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "parsePublicKnowledgeReindex",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge reindex public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge reindex public responsibility (#3918) preserves reindex identity and optional presence without adding defaults"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge reindex public responsibility (#3918) refuses invalid mode force and resume preconditions"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-graph-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateConnectorGraphState",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateConnectorGraphState"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "validateConnectorGraphState"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
+        "exportName": "parsePublicKnowledgeGraph",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge graph public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge graph public responsibility (#3918) preserves graph node edge target identities and nominal lineage"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge graph public responsibility (#3918) refuses invalid graph references discriminants and nested target fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge.test.ts",
+          "testName": "Knowledge graph public responsibility (#3918) revalidates actual endpoint reads before admitting graph edges"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-checkpoint-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation",
+        "exportName": "validateExtractionCheckpointRecord",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation",
+        "exportName": "validateExtractionCheckpointRecord"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation",
+        "exportName": "validateExtractionCheckpointRecord"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation",
+        "exportName": "parsePublicKnowledgeCheckpoint",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge-large-document.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+          "testName": "Knowledge checkpoint public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+          "testName": "Knowledge checkpoint public responsibility (#3918) preserves checkpoint fingerprint diagnostics and admitted scalar identities"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+          "testName": "Knowledge checkpoint public responsibility (#3918) refuses malformed checkpoint lineage fingerprint cursors and diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-large-document.test.ts",
+          "testName": "public checkpoint consumer retains independent nested primitive declarations"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-pod-summary-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "validateKnowledgePodSummary",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "validateKnowledgePodSummary"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "validateKnowledgePodSummary"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parsePublicKnowledgeSummary",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge-pods.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge pod summary public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge pod summary public responsibility (#3918) preserves strict summary privacy policy counts and compatibility references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge pod summary public responsibility (#3918) refuses malformed strict summary privacy counts and missing model policy"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "public summary consumer retains redaction and policy declarations and references"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-retrieval-activity-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity",
+        "exportName": "validateKnowledgePodRetrievalActivity",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity",
+        "exportName": "validateKnowledgePodRetrievalActivity"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity",
+        "exportName": "validateKnowledgePodRetrievalActivity"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity",
+        "exportName": "parsePublicKnowledgeActivity",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+          "testName": "Knowledge retrieval activity public responsibility (#3918) pins exact unknown inputs checked results and nested declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+          "testName": "Knowledge retrieval activity public responsibility (#3918) preserves all participation states counts privacy and original pod references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+          "testName": "Knowledge retrieval activity public responsibility (#3918) refuses malformed activity counts privacy state and closed metadata"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts",
+          "testName": "public retrieval consumer retains closed privacy/state/count declarations"
+        }
+      ]
+    },
+    {
+      "id": "workbench-authority-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchAuthorityEnvelope",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchAuthorityEnvelope"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchAuthorityEnvelope"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "parsePublicWorkbenchAuthority",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench authority public parser (#3918) pins unknown inputs and independent checked authority fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench authority public parser (#3918) preserves admitted authority and nested reference identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench authority public parser (#3918) refuses malformed authority scope budget and vocabulary at the public boundary"
+        }
+      ]
+    },
+    {
+      "id": "workbench-permission-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchPermissionRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchPermissionRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchPermissionRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "parsePublicWorkbenchPermission",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench permission public parser (#3918) pins unknown inputs and independent checked permission fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench permission public parser (#3918) preserves admitted permission identity and optional field presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench permission public parser (#3918) refuses malformed permission pairs dates and raw fields at the public boundary"
+        }
+      ]
+    },
+    {
+      "id": "workbench-runtime-event-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchRuntimeEvent",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchRuntimeEvent"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "validateCodingWorkbenchRuntimeEvent"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation",
+        "exportName": "parsePublicWorkbenchEvent",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench runtime event public parser (#3918) pins unknown inputs and independent checked runtime event fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench runtime event public parser (#3918) preserves admitted runtime event and nested retry identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+          "testName": "Workbench runtime event public parser (#3918) refuses malformed runtime event dates counts and raw fields at the public boundary"
+        }
+      ]
     }
   ]
 }
