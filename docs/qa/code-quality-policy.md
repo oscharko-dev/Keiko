@@ -996,3 +996,26 @@ and by server conversation compaction; `validateContextPreservedFact` is used by
 consumers. Existing direct collector, callback, imported-helper and accumulator
 limits remain authoritative; unsupported slots remain raw rather than gaining an
 implicit family-wide exemption.
+
+## Core Context and shaped-observation diagnostic ownership
+
+Nine additional records reuse the existing closed-envelope `diagnostic-checker` role:
+three core profile/budget/assembly validators and six shaped-observation validators.
+Canonical same-owner public API witnesses count actual ordered failure reasons; strict
+source/public unknown-input and readonly-reason pins preserve the closed success/failure
+contract. The existing 96 records, scope activation, budgets and resolver semantics remain
+unchanged. Source preparation is not a qualified 105-record inventory.
+
+`validateContextBudget` also has the real `connected-context.ts` pack-diagnostic consumer,
+whose absent/valid/invalid nested budget proofs remain intact. The other core roots and
+observation roots use honest public API proof consumers; the observation dispatcher calls
+its four same-file exported validators. No extra production caller is invented. The ordinary
+boolean `isContextToolObservationKind` is neither a type predicate nor a diagnostic checker
+and receives no record here. Existing UTF-8 excerpt/query byte caps, producer byte-count
+cross-checks, optionals and ordered eager diagnostics remain authoritative.
+
+No runtime validator or package export changes. Direct-only helper accounting, callback,
+imported/exported helper and accumulator limits remain unchanged: actual assessment must
+name unsupported slots rather than granting the entire family implicitly. Future strict
+source/public declaration controls, unsafe-body malformed controls and genuine complete
+cohort qualification remain required before readiness is claimed.

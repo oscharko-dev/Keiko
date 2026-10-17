@@ -1086,7 +1086,13 @@ describe("KEIKO-0797 token-estimate cache byte cap", () => {
   });
 });
 
-import { isContextLaneId as publicContextLaneId } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
+import {
+  isContextLaneId as publicContextLaneId,
+  validateContextProfile as publicContextProfile,
+  validateContextBudget as publicContextBudget,
+  validateContextAssemblyDiagnostics as publicContextAssemblyDiagnostics,
+  type ContextValidationResult as PublicContextValidationResult,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 
 describe.each([
   ["source", isContextLaneId],
@@ -1119,5 +1125,257 @@ it("retains the public context lane predicate's independent closed vocabulary", 
       | "history-summary"
       | "verification-evidence"
     >();
+  }
+});
+
+type ExpectedContextDiagnostic =
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
+
+export function countPublicContextProfileDiagnostics(input: unknown): number {
+  const result = publicContextProfile(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+it("shipped context profile diagnostic retains independent source and public closed result types", () => {
+  expectTypeOf<Parameters<typeof validateContextProfile>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof validateContextProfile>>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof validateContextProfile>
+  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<
+    Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<
+    Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"][number]
+  >().not.toBeAny();
+  expectTypeOf<Parameters<typeof publicContextProfile>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof publicContextProfile>>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof publicContextProfile>
+  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<
+    Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<
+    Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"][number]
+  >().not.toBeAny();
+  expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<Parameters<typeof countPublicContextProfileDiagnostics>>().toEqualTypeOf<
+    [unknown]
+  >();
+  expectTypeOf<ReturnType<typeof countPublicContextProfileDiagnostics>>().toEqualTypeOf<number>();
+});
+
+it("shipped context profile diagnostic preserves healthy input and counts no reasons", () => {
+  const input = happyProfile();
+  const before = structuredClone(input);
+  expect(publicContextProfile(input)).toEqual({ ok: true });
+  expect(validateContextProfile(input)).toEqual({ ok: true });
+  expect(countPublicContextProfileDiagnostics(input)).toBe(0);
+  expect(input).toEqual(before);
+});
+
+it("shipped context profile diagnostic counts actual ordered public refusals", () => {
+  expect(publicContextProfile(null)).toEqual({ ok: false, reasons: ["profile invalid"] });
+  expect(validateContextProfile(null)).toEqual({ ok: false, reasons: ["profile invalid"] });
+  expect(countPublicContextProfileDiagnostics(null)).toBe(1);
+  const cases: readonly { readonly input: unknown; readonly reasons: readonly string[] }[] = [
+    {
+      input: { ...happyProfile(), schemaVersion: "2", tokenEstimatorId: "" },
+      reasons: ["profile.schemaVersion mismatch", "profile.tokenEstimatorId empty"],
+    },
+    { input: { ...happyProfile(), model: { id: 42 } }, reasons: ["profile.model.id invalid"] },
+    {
+      input: {
+        ...happyProfile(),
+        tokenAccounting: { source: "calibrated", counterId: "", scaleMilli: 0 },
+      },
+      reasons: [
+        "profile.tokenAccounting.counterId empty",
+        "profile.tokenAccounting.scaleMilli invalid",
+      ],
+    },
+    {
+      input: { ...happyProfile(), inputTokenLimit: 0 },
+      reasons: ["profile.inputTokenLimit invalid", "profile.effectiveInputBudget mismatch"],
+    },
+    {
+      input: {
+        ...happyProfile(),
+        tokenAccounting: { source: "unrecognized-source", counterId: "fixture-counter" },
+      },
+      reasons: ["profile.tokenAccounting.source invalid"],
+    },
+  ];
+  for (const { input, reasons } of cases) {
+    expect(publicContextProfile(input)).toEqual({ ok: false, reasons });
+    expect(validateContextProfile(input)).toEqual({ ok: false, reasons });
+    expect(countPublicContextProfileDiagnostics(input)).toBe(reasons.length);
+  }
+});
+
+export function countPublicContextBudgetDiagnostics(input: unknown): number {
+  const result = publicContextBudget(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+it("shipped context budget diagnostic retains independent source and public closed result types", () => {
+  expectTypeOf<Parameters<typeof validateContextBudget>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof validateContextBudget>>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof validateContextBudget>
+  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<
+    Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<
+    Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"][number]
+  >().not.toBeAny();
+  expectTypeOf<Parameters<typeof publicContextBudget>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof publicContextBudget>>().not.toBeAny();
+  expectTypeOf<ReturnType<typeof publicContextBudget>>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<
+    Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<
+    Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"][number]
+  >().not.toBeAny();
+  expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<Parameters<typeof countPublicContextBudgetDiagnostics>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof countPublicContextBudgetDiagnostics>>().toEqualTypeOf<number>();
+});
+
+it("shipped context budget diagnostic preserves healthy input and counts no reasons", () => {
+  const input = happyBudget();
+  const before = structuredClone(input);
+  expect(publicContextBudget(input)).toEqual({ ok: true });
+  expect(validateContextBudget(input)).toEqual({ ok: true });
+  expect(countPublicContextBudgetDiagnostics(input)).toBe(0);
+  expect(input).toEqual(before);
+});
+
+it("shipped context budget diagnostic counts actual ordered public refusals", () => {
+  expect(publicContextBudget(null)).toEqual({ ok: false, reasons: ["budget invalid"] });
+  expect(validateContextBudget(null)).toEqual({ ok: false, reasons: ["budget invalid"] });
+  expect(countPublicContextBudgetDiagnostics(null)).toBe(1);
+  const cases: readonly { readonly input: unknown; readonly reasons: readonly string[] }[] = [
+    {
+      input: {
+        ...happyBudget(),
+        schemaVersion: "2",
+        lanes: [{ ...happyLaneBudget(), laneId: "bogus", maxTokens: -1 }],
+      },
+      reasons: [
+        "budget.schemaVersion mismatch",
+        "budget.lanes[0].laneId invalid",
+        "budget.lanes[0].maxTokens invalid",
+      ],
+    },
+    {
+      input: {
+        ...happyBudget(),
+        profile: { ...happyProfile(), schemaVersion: "2" },
+        lanes: "invalid",
+      },
+      reasons: ["budget.profile.schemaVersion mismatch", "budget.lanes invalid"],
+    },
+  ];
+  for (const { input, reasons } of cases) {
+    expect(publicContextBudget(input)).toEqual({ ok: false, reasons });
+    expect(validateContextBudget(input)).toEqual({ ok: false, reasons });
+    expect(countPublicContextBudgetDiagnostics(input)).toBe(reasons.length);
+  }
+});
+
+export function countPublicContextAssemblyDiagnosticsDiagnostics(input: unknown): number {
+  const result = publicContextAssemblyDiagnostics(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+it("shipped context assembly diagnostic retains independent source and public closed result types", () => {
+  expectTypeOf<Parameters<typeof validateContextAssemblyDiagnostics>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof validateContextAssemblyDiagnostics>>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof validateContextAssemblyDiagnostics>
+  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<
+    Extract<ReturnType<typeof validateContextAssemblyDiagnostics>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<
+    Extract<ReturnType<typeof validateContextAssemblyDiagnostics>, { ok: false }>["reasons"][number]
+  >().not.toBeAny();
+  expectTypeOf<Parameters<typeof publicContextAssemblyDiagnostics>>().toEqualTypeOf<[unknown]>();
+  expectTypeOf<ReturnType<typeof publicContextAssemblyDiagnostics>>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof publicContextAssemblyDiagnostics>
+  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<
+    Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<
+    Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"][number]
+  >().not.toBeAny();
+  expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
+  expectTypeOf<Parameters<typeof countPublicContextAssemblyDiagnosticsDiagnostics>>().toEqualTypeOf<
+    [unknown]
+  >();
+  expectTypeOf<
+    ReturnType<typeof countPublicContextAssemblyDiagnosticsDiagnostics>
+  >().toEqualTypeOf<number>();
+});
+
+it("shipped context assembly diagnostic preserves healthy input and counts no reasons", () => {
+  const input = happyAssembly();
+  const before = structuredClone(input);
+  expect(publicContextAssemblyDiagnostics(input)).toEqual({ ok: true });
+  expect(validateContextAssemblyDiagnostics(input)).toEqual({ ok: true });
+  expect(countPublicContextAssemblyDiagnosticsDiagnostics(input)).toBe(0);
+  expect(input).toEqual(before);
+});
+
+it("shipped context assembly diagnostic counts actual ordered public refusals", () => {
+  expect(publicContextAssemblyDiagnostics(null)).toEqual({
+    ok: false,
+    reasons: ["assembly invalid"],
+  });
+  expect(validateContextAssemblyDiagnostics(null)).toEqual({
+    ok: false,
+    reasons: ["assembly invalid"],
+  });
+  expect(countPublicContextAssemblyDiagnosticsDiagnostics(null)).toBe(1);
+  const cases: readonly { readonly input: unknown; readonly reasons: readonly string[] }[] = [
+    {
+      input: {
+        ...happyAssembly(),
+        totalEstimatedTokens: -1,
+        budgetPressure: "bogus",
+        orderedForRecency: "yes",
+      },
+      reasons: [
+        "assembly.totalEstimatedTokens invalid",
+        "assembly.budgetPressure invalid",
+        "assembly.orderedForRecency invalid",
+      ],
+    },
+    {
+      input: {
+        ...happyAssembly(),
+        lanes: [
+          { ...happyLaneDiagnostics(), provenanceCounts: { lexical: "bad" }, compactionReason: 1 },
+        ],
+      },
+      reasons: [
+        "assembly.lanes[0].compactionReason invalid",
+        "assembly.lanes[0].provenanceCounts value invalid",
+      ],
+    },
+  ];
+  for (const { input, reasons } of cases) {
+    expect(publicContextAssemblyDiagnostics(input)).toEqual({ ok: false, reasons });
+    expect(validateContextAssemblyDiagnostics(input)).toEqual({ ok: false, reasons });
+    expect(countPublicContextAssemblyDiagnosticsDiagnostics(input)).toBe(reasons.length);
   }
 });

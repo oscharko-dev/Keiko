@@ -331,3 +331,19 @@ describe("G2 actual preflight finding member admission", () => {
     });
   }
 });
+
+it("revalidates the captured verified reason against its actual closed membership", () => {
+  for (const validate of [isVerifiedCommitResult, g2PublicVerified.isVerifiedCommitResult]) {
+    for (const reason of ["constructor", "__proto__", "completed"]) {
+      let reads = 0;
+      const input = {
+        ...receipt,
+        get reason(): unknown {
+          return ++reads < 5 ? "approval-required" : reason;
+        },
+      };
+      expect(validate(input)).toBe(false);
+      expect(reads).toBeGreaterThanOrEqual(5);
+    }
+  }
+});

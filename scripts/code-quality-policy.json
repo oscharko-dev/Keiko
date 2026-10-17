@@ -5145,6 +5145,402 @@
           "testName": "shipped context compaction-record diagnostic counts actual ordered public refusals"
         }
       ]
+    },
+    {
+      "id": "context-profile-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextProfile",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextProfile"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextProfile"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "countPublicContextProfileDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context profile diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context profile diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context profile diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-budget-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextBudget",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextBudget"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextBudget"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "countPublicContextBudgetDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context budget diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context budget diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context budget diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-assembly-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextAssemblyDiagnostics",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextAssemblyDiagnostics"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "validateContextAssemblyDiagnostics"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
+        "exportName": "countPublicContextAssemblyDiagnosticsDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context assembly diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context assembly diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering.test.ts",
+          "testName": "shipped context assembly diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-tool-rehydration-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateContextToolRehydrationHandle",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateContextToolRehydrationHandle"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateContextToolRehydrationHandle"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "countPublicContextToolRehydrationHandleDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-observations.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped context tool rehydration diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped context tool rehydration diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped context tool rehydration diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "shaped-command-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedCommandObservation",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedCommandObservation"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedCommandObservation"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "countPublicShapedCommandObservationDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-observations.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped command diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped command diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped command diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "shaped-test-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedTestObservation",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedTestObservation"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedTestObservation"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "countPublicShapedTestObservationDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-observations.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped test diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped test diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped test diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "shaped-search-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedSearchObservation",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedSearchObservation"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedSearchObservation"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "countPublicShapedSearchObservationDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-observations.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped search diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped search diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped search diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "shaped-browser-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedBrowserObservation",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedBrowserObservation"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateShapedBrowserObservation"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "countPublicShapedBrowserObservationDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-observations.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped browser diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped browser diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped shaped browser diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-tool-observation-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateContextToolObservation",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateContextToolObservation"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "validateContextToolObservation"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
+        "exportName": "countPublicContextToolObservationDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-observations.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped context tool observation diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped context tool observation diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-observations.test.ts",
+          "testName": "shipped context tool observation diagnostic counts actual ordered public refusals"
+        }
+      ]
     }
   ]
 }

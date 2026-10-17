@@ -124,17 +124,23 @@ const STATUS_REASONS: Readonly<Record<VerifiedCommitStatus, readonly VerifiedCom
   "verification-failed": ["verification-missing", "candidate-not-staged", "verification-failed"],
   drift: ["verification-stale", "candidate-drift", "repository-drift"],
 };
+function isVerifiedCommitStatus(status: string): status is VerifiedCommitStatus {
+  return STATUSES.has(status);
+}
+
+function isVerifiedCommitReason(reason: string): reason is VerifiedCommitReason {
+  return REASONS.has(reason);
+}
+
 function validStatusReason(value: Record<string, unknown>): boolean {
   if (typeof value.status !== "string" || !STATUSES.has(value.status)) return false;
-  const statusReasons: Readonly<Partial<Record<string, readonly string[]>>> = STATUS_REASONS;
   const reasonIsKnown = typeof value.reason === "string" && REASONS.has(value.reason);
   if (!reasonIsKnown) return false;
   const status = value.status;
-  if (typeof status !== "string" || !STATUSES.has(status)) return false;
-  const reasons = statusReasons[status];
-  if (reasons === undefined) return false;
+  if (typeof status !== "string" || !isVerifiedCommitStatus(status)) return false;
+  const reasons = STATUS_REASONS[status];
   const reason = value.reason;
-  return typeof reason === "string" && reasons.includes(reason);
+  return typeof reason === "string" && isVerifiedCommitReason(reason) && reasons.includes(reason);
 }
 function validRecordedAt(value: unknown): boolean {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value))

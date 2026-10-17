@@ -281,6 +281,15 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "context-invalidation-key-diagnostic-public-proof",
       "context-rehydration-handle-diagnostic-public-proof",
       "context-compaction-record-diagnostic-public-proof",
+      "context-profile-diagnostic-public-proof",
+      "context-budget-diagnostic-public-proof",
+      "context-assembly-diagnostic-public-proof",
+      "context-tool-rehydration-diagnostic-public-proof",
+      "shaped-command-diagnostic-public-proof",
+      "shaped-test-diagnostic-public-proof",
+      "shaped-search-diagnostic-public-proof",
+      "shaped-browser-diagnostic-public-proof",
+      "context-tool-observation-diagnostic-public-proof",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);

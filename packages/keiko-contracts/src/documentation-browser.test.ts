@@ -544,3 +544,16 @@ describe("documentation navigation public parser (#3918)", () => {
     expect(result.value.cdpPort).toBe(9222);
   });
 });
+
+it("retains the remaining closed browser reason entries on source and public surfaces", () => {
+  for (const reasonFor of [mapBrowserErrorToDocumentationReason, publicBrowserErrorReason]) {
+    expect(reasonFor("REDIRECT_BLOCKED")).toBe("unsupported-external-target");
+    expect(reasonFor("BAD_URL")).toBe("invalid-target");
+    expect(reasonFor("BAD_PORT")).toBe("invalid-target");
+    expect(reasonFor("EAI_AGAIN")).toBe("host-unreachable");
+    expect(reasonFor("ECONNRESET")).toBe("proxy-or-firewall-blocked");
+    expect(reasonFor("EHOSTUNREACH")).toBe("proxy-or-firewall-blocked");
+    expect(reasonFor("ENETUNREACH")).toBe("proxy-or-firewall-blocked");
+    expect(reasonFor("UND_ERR_CONNECT_TIMEOUT")).toBe("request-timed-out");
+  }
+});

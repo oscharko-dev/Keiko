@@ -431,3 +431,30 @@ describe("G2 healthy observed draft binding", () => {
     });
   }
 });
+
+it("keeps public delivered classification aligned with the actual source phase table", () => {
+  for (const phase of phases) {
+    expect(g2PublicDraft.isDeliveredDraftDeliveryPhase(phase)).toBe(
+      isDeliveredDraftDeliveryPhase(phase),
+    );
+  }
+  for (const phase of ["constructor", "__proto__", "toString", "not-a-phase"]) {
+    expect(g2PublicDraft.isDeliveredDraftDeliveryPhase(phase)).toBe(false);
+  }
+});
+
+it("refuses prototype names in the freshly captured draft phase on both surfaces", () => {
+  for (const validate of [isDraftDeliveryRecord, g2PublicDraft.isDraftDeliveryRecord]) {
+    for (const phase of ["constructor", "__proto__"]) {
+      let reads = 0;
+      const input = {
+        ...proposed,
+        get phase(): unknown {
+          return ++reads < 3 ? "push-proposed" : phase;
+        },
+      };
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(3);
+    }
+  }
+});

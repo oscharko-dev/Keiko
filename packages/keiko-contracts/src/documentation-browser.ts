@@ -298,33 +298,32 @@ export function classifyDocumentationTarget(raw: unknown): DocumentationTargetCl
 // KEIKO-0657: read the lookup on a null-prototype object so untrusted keys like `constructor`,
 // `toString`, or `__proto__` return undefined and fall through to the documented
 // "navigation-failed" default instead of resolving to a prototype method.
-const ERROR_CODE_TO_REASON: Readonly<Record<string, DocumentationNavigationReason>> =
-  createErrorCodeReasons();
+const ERROR_CODE_REASONS = {
+  // keiko-tools BrowserToolError codes
+  BROWSER_UNAVAILABLE: "browser-backend-unavailable",
+  CHROME_UNREACHABLE: "browser-backend-unavailable",
+  ORIGIN_NOT_ALLOWED: "unsupported-external-target",
+  SCHEME_NOT_ALLOWED: "unsupported-scheme",
+  REDIRECT_BLOCKED: "unsupported-external-target",
+  NAV_TIMEOUT: "request-timed-out",
+  BAD_URL: "invalid-target",
+  BAD_PORT: "invalid-target",
+  PAYLOAD_TOO_LARGE: "content-too-large",
+  // Node/undici network errno
+  ENOTFOUND: "host-unreachable",
+  EAI_AGAIN: "host-unreachable",
+  ECONNREFUSED: "proxy-or-firewall-blocked",
+  ECONNRESET: "proxy-or-firewall-blocked",
+  EHOSTUNREACH: "proxy-or-firewall-blocked",
+  ENETUNREACH: "proxy-or-firewall-blocked",
+  ETIMEDOUT: "request-timed-out",
+  UND_ERR_CONNECT_TIMEOUT: "request-timed-out",
+} satisfies Record<string, DocumentationNavigationReason>;
+Object.setPrototypeOf(ERROR_CODE_REASONS, null);
+const ERROR_CODE_TO_REASON = Object.freeze(ERROR_CODE_REASONS);
 
-function createErrorCodeReasons(): Readonly<Record<string, DocumentationNavigationReason>> {
-  const reasons: Record<string, DocumentationNavigationReason> = {
-    // keiko-tools BrowserToolError codes
-    BROWSER_UNAVAILABLE: "browser-backend-unavailable",
-    CHROME_UNREACHABLE: "browser-backend-unavailable",
-    ORIGIN_NOT_ALLOWED: "unsupported-external-target",
-    SCHEME_NOT_ALLOWED: "unsupported-scheme",
-    REDIRECT_BLOCKED: "unsupported-external-target",
-    NAV_TIMEOUT: "request-timed-out",
-    BAD_URL: "invalid-target",
-    BAD_PORT: "invalid-target",
-    PAYLOAD_TOO_LARGE: "content-too-large",
-    // Node/undici network errno
-    ENOTFOUND: "host-unreachable",
-    EAI_AGAIN: "host-unreachable",
-    ECONNREFUSED: "proxy-or-firewall-blocked",
-    ECONNRESET: "proxy-or-firewall-blocked",
-    EHOSTUNREACH: "proxy-or-firewall-blocked",
-    ENETUNREACH: "proxy-or-firewall-blocked",
-    ETIMEDOUT: "request-timed-out",
-    UND_ERR_CONNECT_TIMEOUT: "request-timed-out",
-  };
-  Object.setPrototypeOf(reasons, null);
-  return Object.freeze(reasons);
+function isDocumentationBrowserErrorCode(code: string): code is keyof typeof ERROR_CODE_TO_REASON {
+  return Object.hasOwn(ERROR_CODE_TO_REASON, code);
 }
 
 /**
@@ -340,7 +339,7 @@ export function mapBrowserErrorToDocumentationReason(
     return "navigation-failed";
   }
   if (typeof code !== "string" || code.length === 0) return "navigation-failed";
-  return ERROR_CODE_TO_REASON[code] ?? "navigation-failed";
+  return isDocumentationBrowserErrorCode(code) ? ERROR_CODE_TO_REASON[code] : "navigation-failed";
 }
 
 /**

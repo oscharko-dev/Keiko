@@ -117,6 +117,10 @@ const PHASE_REASONS: Readonly<Record<DraftDeliveryPhase, ReadonlySet<string>>> =
   ]),
 };
 
+function isDraftDeliveryPhase(phase: string): phase is DraftDeliveryPhase {
+  return Object.hasOwn(PHASE_REASONS, phase);
+}
+
 /**
  * Whether a record in this phase means something was actually delivered — a push that reached the
  * remote, or a draft pull request that exists. Derived from `PHASE_REASONS` rather than restated as
@@ -194,12 +198,11 @@ function validRecordedAt(value: unknown): boolean {
 
 function validPhase(value: Record<string, unknown>): boolean {
   if (typeof value.phase !== "string" || !Object.hasOwn(PHASE_REASONS, value.phase)) return false;
-  const phaseReasons: Readonly<Partial<Record<string, ReadonlySet<string>>>> = PHASE_REASONS;
   if (typeof value.reason !== "string") return false;
   const phase = value.phase;
-  if (typeof phase !== "string" || !Object.hasOwn(PHASE_REASONS, phase)) return false;
-  const reasons = phaseReasons[phase];
-  return reasons?.has(value.reason) === true;
+  if (typeof phase !== "string" || !isDraftDeliveryPhase(phase)) return false;
+  const reasons = PHASE_REASONS[phase];
+  return reasons.has(value.reason);
 }
 
 function validRemote(value: Record<string, unknown>, binding: DraftDeliveryBinding): boolean {
