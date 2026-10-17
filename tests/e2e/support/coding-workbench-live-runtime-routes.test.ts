@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isCodingWorkbenchModel,
   isToolCallingVerificationFresh,
@@ -195,6 +195,26 @@ function capturedCatalogRoute(
 }
 
 describe("installed live runtime model catalog", (): void => {
+  it("retains one fresh verification per installation across ordinary and refreshed reads", async (): Promise<void> => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-17T04:00:00.000Z"));
+      const handler = await installedRuntimeHandler();
+      const first = capturedCatalogRoute("");
+      await handler(first.route);
+      vi.advanceTimersByTime(5_000);
+      const refreshed = capturedCatalogRoute("?refresh=1");
+      await handler(refreshed.route);
+      expect(refreshed.fulfillment()?.body).toBe(first.fulfillment()?.body);
+      const nextHandler = await installedRuntimeHandler();
+      const next = capturedCatalogRoute("");
+      await nextHandler(next.route);
+      expect(next.fulfillment()?.body).not.toBe(first.fulfillment()?.body);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["", "?refresh=1"])(
     "serves a freshly verified ready model for GET /api/models%s",
     async (suffix): Promise<void> => {

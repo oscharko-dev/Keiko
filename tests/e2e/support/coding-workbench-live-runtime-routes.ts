@@ -145,6 +145,7 @@ async function handleFoundationRoute(
   route: Route,
   pathname: string,
   authStatus: FixtureAuthStatus,
+  catalog: ReturnType<typeof modelCatalog>,
 ): Promise<boolean> {
   // Restore-time re-verification (release-audit F-09b): restoring surfaces run the #447
   // reconciliation pass before claiming a persisted binding, so the fixture must answer it the
@@ -159,7 +160,7 @@ async function handleFoundationRoute(
   }
   if (route.request().method() !== "GET") return false;
   if (pathname === "/api/models") {
-    await fulfillJson(route, modelCatalog());
+    await fulfillJson(route, catalog);
     return true;
   }
   // The pairing dimension of readiness (release-audit F-08/RG-12) reads the workspaces endpoint,
@@ -431,6 +432,8 @@ export async function installRuntimeRoutes(
     runtimeAvailable: options.runtimeAvailable ?? true,
   };
   const authStatus = options.authStatus ?? "connected";
+  // A verification is fresh for this fixture; polling it does not create a new verification.
+  const catalog = modelCatalog();
   // #2386 fixed the product default at the supervised middle mode; the policy channel starts there
   // so the Workbench sees the same baseline it had before the modes moved into Settings.
   const autonomy = { requestedMode: options.requestedMode ?? "supervised-coding", revision: 0 };
@@ -440,7 +443,7 @@ export async function installRuntimeRoutes(
       await handleAutonomyPolicy(route, runtimeOptions.deploymentCeiling, autonomy);
       return;
     }
-    if (await handleFoundationRoute(route, pathname, authStatus)) return;
+    if (await handleFoundationRoute(route, pathname, authStatus, catalog)) return;
     if (await handleEditorSnapshotRoute(route, pathname, fixture)) return;
     if (await handleCodexSetupRoute(route, pathname, fixture)) return;
     if (route.request().method() === "GET") {
