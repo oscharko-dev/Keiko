@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   MANAGED_LSP_BUILD_TAG_MAX_COUNT,
@@ -16,6 +16,7 @@ import {
   matchesManagedLspConfigurationPrecondition,
   parseManagedLspRuntimeConfiguration,
   resolveManagedLspSetting,
+  type ManagedLspRuntimeParseResult as SourceRuntimeResult,
 } from "./managed-lsp-runtime.js";
 
 function approved(runtimeId: string): Record<string, unknown> {
@@ -501,7 +502,10 @@ describe("managed LSP runtime configuration", () => {
   });
 });
 
-import { parseManagedLspRuntimeConfiguration as publicRuntime } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
+import {
+  parseManagedLspRuntimeConfiguration as publicRuntime,
+  type ManagedLspRuntimeParseResult,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
 
 describe.each([
   ["source", parseManagedLspRuntimeConfiguration],
@@ -638,4 +642,78 @@ describe.each([
       expect(lengths).toBeGreaterThan(1);
     },
   );
+});
+
+export function parsePublicManagedLspRuntimeConfiguration(
+  input: unknown,
+): ManagedLspRuntimeParseResult {
+  const result = publicRuntime(input);
+  return result;
+}
+
+describe("Managed LSP runtime configuration public parser (#3918)", () => {
+  it("pins independent source public and forwarding checked runtime types", () => {
+    expectTypeOf(parseManagedLspRuntimeConfiguration).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(publicRuntime).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parsePublicManagedLspRuntimeConfiguration).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parseManagedLspRuntimeConfiguration).returns.toEqualTypeOf<SourceRuntimeResult>();
+    expectTypeOf(publicRuntime).returns.toEqualTypeOf<ManagedLspRuntimeParseResult>();
+    expectTypeOf(
+      parsePublicManagedLspRuntimeConfiguration,
+    ).returns.toEqualTypeOf<ManagedLspRuntimeParseResult>();
+    expectTypeOf(publicRuntime).returns.not.toBeAny();
+    type Success = Extract<ReturnType<typeof publicRuntime>, { readonly ok: true }>;
+    type Failure = Extract<ReturnType<typeof publicRuntime>, { readonly ok: false }>;
+    type Go = Extract<Success["value"], { readonly language: "go" }>;
+    expectTypeOf<Success["value"]["language"]>().toEqualTypeOf<
+      "python" | "go" | "shell" | "java" | "rust"
+    >();
+    expectTypeOf<Success["value"]["revision"]>().toEqualTypeOf<number>();
+    expectTypeOf<Go["settings"]["moduleDownloads"]>().toEqualTypeOf<false>();
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+
+  it("retains all five bounded configurations and settings identities", () => {
+    for (const entry of [
+      { language: "python", settings: pythonSettings() },
+      { language: "go", settings: goSettings() },
+      { language: "shell", settings: shellSettings() },
+      { language: "java", settings: javaSettings() },
+      { language: "rust", settings: rustSettings() },
+    ]) {
+      const input = configuration(entry.language, entry.settings);
+      const result = parsePublicManagedLspRuntimeConfiguration(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy public managed LSP runtime refused");
+      expect(result.value).toBe(input);
+      expect(result.value.settings).toBe(entry.settings);
+    }
+  });
+
+  it("refuses raw shapes provenance authority paths and cross-language settings", () => {
+    for (const input of [null, [], 1, "configuration"])
+      expect(parsePublicManagedLspRuntimeConfiguration(input)).toEqual({
+        ok: false,
+        errors: ["runtime configuration must be an object"],
+      });
+    for (const input of [
+      { ...pythonConfiguration(), revision: 8 },
+      {
+        ...pythonConfiguration(),
+        provenance: {
+          activation: "workspace",
+          runtime: "legacyEnvironment",
+          settings: "workspace",
+        },
+      },
+      configuration("go", { ...goSettings(), moduleDownloads: true }),
+      configuration("python", { ...pythonSettings(), extraPaths: [contained("../outside")] }),
+      configuration("python", goSettings()),
+      { ...pythonConfiguration(), raw: true },
+    ])
+      expect(parsePublicManagedLspRuntimeConfiguration(input)).toEqual({
+        ok: false,
+        errors: ["runtime configuration is invalid or contains unknown fields"],
+      });
+  });
 });

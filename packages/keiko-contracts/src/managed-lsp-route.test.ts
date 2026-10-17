@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   MANAGED_LSP_LANGUAGES,
@@ -10,6 +10,10 @@ import {
   parseManagedLspControlMutationResponse,
   parseManagedLspControlRequest,
   parseManagedLspControlResponse,
+  type ManagedLspControlRequest as SourceControlRequest,
+  type ManagedLspControlResponse as SourceControlResponse,
+  type ManagedLspControlSuccessResult as SourceControlSuccess,
+  type ManagedLspRouteParseResult as SourceRouteResult,
 } from "./managed-lsp-route.js";
 
 const ETAG = '"lspcfg-0-abcdefghijklmnop"';
@@ -435,6 +439,11 @@ describe("managed-LSP route response parser", () => {
 import {
   parseManagedLspControlRequest as publicRequest,
   parseManagedLspControlResponse as publicResponse,
+  parseManagedLspControlMutationResponse as publicMutation,
+  type ManagedLspControlRequest,
+  type ManagedLspControlResponse,
+  type ManagedLspControlSuccessResult,
+  type ManagedLspRouteParseResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
 
 describe.each([
@@ -556,8 +565,6 @@ describe.each([
   });
 });
 
-import { parseManagedLspControlMutationResponse as publicMutation } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
-
 describe.each([
   ["source", parseManagedLspControlMutationResponse],
   ["public", publicMutation],
@@ -618,5 +625,194 @@ describe.each([
       "etag",
       "revision",
     ]);
+  });
+});
+
+export function parsePublicManagedLspControlRequest(
+  input: unknown,
+): ManagedLspRouteParseResult<ManagedLspControlRequest> {
+  const result = publicRequest(input);
+  return result;
+}
+
+export function parsePublicManagedLspControlResponse(
+  input: unknown,
+): ManagedLspRouteParseResult<ManagedLspControlResponse> {
+  const result = publicResponse(input);
+  return result;
+}
+
+export function parsePublicManagedLspControlMutation(
+  input: unknown,
+): ManagedLspRouteParseResult<ManagedLspControlSuccessResult> {
+  const result = publicMutation(input);
+  return result;
+}
+
+describe("Managed LSP control request public parser (#3918)", () => {
+  it("pins independent source public and forwarding checked request types", () => {
+    expectTypeOf(parseManagedLspControlRequest).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(publicRequest).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parsePublicManagedLspControlRequest).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parseManagedLspControlRequest).returns.toEqualTypeOf<
+      SourceRouteResult<SourceControlRequest>
+    >();
+    expectTypeOf(publicRequest).returns.toEqualTypeOf<
+      ManagedLspRouteParseResult<ManagedLspControlRequest>
+    >();
+    expectTypeOf(parsePublicManagedLspControlRequest).returns.toEqualTypeOf<
+      ManagedLspRouteParseResult<ManagedLspControlRequest>
+    >();
+    expectTypeOf(publicRequest).returns.not.toBeAny();
+    type Success = Extract<ReturnType<typeof publicRequest>, { readonly ok: true }>;
+    type Failure = Extract<ReturnType<typeof publicRequest>, { readonly ok: false }>;
+    expectTypeOf<Success["value"]["action"]>().toEqualTypeOf<
+      "activate" | "deactivate" | "restart" | "configure" | "reset" | "rollback"
+    >();
+    expectTypeOf<Success["value"]["expectedRevision"]>().toEqualTypeOf<number>();
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+
+  it("copies checked request fields without inventing configuration", () => {
+    const input = {
+      root: "/workspace/a",
+      language: "python",
+      action: "restart",
+      expectedRevision: 0,
+    };
+    const result = parsePublicManagedLspControlRequest(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public managed LSP request refused");
+    expect(result.value).not.toBe(input);
+    expect(result.value).not.toHaveProperty("configuration");
+  });
+
+  it("refuses raw shapes invalid authority fields and foreign keys", () => {
+    for (const input of [null, [], 1, "request"])
+      expect(parsePublicManagedLspControlRequest(input)).toEqual({
+        ok: false,
+        errors: ["managed LSP control request must be an object"],
+      });
+    const input = {
+      root: "/workspace/a",
+      language: "python",
+      action: "restart",
+      expectedRevision: 0,
+    };
+    for (const extra of [{ language: "sql" }, { action: "spawn" }, { expectedRevision: -1 }])
+      expect(parsePublicManagedLspControlRequest({ ...input, ...extra })).toEqual({
+        ok: false,
+        errors: ["managed LSP control request is invalid"],
+      });
+    expect(parsePublicManagedLspControlRequest({ ...input, raw: true })).toEqual({
+      ok: false,
+      errors: ["managed LSP control request has unknown fields"],
+    });
+  });
+});
+
+describe("Managed LSP control response public parser (#3918)", () => {
+  it("pins independent source public and forwarding checked response types", () => {
+    expectTypeOf(parseManagedLspControlResponse).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(publicResponse).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parsePublicManagedLspControlResponse).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parseManagedLspControlResponse).returns.toEqualTypeOf<
+      SourceRouteResult<SourceControlResponse>
+    >();
+    expectTypeOf(publicResponse).returns.toEqualTypeOf<
+      ManagedLspRouteParseResult<ManagedLspControlResponse>
+    >();
+    expectTypeOf(parsePublicManagedLspControlResponse).returns.toEqualTypeOf<
+      ManagedLspRouteParseResult<ManagedLspControlResponse>
+    >();
+    expectTypeOf(publicResponse).returns.not.toBeAny();
+    type Success = Extract<ReturnType<typeof publicResponse>, { readonly ok: true }>;
+    type Failure = Extract<ReturnType<typeof publicResponse>, { readonly ok: false }>;
+    expectTypeOf<Success["value"]["revision"]>().toEqualTypeOf<number>();
+    expectTypeOf<Success["value"]["storeState"]>().toEqualTypeOf<
+      "absent" | "ready" | "unavailable"
+    >();
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+
+  it("retains the checked snapshot and five language arrays", () => {
+    const input = response();
+    const result = parsePublicManagedLspControlResponse(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public managed LSP response refused");
+    expect(result.value).toBe(input);
+    expect(result.value.languages).toBe(input.languages);
+    expect(result.value.settings).toBe(input.settings);
+    expect(result.value.languages.map((entry) => (entry.ok ? entry.language : null))).toEqual(
+      MANAGED_LSP_LANGUAGES,
+    );
+  });
+
+  it("refuses invalid revisions coverage health and foreign fields", () => {
+    for (const input of [
+      null,
+      [],
+      1,
+      "response",
+      { ...response(), revision: -1 },
+      { ...response(), languages: [status()] },
+      { ...response(), health: [{ language: "go" }] },
+      { ...response(), raw: true },
+    ])
+      expect(parsePublicManagedLspControlResponse(input)).toEqual({
+        ok: false,
+        errors: ["managed LSP control response is invalid or contains unknown fields"],
+      });
+  });
+});
+
+describe("Managed LSP control mutation public parser (#3918)", () => {
+  it("pins independent source public and forwarding checked mutation types", () => {
+    expectTypeOf(parseManagedLspControlMutationResponse).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(publicMutation).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parsePublicManagedLspControlMutation).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parseManagedLspControlMutationResponse).returns.toEqualTypeOf<
+      SourceRouteResult<SourceControlSuccess>
+    >();
+    expectTypeOf(publicMutation).returns.toEqualTypeOf<
+      ManagedLspRouteParseResult<ManagedLspControlSuccessResult>
+    >();
+    expectTypeOf(parsePublicManagedLspControlMutation).returns.toEqualTypeOf<
+      ManagedLspRouteParseResult<ManagedLspControlSuccessResult>
+    >();
+    expectTypeOf(publicMutation).returns.not.toBeAny();
+    type Success = Extract<ReturnType<typeof publicMutation>, { readonly ok: true }>;
+    type Failure = Extract<ReturnType<typeof publicMutation>, { readonly ok: false }>;
+    expectTypeOf<Success["value"]["changed"]>().toEqualTypeOf<boolean>();
+    expectTypeOf<Success["value"]["status"]["configurationRevision"]>().toEqualTypeOf<number>();
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+
+  it("retains the admitted mutation and status identity", () => {
+    const input = { kind: "ok", changed: true, revision: 0, etag: ETAG, status: status() };
+    const result = parsePublicManagedLspControlMutation(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public managed LSP mutation refused");
+    expect(result.value).toBe(input);
+    expect(result.value.status).toBe(input.status);
+  });
+
+  it("refuses primitive status revision and changed-field corruption", () => {
+    for (const input of [null, [], 1, "mutation"])
+      expect(parsePublicManagedLspControlMutation(input)).toEqual({
+        ok: false,
+        errors: ["managed LSP mutation response must be an object"],
+      });
+    const input = { kind: "ok", changed: true, revision: 0, etag: ETAG, status: status() };
+    for (const extra of [
+      { changed: "yes" },
+      { revision: 1 },
+      { status: { ...status(), configurationRevision: 1 } },
+      { raw: true },
+    ])
+      expect(parsePublicManagedLspControlMutation({ ...input, ...extra })).toEqual({
+        ok: false,
+        errors: ["managed LSP mutation response is invalid or contains unknown fields"],
+      });
   });
 });

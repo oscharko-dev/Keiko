@@ -1090,3 +1090,33 @@ diagnostic and read-phase proofs remain unchanged. Matching historical evidence 
 only with exact source/runtime/proof equivalence; contract parser qualification does not replace
 physical persistence or complete integration evidence. No whole Knowledge or contracts scope is
 activated by these declarations.
+
+### Managed LSP existing public parser obligations (#3918)
+
+Four source-prepared unknown-parameter-zero public-parser records bind the existing managed LSP
+control request, response, mutation-response and runtime-configuration parsers to canonical public
+checked-result witnesses in their existing contract test owners. They append to the prior107 records;
+all prior identities, rule declarations, scopes and proofs remain intact. The prospective registry is111.
+The witnesses use the real producer-owned result aliases and return the actual parser result; they
+are public API proofs, not claims that the proof functions are production callers.
+
+Existing production provenance is separate: the server settings route admits requests, the activation
+store/control admit runtime configurations, and the UI's dedicated lazy response adapter admits
+control and mutation envelopes. Source/public strict pins and normative identity/refusal proofs
+retain authority ceilings, revision/ETag and language coverage, safe settings and read-phase
+invariants. Existing physical-array and changing-getter pins remain authoritative.
+
+No private callback helper, foreign parser, UnknownRecord alias or arbitrary dictionary is granted by
+these records. The existing shared parseSafely callback separates the public roots from direct raw
+helper traversal. Revision-ETag's two-unknown helper and typed settings/precondition APIs remain
+outside this one-unknown public-parser registration. The bounded default assessment binds all four
+roots ready with semantic proofs pending and admits exactly their four public unknown-parameter-zero
+coordinates; no private callback helper or UnknownRecord obligation is included. The complete
+source/public owners retain their healthy, refusal, physical-array and read-phase controls.
+
+Four held canonical return-any declarations and two shared success-value erasures fail the strict
+public type pins. Four held canonical JavaScript root bypasses fail the actual public admission or
+fresh-copy assertions while the same-field source healthy/refusal anchors pass. Every held artifact
+is restored exactly before the identical first positive control. These bounded results do not replace
+fresh complete-cohort qualification or activate a rule scope. No product runtime or shared
+throw-classification behavior is changed here.

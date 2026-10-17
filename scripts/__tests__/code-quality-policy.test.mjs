@@ -292,6 +292,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "context-tool-observation-diagnostic-public-proof",
       "connected-scope-path-validator",
       "connected-line-range-validator",
+      "managed-lsp-control-request-public-parser",
+      "managed-lsp-control-response-public-parser",
+      "managed-lsp-control-mutation-response-public-parser",
+      "managed-lsp-runtime-configuration-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1497,5 +1501,51 @@ describe("Connected primitive validator production provenance", () => {
     ]);
     expect(record.proofAssertions).toHaveLength(assertions);
     expect(validatePolicy(policy)).toEqual([]);
+  });
+});
+
+describe("Managed LSP existing public parser obligations (#3918)", () => {
+  it.each([
+    [
+      "managed-lsp-control-request-public-parser",
+      "parseManagedLspControlRequest",
+      "parsePublicManagedLspControlRequest",
+    ],
+    [
+      "managed-lsp-control-response-public-parser",
+      "parseManagedLspControlResponse",
+      "parsePublicManagedLspControlResponse",
+    ],
+    [
+      "managed-lsp-control-mutation-response-public-parser",
+      "parseManagedLspControlMutationResponse",
+      "parsePublicManagedLspControlMutation",
+    ],
+    [
+      "managed-lsp-runtime-configuration-public-parser",
+      "parseManagedLspRuntimeConfiguration",
+      "parsePublicManagedLspRuntimeConfiguration",
+    ],
+  ])("binds only the existing unknown parameter-zero parser %s", (id, producer, witness) => {
+    const record = policy.responsibilities.find((entry) => entry.id === id);
+    expect(record.kind).toBe("public-parser");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+    expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+    expect(record.transform).toEqual(record.output);
+    expect(record.transform.exportName).toBe(producer);
+    expect(record.consumer).toEqual({
+      ...record.transform,
+      exportName: witness,
+      kind: "public-api-proof",
+      owner: record.owner,
+    });
+    expect(record.proofs).toEqual([record.input.consumerPath]);
+    expect(record.proofAssertions).toHaveLength(3);
+    expect(
+      record.proofAssertions.every((assertion) => assertion.path === record.input.consumerPath),
+    ).toBe(true);
+    const removed = structuredClone(policy);
+    removed.responsibilities = removed.responsibilities.filter((entry) => entry.id !== id);
+    expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
   });
 });

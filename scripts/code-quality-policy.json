@@ -5781,6 +5781,182 @@
           "testName": "Connected primitive production consumer admits the public result and refuses malformed scope paths and line ranges"
         }
       ]
+    },
+    {
+      "id": "managed-lsp-control-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parsePublicManagedLspControlRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/managed-lsp-route.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control request public parser (#3918) pins independent source public and forwarding checked request types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control request public parser (#3918) copies checked request fields without inventing configuration"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control request public parser (#3918) refuses raw shapes invalid authority fields and foreign keys"
+        }
+      ]
+    },
+    {
+      "id": "managed-lsp-control-response-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parsePublicManagedLspControlResponse",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/managed-lsp-route.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control response public parser (#3918) pins independent source public and forwarding checked response types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control response public parser (#3918) retains the checked snapshot and five language arrays"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control response public parser (#3918) refuses invalid revisions coverage health and foreign fields"
+        }
+      ]
+    },
+    {
+      "id": "managed-lsp-control-mutation-response-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlMutationResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlMutationResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parseManagedLspControlMutationResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route",
+        "exportName": "parsePublicManagedLspControlMutation",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/managed-lsp-route.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control mutation public parser (#3918) pins independent source public and forwarding checked mutation types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control mutation public parser (#3918) retains the admitted mutation and status identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+          "testName": "Managed LSP control mutation public parser (#3918) refuses primitive status revision and changed-field corruption"
+        }
+      ]
+    },
+    {
+      "id": "managed-lsp-runtime-configuration-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime",
+        "exportName": "parseManagedLspRuntimeConfiguration",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime",
+        "exportName": "parseManagedLspRuntimeConfiguration"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime",
+        "exportName": "parseManagedLspRuntimeConfiguration"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime",
+        "exportName": "parsePublicManagedLspRuntimeConfiguration",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/managed-lsp-runtime.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+          "testName": "Managed LSP runtime configuration public parser (#3918) pins independent source public and forwarding checked runtime types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+          "testName": "Managed LSP runtime configuration public parser (#3918) retains all five bounded configurations and settings identities"
+        },
+        {
+          "path": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+          "testName": "Managed LSP runtime configuration public parser (#3918) refuses raw shapes provenance authority paths and cross-language settings"
+        }
+      ]
     }
   ]
 }
