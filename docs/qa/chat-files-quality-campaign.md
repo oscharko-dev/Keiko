@@ -151,7 +151,14 @@ No fixed wall-clock push deadline overrides required checks. Avoid accumulating 
 in one increment. Product fixes declare their actual release impact. Required CI is the final full
 matrix; it is not the local test loop. Only `oscharko` may authorize and execute integration into
 `dev`, including enabling native auto-merge. An agent acting under that account still requires the
-owner's explicit authorization; this campaign has no integration authorization.
+owner's explicit authorization. On 2026-10-17 the owner authorized bounded closeout of PR #4039,
+protected integration into `dev`, a post-merge smoke and release 1.2.4, conditional on green checks
+and settled review conversations. The durable authorization is recorded in
+[the PR](https://github.com/oscharko-dev/Keiko/pull/4039#issuecomment-6229375703).
+[Follow-up #4040](https://github.com/oscharko-dev/Keiko/issues/4040) retains immediate client-side
+scope cancellation, pending/failed-scope handling, complete N+1 compaction qualification and
+remaining generated-test comparisons. The campaign and its parent epic are not fully qualified
+or closed by this bounded release.
 
 ## Research inputs
 

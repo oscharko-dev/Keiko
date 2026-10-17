@@ -799,3 +799,33 @@ context pressure, prompt-injection cases, and the remaining shared-gateway failu
 An initial one-shot proxy delay was consumed by a background model request and cancelled during
 test-instance restart; it is not evidence of a three-minute Chat wait. Subsequent latency cases
 must correlate the actual Chat dispatch with the injected delay before claiming a result.
+
+## Bounded 1.2.4 closeout
+
+On 2026-10-17 the owner authorized the verified repair increment, protected `dev` integration,
+a post-merge smoke and release 1.2.4. Follow-up #4040 retains the incomplete immediate client-intent
+cancellation, pending/failed scope handling, N+1 source/compaction and generated-test qualification.
+Epic #4037 remains open; these deferred criteria are not marked passed.
+
+The updated browser proof exposed an additional restore race: Files showed a directory and the
+server acknowledged that scope, but the Chat pill still named the previously selected file. A
+bootstrap snapshot captured before the mutation could land after it. A unit regression fails before
+the correction; the existing shared bootstrap version now reloads an invalidated snapshot through
+its original owner. The complete Chat-session suite passes 201 tests. All eight source-navigation
+browser cases pass, followed by the complete 110-case Chromium smoke suite. The cases retain
+canonical root/directory/file assertions, restored-pin removal, full paths, accessible announcements
+and narrow English/German layouts after retiring the obsolete confirmation controls.
+
+The Sonar S9382 repair preserves sequential 32-source batches and stage yields through bounded
+`setImmediate` continuations. Error propagation uses the same explicitly typed Promise rejection
+port already used by the structural request context. The 193 code-intelligence/request-context
+cases and the complete Activity Log gate pass. Default local Sonar analysis exhausted its 4.5 GiB
+heap; the documented 12 GiB configuration completes without unresolved findings. No analyzer rule,
+coverage floor, timeout or read boundary was weakened.
+
+The fixed native host passes all 56 tests locally under CI-pinned Node 24.18.0. The prior Windows
+success and EOF timeout ran on the same merge candidate. Neither local success nor static review
+establishes that failure's cause; the host and its timeouts remain unchanged, and current-head
+native CI is still required. Release metadata covers #4036 plus #4039, preserves existing manual
+update eligibility and does not claim complete model or skill qualification. Final release-package,
+coverage and exact-head CI results must be recorded before integration/publication.
