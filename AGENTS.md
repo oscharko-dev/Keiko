@@ -826,6 +826,8 @@ system that exists, never beside it:
   child-discovered replacements and unmounted windows cannot publish older roots or listings.
   Root normalization/replacement and superseded child reads use the existing Files scope-decision
   Activity Log under their directory-read correlation, without paths or contents.
+  Explicitly forgetting a failed Files edge releases only its own failed admission hold;
+  pending work and independent source holds remain protected.
   Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
   retains per-source pending/failed admission holds and releases only the current accepted token;
   drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision

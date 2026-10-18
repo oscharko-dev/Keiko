@@ -47,6 +47,19 @@ export function clearChatScopeTransitions(chatId: string): void {
   for (const listener of listeners) listener();
 }
 
+/** Explicitly forgetting a failed edge retains the server's unchanged canonical sources. */
+export function releaseFailedChatScopeTransition(chatId: string, sourceId: string): boolean {
+  const intents = scopeIntents.get(chatId);
+  const intent = intents?.get(sourceId);
+  if (intent?.status === "pending") return false;
+  if (intent === undefined || intents === undefined) return true;
+  intents.delete(sourceId);
+  if (intents.size === 0) scopeIntents.delete(chatId);
+  reportFilesScopeDecision(intent.correlationId, { decision: "released" });
+  for (const listener of listeners) listener();
+  return true;
+}
+
 export function refuseChatScopeSend(chatId: string): ChatScopeTransition {
   const transition = chatScopeTransition(chatId);
   const intent = scopeIntents.get(chatId)?.values().next().value;

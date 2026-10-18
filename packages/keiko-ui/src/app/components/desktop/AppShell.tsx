@@ -102,7 +102,11 @@ import { WINDOW_LAUNCHER_TYPES, COMMAND_TOOL_TYPES, type Command } from "./works
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
-import { beginChatScopeTransition, chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
+import {
+  beginChatScopeTransition,
+  chatWindowRuntimeTarget,
+  releaseFailedChatScopeTransition,
+} from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
 import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
@@ -2425,11 +2429,21 @@ function AppShellInner(): ReactNode {
   wsConnectionsForBindingRef.current = ws.conns;
   const forgetUnownedFilesConnection = useCallback((): void => {
     if (unownedFilesConnectionId === null) return;
+    const connection = ws.conns.find((edge) => edge.id === unownedFilesConnectionId);
+    if (connection === undefined) return;
+    const chatWindowId =
+      connection.boundChatWindowId ??
+      [connection.a, connection.b].find((id) => ws.winsById.get(id)?.type === "chat");
+    if (
+      chatWindowId === undefined ||
+      !releaseFailedChatScopeTransition(groundingMutationKey(chatWindowId), connection.id)
+    )
+      return;
     ws.api.removeConn(unownedFilesConnectionId, { unbind: false });
     reportFilesScopeDecision(newClientCorrelationId(), { decision: "released" });
     setUnownedFilesConnectionId(null);
     setSourceConnectionNotice(null);
-  }, [unownedFilesConnectionId, ws.api]);
+  }, [unownedFilesConnectionId, ws.api, ws.conns, ws.winsById, groundingMutationKey]);
 
   // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
   // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,

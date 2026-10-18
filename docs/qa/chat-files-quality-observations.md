@@ -1034,3 +1034,28 @@ real local Sonar analyzer. Full UI coverage passed 551 suites and 10,650 tests w
 skip (91.51% statements, 84.79% branches, 92.94% functions, 94.19% lines). Updater evidence
 freshness passed without regenerating unchanged bindings. Assembled-package verification ran
 last and passed. These local outcomes do not substitute for current-head CI or native acceptance.
+
+## Failed-edge recovery and React candidate refinement, 2026-10-18
+
+A further control reproduced a failed admission hold surviving the user's explicit action to
+forget an ambiguous connection while retaining all canonical Chat sources. It failed against
+`bd3bc32bfaf1776308b6f0a8a0a6bc115471fb6e` before repair. The existing Chat runtime registry
+now releases only that edge's failed hold through this recovery action. It refuses a pending
+mutation, preserves other sources and chats, and emits body-free release evidence using the
+original intent correlation. No source PATCH or authority widening accompanies this action.
+The owning workspace and admission suites pass all 39 controls.
+
+The React candidate now puts awaited-query and exact-result requirements in its mandatory
+interaction rules and final audit. This is a generic response to observed unawaited matchers
+and substring assertions, not a task-specific answer or edited generated output. A new complete
+paired repetition remains required; previous failed generations keep their original outcomes.
+
+The first explicitly fresh original-question run used a clean 8,129-file repository corpus at
+`0f168fb0355f6f94fce2da421be60b9cf77b1570` and held runtime `7825e78c0`. It did not return an
+answer. Activity Log diagnosis recorded 131,072 physical excerpt bytes, one file, 193 read
+windows, 283 selected excerpts and 68,695 estimated admitted prompt tokens. The single actual
+case request retained its 8,192-token output grant but was interrupted after 300 seconds. The
+existing retry then failed authority admission after expiry (HTTP 403); no second physical case
+request was sent. Shutdown canceled the outstanding automatic readiness probe. This is a failed
+fresh baseline, not historical replay or budget/citation acceptance. Subsequent diagnosis will
+retain the original limits and inspect actual prompt composition before proposing a correction.

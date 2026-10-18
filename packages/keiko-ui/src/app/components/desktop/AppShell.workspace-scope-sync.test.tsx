@@ -854,10 +854,12 @@ describe("AppShell canonical workspace scope synchronization", () => {
     await mountAmbiguousFiles();
     const canonical = mocks.serverChat;
     await act(async () => mocks.workspace?.api.removeConn("edge-0"));
+    expect(chatScopeTransition("chat-1")).toBe("failed");
     fireEvent.click(
       await screen.findByRole("button", { name: "Remove connection only; keep chat sources" }),
     );
     await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
+    expect(chatScopeTransition("chat-1")).toBeUndefined();
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(mocks.serverChat).toEqual(canonical);
     expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {

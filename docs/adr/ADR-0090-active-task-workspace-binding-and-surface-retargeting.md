@@ -149,6 +149,10 @@ unmounting invalidates outstanding reads before they can publish a root or selec
 entries are released after settlement; ordinary identical reads remain shared across windows.
 The existing Files scope-decision Activity Log records root normalization/replacement and
 superseded reads without paths or contents, under the producing directory read's correlation.
+When a human explicitly forgets a failed ambiguous Files edge while retaining canonical Chat
+sources, only that edge's failed admission hold is released. Pending mutations refuse this recovery
+action, and independent source holds remain unchanged. Release evidence uses the original intent
+correlation on the existing body-free Files scope-decision log.
 Explicit Editor root changes
 reuse project registration and require current workspace membership before committing
 the canonical root, including ordinary folders without Git, so local history retains

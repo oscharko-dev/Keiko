@@ -740,6 +740,10 @@ establish that identity before a root response; old root responses cannot revers
 read ownership also rejects older same-root listings and replies after unmount, while ordinary
 identical reads remain shared. When an unchanged alias
 resolves elsewhere, outstanding child reads cannot restore its previous tree or selection.
+Explicitly forgetting an ambiguous failed connection while retaining canonical Chat sources
+releases that edge's failed admission hold only. Pending source work cannot be forgotten through
+this recovery action; unrelated source holds remain in force.
+
 The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
 `request-superseded`, joined to directory-read correlations without paths or source bodies.
 Connected Files navigation additionally cancels the bound response before a delayed scope ACK.

@@ -33,6 +33,10 @@ Check the resulting file against the chosen naming, structure, mock policy and m
 3. When the contract exposes a pending state, hold a promise pending to observe it. Settle it inside
    `act`, then verify the result and contract-defined control state. Never leave a resolver
    uninitialized or a promise rejection unobserved.
+4. Resolve asynchronous queries before assertions: `const output = await screen.findByRole(...)`,
+   then assert on `output`. Never pass a `findBy` promise to an element matcher. If the contract
+   requires the exact returned value, use `expect(output.textContent).toBe(expectedResult)`;
+   a substring assertion cannot prove that result. Apply this rule to success and retry cases.
 
 Use this blank-safe interaction when replacing text, adapting the names to the actual test:
 
@@ -68,7 +72,7 @@ export or reproduce its exact signature. Do not import an unused props type and 
 untyped. Use the project's installed Vitest API; do not weaken strictness with casts.
 After submission, assert disabled controls only when the contract requires them and verify the
 expected dispatch count; then `await act(async () => { pending.resolve(actualResult); });`. Await the visible
-result with a `findBy` query. For a separate failure/retry case, use a typed mock with
+result with an awaited `findBy` query before passing the element to a matcher. For a separate failure/retry case, use a typed mock with
 `mockRejectedValueOnce` followed by `mockResolvedValueOnce`, using the real result shape.
 
 ## Pending-submit pattern
@@ -126,7 +130,7 @@ including `advanceTimers`, and restore timers. Preserve isolation, cleanup and m
 ## Check the proposed file before returning it
 
 Check every import, callback/result type, resolver initialization, blank-input interaction and
-disabled-control interaction. Check whole-value assertions and the distinct failure each case
+disabled-control interaction. Check that every `findBy` result is awaited, whole-value assertions reject appended output, and the distinct failure each case
 would expose. Remove unused imports. Name dependency versions only when supplied build or resolved
 dependency evidence establishes them. No `any`, invented exports, type suppressions, ellipses or unhandled
 async work. Each assertion must distinguish a plausible application defect; compilation or runner

@@ -7,6 +7,7 @@ import {
   beginChatScopeTransition,
   chatScopeTransition,
   clearChatScopeTransitions,
+  releaseFailedChatScopeTransition,
 } from "./chatWindowActivity";
 
 const TARGET = { conversationId: "chat-a", projectPath: "/repo" };
@@ -53,6 +54,22 @@ describe("chat source-intent admission", () => {
     expect(chatScopeTransition(TARGET.conversationId)).toBe("pending");
     recovery.settle(true);
     expect(chatScopeTransition(TARGET.conversationId)).toBeUndefined();
+  });
+
+  it("releases only an explicitly forgotten failed source and refuses pending work", () => {
+    const failed = beginChatScopeTransition(TARGET.conversationId, "files-a");
+    const pending = beginChatScopeTransition(TARGET.conversationId, "files-b");
+    failed.settle(false);
+    expect(releaseFailedChatScopeTransition(TARGET.conversationId, "files-b")).toBe(false);
+    expect(releaseFailedChatScopeTransition(TARGET.conversationId, "files-a")).toBe(true);
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("pending");
+    pending.settle(false);
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+    expect(releaseFailedChatScopeTransition("other-chat", "files-b")).toBe(true);
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+    expect(releaseFailedChatScopeTransition(TARGET.conversationId, "files-b")).toBe(true);
+    expect(chatScopeTransition(TARGET.conversationId)).toBeUndefined();
+    expect(releaseFailedChatScopeTransition(TARGET.conversationId, "files-b")).toBe(true);
   });
 });
 
