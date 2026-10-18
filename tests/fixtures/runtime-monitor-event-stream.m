@@ -132,7 +132,9 @@ static struct monitor_session *arm(pid_t supervisor) {
   struct keiko_monitor_request request = {0};
   request.supervisor_pid = (uint32_t)supervisor;
   memset(request.recovery_handle, supervisor == 100 ? 'a' : 'b', sizeof(request.recovery_handle));
-  return allocate_session(1, 501, &request);
+  audit_token_t token;
+  if (!peer_audit_token(1, supervisor, 501, &token)) return NULL;
+  return allocate_session(1, 501, &request, token);
 }
 static int healthy(uint32_t version, uint64_t origin) {
   event(version, ES_EVENT_TYPE_AUTH_EXEC, 999, 0, origin);

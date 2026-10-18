@@ -578,3 +578,42 @@ error serializer. The same `check:knip` failure is reproduced locally. The seria
 explicit test-only dependency at its already resolved4.1.11 version. No resolved package changes,
 test assertions or dead-code exceptions are introduced; the dependency disposition is recorded in
 the existing closeout table.
+
+## Checkpoint 24: coherent native identity and bounded first-frame admission
+
+The monitor checked a numeric PID's signing identity, then separately looked up an audit token for
+session ownership. A changed generation could be allocated under an earlier signing decision. Its
+five-second socket timeout was also an inactivity timer, not a total frame deadline: a peer could
+keep a partial read alive by sending individual bytes.
+
+The final whole-source fixture executes actual admission, code checks, deadline and allocation with
+only external framework/socket/clock/log ports made inert. The same final15 controls produce seven
+failures and eight healthy controls on published23, then15 passes after. The counts include mechanism
+and new clock-failure refusal checks; they are not distinct bug counts. A one-byte/every-four-second
+virtual stream completes after176 simulated seconds before and refuses at five simulated seconds
+after. No live resource exhaustion or wall-clock performance claim is inferred. The original31
+lifecycle/signaling controls retain their assertions through the internal allocation argument update.
+
+Independent review rejected an initial unpublished candidate because it moved all code verification
+after the first blocking read. Its sources, tests, successful local gates and Sonar receipt remain
+retained as that withdrawn candidate, and do not qualify the corrected source. The strengthened final
+controls also fail that candidate. No affected candidate was pushed.
+
+Final admission captures one credential-checked token and uses its exact32-byte CFData with the
+public Security guest API. The code/team preflight rejects invalid peers before any frame wait;
+that decision cannot grant allocation. After the complete bounded frame, the same captured token
+is checked again and passed to allocation without another token or numeric code lookup. A monotonic
+absolute deadline plus poll and nonblocking receives bound the first frame, including fragments,
+interruptions and would-block retries. Existing connection limits, ownership/event-continuity gates,
+long-lived post-handshake control reads and body-free rejection diagnostics remain authoritative.
+All fixture connections release their slot.
+
+One actual own-process Mach audit-token control calls the original Security framework API: correct
+token locates code, changed PID version refuses, and the correct token still locates code. It passes
+on the recorded host/SDK; it does not certify the complete signed ES path or older OS versions.
+`native-code-identity.json` records source identities and all three body-free causal runs.
+
+This fixes coherent identity admission and total first-frame waiting. LOCAL_PEERTOKEN still does not
+prove the immutable original socket writer. Full peer lifetime, functional generation transfer,
+durable monitor-loss recovery, Linux support and consecutive actual updates remain separate open
+requirements. No native wire layout, signing requirement or runtime authority is widened.

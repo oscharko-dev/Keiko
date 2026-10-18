@@ -248,6 +248,17 @@ SPI, with no numeric-PID fallback. ESRCH is not exit evidence: it may mean an ex
 pending. Other signaling refusals invalidate the session's proof; both decisions have bounded,
 body-free native diagnostics. The SPI is private and subject to OS compatibility qualification;
 current-SDK linkage and a fixture-owned kernel signal test do not qualify every supported OS.
+Initial peer admission captures one credential-checked audit token and verifies its code/team
+before waiting for a frame. That preflight may reject but cannot authorize allocation. After the
+complete bounded frame arrives, the same exact token is checked again and passed to allocation.
+The public `kSecGuestAttributeAudit` CFData binds both Security guest checks to PID plus PID version;
+a numeric-PID lookup or a later token lookup cannot substitute another generation. Missing or
+stale identity, invalid signature and foreign-team code refuse through the existing diagnostic.
+The first frame has a total five-second monotonic deadline, including fragmented reads and EINTR;
+SO_RCVTIMEO alone is an inactivity timer and cannot establish that bound. Later session control
+reads retain their existing long-lived behavior. The connection-slot limit is unchanged.
+A fixture-owned actual kernel-token code lookup confirms generation refusal on the measured host
+only; it does not qualify signed Endpoint Security integration on every supported system.
 LOCAL_PEERTOKEN supplies a current PID token, not an immutable connect-time peer certificate.
 Existing credentials and code admission remain required, and full peer-lifetime authentication
 remains a separate qualification requirement. ARM refuses an identity still owned by another

@@ -9,6 +9,7 @@
 #include <libproc.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -16,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define KEIKO_MAX_SESSIONS 16u
@@ -428,15 +430,20 @@ static CFStringRef team_identifier_for_code(SecCodeRef code) {
   return team;
 }
 
-static int same_team_process(pid_t pid) {
+static int same_team_process(audit_token_t token) {
   SecCodeRef self = NULL, guest = NULL;
   CFStringRef self_team = NULL, guest_team = NULL;
-  CFNumberRef process = CFNumberCreate(NULL, kCFNumberIntType, &pid);
-  const void *keys[] = {kSecGuestAttributePid};
+  CFDataRef process = CFDataCreate(NULL, (const UInt8 *)&token, sizeof(token));
+  if (process == NULL) return 0;
+  const void *keys[] = {kSecGuestAttributeAudit};
   const void *values[] = {process};
   CFDictionaryRef attributes =
       CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
                          &kCFTypeDictionaryValueCallBacks);
+  if (attributes == NULL) {
+    CFRelease(process);
+    return 0;
+  }
   int matches = 0;
   if (SecCodeCopySelf(kSecCSDefaultFlags, &self) == errSecSuccess &&
       SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest) ==
@@ -462,18 +469,22 @@ static pid_t peer_pid(int descriptor) {
   return getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0 ? pid : 0;
 }
 
+// LOCAL_PEERTOKEN identifies the PID currently attributed to the socket, not its original writer.
+// Code verification and session allocation must nevertheless use one exact captured generation.
+static int peer_audit_token(int descriptor, pid_t pid, uid_t uid, audit_token_t *token) {
+  socklen_t length = sizeof(*token);
+  return getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, token, &length) == 0 &&
+         length == sizeof(*token) && audit_token_to_pid(*token) == pid &&
+         audit_token_to_euid(*token) == uid;
+}
+
 static struct monitor_session *allocate_session(int descriptor, uid_t uid,
-                                                const struct keiko_monitor_request *request) {
+                                                const struct keiko_monitor_request *request,
+                                                audit_token_t supervisor_token) {
   size_t index;
-  audit_token_t supervisor_token;
-  socklen_t token_length = sizeof(supervisor_token);
   if (!event_sequence_initialized || event_stream_failed) return NULL;
   if (session_for_handle(request->recovery_handle) != NULL) return NULL;
-  // This is the current kernel token for the peer PID, not a connect-time identity certificate.
-  // Existing peer credentials and code admission remain required by serve_client.
-  if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, &supervisor_token, &token_length) != 0 ||
-      token_length != sizeof(supervisor_token) ||
-      audit_token_to_pid(supervisor_token) != (pid_t)request->supervisor_pid ||
+  if (audit_token_to_pid(supervisor_token) != (pid_t)request->supervisor_pid ||
       audit_token_to_euid(supervisor_token) != uid)
     return NULL;
   // KEIKO-0771: also refuse the ARM when another active session already owns the same
@@ -536,6 +547,37 @@ static uint16_t reconcile_refusal_reply(enum reconcile_outcome outcome) {
                                           : KEIKO_MONITOR_ERROR;
 }
 
+static uint64_t handshake_now_ms(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0 || now.tv_nsec < 0 ||
+      now.tv_nsec >= 1000000000 || (uint64_t)now.tv_sec > (UINT64_MAX - 999u) / 1000u)
+    return UINT64_MAX;
+  return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static int read_handshake(int descriptor, struct keiko_monitor_request *request) {
+  unsigned char *bytes = (unsigned char *)request;
+  size_t offset = 0;
+  uint64_t start = handshake_now_ms();
+  uint64_t duration = KEIKO_HANDSHAKE_TIMEOUT_SECONDS * UINT64_C(1000);
+  if (start > UINT64_MAX - duration) return 0;
+  uint64_t deadline = start + duration;
+  while (offset < sizeof(*request)) {
+    uint64_t now = handshake_now_ms();
+    if (now >= deadline) return 0;
+    struct pollfd pending = {descriptor, POLLIN | POLLHUP, 0};
+    int ready = poll(&pending, 1, (int)(deadline - now));
+    if (ready < 0 && errno == EINTR) continue;
+    if (ready <= 0 || (pending.revents & (POLLERR | POLLNVAL)) != 0 ||
+        (pending.revents & (POLLIN | POLLHUP)) == 0) return 0;
+    ssize_t count = recv(descriptor, bytes + offset, sizeof(*request) - offset, MSG_DONTWAIT);
+    if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+    if (count <= 0) return 0;
+    offset += (size_t)count;
+  }
+  return handshake_now_ms() < deadline;
+}
+
 static void *serve_client(void *opaque) {
   int descriptor = *(int *)opaque;
   struct keiko_monitor_request request;
@@ -545,11 +587,14 @@ static void *serve_client(void *opaque) {
   uid_t uid;
   gid_t gid;
   pid_t peer = peer_pid(descriptor);
+  audit_token_t peer_token;
   pthread_cleanup_push(release_connection, opaque);
   memset(&transient, 0, sizeof(transient));
   transient.descriptor = descriptor;
-  if (peer <= 0 || getpeereid(descriptor, &uid, &gid) != 0 || !same_team_process(peer) ||
-      !read_exact(descriptor, &request, sizeof(request)) || !request_valid(&request, peer)) {
+  if (peer <= 0 || getpeereid(descriptor, &uid, &gid) != 0 ||
+      !peer_audit_token(descriptor, peer, uid, &peer_token) || !same_team_process(peer_token) ||
+      !read_handshake(descriptor, &request) || !request_valid(&request, peer) ||
+      !same_team_process(peer_token)) {
     // KEIKO-0419: a rejected connection closed silently, so a same-team check failure, a short
     // read and a malformed frame were all the same non-event. The pid is what the kernel already
     // attributes to the socket; nothing further about the peer is logged.
@@ -581,7 +626,7 @@ static void *serve_client(void *opaque) {
   }
   pthread_mutex_lock(&sessions_lock);
   if (request.command == KEIKO_MONITOR_ARM) {
-    session = allocate_session(descriptor, uid, &request);
+    session = allocate_session(descriptor, uid, &request, peer_token);
   } else if (request.command == KEIKO_MONITOR_RECONCILE) {
     session = session_for_handle(request.recovery_handle);
     // KEIKO-0433: the three RECONCILE outcomes were collapsed into session/NULL, so "already
