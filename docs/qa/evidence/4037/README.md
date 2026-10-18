@@ -548,3 +548,33 @@ not overwritten; no model answer is repaired or regraded.
 This change is model-agnostic verification tooling. No provider, customer prompt or customer skill
 is specialized for Gemma or this fixture. Known regressions remain separate from untouched heldout
 model tasks. Native model dispatch and customer-skill acceptance remain outstanding.
+
+## Checkpoint 23: omit empty deduplication frames from grounded prompts
+
+The existing assembler legitimately retains distinct reference-edge observations as metadata aliases
+when their source window already has a body. The shared single-source, multi-source and hybrid
+renderer nevertheless repeated an evidence header, provenance line and empty fence for each alias.
+The production reference counter already excluded those zero-length bodies. A two-line local
+filter aligns presentation with that boundary without removing metadata or changing selection.
+Nonempty whitespace lines and document labels/bodies remain intact.
+
+The identical final seven controls produce five failures and two healthy controls on published22,
+then seven passes after. The actual fresh React corpus is retrieved once and passed to both final
+protected-skill fitters with the actual configured model-profile accounting: 19,298 to 14,170 UTF-8
+prompt bytes, and 6,350 to 4,641 accounted input tokens. The input grant stays 118,784. All positive
+bodies and retained packs are byte-identical; the complete component and eight complete accepted
+requirements remain present, and the selected skill occurs exactly once. All38 metadata aliases
+remain in the pack. This is a measured serialization saving, not an inference-quality or latency
+claim. Existing final-prompt and gateway cost/reference observations describe the result.
+
+Source digests, causal runs and body-free final-fitting observations are recorded in
+`empty-evidence-serialization.json`. The next native comparison freezes this revised pipeline;
+its scores must not be pooled with the older immutable19 campaign as identical inputs. Customer
+skills, prompt instructions, provider selection, source reads and cumulative grants are unchanged.
+The broader platform, browser, model-quality, historical and exact-head acceptance holds remain.
+
+The published22 Core quality run exposed an unlisted transitive test import of the actual Vitest
+error serializer. The same `check:knip` failure is reproduced locally. The serializer is now an
+explicit test-only dependency at its already resolved4.1.11 version. No resolved package changes,
+test assertions or dead-code exceptions are introduced; the dependency disposition is recorded in
+the existing closeout table.

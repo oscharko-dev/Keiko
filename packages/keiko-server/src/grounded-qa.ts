@@ -1457,11 +1457,12 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
   const lines: string[] = [];
   for (const file of pack.files) {
     lines.push(`File: ${redactedString(redactor, file.scopePath)}`);
-    if (file.excerpts.length === 0) {
+    const excerpts = file.excerpts.filter((excerpt) => excerpt.content.length > 0);
+    if (excerpts.length === 0) {
       lines.push("- No excerpt content was available for this selected file.");
       continue;
     }
-    for (const excerpt of file.excerpts) {
+    for (const excerpt of excerpts) {
       const citation = formatLineRange({
         scopePath: excerpt.atom.scopePath,
         lineRange: excerpt.atom.lineRange,

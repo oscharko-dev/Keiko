@@ -997,6 +997,10 @@ error, preserving its cause. The registered retrieval line remains WARN/cancelle
 create a registered-failure support incident; actual read failures and timeouts remain distinct.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+Prompt rendering omits zero-length metadata-alias bodies instead of emitting empty evidence fences.
+Nonempty whitespace source lines, document labels, positive body bytes and ranges remain unchanged.
+The retained packs preserve alias identities, provenance, usage, confidence and citation authority;
+existing final-prompt token and sent-reference observations measure the serialized result.
 An explicitly empty sent-pack inventory grants no source support; only absent legacy metadata may
 fall back to assembled evidence. Zero sent files retain physical read usage without producing a
 grounded source manifest.

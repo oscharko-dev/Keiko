@@ -183,6 +183,9 @@ fitted selection confidence without source bodies.
 Evidence manifest hashes and ranges enumerate final sent excerpts; retrieval candidate counts, usage and omissions
 retain the actual earlier work. Existing prompt sent/available counts distinguish fitting removals
 without inventing retrieval omissions.
+Zero-length deduplicated metadata aliases remain in retained packs but add no empty prompt evidence
+fences. Positive bodies, whitespace source lines, document labels and citation authority remain
+unchanged; existing final-prompt counts and costs describe the serialization.
 Lexical relevance establishes neither an answer fact nor precedence between conflicting sources.
 An observed admitted callable may retain an imported constant declaration only when its current
 TypeScript lexical binding, nearest callable owner, declaration identity and physical identifier
