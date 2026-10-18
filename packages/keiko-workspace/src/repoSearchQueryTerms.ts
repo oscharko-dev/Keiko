@@ -1,6 +1,7 @@
 // Deterministic query-term expansion for repository retrieval. Kept in keiko-workspace so both
 // candidate ordering and line matching interpret code-shaped prompts the same way.
 
+import { withoutAnswerPresentationInstructions } from "./repoSearchPresentation.js";
 import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
 
 const QUERY_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
@@ -30,7 +31,7 @@ export function containsNumberedCompoundQueryTerm(
   ).test(haystack);
 }
 
-const MAX_EXPANDED_QUERY_TERMS = 48;
+export const MAX_EXPANDED_QUERY_TERMS = 48;
 
 const CITATION_DIRECTIVE_VERBS: ReadonlySet<string> = new Set([
   "cite",
@@ -107,9 +108,12 @@ export function naturalLanguageSubject(text: string): NaturalLanguageSubject {
   if (/["'`“”‘’«»]/u.test(text)) return unchanged;
   const clauses = text.split(/(?<=[.!?;])\s+|\n+/u);
   const retained = clauses.filter((clause) => !isCitationOnlyDirective(clause));
-  if (retained.length === 0 || retained.length === clauses.length) return unchanged;
+  if (retained.length === 0) return unchanged;
+  const subject = retained.length === clauses.length ? text : retained.join(" ");
+  const normalized = withoutAnswerPresentationInstructions(subject);
+  if (!/[\p{L}\p{N}]/u.test(normalized)) return unchanged;
   return {
-    text: retained.join(" "),
+    text: normalized,
     citationDirectiveClauseCount: clauses.length - retained.length,
   };
 }

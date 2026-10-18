@@ -334,3 +334,16 @@ export {
   SUPPORTED_MIME_PREFIXES,
   extractDocumentContext,
 } from "./document-extraction.js";
+
+export {
+  withoutQueryPresentationInstructions,
+  skipPresentationWhitespace,
+  presentationTokenEnd,
+  spacedPresentationTokenEnd,
+} from "./repoSearchPresentation.js";
+export {
+  mapUnquotedRepositoryFilePaths,
+  normalizeUnquotedFilePathToken,
+} from "./repoSearchQueryPaths.js";
+
+export { hasSourceAdviceAttribution, isSourceAdviceNoun } from "./repoSearchSourceDescriptors.js";

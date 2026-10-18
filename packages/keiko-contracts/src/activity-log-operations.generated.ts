@@ -29186,6 +29186,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      sourceDescriptorPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       metadataUnavailableInspectionCount: {
         type: "integer",
         dataClass: "count",

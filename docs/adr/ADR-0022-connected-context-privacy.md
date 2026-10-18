@@ -888,6 +888,25 @@ reported when that grant is spent; cancellation or a changed source prevents pub
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
 boosts; vague, diagnostic, relational, and semantic evidence retains ordinary relevance filtering.
+Positive user-requested source descriptions can also supply primary lexical relevance when all
+descriptor words occur in order on one completely observed coherent source span. Bounded ordinary
+modifiers may intervene; whole-word matching, explicit negation, case sensitivity and physical read
+completeness remain binding. HTML uses the existing quote-aware tag and entity owners: inline
+formatting preserves text, while block boundaries separate descriptor spans without changing
+physical source-line coordinates. A file containing raw text, comments or ambiguous/multiline tags
+conservatively declines this optional witness and its score boost; ordinary HTML source matching
+remains available. The body-free
+`sourceDescriptorMatch` observation is bound to the actual lexical atom and query identity; it
+never verifies organizational approval or gives repository text instruction or permission authority.
+The existing source-details Activity Log event records the certified descriptor-path count
+separately from aggregate primary content, without recording descriptor words or paths.
+The existing source admission, freshness, excerpt reads, selection floors and cumulative grants
+still apply. Same-query validated match records may preserve the observation; token-hash inventories
+alone cannot manufacture it. The existing runner prepares that pure query derivation once per scan.
+Source-subject normalization and the planner share the existing presentation and complete-path
+grammar. Formatting numbers and path components cannot become unrelated content terms; complete
+path identity remains a separate bounded ranking signal. Changed matching semantics invalidate
+prior query-match identities, including prior positive formatting-only matches.
 Query-named paths (relative, contained absolute, or local file URLs) are case-preserving explicit
 selections. A single admission seam applies selected-scope membership, canonical containment, deny
 and ignore rules, safe regular-file checks, and the existing binary/size classifier before injection.

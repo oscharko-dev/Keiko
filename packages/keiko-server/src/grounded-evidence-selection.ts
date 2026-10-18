@@ -34,6 +34,21 @@ export function certifiedContentPaths(
   );
 }
 
+export function certifiedSourceDescriptorPaths(
+  atoms: readonly EvidenceAtom[],
+  identities: readonly ContentEvidenceIdentity[],
+): ReadonlySet<string> {
+  return certifiedContentPaths(
+    atoms.filter(
+      (atom) =>
+        atom.metrics?.sourceDescriptorMatch === true &&
+        atom.provenance.kind === "lexical-search" &&
+        atom.provenance.tool === "repo.searchText",
+    ),
+    identities,
+  );
+}
+
 export type FloorReferenceKind = "ordinary-p75" | "no-ordinary" | "files-scope";
 
 export interface RelativeFloorObservation {

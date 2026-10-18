@@ -289,6 +289,7 @@ import {
 } from "./grounded-document-evidence.js";
 import {
   certifiedContentPaths,
+  certifiedSourceDescriptorPaths,
   type ContentEvidenceIdentity,
   selectGroundedCandidateFiles,
   ordinaryRelativeFloor,
@@ -849,6 +850,7 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     },
     semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
     primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
+    sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
     metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
     metadataObservedCount: { type: "integer", dataClass: "count", required: false },
     metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
@@ -1317,6 +1319,7 @@ interface SourceDecisionObservation {
   semanticProviderCallCount: number;
   semanticRejectedAtomCount: number;
   primaryContentPathCount: number;
+  sourceDescriptorPathCount: number;
 }
 
 function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
@@ -1326,6 +1329,7 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
     semanticProviderCallCount: 0,
     semanticRejectedAtomCount: 0,
     primaryContentPathCount: 0,
+    sourceDescriptorPathCount: 0,
   };
 }
 
@@ -2354,7 +2358,7 @@ function certifiedLexicalContent(
   return result.atoms
     .filter(
       (atom) =>
-        ((literal &&
+        (((literal || atom.metrics?.sourceDescriptorMatch === true) &&
           atom.provenance.kind === "lexical-search" &&
           atom.provenance.tool === "repo.searchText") ||
           (atom.provenance.kind === "file-listing" && atom.provenance.tool === "repo.findFiles")) &&
@@ -2720,6 +2724,10 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   const endpointContentIdentities = endpointLexicalContent(result, inputs);
   const sourceDecision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
   sourceDecision.primaryContentPathCount = certifiedContentPaths(
+    result.atoms,
+    primaryContentIdentities,
+  ).size;
+  sourceDecision.sourceDescriptorPathCount = certifiedSourceDescriptorPaths(
     result.atoms,
     primaryContentIdentities,
   ).size;

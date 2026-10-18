@@ -166,3 +166,80 @@ implementation gate, ADR/e2e wiring, updater evidence freshness and the real loc
 pass. The final macOS production export measures 348,590 gzip bytes across 22 initial scripts
 against the unchanged 349,184-byte ceiling, with no initial Editor/Monaco runtime. This is a
 macOS bundle observation, not the authoritative Linux measurement or native update qualification.
+
+## Requested source conventions and native model diagnostics
+
+The unchanged checked-in Spring slice task independently reproduces a missing requested conventions
+document. The server owner regression fails before repair and then retains that document and its
+actual API names in gateway messages. Positive ordered whole-word source descriptions now supply
+observed lexical relevance through the existing matcher, atom provenance and selection owners.
+This does not verify organizational approval or turn source prose into authority. Ordinary floors,
+scope/deny/freshness rules, physical read completeness and model grants remain unchanged. HTML
+inline formatting preserves coherent descriptor text; block boundaries separate spans while
+physical source-line coordinates stay intact. Hash-only records cannot certify this witness;
+validated same-query match records preserve it after current-file checks.
+Three failure-first multiline controls prevent Script/comment/quoted-attribute interiors from
+being mistaken for document text. The optional HTML witness and its boost conservatively decline
+for such file context; ordinary source search stays available. This is a scoped relevance rule,
+not a full HTML rendering claim or a new instruction-authority boundary.
+
+Three source-facet controls fail before correction: output-length and formatting terms pollute
+content matching, and complete file paths produce unrelated component terms. The planner and
+workspace now share the existing presentation/path grammar. Complete paths retain a separate
+bounded ranking signal. A frozen revision-six compiled producer's formatting-only positive also
+reproduces a stale-cache failure when its query identity is reused. The new matching revision
+forces a reread and then permits unchanged warm reuse. Earlier private candidate path-ranking and
+named-file continuation regressions remain recorded; their unchanged owning controls pass after
+repair. Independent adversarial checks additionally find and verify repairs for repeated
+attribution and long-whitespace parser costs. These are specific bounded work observations, not
+a general performance qualification or acceptance of all language variants.
+The existing correlated source-details event now records a bounded certified-descriptor path count.
+Two failure-first emitted-event controls assert the positive/negated counts and registered persisted
+line shape, without source text or paths. No additional diagnostic stream is introduced.
+
+A separately frozen 22-file private candidate runs the original question through native Gemma with
+the unchanged 118,784 input and 8,192 physical-output grants. The selected Java skill returns eight
+citations in one attempt; the unselected control returns zero citations in two attempts. Both
+observe the required MockitoBean API identifier in the actual provider payload, preserve exact
+published answer bytes and satisfy the declared context/accounting observations. This witness is
+one identifier, not a whole-document completeness claim. The controls have no matched customer
+profile, so these observations do not establish profile superiority.
+Provider/transport limits for this diagnostic are 300,000/900,000 ms with one provider retry;
+this is not a replay of the longer historical provider/transport configuration.
+
+Both unchanged returned Java files fail baseline compilation in the existing isolated offline
+verifier. The selected answer still uses an obsolete WebMvcTest import and an unavailable JSON
+mapper; the control invents a different WebMvcTest package. All six execution fixture files agree
+with the supplied fixture, and output hashes/sizes are verified before extraction. Neither run
+earns executed-test or mutant credit. The generic Java skill now explicitly requires copying
+documented fully qualified API names and avoiding unnecessary mapper dependencies; its new native
+diagnostic remains separate from final qualification. No version-specific answer is inserted into
+the skill or the original task.
+Its next single selected diagnostic removes the unnecessary mapper but still fails compilation on
+the obsolete WebMvcTest import. The first witness established only MockitoBean arrival. A bounded
+per-marker digest/presence observer now checks both documented API names separately without
+retaining provider text; the earlier one-marker observations remain unchanged. Its next diagnostic
+confirms both names on the single actual provider request, but the unchanged returned file still
+fails compilation on the old MVC import and an invented Mockito method. No executed-test or
+mutant credit follows from those source-presence observations.
+
+The full quality run on immutable prior head `a640886829c66ebe89f297637def3b970fb7db72` completes
+with 73,658 passing tests and 91 declared skips across package/UI/script stages. All 27 package
+metric floors, 73 governed file floors and both release targets pass. This is historical evidence
+for that head, not a full-quality verdict for subsequent candidates.
+
+The final source-conventions candidate passes all 2,714 workspace cases, 1,448 workflow cases,
+32 source-selection/logging cases and complete UI coverage (10,703 passing, one existing skip).
+The full Activity Log aggregate and real local Sonar pass. The assembled public package surface
+passes with 6,352 files after its producer records the eight shared grammar exports; dependencies
+are restored afterwards and the lockfile stays unchanged. Editor isolation, release evidence,
+updater evidence freshness, ADR index and e2e wiring also pass. Earlier relative-timing failures
+in the unchanged line-selection benchmark remain recorded; its targeted owner and final complete
+workspace run pass without changing the bound.
+
+The prior published head's CI remains distinct: SonarCloud flags a positive presence assertion
+using `queryByText`; the candidate uses `getByText` and its owning control passes. One macOS Intel
+native-service readiness run exceeds its unchanged ten-second bound while a separate run on the
+same head passes. A WebKit smoke run also fails the Files root-navigation case. These observations
+are retained as unresolved platform/journey evidence, not erased by healthy runs on other engines
+or platforms. Native package replacement and both customer skill qualifications remain open.

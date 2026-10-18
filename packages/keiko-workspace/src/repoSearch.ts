@@ -637,6 +637,7 @@ function buildSearchTextRunner(
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
     matcher,
+    cachedLexicalQuery: prepareCachedLexicalQuery(query),
     ...(deps.queryInterpretation?.terms === undefined
       ? {}
       : { literalTerms: deps.queryInterpretation.terms }),
@@ -1305,7 +1306,7 @@ function needsLiveWorkspaceIndexCandidates(
   // rank those queries soundly. Re-run content prescoring; the request-local context reuses its
   // descriptor-validated preview cache, so repeated grounded anchors still perform no byte reads.
   if (!queryRequiresContentRanking(query, runner)) return false;
-  const cachedQuery = prepareCachedLexicalQuery(query);
+  const cachedQuery = runner.cachedLexicalQuery;
   if (prepared === undefined || cachedQuery === undefined) return true;
   return prepared.entries.some((entry) => {
     const lexical = entry.record?.lexical;

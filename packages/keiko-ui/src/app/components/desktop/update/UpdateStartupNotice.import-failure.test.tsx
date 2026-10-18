@@ -65,7 +65,7 @@ it("optional notice module failure preserves the working desktop", async () => {
         true,
       ),
     );
-    expect(screen.queryByText("Independent workspace remains usable")).toBeInTheDocument();
+    expect(screen.getByText("Independent workspace remains usable")).toBeInTheDocument();
     expect(document.querySelector("[data-app-shell-crashed]")).toBeNull();
     const loadFailure = diagnostic.mock.calls.find(([, meta]) => meta?.errorEvidence !== undefined);
     expect(loadFailure?.[0]).toBe("update-startup-notice: presentation-load-failed");

@@ -77,6 +77,30 @@ async function localProvider(contextWindow) {
   };
 }
 
+function sourceWitnessObservations(contents, markers) {
+  if (
+    !Array.isArray(markers) ||
+    markers.length > 8 ||
+    markers.some(
+      (marker) => typeof marker !== "string" || marker.length === 0 || marker.length > 4096,
+    )
+  )
+    throw new TypeError("source-witness-list-invalid");
+  return markers.map((marker) => ({
+    digest: digest(marker),
+    present: contents.some((text) => text.includes(marker)),
+  }));
+}
+
+function sourceObservation(contents, scope) {
+  const sourceComplete = scope.source ? contents.some((text) => text.includes(scope.source)) : null;
+  if (scope.sourceWitnesses === undefined) return { sourceComplete };
+  return {
+    sourceComplete,
+    sourceWitnesses: sourceWitnessObservations(contents, scope.sourceWitnesses),
+  };
+}
+
 export function requestObservation(payload, bytes, body, scope) {
   const contents = (payload.messages ?? []).map((message) =>
     typeof message.content === "string" ? message.content : JSON.stringify(message.content),
@@ -95,7 +119,7 @@ export function requestObservation(payload, bytes, body, scope) {
     messageCount: contents.length,
     skillOccurrences,
     skillDigest: skillOccurrences > 0 ? digest(scope.skillBody) : null,
-    sourceComplete: scope.source ? contents.some((text) => text.includes(scope.source)) : null,
+    ...sourceObservation(contents, scope),
     operation: compaction ? "compaction" : "conversation",
     caseRequest:
       !compaction && !!scope.question && contents.some((text) => text.includes(scope.question)),
@@ -346,14 +370,14 @@ async function canonicalCompactionPrompts() {
 
 export async function startRuntime(
   dir,
-  { contextWindow = 131072, skillBody = "", source = "" } = {},
+  { contextWindow = 131072, skillBody = "", source = "", sourceWitnesses } = {},
 ) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const provider = await localProvider(contextWindow),
     physical = [],
     state = createChaosState(),
     compactionPrompts = await canonicalCompactionPrompts();
-  let scope = { id: "setup", question: "", skillBody, source, compactionPrompts };
+  let scope = { id: "setup", question: "", skillBody, source, sourceWitnesses, compactionPrompts };
   const proxy = createChaosProxy({
     upstream: provider.upstream,
     state,
@@ -380,7 +404,7 @@ export async function startRuntime(
       return bff.baseUrl;
     },
     setActive: (id, question = "") => {
-      scope = { id, question, skillBody, source, compactionPrompts };
+      scope = { id, question, skillBody, source, sourceWitnesses, compactionPrompts };
     },
     request: bff.request,
     drain: () => drainPhysicalRequests(physical),

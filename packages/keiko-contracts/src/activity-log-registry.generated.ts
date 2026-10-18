@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9ce0d7abe239c1ff84ff759dc962f203275a02f55fc0f2d98b5796119eb3e0b1" as const;
+  "4371b7c461e3e67b1bc986686c93000885a85e03b1d3f36d4e7f1961c20d77e8" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -14058,6 +14058,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "semanticRejectedAtomCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "sourceDescriptorPathCount",
               type: "integer",
               dataClass: "count",
               required: false,

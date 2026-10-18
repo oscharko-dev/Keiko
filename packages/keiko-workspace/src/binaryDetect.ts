@@ -145,6 +145,11 @@ interface HtmlProbeAttributes {
   readonly attributes: ReadonlyMap<string, string>;
 }
 
+/** Shared quote-aware tag boundary for encoding probes and source-text projection. */
+export function htmlProbeTagEnd(source: string, offset: number): number | undefined {
+  return parseHtmlProbeAttributes(source, offset)?.end;
+}
+
 function parseHtmlProbeAttributes(prefix: string, offset: number): HtmlProbeAttributes | undefined {
   const cursor = { tag: prefix, offset };
   const attributes = new Map<string, string>();

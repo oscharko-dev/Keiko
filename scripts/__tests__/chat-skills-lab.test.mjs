@@ -23,6 +23,28 @@ const scope = {
   compactionPrompts: new Set([SUMMARY_SYSTEM_PROMPT, PROMPT_COMPACTION_SYSTEM]),
 };
 describe("private Chat skill qualification observations", () => {
+  it("observes each requested source witness independently without retaining its text", () => {
+    const markers = ["Synthetic API One", "Synthetic API Two"];
+    const observed = requestObservation(
+      { messages: [{ role: "user", content: markers[0] }] },
+      4,
+      "wire",
+      { ...scope, sourceWitnesses: markers },
+    );
+    expect(observed.sourceWitnesses).toEqual([
+      { digest: digest(markers[0]), present: true },
+      { digest: digest(markers[1]), present: false },
+    ]);
+    for (const marker of markers) expect(JSON.stringify(observed)).not.toContain(marker);
+  });
+  it.each([[""], [0], ["x".repeat(4097)], Array(9).fill("marker")])(
+    "rejects an invalid or oversized source-witness list",
+    (...sourceWitnesses) => {
+      expect(() =>
+        requestObservation({ messages: [] }, 4, "wire", { ...scope, sourceWitnesses }),
+      ).toThrow("source-witness-list-invalid");
+    },
+  );
   it("hashes a large release diff completely without retaining it in an error", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "skill-lab-provenance-"));
     try {

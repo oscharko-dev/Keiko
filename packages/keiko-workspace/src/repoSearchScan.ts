@@ -716,6 +716,7 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
 }
 
 export interface SearchTextRunner {
+  readonly cachedLexicalQuery?: CachedLexicalQuery | undefined;
   readonly streamingWorkspaceIndex?: StreamingWorkspaceIndexSession | undefined;
   readonly queryIdentitySha256?: string | undefined;
   readonly eligibleTextObserver?:
@@ -1216,9 +1217,16 @@ function emitBestLines(
         tool: "repo.searchText",
         queryFingerprint: runner.fingerprint,
         score: match.score,
-        ...(match.queryGroupKey === undefined
+        ...(match.queryGroupKey === undefined && match.sourceDescriptorMatch !== true
           ? {}
-          : { metrics: { lexicalQueryGroupKey: match.queryGroupKey } }),
+          : {
+              metrics: {
+                ...(match.queryGroupKey === undefined
+                  ? {}
+                  : { lexicalQueryGroupKey: match.queryGroupKey }),
+                ...(match.sourceDescriptorMatch === true ? { sourceDescriptorMatch: true } : {}),
+              },
+            }),
         emittedAtMs: runner.nowMs(),
       }),
     );
@@ -1367,7 +1375,10 @@ function cachedLexicalRecord(
   if (lexical === undefined || lexical.truncated) {
     return undefined;
   }
-  const query = prepareCachedLexicalQuery(runner.query);
+  const query =
+    "cachedLexicalQuery" in runner
+      ? runner.cachedLexicalQuery
+      : prepareCachedLexicalQuery(runner.query);
   return query === undefined ? undefined : { lexical, query };
 }
 
@@ -1621,6 +1632,7 @@ function collectRankedSemanticDocument(
 
 function fileCanContainMatches(runner: SearchTextRunner, text: string): boolean {
   if (runner.sourceInspection === true) return true;
+  if (runner.matcher.matchesSourceDescriptor?.(text) === true) return true;
   // Reuse the prepared literal matcher: alternatives and case folding must match line selection.
   if (runner.literalTerms !== undefined) return runner.matcher.match(text) > 0;
   return shouldScoreContent(runner.query, text, runner.policy);
@@ -1679,9 +1691,12 @@ function textFileMatches(
   const sourceLinesFor = prepareSourceLines(text, file.relativePath);
   collectRankedSemanticDocument(runner, file, text, sourceLinesFor);
   const projected = htmlEntitySearchText(file.relativePath, text);
-  if (!projectedFileCanContainMatches(runner, text, projected)) return undefined;
   const matchingRunner =
-    projected === text ? runner : { ...runner, matcher: htmlEntityLineMatcher(runner.matcher) };
+    projected !== text ||
+    (isHtmlSearchPath(file.relativePath) && runner.matcher.matchesSourceDescriptor !== undefined)
+      ? { ...runner, matcher: htmlEntityLineMatcher(runner.matcher, text) }
+      : runner;
+  if (!projectedFileCanContainMatches(matchingRunner, text, projected)) return undefined;
   const matched = scanLines(matchingRunner, text, state, file.relativePath, sourceLinesFor);
   const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {

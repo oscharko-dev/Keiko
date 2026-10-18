@@ -42,6 +42,13 @@ Use only dependencies and APIs supported by that project. Distinguish approved b
 proposals and assumptions. Ask for the smallest missing signature or requirement when it prevents
 a correct test; do not invent classes, constructors, methods, annotations or business rules.
 
+Before writing imports, identify the exact fully qualified names supplied by the project's current
+conventions, dependency evidence or neighboring tests. Copy those names exactly. An explicitly
+documented package takes precedence over a familiar package from another framework version.
+Check every final import against that evidence, including test annotations, bean overrides and JSON
+APIs. Do not add a JSON mapper or another helper dependency just to construct a fixed request body;
+use the supported HTTP test client's string body when that is sufficient.
+
 For each requested behavior, identify an observable result, exception or externally meaningful
 interaction. Derive expected examples from the requirement independently of the implementation;
 do not reproduce its algorithm in the assertion. If requirements and implementation disagree,

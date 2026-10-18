@@ -27,11 +27,17 @@ none of them in either its JavaScript or TypeScript rule repository. All four af
 were correctly classified as main sources, rather than tests. Review these shapes explicitly until
 the pinned local analyzer contains the rules; a clean local scan cannot check an absent rule.
 
-| Cloud rule | Required shape                                    | Preserved behavior                                                                                              |
-| ---------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `S9382`    | Avoid `await` directly inside a loop.             | Keep bounded, sequential catalog refresh and readiness probes; do not introduce uncontrolled parallel requests. |
-| `S9381`    | Flatten nested Promise handlers.                  | Retain handshake ordering and the existing rejection boundary.                                                  |
-| `S7503`    | Remove async callbacks without asynchronous work. | Return the existing Promise contract without an unnecessary async wrapper.                                      |
+| Cloud rule | Required shape                                         | Preserved behavior                                                                                              |
+| ---------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `S9382`    | Avoid `await` directly inside a loop.                  | Keep bounded, sequential catalog refresh and readiness probes; do not introduce uncontrolled parallel requests. |
+| `S9381`    | Flatten nested Promise handlers.                       | Retain handshake ordering and the existing rejection boundary.                                                  |
+| `S7503`    | Remove async callbacks without asynchronous work.      | Return the existing Promise contract without an unnecessary async wrapper.                                      |
+| `S9027`    | Use `getBy*` queries for positive presence assertions. | Preserve Testing Library's missing-element diagnostics; retain `queryBy*` for absence assertions.               |
+
+PR #4046 additionally encountered S9027 in a test source. The pinned local 13.1 analyzer's rule
+metadata returns `Rule not found` for `typescript:S9027`; an actual owning test and this explicit
+shape review supplement the local scan until that analyzer registers it. The required Cloud
+zero-unresolved-issue gate remains authoritative.
 
 Shell rules SonarCloud runs and no local tool reproduces — check these by hand on a changed `.sh`:
 
