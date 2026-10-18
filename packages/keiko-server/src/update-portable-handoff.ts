@@ -15,7 +15,10 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import type { UpdateActivationWalState } from "@oscharko-dev/keiko-contracts";
-import { posixPortableActivationLayout } from "./update-portable-activation-files.js";
+import {
+  attestPortableManagedRegistration,
+  posixPortableActivationLayout,
+} from "./update-portable-activation-files.js";
 import {
   portableHandoffPlanSha256,
   portableHandoffRoot,
@@ -378,6 +381,20 @@ function writeCoordinatorControl(child: ChildProcess, planSha256: string): Promi
   });
 }
 
+function assertCurrentManagedRegistration(stateDir: string, plan: PortableHandoffPlan): void {
+  if (
+    !attestPortableManagedRegistration({
+      stateDir,
+      managedRoot: plan.paths.managedRoot,
+      target: plan.target,
+      version: plan.oldProcess.version,
+      expectedSha256: plan.digests.previousRegistrationSha256,
+    })
+  ) {
+    fail("portable handoff current managed registration is invalid");
+  }
+}
+
 async function prepareCoordinator(
   options: PortableHandoffCoordinatorOptions,
   sessionId: string,
@@ -397,6 +414,8 @@ async function prepareCoordinator(
   const coordinator = join(root, `coordinator${extension}`);
   const supervisor = join(root, `runtime-supervisor${extension}`);
   try {
+    snapshotWindowsCapsule(plan, root);
+    assertCurrentManagedRegistration(options.stateDir, plan);
     const coordinatorSha256 = await copyAndVerifyNativeArtifacts({
       options,
       plan,
@@ -404,7 +423,6 @@ async function prepareCoordinator(
       supervisor,
       signal,
     });
-    snapshotWindowsCapsule(plan, root);
     const planSha256 = await persistPreparedCoordinator(
       options,
       plan,

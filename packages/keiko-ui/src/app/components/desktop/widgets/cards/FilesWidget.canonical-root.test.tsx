@@ -369,23 +369,28 @@ function delayedRootRefresh(
   native: NativeFixture,
   requestedRoot = native.root,
 ): {
+  readonly initialRootRead: Promise<void>;
   readonly hold: () => void;
   readonly entered: Promise<void>;
   readonly release: () => void;
 } {
   const entered = deferred<void>();
   const released = deferred<void>();
+  const initialRootRead = deferred<void>();
   let holding = false;
   vi.mocked(fetchFilesTree).mockImplementation(async (root, path = "") => {
+    const holdRead = holding && root === requestedRoot && path === "";
+    if (holdRead) holding = false;
     const response = await native.tree(root, path);
-    if (holding && root === requestedRoot && path === "") {
-      holding = false;
+    if (holdRead) {
       entered.resolve();
       await released.promise;
     }
+    if (root === requestedRoot && path === "") initialRootRead.resolve();
     return response;
   });
   return {
+    initialRootRead: initialRootRead.promise,
     hold: (): void => {
       holding = true;
     },
@@ -393,6 +398,53 @@ function delayedRootRefresh(
     release: (): void => released.resolve(),
   };
 }
+
+it("holds only a root read started after the refresh barrier is armed", async () => {
+  const native = await nativeFilesChatFixture();
+  const response = await native.tree(native.root, "");
+  const first = deferred<typeof response>();
+  const pending = delayedRootRefresh({
+    ...native,
+    tree: vi
+      .fn<NativeFixture["tree"]>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(response),
+  });
+  const reads: Promise<unknown>[] = [];
+  let firstCompleted = false;
+  let nextCompleted = false;
+  let entered = false;
+  void pending.entered.then(() => {
+    entered = true;
+  });
+  try {
+    reads.push(
+      fetchFilesTree(native.root, "").then(() => {
+        firstCompleted = true;
+      }),
+    );
+    pending.hold();
+    await act(async () => first.resolve(response));
+    expect(firstCompleted).toBe(true);
+    expect(entered).toBe(false);
+    reads.push(
+      fetchFilesTree(native.root, "").then(() => {
+        nextCompleted = true;
+      }),
+    );
+    await act(async () => pending.entered);
+    expect(nextCompleted).toBe(false);
+    await act(async () => pending.release());
+    await Promise.all(reads);
+    expect(nextCompleted).toBe(true);
+  } finally {
+    first.resolve(response);
+    pending.release();
+    await Promise.allSettled(reads);
+    cleanup();
+    await native.close();
+  }
+});
 
 it("does not reuse a held old-root read after a child discovers an alias replacement", async () => {
   const native = await nativeFilesChatFixture(true);
@@ -507,6 +559,7 @@ it.each(["close-preview", "change-root"] as const)(
       );
       fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
       await screen.findByRole("button", { name: "Back to files" });
+      await act(async () => pending.initialRootRead);
       pending.hold();
       await act(async () => {
         notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });

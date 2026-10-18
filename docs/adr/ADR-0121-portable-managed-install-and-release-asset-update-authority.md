@@ -170,6 +170,11 @@ retains the WAL and emits the existing correlated recovery-required Activity Log
 binding check does not replace native supervisor, release-signature or process-lifetime proof.
 Registration, setup and launcher readers open nonblocking before checking the descriptor type,
 so a FIFO cannot stall startup before the existing regular-file and deadline checks run.
+Handoff preparation reuses that same current-install attestation before copying or verifying the
+current coordinator and supervisor, and before publishing prepared intent. Its expected registration
+digest comes from the accepted plan. Windows capsule prerequisites retain their existing earlier
+validation and cleanup. A digest measured from an executable during preparation establishes byte
+continuity only; it cannot replace the installation binding or release authenticity.
 
 ### D4 — Source-of-truth split
 

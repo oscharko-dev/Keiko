@@ -349,3 +349,28 @@ qualification invocation error: the wrapper omitted the pinned PATH and used Nod
 11.19.1. The exact toolchain gate rejects that pair and accepts pinned Node 24.18.0/npm 11.16.0.
 This does not establish a debug-launch product defect. The failed receipt remains retained;
 downstream UI/script/floor stages did not run, and a correctly pinned complete rerun is required.
+
+## Current installation binding before handoff preparation
+
+Ten failure-first controls reach a healthy copy/verification path and then demonstrate that changed,
+missing or hard-linked setup files, or changed/missing registration files, were accepted during
+preparation for both POSIX layouts. Fifteen original coordinator controls remain healthy before
+the correction. The existing active-registration owner now revalidates the accepted plan's exact
+registration digest, current target/version, real root, setup and launcher before copying current
+native executables, verifying their OS identities or publishing prepared intent. Refusals use the
+existing preparation failure path; no execution or signature exception is introduced.
+
+POSIX and Windows coordinator fixtures obtain registration bytes from the existing production
+producer. Windows capsule controls still require exact source-to-copy setup and registration bytes,
+and retain their stale, replaced and hard-link refusals. This prerequisite does not authenticate a
+supervisor from a self-observed hash, implement Linux process containment, admit unsigned native
+copies or qualify a complete installed update/restart.
+
+The checkpoint-16 UI coverage job retains one close-preview/root-refresh failure. Its unchanged
+owning suite and complete UI coverage pass locally; those runs do not refute CI. A new controlled
+read-order test separately proves that the refresh fixture could consume its hold flag for a read
+already started before the flag was armed (one failure, fifteen healthy controls). The fixture now
+captures ownership at request entry and explicitly awaits initial root-read readiness before the
+selection-change case. All sixteen owning controls pass; the original stale-selection and exact
+active-directory assertions remain intact. This is a fixture-ordering correction, not a new claim
+of native browser or current-head CI completion.

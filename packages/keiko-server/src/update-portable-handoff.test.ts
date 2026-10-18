@@ -18,6 +18,11 @@ import {
 } from "./update-portable-handoff-plan.js";
 
 import { prepare, type HandoffFixture } from "./__tests__/portable-handoff-fixture.js";
+import { portableRegistrationDocument } from "./update-portable-activation-files.js";
+import {
+  parseWindowsGenerationBinding,
+  resolveWindowsGenerationLayout,
+} from "./update-portable-windows-generation.js";
 
 const roots: string[] = [];
 
@@ -25,6 +30,50 @@ afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
+
+function writeWindowsCurrentRegistration(
+  managedRoot: string,
+  stateDir: string,
+  treeSha256: string,
+): string {
+  const binding = parseWindowsGenerationBinding({
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: createHash("sha256")
+      .update(readFileSync(join(managedRoot, "Keiko.exe")))
+      .digest("hex"),
+  });
+  if (binding === undefined) throw new Error("Invalid Windows registration fixture");
+  const layout = resolveWindowsGenerationLayout(managedRoot, binding);
+  writeFileSync(
+    layout.rootSetupManifestPath,
+    JSON.stringify({
+      schemaVersion: 2,
+      platformTarget: "windows-x64",
+      packageVersion: "1.2.2",
+      stable: true,
+      windowsGeneration: binding,
+    }),
+  );
+  const registration = portableRegistrationDocument({
+    layout: {
+      ...layout,
+      launcherPath: layout.rootLauncherPath,
+      setupManifestPath: layout.rootSetupManifestPath,
+      windowsGeneration: binding,
+    },
+    target: "windows-x64",
+    env: {},
+    home: managedRoot,
+    now: 1_800_000_000_000,
+  });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "portable-install-state.json"), registration);
+  return registration;
+}
 
 function prepareWindows(root: string): HandoffFixture {
   const stateDir = join(root, "state");
@@ -64,9 +113,12 @@ function prepareWindows(root: string): HandoffFixture {
   writeFileSync(supervisor, "supervisor");
   writeFileSync(candidateLauncher, "candidate-launcher");
   writeFileSync(candidateSupervisor, "candidate-supervisor");
-  writeFileSync(currentSetup, "current-setup");
   writeFileSync(candidateSetup, "candidate-setup");
-  const registrationPrevious = "registration-previous";
+  const registrationPrevious = writeWindowsCurrentRegistration(
+    managedRoot,
+    stateDir,
+    currentGenerationTreeSha256,
+  );
   const registrationNext = "registration-next";
   const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
   const plan = createPortableHandoffPlan({
@@ -113,7 +165,7 @@ function prepareWindows(root: string): HandoffFixture {
     cutoverKind: "windows-generation-v1",
     currentGenerationTreeSha256,
     candidateGenerationTreeSha256,
-    currentSetupManifestSha256: digest("current-setup"),
+    currentSetupManifestSha256: digest(readFileSync(currentSetup, "utf8")),
     candidateSetupManifestSha256: digest("candidate-setup"),
   });
   writePortableHandoffPlan({ stateDir, plan });
@@ -144,10 +196,12 @@ describe("portable handoff coordinator", () => {
       expect(readFileSync(join(capsule, "coordinator.exe"), "utf8")).toBe("coordinator");
       expect(readFileSync(join(capsule, "runtime-supervisor.exe"), "utf8")).toBe("supervisor");
       expect(readFileSync(join(capsule, "launcher.next"), "utf8")).toBe("candidate-launcher");
-      expect(readFileSync(join(capsule, "setup-manifest.previous"), "utf8")).toBe("current-setup");
+      expect(readFileSync(join(capsule, "setup-manifest.previous"))).toEqual(
+        readFileSync(join(fixture.plan.paths.managedRoot, ".portable", "setup-manifest.json")),
+      );
       expect(readFileSync(join(capsule, "setup-manifest.next"), "utf8")).toBe("candidate-setup");
-      expect(readFileSync(join(capsule, "registration.previous"), "utf8")).toBe(
-        "registration-previous",
+      expect(readFileSync(join(capsule, "registration.previous"))).toEqual(
+        readFileSync(join(fixture.stateDir, "portable-install-state.json")),
       );
       expect(readFileSync(join(capsule, "registration.next"), "utf8")).toBe("registration-next");
       return Promise.resolve();
