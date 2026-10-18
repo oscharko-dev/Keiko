@@ -651,3 +651,25 @@ and the exact selected-skill presence within the original cumulative output gran
 physical records remain separately classified. These failures do not establish a useful skill.
 Further cause diagnostics and any candidate method changes remain separate, without rewriting or
 recrediting the original campaign. The broader functional/platform/model acceptance holds remain.
+
+## Checkpoint 26: observe necessary toolchain spans before the next skill comparison
+
+The existing qualification proxy records hashes and presence flags for source spans on actual model
+requests. Eight slots cover the current eight rules but cannot also witness the thirteen dependency
+versions and ten compiler options needed by the next comparison. Its bounded inventory now accepts
+32 spans; 33 spans, malformed values and individual markers above 4,096 characters still refuse.
+Missing array slots are now rejected too: the old sparse-array iteration silently skipped them,
+which could serialize absent observations. Its separate negative control fails before and passes
+after materializing the bounded list for validation.
+The same new 32-span control fails before and passes after. Existing observation, redaction and
+verification controls remain in place. This extends test observability without adding model prompt
+instructions, exposing bodies or changing product authority, retrieval or generation budgets.
+
+`react-native-credit-hold-v1.json` preserves the failed original twelve-case comparison and the
+separate thirteen-test isolation diagnosis. Seven assertions pass individually with zero runtime
+errors; six still fail. Filtered cases stay ineligible and receive no mutation credit. Independent
+source inspection finds shared describe-scope mocks without lifecycle hooks in all three affected
+compiled outputs. This supports a focused method experiment; it does not prove a wording change,
+blanket reset or repaired application. The candidate React clarification remains private and Java
+is unchanged. New model calls require a separately frozen paired plan and actual necessary-source
+observations; original scores and untouched-task requirements remain unchanged.

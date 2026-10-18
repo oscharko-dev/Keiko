@@ -37,7 +37,22 @@ describe("private Chat skill qualification observations", () => {
     ]);
     for (const marker of markers) expect(JSON.stringify(observed)).not.toContain(marker);
   });
-  it.each([[""], [0], ["x".repeat(4097)], Array(9).fill("marker")])(
+  it("observes a bounded complete toolchain-and-requirement inventory without retaining text", () => {
+    const markers = Array.from(
+      { length: 32 },
+      (_unused, index) => `Synthetic source span ${index}.`,
+    );
+    const observed = requestObservation(
+      { messages: [{ role: "user", content: markers.join("\n") }] },
+      4,
+      "wire",
+      { ...scope, sourceWitnesses: markers },
+    );
+    expect(observed.sourceWitnesses).toHaveLength(32);
+    expect(observed.sourceWitnesses.every((witness) => witness.present)).toBe(true);
+    for (const marker of markers) expect(JSON.stringify(observed)).not.toContain(marker);
+  });
+  it.each([[""], [0], ["x".repeat(4097)], Array(33).fill("marker")])(
     "rejects an invalid or oversized source-witness list",
     (...sourceWitnesses) => {
       expect(() =>
@@ -45,6 +60,11 @@ describe("private Chat skill qualification observations", () => {
       ).toThrow("source-witness-list-invalid");
     },
   );
+  it("rejects missing source-witness slots instead of emitting absent observations", () => {
+    expect(() =>
+      requestObservation({ messages: [] }, 4, "wire", { ...scope, sourceWitnesses: Array(1) }),
+    ).toThrow("source-witness-list-invalid");
+  });
   it("hashes a large release diff completely without retaining it in an error", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "skill-lab-provenance-"));
     try {

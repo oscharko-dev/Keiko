@@ -80,8 +80,8 @@ async function localProvider(contextWindow) {
 function sourceWitnessObservations(contents, markers) {
   if (
     !Array.isArray(markers) ||
-    markers.length > 8 ||
-    markers.some(
+    markers.length > 32 ||
+    Array.from(markers).some(
       (marker) => typeof marker !== "string" || marker.length === 0 || marker.length > 4096,
     )
   )
