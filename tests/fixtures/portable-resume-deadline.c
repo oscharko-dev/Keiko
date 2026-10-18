@@ -1,13 +1,50 @@
 #include <assert.h>
 #include <errno.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 
 static uint64_t fixture_wall;
 static uint64_t fixture_monotonic = 1000u;
+static int fixture_read_timing;
+static unsigned int fixture_gate_polls;
+static int fixture_clock_unavailable;
+
+static void fixture_advance(uint64_t milliseconds) {
+  fixture_wall += milliseconds;
+  fixture_monotonic += milliseconds;
+}
+
+static int fixture_poll(struct pollfd *descriptors, nfds_t length, int timeout) {
+  if (length == 1u && descriptors[0].fd == 5 &&
+      fixture_read_timing == 6 && fixture_gate_polls++ == 0u) {
+    fixture_advance(10u);
+    errno = EINTR;
+    return -1;
+  }
+  int result = poll(descriptors, length, timeout);
+  if (length == 1u && descriptors[0].fd == 5 && result > 0) {
+    if (fixture_read_timing == 1) fixture_advance(10u);
+    if (fixture_read_timing == 3) fixture_advance(11u);
+  }
+  return result;
+}
+
+static ssize_t fixture_read(int descriptor, void *output, size_t length) {
+  if (descriptor == 5 && fixture_read_timing == 5 && length == 65u) length = 32u;
+  ssize_t result = read(descriptor, output, length);
+  if (descriptor == 5 && result > 0) {
+    if (fixture_read_timing == 2) fixture_advance(10u);
+    if (fixture_read_timing == 4) fixture_advance(11u);
+    if (fixture_read_timing == 5) fixture_advance(6u);
+    if (fixture_read_timing == 7) fixture_clock_unavailable = 1;
+  }
+  return result;
+}
 
 static int fixture_gettimeofday(struct timeval *value, void *zone) {
   (void)zone;
@@ -18,6 +55,7 @@ static int fixture_gettimeofday(struct timeval *value, void *zone) {
 
 static int fixture_clock_gettime(clockid_t clock, struct timespec *value) {
   assert(clock == CLOCK_MONOTONIC);
+  if (fixture_clock_unavailable) return -1;
   value->tv_sec = (time_t)(fixture_monotonic / 1000u);
   value->tv_nsec = (long)((fixture_monotonic % 1000u) * 1000000u);
   return 0;
@@ -25,11 +63,15 @@ static int fixture_clock_gettime(clockid_t clock, struct timespec *value) {
 
 #define gettimeofday fixture_gettimeofday
 #define clock_gettime fixture_clock_gettime
+#define poll fixture_poll
+#define read fixture_read
 #define main unused_portable_launcher_main
 #include "../../native/portable-launcher/keiko-portable-launcher.c"
 #undef main
 #undef clock_gettime
 #undef gettimeofday
+#undef poll
+#undef read
 
 typedef struct {
   keiko_coordinator_context transaction;
@@ -131,7 +173,7 @@ int main(int argc, char **argv) {
   resume_fixture fixture;
   keiko_coordinator_context resumed;
   int admitted;
-  assert(argc == 9);
+  assert(argc == 10);
   memset(&fixture, 0, sizeof(fixture));
   fixture.activation = argv[2];
   fixture.executable = argv[3];
@@ -140,6 +182,7 @@ int main(int argc, char **argv) {
   assert(keiko_khp_decimal_value(argv[6], UINT64_C(9007199254740991),
                                 &fixture.failure_wall) == 1);
   assert(strcmp(getenv("KEIKO_STATE_DIR"), argv[7]) == 0);
+  fixture_read_timing = atoi(argv[9]);
   if (strcmp(argv[1], "rollback") == 0) admitted = rollback(&fixture);
   else {
     reopen_gate(&fixture);

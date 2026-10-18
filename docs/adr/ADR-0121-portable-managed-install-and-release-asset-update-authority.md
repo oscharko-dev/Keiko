@@ -290,6 +290,11 @@ alone proves neither runtime readiness nor settled recovery.
 Windows selects that plan deadline immediately after loading the capsule, before image, parent,
 volume, phase and gate work. It cannot replace an expired phase with a fresh control interval;
 unavailable wall time and monotonic overflow refuse through the existing conversion owner.
+Both native exact-read owners preserve that same absolute monotonic deadline through the operation:
+they check before waiting, after readiness and before accepting a completed read. A buffered or
+partial frame becoming available at or after expiry cannot renew authority. Interrupted or repeated
+reads retain the original deadline. Failure to observe a valid clock or complete timely response
+retains recovery ownership; no PID/port absence or transport EOF can substitute for native proof.
 Successful restoration settles a **failed update with
 recovery settled**, not a successful update, cancellation, or automatic retry. The server commits
 that result through revision-checked state; uncertain termination, incomplete restore evidence, or

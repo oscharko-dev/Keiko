@@ -83,6 +83,30 @@ describe.skipIf(process.platform === "win32")(
       return JSON.parse(result.stdout);
     }
 
+    describe.each([false, true])("restoring %s", (restoring) => {
+      it.each([
+        ["ready exactly at expiry", 8],
+        ["peek completes at expiry", 9],
+        ["read completes at expiry", 10],
+        ["peek completes after expiry", 11],
+        ["read completes after expiry", 12],
+      ])("refuses a gate when %s", (_name, fault) => {
+        expect(run(restoring ? 2990 : 990, restoring, fault).admitted).toBe(0);
+      });
+
+      it.each([8, 9, 10, 11, 12])("admits timely gate I/O under timing port %s", (fault) => {
+        expect(run(restoring ? 2988 : 988, restoring, fault).admitted).toBe(1);
+      });
+
+      it("refuses a partial gate completed after the original deadline", () => {
+        expect(run(restoring ? 2990 : 990, restoring, 13).admitted).toBe(0);
+      });
+
+      it("admits a complete partial gate one millisecond before the deadline", () => {
+        expect(run(restoring ? 2987 : 987, restoring, 13).admitted).toBe(1);
+      });
+    });
+
     it.each([
       ["forward before start", 999, false, 1],
       ["forward at start", 1000, false, 0],

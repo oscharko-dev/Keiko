@@ -52,6 +52,7 @@ function runResume(
   now: number,
   restoring: boolean,
   failureAt = 0,
+  timing = 0,
 ): unknown {
   const compiledSubject = compiledSubjects.get(fixture.plan.target);
   if (compiledSubject === undefined) throw new Error("Native resume fixture was not compiled");
@@ -66,6 +67,7 @@ function runResume(
       String(failureAt),
       fixture.stateDir,
       restoring ? "restore" : "forward",
+      String(timing),
     ],
     { encoding: "utf8", timeout: 3_500, env: { KEIKO_STATE_DIR: fixture.stateDir } },
   );
@@ -110,6 +112,44 @@ describe.skipIf(process.platform === "win32")("actual POSIX resume phase deadlin
   }, 35_000);
 
   describe.each(["macos-arm64", "linux-x64"] as const)("%s plan", (target) => {
+    describe.each([false, true])("restoring %s", (restoring) => {
+      it.each([
+        ["poll at expiry", 1],
+        ["read at expiry", 2],
+        ["poll after expiry", 3],
+        ["read after expiry", 4],
+        ["partial gate after expiry", 5],
+        ["interrupted poll at expiry", 6],
+      ] as const)("preserves the grant across %s", (_name, timing) => {
+        const fixture = resumeFixture(restoring, target);
+        const deadline = fixture.plan.deadlines[restoring ? "cleanupAt" : "startAt"];
+        expect(runResume(fixture, deadline - 10, restoring, 0, timing)).toMatchObject({
+          admitted: 0,
+        });
+      });
+
+      it.each([
+        [1, 11],
+        [2, 11],
+        [3, 12],
+        [4, 12],
+        [5, 13],
+        [6, 11],
+      ])("admits timely gate I/O under timing port %s", (timing, remaining) => {
+        const fixture = resumeFixture(restoring, target);
+        const deadline = fixture.plan.deadlines[restoring ? "cleanupAt" : "startAt"];
+        expect(runResume(fixture, deadline - remaining, restoring, 0, timing)).toMatchObject({
+          admitted: 1,
+        });
+      });
+
+      it("refuses authority if the monotonic clock fails after reading the gate", () => {
+        const fixture = resumeFixture(restoring, target);
+        const deadline = fixture.plan.deadlines[restoring ? "cleanupAt" : "startAt"];
+        expect(runResume(fixture, deadline - 100, restoring, 0, 7)).toMatchObject({ admitted: 0 });
+      });
+    });
+
     it.each([
       { name: "forward before start", restoring: false, phase: "startAt", offset: -1, admitted: 1 },
       { name: "forward after start", restoring: false, phase: "startAt", offset: 1, admitted: 0 },

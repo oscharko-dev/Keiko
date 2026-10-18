@@ -26,6 +26,13 @@ static uint64_t wall_now, monotonic_now;
 static int restoring_mode, fault;
 static unsigned int gate_reads, image_checks, parent_checks;
 static char digest[65];
+static uint64_t gate_ready_at;
+static unsigned int gate_offset;
+
+static void advance_clock(uint64_t milliseconds) {
+  monotonic_now += milliseconds;
+  wall_now += milliseconds;
+}
 
 static uint64_t GetTickCount64(void) { return monotonic_now; }
 static uint64_t keiko_coordinator_windows_wall_ms(void) { return wall_now; }
@@ -128,22 +135,30 @@ static intptr_t _get_osfhandle(int descriptor) { assert(descriptor == 10); retur
 static int PeekNamedPipe(HANDLE handle, void *buffer, DWORD length, DWORD *read,
                          DWORD *available, DWORD *remaining) {
   (void)handle; (void)buffer; (void)length; (void)read; (void)remaining;
-  *available = fault == 7 ? 0u : 65u;
+  if (fault == 9) advance_clock(10u);
+  if (fault == 11) advance_clock(11u);
+  *available = fault == 7 || monotonic_now < gate_ready_at ? 0u : 65u;
+  if (fault == 13) *available = gate_offset == 0u ? 32u : 65u - gate_offset;
   return 1;
 }
 
 static void Sleep(DWORD milliseconds) {
-  monotonic_now += milliseconds;
-  wall_now += milliseconds;
+  advance_clock(milliseconds);
 }
 
 static int _read(int descriptor, void *output, unsigned int length) {
-  assert(descriptor == 10 && length == 65u);
-  memcpy(output, digest, 64u);
-  ((char *)output)[64] = '\n';
-  if (fault == 2) ((char *)output)[0] = 'z';
+  char gate[65];
+  assert(descriptor == 10 && length > 0u && gate_offset + length <= 65u);
+  if (fault == 10) advance_clock(10u);
+  if (fault == 12) advance_clock(11u);
+  if (fault == 13) advance_clock(6u);
+  memcpy(gate, digest, 64u);
+  gate[64] = '\n';
+  if (fault == 2) gate[0] = 'z';
+  memcpy(output, gate + gate_offset, length);
+  gate_offset += length;
   gate_reads += 1u;
-  return 65;
+  return (int)length;
 }
 
 static int fixture_fileno(FILE *file) { (void)file; return 10; }
@@ -171,6 +186,7 @@ int main(int argc, char **argv) {
   fault = atoi(argv[3]);
   monotonic_now = strtoull(argv[4], NULL, 10);
   started = monotonic_now;
+  gate_ready_at = fault == 8 ? started + 10u : 0u;
   admitted = keiko_coordinator_prepare_resume_windows(
       &context, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", L"C:\\fixture\\Keiko.exe", restoring_mode);
   if (admitted) keiko_coordinator_clear(&context);

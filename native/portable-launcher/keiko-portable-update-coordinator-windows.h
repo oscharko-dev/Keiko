@@ -374,8 +374,9 @@ static int keiko_coordinator_windows_read_exact_fd(
   while (offset < length) {
     DWORD available = 0;
     int count;
-    if (GetTickCount64() > deadline_ms || length - offset > INT_MAX) return 0;
+    if (GetTickCount64() >= deadline_ms || length - offset > INT_MAX) return 0;
     if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) return 0;
+    if (GetTickCount64() >= deadline_ms) return 0;
     if (available == 0) {
       Sleep(10);
       continue;
@@ -385,7 +386,7 @@ static int keiko_coordinator_windows_read_exact_fd(
     if (count <= 0) return 0;
     offset += (size_t)count;
   }
-  return 1;
+  return GetTickCount64() < deadline_ms;
 }
 
 static int keiko_coordinator_windows_write_exact_fd(

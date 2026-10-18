@@ -77,17 +77,18 @@ static int keiko_coordinator_read_exact_deadline(int descriptor, void *buffer, s
     uint64_t now = keiko_tree_now_ms();
     int timeout, ready;
     ssize_t count;
-    if (now > deadline_ms) return 0;
+    if (now >= deadline_ms) return 0;
     timeout = deadline_ms - now > (uint64_t)INT_MAX ? INT_MAX : (int)(deadline_ms - now);
     ready = poll(&poll_descriptor, 1, timeout);
     if (ready < 0 && errno == EINTR) continue;
-    if (ready <= 0 || (poll_descriptor.revents & (POLLERR | POLLNVAL)) != 0) return 0;
+    if (ready <= 0 || (poll_descriptor.revents & (POLLERR | POLLNVAL)) != 0 ||
+        keiko_tree_now_ms() >= deadline_ms) return 0;
     count = read(descriptor, bytes + offset, length - offset);
     if (count < 0 && errno == EINTR) continue;
     if (count <= 0) return 0;
     offset += (size_t)count;
   }
-  return 1;
+  return keiko_tree_now_ms() < deadline_ms;
 }
 
 static int keiko_coordinator_write_exact(int descriptor, const void *buffer, size_t length) {

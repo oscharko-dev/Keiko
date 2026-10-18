@@ -725,3 +725,27 @@ assembled updater or restart evidence. The actual Windows native quality command
 host and is not locally executable on this macOS host; its exact-head CI result remains required.
 The POSIX controls remain intact. Native ownership transfer, genuine packaged update/rollback,
 consecutive updates and SSD/state qualification remain open.
+
+## Checkpoint 29: retain expiry through native I/O
+
+The phase-selector repairs did not cover time advancing inside the final pipe operation. Both
+native exact-read helpers could accept a valid gate observed at expiry; POSIX poll or either
+platform's read could also finish after the last clock check. The shared owners now enforce the
+same strict absolute deadline at loop entry, after readiness and after the complete read. They
+never establish a new relative grant. This protects their existing parent-control, supervisor
+launch/reap/reconcile and resumed-start consumers without changing frame layouts or receipts.
+
+The final permanent fixtures add before/at/after-expiry readiness and read delays for forward and
+restored launches, partial frames, interrupted POSIX polling and clock failure after the last read.
+The unchanged original controls remain. Against the identical final fixtures the delivered parent
+has forty failures and 82 healthy controls; the repair passes all 122. This includes 78 actual
+POSIX launcher/engine controls with real KHP, private files and FD5, and 44 actual Windows policy
+controls with inert OS/identity/filesystem ports. Only clocks and readiness/read timing are
+controlled in the new POSIX I/O cases. One intermediate fixture put two Windows tests outside
+their parameter scope; its two failures are retained and corrected before the final causal run.
+
+`inflight-handoff-deadlines.json` binds sources and observed results. Linux executes the same final
+122 controls offline with root sources read-only. The macOS native compiler/analyzer/boundary gate
+passes. These checks do not establish real Windows APIs, signed ES containment, the missing
+generation-ownership transition or genuine packaged update/restart/rollback/SSD acceptance. The
+broader native and model acceptance holds remain open.
