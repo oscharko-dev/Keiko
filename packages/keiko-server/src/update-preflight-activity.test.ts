@@ -1,3 +1,8 @@
+import { UPDATE_PORTABLE_TARGETS } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { describe, expect, it } from "vitest";
 import {
   recordUpdateInstallMode,
@@ -286,4 +291,15 @@ it("records the update.install-mode.detected Activity Log proof without roots or
     durationMs: 12,
   });
   expect(JSON.stringify(event)).not.toContain("canary");
+});
+
+it.each([
+  "update.portable-asset.redirect-refused",
+  "update.portable-fetch.failed",
+  "update.release-trust.verify",
+  "update.install-mode.detected",
+])("binds %s registered target values to the canonical product vocabulary", (op) => {
+  const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
+  const registration = registry.find((entry) => entry.op === op);
+  expect(registration?.fields.target?.values).toEqual(UPDATE_PORTABLE_TARGETS);
 });

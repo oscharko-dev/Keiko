@@ -15,6 +15,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import type { UpdateActivationWalState } from "@oscharko-dev/keiko-contracts";
+import { posixPortableActivationLayout } from "./update-portable-activation-files.js";
 import {
   portableHandoffPlanSha256,
   portableHandoffRoot,
@@ -610,17 +611,8 @@ function currentNativeArtifacts(plan: PortableHandoffPlan): {
       supervisor: join(generation, "runtime", "native", "keiko-runtime-supervisor.exe"),
     };
   }
-  return {
-    coordinator: join(plan.paths.managedRoot, "Contents", "MacOS", "Keiko"),
-    supervisor: join(
-      plan.paths.managedRoot,
-      "Contents",
-      "Resources",
-      "runtime",
-      "native",
-      "keiko-runtime-supervisor",
-    ),
-  };
+  const layout = posixPortableActivationLayout(plan.target, plan.paths.managedRoot);
+  return { coordinator: layout.launcherPath, supervisor: layout.runtimeSupervisorPath };
 }
 
 async function beginPortableHandoff(

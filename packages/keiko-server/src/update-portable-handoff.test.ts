@@ -32,33 +32,32 @@ interface HandoffFixture {
   readonly supervisor: string;
 }
 
-function prepare(root: string): HandoffFixture {
+function prepare(
+  root: string,
+  target: "macos-arm64" | "linux-x64" = "macos-arm64",
+): HandoffFixture {
   const stateDir = join(root, "state");
   const parent = join(root, "install-parent");
-  const managedRoot = join(parent, "Keiko.app");
+  const managedRoot = join(parent, target === "linux-x64" ? "Keiko" : "Keiko.app");
   const stageRoot = join(parent, ".keiko-portable-updates", "stage-1");
   mkdirSync(managedRoot, { recursive: true });
   mkdirSync(stageRoot, { recursive: true });
-  const coordinator = join(managedRoot, "Contents", "MacOS", "Keiko");
-  const supervisor = join(
-    managedRoot,
-    "Contents",
-    "Resources",
-    "runtime",
-    "native",
-    "keiko-runtime-supervisor",
-  );
-  mkdirSync(join(managedRoot, "Contents", "MacOS"), { recursive: true });
-  mkdirSync(join(managedRoot, "Contents", "Resources", "runtime", "native"), {
-    recursive: true,
-  });
+  const coordinator =
+    target === "linux-x64"
+      ? join(managedRoot, "Keiko")
+      : join(managedRoot, "Contents", "MacOS", "Keiko");
+  const resourceRoot =
+    target === "linux-x64" ? managedRoot : join(managedRoot, "Contents", "Resources");
+  const supervisor = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor");
+  mkdirSync(join(coordinator, ".."), { recursive: true });
+  mkdirSync(join(resourceRoot, "runtime", "native"), { recursive: true });
   writeFileSync(coordinator, "coordinator");
   writeFileSync(supervisor, "supervisor");
   const plan = createPortableHandoffPlan({
     activationId: "a".repeat(32),
     sessionId: "session-1",
     stageId: "stage-1",
-    target: "macos-arm64",
+    target,
     targetVersion: "1.2.3",
     newLaunchId: "2".repeat(32),
     restoreLaunchId: "3".repeat(32),
@@ -74,19 +73,26 @@ function prepare(root: string): HandoffFixture {
     paths: {
       managedRoot,
       stageRoot,
-      candidateRoot: join(stageRoot, "Keiko", "Keiko.app"),
+      candidateRoot:
+        target === "linux-x64" ? join(stageRoot, "Keiko") : join(stageRoot, "Keiko", "Keiko.app"),
       backupRoot: join(parent, `.keiko-previous-${"a".repeat(32)}`),
-      candidateLauncher: join(stageRoot, "Keiko", "Keiko.app", "Contents", "MacOS", "Keiko"),
-      candidateSupervisor: join(
-        stageRoot,
-        "Keiko",
-        "Keiko.app",
-        "Contents",
-        "Resources",
-        "runtime",
-        "native",
-        "keiko-runtime-supervisor",
-      ),
+      candidateLauncher:
+        target === "linux-x64"
+          ? join(stageRoot, "Keiko", "Keiko")
+          : join(stageRoot, "Keiko", "Keiko.app", "Contents", "MacOS", "Keiko"),
+      candidateSupervisor:
+        target === "linux-x64"
+          ? join(stageRoot, "Keiko", "runtime", "native", "keiko-runtime-supervisor")
+          : join(
+              stageRoot,
+              "Keiko",
+              "Keiko.app",
+              "Contents",
+              "Resources",
+              "runtime",
+              "native",
+              "keiko-runtime-supervisor",
+            ),
     },
     digests: {
       currentTreeSha256: "c".repeat(64),
@@ -691,3 +697,44 @@ describe("portable handoff coordinator", () => {
     });
   });
 });
+
+it.each(["linux-x64", "macos-arm64"] as const)(
+  "copies the actual %s native layout before durable preparation",
+  async (target): Promise<void> => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-native-layout-"));
+    roots.push(root);
+    const fixture = prepare(root, target);
+    const stop = new Error("Synthetic stop before native spawn");
+    const persistPrepared = vi.fn(() => Promise.reject(stop));
+    const verifyNativeCopy = vi.fn(
+      ({
+        currentPath,
+        copiedPath,
+      }: {
+        readonly currentPath: string;
+        readonly copiedPath: string;
+      }): Promise<void> => {
+        expect(readFileSync(copiedPath)).toEqual(readFileSync(currentPath));
+        return Promise.resolve();
+      },
+    );
+    const spawnFn = vi.fn();
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared,
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy,
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+    await expect(
+      coordinator.begin({
+        sessionId: fixture.plan.sessionId,
+        activationId: fixture.plan.activationId,
+      }),
+    ).rejects.toBe(stop);
+    expect(verifyNativeCopy).toHaveBeenCalledTimes(2);
+    expect(persistPrepared).toHaveBeenCalledOnce();
+    expect(spawnFn).not.toHaveBeenCalled();
+  },
+);

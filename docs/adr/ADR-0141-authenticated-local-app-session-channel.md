@@ -149,6 +149,9 @@ Snapshots, repaired cookies and replacement live streams all remain bounded by t
 absolute lifetime. Rotated HTTP cookie projections use only that lifetime's remaining full seconds,
 clamped by the existing cookie ceiling; the registered rotation event records the actual
 `cookieMaxAgeSeconds` without bearer material. Fresh secret issuance is not fresh human approval.
+Rotation requires at least one full second of remaining original authority, matching cookie repair.
+The channel checks this before replacing the original secret and again after minting; if time crosses
+that boundary, it revokes the unusable replacement and cannot report a successful zero-age cookie.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification

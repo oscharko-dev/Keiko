@@ -134,6 +134,14 @@ function layoutFor(
       windowsGeneration: binding,
     };
   }
+  return posixPortableActivationLayout(target, root);
+}
+
+/** Canonical POSIX package paths shared by activation and its verified native handoff. */
+export function posixPortableActivationLayout(
+  target: Exclude<UpdatePortableTarget, "windows-x64">,
+  root: string,
+): PortableActivationLayout {
   if (target === "linux-x64") {
     return {
       installRoot: root,
@@ -239,7 +247,7 @@ function validateLayout(
   const rootSetupManifestPath =
     target === "windows-x64"
       ? join(root, ".portable", "setup-manifest.json")
-      : join(root, "Contents", "Resources", ".portable", "setup-manifest.json");
+      : posixPortableActivationLayout(target, root).setupManifestPath;
   requiredFile(rootSetupManifestPath);
   const setupManifest = readJsonRecord(rootSetupManifestPath);
   const layout = layoutFor(target, root, setupManifest);

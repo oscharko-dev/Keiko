@@ -3694,10 +3694,11 @@ function ComposerCoreImpl({
   );
 
   const handleDraftChange = useCallback(
-    (next: string, cursor: number): void => {
-      setDraft(next);
+    (next: string, cursor: number): number | void => {
+      const revision = setDraft(next);
       if (cursor < 0) setRepositoryMention(null);
       else updateRepositoryMentionFromTextarea(next, cursor);
+      return revision;
     },
     [setDraft, updateRepositoryMentionFromTextarea],
   );
@@ -3784,6 +3785,7 @@ function ComposerCoreImpl({
           input={
             <MarkdownComposer
               value={draft}
+              valueRevision={session.draftRevision}
               placeholder={placeholder}
               inputRef={taRef}
               documentKey={activeChat?.id ?? "new-chat"}

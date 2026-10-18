@@ -19,6 +19,15 @@ export type PortableFetchAssetKind =
 type PortableEvidenceAssetKind = Extract<PortableFetchAssetKind, "manifest" | "checksum">;
 type ReleaseTrustFailureReason = PortableReleaseTrustFailureReason | "missing";
 
+// Registry metadata must remain a closed literal; owner tests bind this projection to the
+// canonical UPDATE_PORTABLE_TARGETS vocabulary without relaxing the generator's runtime-call pin.
+const PORTABLE_TARGET_FIELD_VALUES = [
+  "linux-x64",
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+] as const satisfies readonly UpdatePortableTarget[];
+
 const PORTABLE_ASSET_REDIRECT_REFUSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -50,7 +59,7 @@ const PORTABLE_ASSET_REDIRECT_REFUSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: true,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -87,7 +96,7 @@ const PORTABLE_FETCH_FAILED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: true,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -118,7 +127,7 @@ const RELEASE_TRUST_VERIFY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: true,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     reason: {
       type: "string",
@@ -313,7 +322,7 @@ const UPDATE_INSTALL_MODE_DETECTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: false,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     durationMs: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },

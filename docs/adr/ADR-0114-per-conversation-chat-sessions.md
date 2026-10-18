@@ -73,6 +73,14 @@ windows.
    chat window waits for private draft acknowledgement and refuses unresolved conflicts or staged
    attachments. A final synchronous readiness check preserves edits made during asynchronous
    connection teardown; acknowledged unbinds still remove their corresponding visible connections.
+   The existing window-local draft mutation revision also identifies Composer acknowledgements.
+   Published native edits carry their returned revision through the settled session slice; a new
+   external revision can therefore clear the same empty string even when React never rendered the
+   intermediate native text. An exact local acknowledgement preserves newer native input, while
+   an older acknowledgement cannot replace a newer revision. Conversation replacement resets that
+   binding. This transient revision is separate from the server's persisted compare-and-set revision
+   and carries no draft text into evidence or browser storage. External resynchronization uses the
+   existing body-free Composer activity event.
 2. **D2 — Global shell session.** `AppShell` retains one application session for catalog, project,
    history, and shell consumers. Nested window providers shadow it for all ChatWindow descendants.
    A window never claims or mutates another window's active conversation state.

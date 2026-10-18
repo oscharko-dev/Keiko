@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2bcebbaad1b672420c7f2134348dc9cf3563d20a58c89667d6b096023390ce7b",
+    "catalogDigest": "9ce0d7abe239c1ff84ff759dc962f203275a02f55fc0f2d98b5796119eb3e0b1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36268,8 +36268,8 @@
         "failureClasses": ["update-runtime"],
         "proofIds": ["update.install-mode.detected.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:259",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:338"]
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:268",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:347"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36321,8 +36321,8 @@
         "failureClasses": ["portable-update-evidence"],
         "proofIds": ["update.portable-asset.redirect-refused.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:22",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:186"]
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:31",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:195"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36372,8 +36372,8 @@
         "failureClasses": ["portable-update-evidence"],
         "proofIds": ["update.portable-fetch.failed.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:66",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:206"]
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:75",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:215"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36436,10 +36436,10 @@
         "failureClasses": ["portable-release-trust"],
         "proofIds": ["update.release-trust.verify.status"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:103",
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:112",
         "emitterSites": [
-          "packages/keiko-server/src/update-preflight-activity.ts:225",
-          "packages/keiko-server/src/update-preflight-activity.ts:244"
+          "packages/keiko-server/src/update-preflight-activity.ts:234",
+          "packages/keiko-server/src/update-preflight-activity.ts:253"
         ]
       },
       {
@@ -94715,19 +94715,19 @@
     {
       "op": "update.install-mode.detected",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:262",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:271",
       "package": "keiko-server"
     },
     {
       "op": "update.portable-asset.redirect-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:25",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:34",
       "package": "keiko-server"
     },
     {
       "op": "update.portable-fetch.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:69",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:78",
       "package": "keiko-server"
     },
     {
@@ -94740,7 +94740,7 @@
     {
       "op": "update.release-trust.verify",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:106",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:115",
       "package": "keiko-server"
     },
     {

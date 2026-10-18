@@ -122,3 +122,47 @@ file floors and historical registry bytes are unchanged. Both owning script suit
 all 77 controls. Four separately targeted CI timeout-owner files pass 109 controls with 26
 explicit skips locally, without changing their bounds. Missing PowerShell remains a platform
 limitation, not native Windows acceptance or a reason to discard the earlier CI failures.
+
+## Further bounded regression controls
+
+The actual Linux activation entry and subsequent native-copy preparation independently assumed
+macOS paths. Current/candidate files produced through the existing launcher layout expose the first
+failure (one Linux failure, one healthy macOS control); real safe native-copy fixtures expose the
+second (one Linux failure, fourteen healthy controls). Both now reuse the existing canonical POSIX
+activation layout. Four owning suites pass 37 controls. No native child was spawned by these
+controls; OS verification, real coordinator acknowledgement, package promotion and restart remain
+separate requirements.
+
+A delayed React acknowledgement can leave sent text in the Composer when an admitted clear has
+the same empty string as the last rendered snapshot. A controlled parent reproduces this class
+before repair (one failure, 58 healthy controls). The existing local mutation revision now binds
+local publications and external snapshots. Exact older local acknowledgements preserve new native
+input; a new external clear cannot be mistaken for an old empty acknowledgement. An additional
+reordered-acknowledgement control found a candidate defect (one failure, 62 healthy controls), which
+is corrected by monotonic revision admission. These component controls do not alone identify the
+complete historical Firefox CI cause. The existing diagnostic records external resynchronization
+without text or revision bodies.
+
+The subsecond session-rotation review case reproduces separately before repair: two failures and
+25 healthy controls. The channel now checks the existing full-second cookie bound before replacing
+a secret and after minting, revoking an unusable replacement. Exactly one full second and the
+ordinary remaining-lifetime controls remain allowed. Session and preflight-activity owners pass
+177 controls. The preflight activity declarations share one closed literal target projection,
+with executable schema parity controls against the existing canonical target enum.
+
+On immutable `a640886829c66ebe89f297637def3b970fb7db72`, isolated Linux/arm64 with pinned Node
+24.18.0, npm 11.16.0 and Playwright 1.63.0 passes the original Firefox Enter case once and twelve
+repetitions, and the original WebKit read-metadata case once and six repetitions. The initial
+container attempt lacked a package prebuild and receives no product credit; two macOS Firefox
+launches failed before test execution at the browser profile. These declared browser/platform
+observations do not refute the original Linux CI failures or qualify remembered browser access.
+
+The next candidate passes the complete original `chat-send.smoke.spec.ts` file on isolated
+Linux/arm64: Firefox 17/17 and WebKit 17/17, with both process exits zero. The 24 candidate
+files are byte-joined before execution; the provider remains the existing synthetic fixture.
+Complete UI coverage passes 10,703 cases with one existing skip. Strict root/UI typechecks,
+root/UI lint, formatting, architecture checks including negative controls, the Activity Log
+implementation gate, ADR/e2e wiring, updater evidence freshness and the real local Sonar analyzer
+pass. The final macOS production export measures 348,590 gzip bytes across 22 initial scripts
+against the unchanged 349,184-byte ceiling, with no initial Editor/Monaco runtime. This is a
+macOS bundle observation, not the authoritative Linux measurement or native update qualification.

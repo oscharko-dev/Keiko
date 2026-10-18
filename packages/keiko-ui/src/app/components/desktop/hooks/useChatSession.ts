@@ -1545,6 +1545,7 @@ export interface UseChatSessionResult {
   // true when loading is complete and no eligible model is available.
   noEligibleModels: boolean;
   draft: string;
+  readonly draftRevision?: number | undefined;
   loading: boolean;
   // Issue #152 — derived: `sending = isInFlight(sendStatus)`. Kept for
   // backwards compatibility with call sites that only branch on "is a request
@@ -1559,7 +1560,7 @@ export interface UseChatSessionResult {
   notice?: string | undefined;
   clearError?: (() => void) | undefined;
   clearNotice?: (() => void) | undefined;
-  setDraft: (value: string) => void;
+  setDraft: (value: string) => number | void;
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
   // blank/whitespace falls back to DEFAULT_CHAT_TITLE.
@@ -3038,9 +3039,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const chatDraft = useChatDraft(state.activeChat?.id, onDraftReplaced);
   const { text: draftState, setText: setDraftState } = chatDraft;
   const setDraft = useCallback(
-    (value: string): void => {
+    (value: string): number => {
       draftRevisionRef.current += 1;
       setDraftState(value);
+      return draftRevisionRef.current;
     },
     [setDraftState],
   );
@@ -5274,6 +5276,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [state.catalogCapabilities, state.catalogSource, state.catalogCorrelationId],
   );
   const noEligibleModels = !loading && state.models.length === 0;
+  const draftRevision = draftRevisionRef.current;
 
   return useMemo<UseChatSessionResult>(
     () => ({
@@ -5291,6 +5294,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       noEligibleModels,
       markdownSkill,
       draft: draftState,
+      draftRevision,
       draftPersistence,
       loading,
       sending,
@@ -5351,6 +5355,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       markdownSkill,
       draftPersistence,
       draftState,
+      draftRevision,
       setDraft,
       loading,
       sending,

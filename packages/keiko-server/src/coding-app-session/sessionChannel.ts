@@ -379,18 +379,21 @@ function rotateSession(
   registry: SessionRegistry,
   cookieToken: string | undefined,
 ): CodingAppSessionRotateResult {
+  if (ensureLocalSession(registry, cookieToken).status === "unavailable") return { rotated: false };
   const session = registry.verify(cookieToken);
   if (session === undefined) return { rotated: false };
   const mint = registry.rotate(session.sessionId);
   if (mint === undefined) return { rotated: false };
   const remainingMs = registry.verifyForCookieRepair(mint.cookieToken);
-  return remainingMs === undefined
-    ? { rotated: false }
-    : {
-        rotated: true,
-        cookieToken: mint.cookieToken,
-        maxAgeSeconds: Math.floor(remainingMs / 1000),
-      };
+  if (remainingMs === undefined || remainingMs < 1_000) {
+    registry.revoke(mint.session.sessionId);
+    return { rotated: false };
+  }
+  return {
+    rotated: true,
+    cookieToken: mint.cookieToken,
+    maxAgeSeconds: Math.floor(remainingMs / 1000),
+  };
 }
 
 export function createCodingAppSessionChannel(

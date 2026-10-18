@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeSelection, TextSelection } from "prosemirror-state";
@@ -611,4 +611,73 @@ describe("Markdown composer editing", () => {
     expect(draftSeenByKeyDown).toBe("Immediate send");
     expect(liveSeenByKeyDown).toBe("Immediate send");
   });
+});
+
+it("applies an admitted clear when native text was never acknowledged by rendered props", () => {
+  const config = props();
+  let revision = 0;
+  function DeferredParent(): ReactNode {
+    const [snapshot, setSnapshot] = useState({ value: "", valueRevision: revision });
+    return (
+      <MarkdownComposer
+        {...config}
+        {...snapshot}
+        onChange={(): number => ++revision}
+        onKeyDown={(): void => setSnapshot({ value: "", valueRevision: ++revision })}
+      />
+    );
+  }
+  render(<DeferredParent />);
+  const editor = config.inputRef.current;
+  if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+  act(() => type(editor, "Immediate send"));
+  fireEvent.keyDown(editor.view.dom, { key: "Enter" });
+  expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("");
+});
+
+it.each([
+  [1, "Fresh"],
+  [2, ""],
+] as const)(
+  "distinguishes an older empty acknowledgement from external revision %s",
+  async (valueRevision, expected): Promise<void> => {
+    const config = { ...props("seed"), valueRevision: 0, onChange: vi.fn(() => 1) };
+    const rendered = render(<MarkdownComposer {...config} />);
+    const editor = config.inputRef.current;
+    if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+    act(() =>
+      editor.view.dispatch(editor.view.state.tr.delete(0, editor.view.state.doc.content.size)),
+    );
+    await waitFor(() => expect(config.onChange).toHaveBeenCalledExactlyOnceWith("", 0));
+    act(() => type(editor, "Fresh"));
+    rendered.rerender(<MarkdownComposer {...config} value="" valueRevision={valueRevision} />);
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toBe(expected);
+  },
+);
+
+it("preserves newer native input when an exact published revision is acknowledged", async (): Promise<void> => {
+  const config = { ...props(), valueRevision: 0, onChange: vi.fn(() => 1) };
+  const rendered = render(<MarkdownComposer {...config} />);
+  const editor = config.inputRef.current;
+  if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+  act(() => type(editor, "SE"));
+  await waitFor(() => expect(config.onChange).toHaveBeenCalledExactlyOnceWith("SE", 2));
+  act(() => type(editor, "L"));
+  rendered.rerender(<MarkdownComposer {...config} value="SE" valueRevision={1} />);
+  expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("SEL");
+});
+
+it("ignores a revision acknowledgement delivered after a newer acknowledgement", async (): Promise<void> => {
+  let revision = 0;
+  const config = { ...props(), valueRevision: 0, onChange: vi.fn(() => ++revision) };
+  const rendered = render(<MarkdownComposer {...config} />);
+  const editor = config.inputRef.current;
+  if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+  act(() => type(editor, "A"));
+  await waitFor(() => expect(config.onChange).toHaveBeenCalledTimes(1));
+  act(() => type(editor, "B"));
+  await waitFor(() => expect(config.onChange).toHaveBeenCalledTimes(2));
+  rendered.rerender(<MarkdownComposer {...config} value="AB" valueRevision={2} />);
+  rendered.rerender(<MarkdownComposer {...config} value="A" valueRevision={1} />);
+  expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("AB");
 });

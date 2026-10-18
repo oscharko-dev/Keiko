@@ -236,6 +236,11 @@ capsule is private local control data: authenticated fixed paths and mechanical 
 are permitted there, but are never copied into API projections, activity logs, support evidence, or
 release artifacts. It is not a package backup or another update state store.
 
+POSIX activation and native-copy preparation share the existing target-layout owner: Linux uses
+the flat root launcher, setup manifest and runtime supervisor; macOS uses its app-bundle paths.
+Current and candidate setup lookup follow that same grammar before layout validation. This path
+resolution grants no release trust, platform verification waiver or native handoff acceptance.
+
 The server persists semantic intent before spawning the coordinator. Native code accepts only the
 closed activation-id mode, validates the fixed plan and its authority, and acknowledges the exact
 plan digest over the inherited channel. A spawn event alone is not acceptance. Preparation remains

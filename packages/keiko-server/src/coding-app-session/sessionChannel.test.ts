@@ -360,17 +360,19 @@ function createStatic(content: CodingAppSessionChannelContent): CodingAppSession
 }
 
 function rotationExpiryChannel(): {
+  readonly registry: ReturnType<typeof createSessionRegistry>;
   readonly channel: ReturnType<typeof createCodingAppSessionChannel>;
   readonly token: string;
   readonly setNow: (value: number) => void;
 } {
   let now = 0;
+  const registry = createSessionRegistry({
+    now: () => now,
+    idleTtlMs: 1_000_000,
+    absoluteTtlMs: 500_000,
+  });
   const channel = createCodingAppSessionChannel({
-    registry: createSessionRegistry({
-      now: () => now,
-      idleTtlMs: 1_000_000,
-      absoluteTtlMs: 500_000,
-    }),
+    registry,
     pairingPort: createFakeSessionPairingPort(),
     contentSource: createStatic(CANARY),
   });
@@ -378,6 +380,7 @@ function rotationExpiryChannel(): {
   if (!paired.paired) throw new TypeError("Synthetic approved pairing must succeed");
   return {
     channel,
+    registry,
     token: paired.cookieToken,
     setNow: (value: number): void => {
       now = value;
@@ -452,4 +455,32 @@ it("rotation stops the replacement stream at the original absolute deadline", ()
   } finally {
     subscription.detach();
   }
+});
+
+it("refuses subsecond rotation before replacing the valid original secret", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(499_001);
+  expect(fixture.channel.rotate(fixture.token)).toEqual({ rotated: false });
+  expect(fixture.channel.snapshot(fixture.token).content).toEqual(CANARY);
+});
+
+it("allows rotation with exactly one full second of original authority", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(499_000);
+  expect(fixture.channel.rotate(fixture.token)).toMatchObject({ rotated: true, maxAgeSeconds: 1 });
+});
+
+it("revokes a replacement that loses its last full second during rotation", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(499_000);
+  const rotate = fixture.registry.rotate;
+  let replacement: string | undefined;
+  vi.spyOn(fixture.registry, "rotate").mockImplementation((sessionId) => {
+    const mint = rotate(sessionId);
+    replacement = mint?.cookieToken;
+    fixture.setNow(499_001);
+    return mint;
+  });
+  expect(fixture.channel.rotate(fixture.token)).toEqual({ rotated: false });
+  expect(fixture.channel.snapshot(replacement).content).toBeNull();
 });
