@@ -505,3 +505,46 @@ and can misclassify runtime-only failures as defect detection. The initial priva
 rejects legitimate Testing Library/jest-dom assertion failures. Those measurement defects remain
 open in the existing verification owner; no model dispatch or clean-runtime qualification is
 claimed from absent JSON fields. No additional customer prompt rules are added.
+
+## Checkpoint 22: observe actual test failures before assigning qualification credit
+
+The existing generated-test verifier defaulted an absent runtime-error counter to zero. The pinned
+Vitest JSON reporter does not emit that field and omits its global unhandled-error argument. A
+runtime-only failure, an assertion plus an unrelated global error, or inverted expected-failure
+semantics could therefore receive defect-detection credit. The identical final entrypoint controls
+run against the actual published parent and candidate with inert Docker ports: seventeen failures
+and one healthy control before, then eighteen passes after. Source hashes and actual receipts are
+recorded in `generated-test-verification.json`.
+
+The existing JSON reporter is extended through the pinned public `vitest/node` API. Its actual
+run-end and test-case observations supply error, collection, option and completion counts without
+copying the runner's execution logic. Missing observations remain unknown. The verifier cross-checks
+actual case inventory and totals, requires a completely clean correct-subject run, and accepts a
+mutation only with recognized assertion failures and no runtime/global/collection/unclassified
+failure. Plain Error is not automatically an assertion. Pinned matcher metadata handles both
+positive and negated jest-dom assertions; Testing Library query failures retain their framework
+origin. A mixed assertion/runtime failure remains a runtime failure. `allowOnly:false` refuses
+focus before the runner normalizes it away. Skips, expected failures, configured retries, repeats,
+missing diagnostics and interrupted runs cannot earn credit. An invalid baseline dispatches no
+mutant. Existing offline, read-only, unprivileged container limits remain; future runs use the
+already measured immutable Node image digest instead of the historical mutable tag.
+
+Eighteen actual offline Vitest controls validate six legitimate clean/pass/assertion/query/matcher
+cases and twelve refusal cases. The actual public verifier additionally executes a trusted manual
+three-test control: correct application 3/3, declared mutant: 2 recognized assertion failures, strict
+types and explicitly observed zero runtime/global errors. These measurements are independent of
+model output and do not establish resistance to an intentionally malicious test runner.
+
+Re-executing the unchanged React manual oracle with the new observer exposes one previously
+unobserved global error on its fractional-input mutant. Its invalid-input reserve double returned
+undefined despite its declared Promise contract. That replay receives no credit and remains
+retained. A separate manual oracle version adds exactly the missing Promise implementation;
+all 13 tests, eight predeclared mutations and model-supplied source bytes stay unchanged. The new
+actual strict-type/container/JSON/lifecycle campaign passes 13/13 on the correct subject and detects
+all eight independent defects with explicitly observed zero other errors. The independent auditor
+joins every source, test and report digest. The original oracle and prior failed measurements are
+not overwritten; no model answer is repaired or regraded.
+
+This change is model-agnostic verification tooling. No provider, customer prompt or customer skill
+is specialized for Gemma or this fixture. Known regressions remain separate from untouched heldout
+model tasks. Native model dispatch and customer-skill acceptance remain outstanding.
