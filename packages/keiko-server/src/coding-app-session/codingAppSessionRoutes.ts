@@ -129,7 +129,7 @@ const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionRotate",
-  fields: {},
+  fields: { cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true } },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -455,14 +455,15 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
     });
     return ackResult();
   }
+  const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_ROTATED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      { cookieMaxAgeSeconds: maxAgeSeconds },
     ),
   );
-  return ackResult(issuedCookie(ctx.req, result.cookieToken));
+  return ackResult(issuedCookie(ctx.req, result.cookieToken, maxAgeSeconds));
 }
 
 /** POST /sign-out — revoke the presented session and clear the cookie. */

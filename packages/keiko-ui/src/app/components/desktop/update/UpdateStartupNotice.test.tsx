@@ -395,4 +395,39 @@ describe("UpdateStartupNotice", () => {
       expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private customer content");
     },
   );
+  it.each([
+    { button: "Not now", available: true, noticeKind: "update-available" },
+    { button: "Review update", available: true, noticeKind: "update-available" },
+    { button: "Review details", available: false, noticeKind: "action-required" },
+  ] as const)(
+    "records immediate body-free dismissal from $button",
+    async ({ button, available, noticeKind }) => {
+      const diagnostics = vi.fn<Parameters<typeof setClientDiagnosticWriter>[0]>();
+      setClientDiagnosticWriter(diagnostics);
+      render(
+        <UpdateStartupNotice
+          ready
+          openUpdates={vi.fn()}
+          fetchReport={async () =>
+            report({
+              updateAvailable: available,
+              userActionRequired: true,
+              warnings: ["private dismissal canary"],
+            })
+          }
+        />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: button }));
+      const presentations = diagnostics.mock.calls.flatMap(([, meta]) =>
+        meta?.updateNotice === undefined ? [] : [meta.updateNotice],
+      );
+      expect(presentations.map((event) => event.presentation)).toEqual(["shown", "dismissed"]);
+      expect(presentations.at(-1)).toMatchObject({
+        noticeKind,
+        updateAvailable: available,
+        blockerCount: 0,
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private dismissal canary");
+    },
+  );
 });

@@ -4,7 +4,7 @@
   "verdict": "PASS",
   "cssSha256": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
   "sourceSha256": {
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "19973259da7ccdbaad7d35a58868dbcd4b57b7845f292a5997a2b8d9d3e58b46",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "f871071c366e4caa1c9f73d678a5072c152141e1bbcad1e870e6dc1a563e6084",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx": "20cc4f1aabe0db16174f7fb1374ef0a6249c7d03cea64f21b0c42ea810e43a19",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
@@ -26,7 +26,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-10-18T11:55:31.954Z",
+  "generatedAt": "2026-10-18T12:20:58.438Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

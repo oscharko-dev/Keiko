@@ -72,6 +72,11 @@ it("optional notice module failure preserves the working desktop", async () => {
     expect(loadFailure?.[1]).toMatchObject({ kind: "other", errorKind: "unavailable" });
     fireEvent.click(await screen.findByRole("button", { name: "Updates" }));
     expect(openUpdates).toHaveBeenCalledOnce();
+    const presentations = diagnostic.mock.calls.flatMap(([, meta]) =>
+      meta?.updateNotice === undefined ? [] : [meta.updateNotice],
+    );
+    expect(presentations.map((event) => event.presentation)).toEqual(["shown", "dismissed"]);
+
     expect(screen.getByText("Independent workspace remains usable")).toBeInTheDocument();
   } finally {
     window.removeEventListener("error", onError);

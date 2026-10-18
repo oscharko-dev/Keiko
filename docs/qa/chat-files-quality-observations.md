@@ -1362,8 +1362,8 @@ A captured canonical Voice request for conversation A survives navigation to B a
 requires. The auditor also found that a later A source intent reaches only runtimes currently
 displaying A. Real server handler controls reject changed source identities and prevent stale
 persistence; terminal captured-Voice controls do not retry into new authority. These safe outcomes
-do not establish the immediate client cancellation required by #4040. That request-ownership
-boundary remains open and will be repaired separately with a navigation-survival countercontrol.
+do not establish the immediate client cancellation required by #4040. At that earlier checkpoint, the request-ownership
+boundary still required repair; the following increment supplies the navigation-survival countercontrol.
 
 ### Request ownership and truthful updater notices
 
@@ -1377,8 +1377,11 @@ The new closed `intent-send-cancelled` decision shares the admitted intent corre
 
 The original pair of captured-Voice controls reproduces both the missed-A and wrong-B cancellation
 on the delivered runtime. An initial window-only candidate passed those controls but independently
-missed the root fallback. The root fixture must prove its first missing-user unmount and subsequent
-root election, then provide the actual durable user row for the second cancellation's settlement.
+missed the root fallback. The final passing root fixture proves its first missing-user unmount and subsequent
+root election, then provides the actual durable user row only after the second fallback request
+is admitted, allowing the cancellation to settle. The delivered exact named case was independently
+re-executed on the published sources; this request-owner boundary is repaired, while the broader
+qualification ledger remains open.
 A cleanup timeout with no such row is retained as a fixture failure, not a product outcome or
 permission to alter persistence/retry policy. No timeout ceiling was increased.
 

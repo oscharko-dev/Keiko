@@ -81,3 +81,44 @@ The added lazy-view failure control also reproduced a desktop-wide error before 
 fix the workspace remains mounted, diagnostics contain no raw import error, and the existing
 Updates action works. The final owning presentation count is 77 and complete UI coverage is
 10,694 passing with one existing skip. Earlier partial/superseded runs remain separate receipts.
+
+## Existing browser-session rotation owner (#4043)
+
+The read-only auditor identified that the existing registry renewed `issuedAtMs` when changing a
+secret for the same approved session. Controlled snapshots, cookie repair and a real live-source
+subscription reproduced extension beyond the original absolute deadline (3 failures, 21 healthy
+channel controls). Direct registry calls also revived idle/absolute-expired authority (2 failures).
+An exact copy of the old published HTTP route, isolated with the already-corrected registry,
+separately returned a 43,200-second cookie despite only 50 seconds remaining (one clean failure).
+An earlier cookie control had a fixture-scoped helper error and receives no product-defect credit.
+
+The registry now preserves original issuance, refuses expired direct rotation, replaces the secret
+and operation owner, and limits rotated cookie projections to the original remaining lifetime.
+The existing rotation Activity Log event records only that actual duration. Original bearer,
+revocation, inactivity, stream and old-operation-release protections remain authoritative. These
+owning controls do not qualify remembered browser grants, approval after restart, cross-browser
+Draft saving or the complete #4043 acceptance criteria.
+
+The final existing-session folder passes all 163 controls. Independent historical-registry
+controls use synthetic records bound to the frozen released registry, not recovered customer logs:
+old identified records retain their original field obligations, while a current rotation record
+without its required duration is incomplete. The new duration remains required.
+
+## Immediate updater dismissal and source inventories
+
+Four failure-first presentation controls establish that the current button action previously
+persisted a dismissal without emitting its transition. The shared dismissal owner now records
+the existing body-free `dismissed` presentation immediately, including the local import-failure
+fallback. The three owning UI suites pass 80 cases; complete UI coverage passes 10,697 cases with
+one existing skip. The original nine-case Chromium producer passes in 1.4 minutes and regenerates
+all 17 tracked artifacts. These remain UI and declared BFF recovery-fixture observations.
+
+The immutable `f7c007c8a4b4bf0a2ddf8501894020ec1218bfd4` full quality run retains two failing
+source-inventory assertions alongside 55,599 passing and 63 skipped package tests. The chained
+UI, scripts and floor stages therefore did not execute in that run. Both failures reproduce
+locally before repair. The existing generators add the two new current product modules and
+refresh only source-file counts (security 32 → 33; UI 536 → 537); coverage metrics, package floors,
+file floors and historical registry bytes are unchanged. Both owning script suites then pass
+all 77 controls. Four separately targeted CI timeout-owner files pass 109 controls with 26
+explicit skips locally, without changing their bounds. Missing PowerShell remains a platform
+limitation, not native Windows acceptance or a reason to discard the earlier CI failures.

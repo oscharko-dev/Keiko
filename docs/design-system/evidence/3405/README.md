@@ -112,3 +112,10 @@ suppressed-current control before repair. The repaired path records body-free fa
 keeps the workspace mounted, and offers the existing Updates entry and dismissal using core
 translations. The final three owning suites pass 77 cases, complete UI coverage passes 10,694 cases
 (one existing skip), and the original nine-case browser producer passes again in 1.3 minutes.
+
+The immediate-dismissal correction for #4047 then adds four failure-first action controls. The
+common dismissal owner emits the existing presentation transition when the action occurs,
+including the optional-view load-failure fallback. Its three owning suites pass 80 cases and
+complete UI coverage passes 10,697 cases with one existing skip. The original nine-case browser
+producer passes in 1.4 minutes and regenerates the same 17 artifacts, binding the same twelve UI
+sources and four harness inputs. This does not establish native package replacement or restart.

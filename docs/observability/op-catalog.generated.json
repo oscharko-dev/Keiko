@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f082d50663a61b8e4231c28bbc9b964193cde0e38d090d27f32baabd01e390f6",
+    "catalogDigest": "2bcebbaad1b672420c7f2134348dc9cf3563d20a58c89667d6b096023390ce7b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5165,6 +5165,11 @@
             "type": "string",
             "dataClass": "loss-state",
             "required": true
+          },
+          "cookieMaxAgeSeconds": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
           }
         },
         "causal": "correlation",
@@ -5175,7 +5180,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:125",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:459"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:460"
         ]
       },
       {
@@ -5205,7 +5210,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:141",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:475"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:476"
         ]
       },
       {
@@ -38798,7 +38803,7 @@
         "requiredProofOperations": ["coding-app-session.rotated"],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["coding-app-session.rotated"],
-        "requiredEvidenceClasses": ["completeness-state", "loss-state"],
+        "requiredEvidenceClasses": ["completeness-state", "duration", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -52857,8 +52862,15 @@
               "lifecycle": "end",
               "causal": "correlation",
               "analyzerProjection": "timeline",
-              "safeContextFields": [],
-              "evidenceClasses": ["completeness-state", "loss-state"],
+              "safeContextFields": [
+                {
+                  "name": "cookieMaxAgeSeconds",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "duration", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -92010,7 +92022,7 @@
     {
       "op": "coding-app-session.channel.subscribe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:182",
+      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:183",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

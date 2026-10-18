@@ -234,7 +234,7 @@
       }
     },
     "keiko-security": {
-      "files": 32,
+      "files": 33,
       "uncoveredFiles": 0,
       "uncoveredLines": 18,
       "totalLines": 887,
@@ -282,7 +282,7 @@
       }
     },
     "keiko-ui": {
-      "files": 536,
+      "files": 537,
       "uncoveredFiles": 3,
       "uncoveredLines": 2947,
       "totalLines": 41689,

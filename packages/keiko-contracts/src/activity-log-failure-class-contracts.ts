@@ -1257,7 +1257,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["coding-app-session.rotated"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["coding-app-session.rotated"],
-    requiredEvidenceClasses: ["completeness-state", "loss-state"],
+    requiredEvidenceClasses: ["completeness-state", "duration", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

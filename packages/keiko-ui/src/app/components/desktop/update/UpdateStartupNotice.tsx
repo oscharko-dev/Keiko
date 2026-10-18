@@ -168,6 +168,7 @@ function useNoticeState(
   return {
     state,
     dismiss: (report): void => {
+      reportNoticePresentation(report, "dismissed");
       persistDismissal(report);
       setState({ status: "dismissed" });
     },

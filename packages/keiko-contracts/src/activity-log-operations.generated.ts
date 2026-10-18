@@ -4936,6 +4936,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      cookieMaxAgeSeconds: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
     },
     causal: "correlation",
     lifecycle: "end",

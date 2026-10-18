@@ -154,6 +154,7 @@ function storeSession(
   sessionId: string,
   principalLabel: string,
   rotationCount: number,
+  issuedAtMs = state.now(),
 ): SessionMint {
   const secret = state.mintSecret();
   const nowMs = state.now();
@@ -161,7 +162,7 @@ function storeSession(
     sessionId,
     secretHash: saltedHash(state.salt, secret),
     principalLabel,
-    issuedAtMs: nowMs,
+    issuedAtMs,
     lastSeenAtMs: nowMs,
     activeOperationCount: 0,
     rotationCount,
@@ -209,7 +210,14 @@ function rotateSession(state: RegistryState, sessionId: string): SessionMint | u
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
   state.sessions.delete(sessionId);
-  return storeSession(state, sessionId, stored.principalLabel, stored.rotationCount + 1);
+  if (isExpired(state, stored, state.now())) return undefined;
+  return storeSession(
+    state,
+    sessionId,
+    stored.principalLabel,
+    stored.rotationCount + 1,
+    stored.issuedAtMs,
+  );
 }
 
 function beginSessionOperation(

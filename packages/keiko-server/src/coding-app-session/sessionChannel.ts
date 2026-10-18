@@ -47,7 +47,8 @@ export type CodingAppSessionPairResult =
   | { readonly paired: false };
 
 export type CodingAppSessionRotateResult =
-  { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
+  | { readonly rotated: true; readonly cookieToken: string; readonly maxAgeSeconds: number }
+  | { readonly rotated: false };
 
 export type CodingAppSessionEnsureResult =
   | { readonly status: "active"; readonly maxAgeSeconds: number }
@@ -374,6 +375,24 @@ function ensureLocalSession(
     : { status: "active", maxAgeSeconds: Math.floor(remainingMs / 1000) };
 }
 
+function rotateSession(
+  registry: SessionRegistry,
+  cookieToken: string | undefined,
+): CodingAppSessionRotateResult {
+  const session = registry.verify(cookieToken);
+  if (session === undefined) return { rotated: false };
+  const mint = registry.rotate(session.sessionId);
+  if (mint === undefined) return { rotated: false };
+  const remainingMs = registry.verifyForCookieRepair(mint.cookieToken);
+  return remainingMs === undefined
+    ? { rotated: false }
+    : {
+        rotated: true,
+        cookieToken: mint.cookieToken,
+        maxAgeSeconds: Math.floor(remainingMs / 1000),
+      };
+}
+
 export function createCodingAppSessionChannel(
   deps: CodingAppSessionChannelDeps,
 ): CodingAppSessionChannel {
@@ -390,14 +409,8 @@ export function createCodingAppSessionChannel(
       if (session === undefined) return contentFreeCodingAppSessionChannelSnapshot();
       return projectContent(session, contentSource);
     },
-    rotate: (cookieToken: string | undefined): CodingAppSessionRotateResult => {
-      const session = registry.verify(cookieToken);
-      if (session === undefined) return { rotated: false };
-      const mint = registry.rotate(session.sessionId);
-      return mint === undefined
-        ? { rotated: false }
-        : { rotated: true, cookieToken: mint.cookieToken };
-    },
+    rotate: (cookieToken: string | undefined): CodingAppSessionRotateResult =>
+      rotateSession(registry, cookieToken),
     signOut: (cookieToken: string | undefined): boolean => {
       const session = registry.verify(cookieToken);
       if (session === undefined) return false;

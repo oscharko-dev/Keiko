@@ -141,6 +141,15 @@ of these cases the prior cookie immediately yields the content-free projection. 
 authority per BFF process; this composes with, and does not duplicate, the single-active-run model
 of ADR-0137.
 
+Secret rotation preserves the original issuance time and absolute deadline, including repeated
+rotations. The registry rejects direct rotation of idle-expired or absolutely expired authority;
+knowing an old session id cannot revive it. A valid replacement starts a new inactivity window,
+but does not inherit an old operation lease, and releasing an old lease cannot touch the replacement.
+Snapshots, repaired cookies and replacement live streams all remain bounded by the original
+absolute lifetime. Rotated HTTP cookie projections use only that lifetime's remaining full seconds,
+clamped by the existing cookie ceiling; the registered rotation event records the actual
+`cookieMaxAgeSeconds` without bearer material. Fresh secret issuance is not fresh human approval.
+
 Explicit normal Chat sends verify an optionally presented existing session so active conversation
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
 cannot mint, revive or extend an expired or revoked session. Passive SSE, polling and unrelated
