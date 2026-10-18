@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  recordUpdateInstallMode,
   recordPortableFetchFailure,
   recordPortableRedirectRefusal,
   recordReleaseTrustFailure,
@@ -249,4 +250,40 @@ describe("release trust verification activity", () => {
       recordReleaseTrustSuccess(undefined, "linux-x64", { keyId: "k", metadataVersion: 1 });
     }).not.toThrow();
   });
+});
+
+it("records the update.install-mode.detected Activity Log proof without roots or package bodies", () => {
+  const { events, sink } = capture();
+  recordUpdateInstallMode(
+    sink,
+    {
+      schemaVersion: "1",
+      status: "supported",
+      packageName: "private-package-canary",
+      installRoot: "/private/customer-canary",
+      installKind: "portable-managed",
+      portable: { target: "linux-x64", status: "managed", updateEligible: true },
+    },
+    "preflight",
+    12,
+    "mode-preflight-0001",
+  );
+  const event = events[0];
+  if (event === undefined) throw new TypeError("Expected mode observation");
+  expect(event).toMatchObject({
+    op: "update.install-mode.detected",
+    level: "info",
+    correlationId: "mode-preflight-0001",
+  });
+  const persisted = expectActivityLogProof(
+    "update.install-mode.detected.body-free",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({
+    status: "supported",
+    installKind: "portable-managed",
+    target: "linux-x64",
+    durationMs: 12,
+  });
+  expect(JSON.stringify(event)).not.toContain("canary");
 });

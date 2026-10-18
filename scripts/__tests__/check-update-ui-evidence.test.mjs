@@ -60,6 +60,7 @@ describe("updater UI evidence freshness", () => {
   });
 
   it.each([
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
     "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
     "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
     "packages/keiko-ui/src/lib/optional-widget-i18n.ts",

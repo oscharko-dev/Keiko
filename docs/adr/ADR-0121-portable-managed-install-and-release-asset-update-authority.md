@@ -151,6 +151,16 @@ same root before every portable update. Organization-managed installations remai
 Keiko's self-updater unless the same managed-root authority is attested. V1 does not install an
 always-on privileged helper, schedule a task, or register a background updater.
 
+The launcher and server share the pure system-root classifier; filesystem, symlink, volume,
+repository/state separation, signature and activation checks remain with their existing owners.
+The server resolves the Linux flat `app/` layout and both macOS bundle layouts through the same
+portable layout resolver used by staging and automatic Coding runtime discovery. Portable target
+recognition uses the contracts inventory. For POSIX managed eligibility, the installed package
+identity and the registration's setup, real root and launcher digests must match the current files;
+a matching target/version alone is insufficient. The canonical macOS exception never overrides an
+explicit organization/machine-managed policy. Preflight and session status record their actual
+classification and elapsed time on the existing Activity Log without paths or package bodies.
+
 ### D4 — Source-of-truth split
 
 GitHub Release Assets are the authoritative source of portable installability.

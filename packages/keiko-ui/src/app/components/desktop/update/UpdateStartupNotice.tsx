@@ -1,27 +1,67 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useState, type ReactNode } from "react";
-import type { ClientUpdateNoticeKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { fetchStartupUpdatePreflight } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import type { UpdateStartupNoticeContentProps } from "./UpdateStartupNoticeContent";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import {
-  useOptionalWidgetTranslate as useTranslate,
-  type OptionalWidgetTranslate as I18nTranslate,
-} from "@/lib/optional-widget-i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
-import { Icons } from "../Icons";
-import {
-  hasStartupUpdateSignal,
-  startupUpdateNoticeKind,
-  isPortableBootstrapSetupRequired,
-  isPortableExternallyManaged,
-  isPortableReleaseMetadataUnavailable,
-} from "./update-copy";
+import { hasStartupUpdateSignal, startupUpdateNoticeKind } from "./update-copy";
 
-// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const InfoIcon = Icons.info;
-const ActivityIcon = Icons.activity;
+const NoticeContent = dynamic(
+  () =>
+    import("./UpdateStartupNoticeContent")
+      .then((module) => module.UpdateStartupNoticeContent)
+      .catch((error: unknown) => {
+        reportClientDiagnostic("update-startup-notice: presentation-load-failed", {
+          kind: "other",
+          errorKind: "unavailable",
+          correlationId: newClientCorrelationId(),
+          errorEvidence: clientErrorEvidence(error),
+        });
+        return NoticeLoadFailure;
+      }),
+  { ssr: false, loading: () => null },
+);
+
+function NoticeLoadFailure({
+  report,
+  dismiss,
+  openUpdates,
+}: UpdateStartupNoticeContentProps): ReactNode {
+  const t = useTranslate();
+  return (
+    <output className="update-notice" aria-label={t("window.type.updates.title")}>
+      <span className="update-notice-body">
+        <span>{t("updates.notice.loadFailed")}</span>
+      </span>
+      <span className="update-notice-actions">
+        <button
+          type="button"
+          className="update-notice-primary"
+          onClick={() => {
+            dismiss(report);
+            openUpdates();
+          }}
+        >
+          {t("window.type.updates.title")}
+        </button>
+        <button
+          type="button"
+          className="update-notice-dismiss"
+          onClick={() => {
+            dismiss(report);
+          }}
+        >
+          {t("common.dismissError")}
+        </button>
+      </span>
+    </output>
+  );
+}
 
 interface UpdateStartupNoticeProps {
   readonly ready: boolean;
@@ -74,40 +114,6 @@ function persistDismissal(report: UpdatePreflightReport): void {
   }
 }
 
-function noticeBody(
-  report: UpdatePreflightReport,
-  targetVersion: string,
-  t: I18nTranslate,
-): string {
-  if (isPortableReleaseMetadataUnavailable(report)) {
-    return t("updates.notice.releaseUnavailableBody");
-  }
-  if (isPortableExternallyManaged(report)) {
-    return t("updates.notice.portableExternallyManagedBody");
-  }
-  if (isPortableBootstrapSetupRequired(report)) {
-    return t("updates.notice.portableSetupBody");
-  }
-  if (!report.updateAvailable) return t("updates.notice.actionBody");
-  if (
-    report.installabilitySource === "github-release-asset" &&
-    report.portableAsset?.status === "eligible"
-  ) {
-    return t("updates.notice.portableBody", { version: targetVersion });
-  }
-  return t("updates.notice.body", { version: targetVersion });
-}
-
-const NOTICE_TITLE_KEYS: Readonly<Record<ClientUpdateNoticeKind, Parameters<I18nTranslate>[0]>> = {
-  "update-available": "updates.notice.title",
-  "critical-update-available": "updates.notice.criticalTitle",
-  "portable-setup-required": "updates.status.portableSetupRequired",
-  "externally-managed": "updates.status.portableExternallyManaged",
-  "check-unavailable": "updates.notice.releaseUnavailableTitle",
-  "action-required": "updates.notice.actionTitle",
-  "no-update-signal": "updates.notice.actionTitle",
-};
-
 function reportNoticePresentation(
   report: UpdatePreflightReport,
   presentation: "shown" | "dismissed" | "suppressed",
@@ -123,12 +129,10 @@ function reportNoticePresentation(
   });
 }
 
-export function UpdateStartupNotice({
-  ready,
-  openUpdates,
-  fetchReport = fetchStartupUpdatePreflight,
-}: UpdateStartupNoticeProps): ReactNode {
-  const t = useTranslate();
+function useNoticeState(
+  ready: boolean,
+  fetchReport: () => Promise<UpdatePreflightReport>,
+): { readonly state: NoticeState; readonly dismiss: (report: UpdatePreflightReport) => void } {
   const [state, setState] = useState<NoticeState>({ status: "idle" });
 
   useEffect(() => {
@@ -156,56 +160,27 @@ export function UpdateStartupNotice({
         reportClientDiagnostic("update-startup-notice: preflight-fetch-failed");
         setState({ status: "failed" });
       });
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [fetchReport, ready, state.status]);
 
+  return {
+    state,
+    dismiss: (report): void => {
+      persistDismissal(report);
+      setState({ status: "dismissed" });
+    },
+  };
+}
+
+/** Optional catalogs load only after preflight admits a visible notice. */
+export function UpdateStartupNotice({
+  ready,
+  openUpdates,
+  fetchReport = fetchStartupUpdatePreflight,
+}: UpdateStartupNoticeProps): ReactNode {
+  const { state, dismiss } = useNoticeState(ready, fetchReport);
   if (state.status !== "ready") return null;
-
-  const critical = state.report.severity === "critical";
-  const targetVersion = state.report.targetVersion ?? t("updates.versionUnknown");
-
-  return (
-    <aside
-      className="update-notice"
-      data-severity={critical ? "critical" : "normal"}
-      role={critical ? "alert" : "status"}
-      aria-live={critical ? "assertive" : "polite"}
-      aria-label={t("updates.notice.aria")}
-    >
-      <span className="update-notice-icon" aria-hidden="true">
-        {critical ? <InfoIcon size={17} /> : <ActivityIcon size={17} />}
-      </span>
-      <div className="update-notice-body">
-        <strong>{t(NOTICE_TITLE_KEYS[startupUpdateNoticeKind(state.report)])}</strong>
-        <span>{noticeBody(state.report, targetVersion, t)}</span>
-      </div>
-      <div className="update-notice-actions">
-        <button
-          type="button"
-          className="update-notice-primary"
-          onClick={() => {
-            persistDismissal(state.report);
-            openUpdates();
-            setState({ status: "dismissed" });
-          }}
-        >
-          {t(
-            state.report.updateAvailable ? "updates.notice.review" : "updates.notice.reviewDetails",
-          )}
-        </button>
-        <button
-          type="button"
-          className="update-notice-dismiss"
-          onClick={() => {
-            persistDismissal(state.report);
-            setState({ status: "dismissed" });
-          }}
-        >
-          {t("updates.notice.notNow")}
-        </button>
-      </div>
-    </aside>
-  );
+  return <NoticeContent report={state.report} dismiss={dismiss} openUpdates={openUpdates} />;
 }

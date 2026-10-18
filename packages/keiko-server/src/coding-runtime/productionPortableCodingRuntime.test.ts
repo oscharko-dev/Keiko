@@ -1199,3 +1199,49 @@ function nativeHelper(
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
+
+it("automatic Linux discovery uses the actual CLI package root without an injected installRoot", () => {
+  const fixture = linuxPortableInstall();
+  try {
+    const packageRoot = join(fixture.root, "app");
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko", version: KEIKO_PRODUCT_VERSION }),
+    );
+    expect(discoverLinux(fixture)?.target).toBe(LINUX_TARGET);
+    const result = discoverQualifiedPortableOpenCode({
+      env: { KEIKO_CLI_BIN_PATH: join(packageRoot, "dist", "bin", "keiko.js") },
+      platform: "linux",
+      arch: "x64",
+      attestation: { readReceipt: () => fixture.receipt },
+    });
+    expect(result).toMatchObject({
+      installRoot: realpathSync(fixture.root),
+      target: LINUX_TARGET,
+      qualification: { backend: "linux-namespace-gateway" },
+    });
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+it("automatic Linux discovery retains the launcher drift rejection", () => {
+  const fixture = linuxPortableInstall();
+  try {
+    const packageRoot = join(fixture.root, "app");
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko", version: KEIKO_PRODUCT_VERSION }),
+    );
+    writeFileSync(join(fixture.root, "Keiko"), "synthetic launcher drift");
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: { KEIKO_CLI_BIN_PATH: join(packageRoot, "dist", "bin", "keiko.js") },
+        platform: "linux",
+        arch: "x64",
+        attestation: { readReceipt: () => fixture.receipt },
+      }),
+    ).toBeUndefined();
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

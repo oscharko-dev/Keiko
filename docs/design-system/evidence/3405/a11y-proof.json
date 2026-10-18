@@ -5,14 +5,15 @@
   "tool": "axe-core 4.12.1",
   "cssSha256": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
   "sourceSha256": {
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "4efbb0dce34076da10816fc66a62a99ba9270ab823d275bf3a7fcea915f98de2",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "19973259da7ccdbaad7d35a58868dbcd4b57b7845f292a5997a2b8d9d3e58b46",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx": "20cc4f1aabe0db16174f7fb1374ef0a6249c7d03cea64f21b0c42ea810e43a19",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "aab4708993761c799c966f08002759a330910ac5a005a727cecb4ccd453452b8",
     "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
     "packages/keiko-ui/src/lib/api.ts": "869fd101570c2a2440cbb20530789f65f7c6a18a3b33f66e96cae19c0d13a263",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "821a4ed16ad8cb3db2ef57bfc63de5904c75165d9de731011ed15bf194b7ae8a",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "cef2261aeb07a44a497ba60e4301324484d37ac3770141c8a215187b1c59ae3b",
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "fbf21781319cd4908ee21c437f553e31af12c013315623beb91fe54e611422aa",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "638ed6162d8336b6a25b0f484899ccd0c0f62cfb0e13b5c9633255969b4c7181",
     "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "e6d7916bef9e2bea99beac10d5a0450d0ead70f48d73d63fe8635ef19df9bd76",
     "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "f7eccf28fea194dbbd71a61787ef396086ec99ef777016de0d564aad1eb3b635",
     "packages/keiko-ui/src/lib/optional-widget-i18n.ts": "48a5b89217f4e144af6b385199e1803cde0389649d363c9268e30120a02e3b46"

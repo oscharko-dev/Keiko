@@ -94,3 +94,21 @@ setup-only reload/details checks. All three records bind 11 UI sources and 4 har
 `13-reconnecting-state-mocked.png` changed PNG bytes. The unchanged numerical freshness and
 Editor isolation gates pass. This remains UI/fixture evidence; actual signed package replacement,
 restart and SSD qualification are separate #4047 obligations.
+
+The subsequent #4047 repair preserves the unchanged startup import-boundary control: the thin
+preflight/dismissal controller loads its optional-catalog view only when a visible notice is
+admitted. A current or suppressed report does not load that view. The original control reproduced
+locally as 1 failure/3 healthy controls before the repair and all four pass afterwards. Two existing
+UI lint suppressions were removed. The final nine-case producer passed in 47.3 seconds and binds
+12 UI sources, including the deferred presentation, plus the same four harness inputs. All 17
+artifacts were regenerated through the original producer with tracked evidence enabled; only
+`10-responsive-manual-path.png`, `11-progress-state.png`, and
+`13-reconnecting-state-mocked.png` changed screenshot bytes in this increment. This still qualifies UI and the declared BFF recovery fixture, not native replacement.
+
+A rejected optional notice-view import is contained locally. The failure-first control uses the
+installed Next.js App Router loader and the real shell boundary, rather than the different Pages
+loader that plain test resolution selects. It reproduces one desktop-loss failure with one healthy
+suppressed-current control before repair. The repaired path records body-free failure evidence,
+keeps the workspace mounted, and offers the existing Updates entry and dismissal using core
+translations. The final three owning suites pass 77 cases, complete UI coverage passes 10,694 cases
+(one existing skip), and the original nine-case browser producer passes again in 1.3 minutes.

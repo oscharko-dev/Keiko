@@ -569,14 +569,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/update/UpdateStartupNotice.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/update/UpdateWindow.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 3

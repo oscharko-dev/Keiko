@@ -648,6 +648,8 @@ export const DE_MESSAGES = {
   "footer.windowAction": "{action} {title}-Fenster{suffix}",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",
+  "updates.notice.loadFailed":
+    "Der Update-Hinweis konnte nicht geladen werden. Öffne Updates zum Prüfen.",
   "updates.versionUnknown": "unbekannt",
 
   "updates.status.current": "Keiko ist aktuell",

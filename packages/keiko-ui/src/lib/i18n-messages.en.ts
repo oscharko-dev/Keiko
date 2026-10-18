@@ -629,6 +629,7 @@ export const EN_MESSAGES = {
   "footer.windowAction": "{action} {title} window{suffix}",
   "settings.title": "Settings",
   "settings.language.compactLabel": "Language",
+  "updates.notice.loadFailed": "The update notice could not be loaded. Open Updates to check.",
   "updates.versionUnknown": "unknown",
 
   "updates.status.current": "Keiko is up to date",

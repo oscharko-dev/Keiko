@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "877083d99ae73a9ba93c1d4202aab9b5ee48deb9c5eb5de1f62afdeafa75af56"
+    "catalogDigest": "f082d50663a61b8e4231c28bbc9b964193cde0e38d090d27f32baabd01e390f6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 541,
-    "proofCount": 553,
-    "resolvedProofCount": 553,
+    "operationCount": 542,
+    "proofCount": 554,
+    "resolvedProofCount": 554,
     "failureClassCount": 348,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -700,6 +700,7 @@
         "update.candidate.consumed",
         "update.candidate.issued",
         "update.candidate.rejected",
+        "update.install-mode.detected",
         "update.portable-asset.redirect-refused",
         "update.portable-fetch.failed",
         "update.release-trust.verify",
@@ -2615,6 +2616,9 @@
     ],
     "update.candidate.rejected.reason": [
       "packages/keiko-server/src/update-candidate-authority.test.ts"
+    ],
+    "update.install-mode.detected.body-free": [
+      "packages/keiko-server/src/update-preflight-activity.test.ts"
     ],
     "update.portable-asset.redirect-refused.reason": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"

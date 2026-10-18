@@ -3,6 +3,7 @@ import {
   parseUpdateRestartVerificationRequest,
   parseUpdateSessionStartRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import { recordUpdateInstallMode } from "./update-preflight-activity.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { UpdateSessionError, type UpdateSessionManager } from "./update-session.js";
@@ -99,10 +100,19 @@ async function runHandler(
   }
 }
 
-export function handleGetUpdateSession(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleGetUpdateSession(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
-  return { status: 200, body: guard.getStatus() };
+  const modeStartedAt = performance.now();
+  const body = guard.getStatus();
+  recordUpdateInstallMode(
+    deps.activityLog,
+    body.installMode,
+    "session-status",
+    Math.round(performance.now() - modeStartedAt),
+    ctx.correlationId,
+  );
+  return { status: 200, body };
 }
 
 export async function handleCreateUpdateSession(

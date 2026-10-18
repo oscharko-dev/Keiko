@@ -319,6 +319,7 @@ function sourceSha256(path: string): string {
 function updateSourceHashes(): JsonObject {
   const paths = [
     "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",

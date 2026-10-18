@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "877083d99ae73a9ba93c1d4202aab9b5ee48deb9c5eb5de1f62afdeafa75af56" as const;
+  "f082d50663a61b8e4231c28bbc9b964193cde0e38d090d27f32baabd01e390f6" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -39200,21 +39200,85 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["update.runtime.event"],
+        state: ["update.install-mode.detected", "update.runtime.event"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "update.install-mode.detected",
+          mode: "correlation",
+        },
+        {
           op: "update.runtime.event",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["update.runtime.event"],
+      resourceSignals: ["update.install-mode.detected", "update.runtime.event"],
       replayReferences: [],
       operations: [
+        {
+          op: "update.install-mode.detected",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "durationMs",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "installKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "source",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "status",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "target",
+              type: "string",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["update.install-mode.detected.body-free"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "update.runtime.event",
           owner: "keiko-server",
@@ -42243,6 +42307,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "update.candidate.consumed": "runtime-packages",
     "update.candidate.issued": "runtime-packages",
     "update.candidate.rejected": "runtime-packages",
+    "update.install-mode.detected": "runtime-packages",
     "update.portable-asset.redirect-refused": "runtime-packages",
     "update.portable-fetch.failed": "runtime-packages",
     "update.release-trust.verify": "runtime-packages",

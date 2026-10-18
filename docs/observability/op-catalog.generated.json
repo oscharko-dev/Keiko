@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "877083d99ae73a9ba93c1d4202aab9b5ee48deb9c5eb5de1f62afdeafa75af56",
+    "catalogDigest": "f082d50663a61b8e4231c28bbc9b964193cde0e38d090d27f32baabd01e390f6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36185,6 +36185,90 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "update.install-mode.detected",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "update-preflight-activity.recordUpdateInstallMode",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "source": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["preflight", "session-status"]
+          },
+          "status": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["supported", "unsupported"]
+          },
+          "installKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "package-manager",
+              "portable-managed",
+              "portable-bootstrap",
+              "portable-setup-failed",
+              "portable-it-managed"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "unknown-path",
+              "local-checkout",
+              "local-install",
+              "linked-package",
+              "transient-runner",
+              "launcher-drift",
+              "package-manager-ambiguous",
+              "package-manager-unsupported",
+              "manifest-unavailable",
+              "portable-bootstrap",
+              "portable-setup-failed",
+              "portable-it-managed",
+              "portable-registration-invalid",
+              "portable-non-stable"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "values": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["update-runtime"],
+        "proofIds": ["update.install-mode.detected.body-free"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:259",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:338"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "update.portable-asset.redirect-refused",
         "category": "security",
         "owner": "keiko-server",
@@ -46434,16 +46518,16 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["update.runtime.event"],
+          "state": ["update.install-mode.detected", "update.runtime.event"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["update.runtime.event"],
+        "requiredCausalOperations": ["update.install-mode.detected", "update.runtime.event"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["update.runtime.event"],
+        "requiredProofOperations": ["update.install-mode.detected", "update.runtime.event"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["update.runtime.event"],
+        "requiredResourceOperations": ["update.install-mode.detected", "update.runtime.event"],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -86759,21 +86843,85 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["update.runtime.event"],
+            "state": ["update.install-mode.detected", "update.runtime.event"],
             "end": [],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
             {
+              "op": "update.install-mode.detected",
+              "mode": "correlation"
+            },
+            {
               "op": "update.runtime.event",
               "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["update.runtime.event"],
+          "resourceSignals": ["update.install-mode.detected", "update.runtime.event"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "update.install-mode.detected",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "installKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "source",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "status",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "target",
+                  "type": "string",
+                  "dataClass": "safe-platform-class",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "loss-state",
+                "safe-platform-class"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["update.install-mode.detected.body-free"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "update.runtime.event",
               "owner": "keiko-server",
@@ -94553,6 +94701,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "update.install-mode.detected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:262",
+      "package": "keiko-server"
+    },
+    {
       "op": "update.portable-asset.redirect-refused",
       "category": "security",
       "site": "packages/keiko-server/src/update-preflight-activity.ts:25",
@@ -95393,6 +95547,7 @@
     "update.candidate.consumed",
     "update.candidate.issued",
     "update.candidate.rejected",
+    "update.install-mode.detected",
     "update.portable-asset.redirect-refused",
     "update.portable-fetch.failed",
     "update.preflight.bundled-catalog.read",

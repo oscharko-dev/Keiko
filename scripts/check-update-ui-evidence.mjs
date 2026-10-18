@@ -12,6 +12,7 @@ const EVIDENCE_RECORDS = [
 
 export const UPDATE_UI_SOURCE_PATHS = Object.freeze([
   "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
+  "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
   "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
