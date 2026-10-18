@@ -8,7 +8,9 @@
     "HTTP success, persistence and accounting do not establish semantic correctness.",
     "Mutation credit requires unchanged generated tests to compile and pass the correct subject first.",
     "Missing semantic/profile review is not a pass; native N+1/compaction, large-scale/freshness/pressure/gateway and original-history replay remain separate.",
-    "The failed React v4 generation and missing execution are retained in the denominator."
+    "The failed React v4 generation and missing execution are retained in the denominator.",
+    "status is frozen at generation return; executionStatus and variants carry the subsequent restricted-execution outcome. Neither establishes final semantic/profile qualification.",
+    "physicalAttempts counts case-bound answer requests only. Setup readiness probes are reported separately and cannot be counted as answer attempts."
   ],
   "runs": [
     {
@@ -983,7 +985,8 @@
           "declaredMutantCount": null,
           "variants": [],
           "detectedMutants": [],
-          "allDeclaredMutantsDetected": false
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
         },
         {
           "id": "react-control-1",
@@ -1017,7 +1020,8 @@
           "declaredMutantCount": null,
           "variants": [],
           "detectedMutants": [],
-          "allDeclaredMutantsDetected": false
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
         },
         {
           "id": "react-skill-2",
@@ -1051,7 +1055,8 @@
           "declaredMutantCount": null,
           "variants": [],
           "detectedMutants": [],
-          "allDeclaredMutantsDetected": false
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
         },
         {
           "id": "react-control-2",
@@ -1085,7 +1090,8 @@
           "declaredMutantCount": null,
           "variants": [],
           "detectedMutants": [],
-          "allDeclaredMutantsDetected": false
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
         },
         {
           "id": "react-skill-3",
@@ -1119,7 +1125,8 @@
           "declaredMutantCount": null,
           "variants": [],
           "detectedMutants": [],
-          "allDeclaredMutantsDetected": false
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
         },
         {
           "id": "react-control-3",
@@ -1153,9 +1160,12 @@
           "declaredMutantCount": null,
           "variants": [],
           "detectedMutants": [],
-          "allDeclaredMutantsDetected": false
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
         }
-      ]
+      ],
+      "setupReadinessAttempts": 1,
+      "setupReadinessHttpStatuses": [500]
     },
     {
       "id": "generation-react-v5",

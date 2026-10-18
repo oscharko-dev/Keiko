@@ -109,6 +109,19 @@ disambiguating paths, disconnect controls and actual pending/error feedback. Gen
 is available only on demand in the missing-evidence action. The existing `client.scope.notice`
 observer records body-free transitions without a duplicate live-region announcement.
 
+An abandoned Files write whose compensation fails retains its admission hold. A subsequent
+explicit, successfully acknowledged bind may retire detached failed edges only for the same chat,
+mounted source window and canonical scope. Attribution uses the actual canonical PATCH reply,
+including its submitted timestamp and selection geometry, before compensation runs. A requested
+alias alone cannot identify the source: retargeting that alias to another canonical root must retain
+the prior hold. Missing acknowledgement attribution, live edges, pending writes, other mounted
+owners and other chats remain ineligible. This extends the existing intent registry and serialized
+PATCH owner; it introduces neither a source cache nor a second persistence path. Retiring a failed
+edge emits the existing correlated, body-free `client.files-scope.decision` release disposition.
+Failed unbind holds use the same mounted edge/conversation ownership boundary. Removing an obsolete
+edge may release its settled failed hold; an unfinished or blocked serialized write still retains
+admission protection.
+
 ### D2 — Per-answer summary is wire-only
 
 The wire response carries `contextPack: GroundedAnswerContextPackSummary` on every
@@ -710,6 +723,14 @@ guards. Current callable ownership and actual code matches precede root selectio
 use the existing query and certified-definition capacity. Explicit selected lines, non-addressed
 discovery and route tracing keep their own rules.
 Lexical query-group coverage alone never certifies the requested implementation or an answer.
+Direct batched reads retain the original requested-range index on every returned window before
+flattening. An omitted range leaves that index absent; duplicate and overlapping requests retain
+their distinct indices. Discovery joins observations by that producer index, keeping current
+witnesses when another old lexical range is unavailable and recording the unavailable atom through
+the existing uncertainty owner. All-unavailable contextual batches remain incomplete. Actual
+snapshot changes retain their fail-closed I/O error. Lazy asynchronous iteration schedules each
+next discovery or frontier read only after the prior result has settled and updated its remaining
+capacity; no concurrent promise batch bypasses deadline, cancellation or currentness checks.
 
 The governed request's existing document collector checks the original remaining file and
 excerpt-byte grant before each extraction. It bounds the redacted logical projection, including

@@ -33,6 +33,7 @@ interface ScopeIntent {
   readonly status: "pending" | "failed";
   readonly correlationId: string;
   readonly isCurrent: () => boolean;
+  readonly ownerKey: (() => string | undefined) | undefined;
 }
 // Admission state only: canonical source lists and identities remain server-owned.
 const scopeIntents = new Map<string, Map<string, ScopeIntent>>();
@@ -63,6 +64,20 @@ export function releaseFailedChatScopeTransition(chatId: string, sourceId: strin
   reportFilesScopeDecision(intent.correlationId, { decision: "released" });
   for (const listener of listeners) listener();
   return true;
+}
+
+/** Fresh explicit reacceptance can retire failed edges belonging to that same mounted source. */
+export function releaseDetachedFailedChatScopeTransitions(
+  chatId: string,
+  ownerKey: string,
+  liveSourceIds: ReadonlySet<string>,
+): void {
+  const intents = scopeIntents.get(chatId);
+  if (intents === undefined) return;
+  for (const [sourceId, intent] of intents) {
+    if (intent.ownerKey?.() === ownerKey && !liveSourceIds.has(sourceId))
+      releaseFailedChatScopeTransition(chatId, sourceId);
+  }
 }
 
 export function releaseObsoleteFailedChatScopeTransitions(): void {
@@ -105,6 +120,7 @@ export function beginChatScopeTransition(
   chatId: string,
   sourceId: string,
   isCurrent: () => boolean = (): boolean => true,
+  ownerKey?: () => string | undefined,
 ): { readonly correlationId: string; readonly settle: (accepted: boolean) => void } {
   const shouldCancel = chatScopeTransition(chatId) === undefined;
   const intent: ScopeIntent = {
@@ -112,6 +128,7 @@ export function beginChatScopeTransition(
     status: "pending",
     correlationId: newClientCorrelationId(),
     isCurrent,
+    ownerKey,
   };
   const intents = scopeIntents.get(chatId) ?? new Map<string, ScopeIntent>();
   intents.set(sourceId, intent);

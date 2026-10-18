@@ -9,6 +9,7 @@ import {
   clearChatScopeTransitions,
   releaseFailedChatScopeTransition,
   releaseObsoleteFailedChatScopeTransitions,
+  releaseDetachedFailedChatScopeTransitions,
   chatScopeSourceTransition,
 } from "./chatWindowActivity";
 
@@ -98,6 +99,53 @@ describe("chat source-intent admission", () => {
     obsolete.settle(true);
     releaseObsoleteFailedChatScopeTransitions();
     expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+  });
+});
+
+describe("verified detached source recovery", () => {
+  it("releases only failed detached intents for the verified owner", () => {
+    const failed = beginChatScopeTransition(
+      TARGET.conversationId,
+      "old-edge",
+      () => true,
+      () => "source-a",
+    );
+    const live = beginChatScopeTransition(
+      TARGET.conversationId,
+      "live-edge",
+      () => true,
+      () => "source-a",
+    );
+    const pending = beginChatScopeTransition(
+      TARGET.conversationId,
+      "pending-edge",
+      () => true,
+      () => "source-a",
+    );
+    const independent = beginChatScopeTransition(
+      TARGET.conversationId,
+      "other-edge",
+      () => true,
+      () => "source-b",
+    );
+    const unowned = beginChatScopeTransition(TARGET.conversationId, "unowned-edge");
+    failed.settle(false);
+    live.settle(false);
+    independent.settle(false);
+    unowned.settle(false);
+    releaseDetachedFailedChatScopeTransitions("other-chat", "source-a", new Set());
+    expect(chatScopeSourceTransition(TARGET.conversationId, "old-edge")).toBe("failed");
+    releaseDetachedFailedChatScopeTransitions(
+      TARGET.conversationId,
+      "source-a",
+      new Set(["live-edge"]),
+    );
+    expect(chatScopeSourceTransition(TARGET.conversationId, "old-edge")).toBeUndefined();
+    expect(chatScopeSourceTransition(TARGET.conversationId, "live-edge")).toBe("failed");
+    expect(chatScopeSourceTransition(TARGET.conversationId, "pending-edge")).toBe("pending");
+    expect(chatScopeSourceTransition(TARGET.conversationId, "other-edge")).toBe("failed");
+    expect(chatScopeSourceTransition(TARGET.conversationId, "unowned-edge")).toBe("failed");
+    pending.settle(false);
   });
 });
 

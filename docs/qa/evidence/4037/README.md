@@ -10,11 +10,16 @@ inherited 96-criterion ledger.
   hashes and restricted execution outcomes retain their original identities. Later skill
   revisions are not qualified by earlier outputs. A correct-subject failure earns no mutation
   credit. Semantic and customer-profile review is separately pending.
+  The original `status` is frozen at generation return; `executionStatus` and the variant records
+  describe subsequent execution. The six failed React v4 cases each have zero case-bound answer
+  attempts. Their separately recorded setup readiness probe returned HTTP 500; setup waiting is
+  not an answer attempt. Failed setup and generation remain in the denominator.
 - `symbol-discovery-read-batching.json` compares the actual production retrieval path on the
   same one-file corpus and original question/grants, with no model call. Ordered ranges, byte
-  lengths and content hashes agree. Read amplification is corrected; the explicitly absent
-  deadline and read-charge windows remain acceptance failures. Timing under concurrent local
-  work is an observation, not latency qualification.
+  lengths and content hashes agree. Read amplification is corrected. The original mechanical joins retain their
+  observed presence/absence; equivalent current implementation ranges may establish the same budget
+  facts. Named-function probes alone do not establish semantic recall success or failure. Timing
+  under concurrent local work is an observation, not latency qualification.
 
 Raw source/prompt/answer content, provider locations and credentials stay outside the checkout.
 The existing Chat skills lab owns runtime pairing, selected-skill import/accounting, real product

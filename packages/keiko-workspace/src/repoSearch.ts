@@ -212,6 +212,8 @@ export interface ReadExcerptRequest {
 }
 
 interface ReadExcerptWindowResult {
+  /** Original direct-range position, retained even when another requested range is omitted. */
+  readonly requestedRangeIndex?: number | undefined;
   readonly anchoredWindowApplied?: boolean | undefined;
   readonly atom: EvidenceAtom;
   readonly content: string;
@@ -4600,8 +4602,11 @@ async function batchedExcerptResults(
   const ranges = request.ranges ?? [];
   const batch = createExcerptBatch(scope, request, lines, nowMs, control, ranges.length);
   const results: ReadExcerptWindowResult[] = [];
-  for await (const windows of excerptBatchRanges(batch, ranges))
-    for (const window of windows) results.push(window);
+  let requestedRangeIndex = 0;
+  for await (const windows of excerptBatchRanges(batch, ranges)) {
+    for (const window of windows) results.push({ ...window, requestedRangeIndex });
+    requestedRangeIndex += 1;
+  }
   return {
     results,
     omittedRangeCount: ranges.length - batch.processed + batch.emptyRanges,

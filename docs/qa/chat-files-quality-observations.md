@@ -1212,8 +1212,11 @@ A production-cap A/B uses the identical 467,450-byte one-file corpus, unchanged 
 read bytes from 509,265,584 to 14,142,284. All 287 ordered excerpt ranges, lengths and content hashes
 agree exactly. The auditor independently reproduced both counts and byte/hash equality. Mixed-load
 wall times (36,716/26,755 ms in the repeated developer observation) are not latency acceptance. The
-absent deadline constructor/caller and physical excerpt-charge windows remain absent; source census
-completeness does not certify necessary-window recall. Body-free records are in `evidence/4037/`.
+originally probed deadline constructor/caller and physical excerpt-charge windows remain absent.
+Those exact function names are not exclusive acceptance witnesses: the auditor identified other
+current ranges carrying the same absolute-deadline behavior. These probes alone establish neither
+complete semantic recall nor its failure. Source census completeness does not certify required
+facts. Body-free records retain their mechanical observations in `evidence/4037/`.
 
 Exact-head CI found three task-order controls still anchored to the retired full-answer repair phrase.
 Those exact single/plural/hybrid failures reproduced locally. The controls now derive the actual JSON
@@ -1250,3 +1253,65 @@ The fresh original-question run with the documented provider/transport values re
 agreement. Its answer uses detached numeric ranges and does not establish the required cumulative
 physical-attempt accounting explanation. This remains a failed native quality baseline, despite
 successful transport and persistence; the recreated corpus/history boundary is unchanged.
+
+### Canonical detached-source recovery and verifier correction
+
+The next recovery increment addresses the auditor's abandoned-write/failed-compensation sequence.
+A fresh explicit bind releases only detached failed holds attributable to the same mounted source
+and actually acknowledged canonical scope. A changed canonical root behind the same requested alias
+retains the old hold. Valid late-ACK fixtures derive geometry and timestamps from the actual submitted
+PATCH. Substituting only the two original implementation files from `86d6c674d` produces two failures
+for same-source recovery and same-canonical alias recovery, while the different-canonical-root safety
+control passes. Restoring the candidate passes all three and the complete 529-test owning/send-guard
+selection. Independent auditor controls reproduce the two-failure/one-pass boundary. These results
+precede publication and do not claim final-head CI or full browser qualification.
+
+The complete pinned quality run did not finish: a synchronous test fixture inherited the developer's
+global `tag.gpgsign=true` and opened an interactive editor while creating a same-named tag. The owned
+blocked processes were terminated, with no full-quality PASS recorded. A bounded reproduction with
+`GIT_EDITOR=false` fails at that exact command. Configuring commit and tag signing off only inside
+the temporary fixture repository passes all 31 local-checkout controls. Repository delivery signing
+and the developer's global configuration are unchanged. The complete quality chain must run again.
+
+The private offline Java verifier now validates all actual Surefire XML reports and joins output
+bytes and hashes only after terminal generation-ledger publication. Ten parser controls pass. A
+real offline Maven control returns 14 tests with one skipped test across two reports and is correctly
+ineligible for baseline success despite Maven exit zero. Generated output remains unchanged. This
+corrects verification, not model performance; the frozen profile campaign retains its compilation
+failures. No mutation credit is awarded to a failing correct-subject suite. Its no-skill condition
+does not receive the profile instructions, so comparisons describe whole-skill outcomes rather than
+an isolated method or naming-style effect.
+
+Issue #4043 is accepted additional work. Existing ADR-0141 authentication owns the implementation:
+explicit local approval, optional remembered-browser access, bounded renewal and revocation must
+preserve protected-data access checks across browsers, restart and removable-SSD use. Inspection
+confirms current process-scoped sessions intentionally expire on restart; remembered access is not
+implemented by relaxing that verification. Its implementation and native browser evidence remain
+open. Acceptance checkboxes are updated only when linked implementation and verification exist;
+issues and epics stay open until their completed work is verified as merged into `dev`.
+
+The current-head CodeRabbit review also exposed a failed-unbind hold whose default ownership
+predicate survived removal of its edge. A new mounted regression fails specifically at clearing
+that obsolete failed hold. The unbind owner now checks the mounted edge and conversation while
+retaining protection for a blocked serialized write.
+
+Real lexical producers independently reproduce a partial discovery-batch failure: an old range
+beyond the shortened source discards a still-current callable witness from the same file. The
+existing direct-range reader now stamps original request indices before flattening its compact
+window list. Discovery preserves available observations and marks missing positions unavailable,
+without range-value matching, extra source reads or a new reader. Workspace controls cover omitted
+and duplicate positions and multibyte clipping; the real-producer control retains its healthy-prefix
+comparison and separately checks all-unavailable input. A deliberately reversed index mapping fails
+the strengthened fanout certification assertion; source restoration is verified byte-for-byte.
+
+SonarCloud on `86d6c674d` reports three `S9382` findings in the new discovery loops. The pinned local
+analyzer passes but does not contain this cloud rule, a documented tool boundary. Local ESLint's
+equivalent `no-await-in-loop` identifies the same three locations alongside four unchanged older
+loops. Lazy asynchronous generators now yield each operation only when the preceding one settles,
+preserving capacity-dependent scheduling and stop checks. Final-head analysis remains required.
+
+The frozen 12-case Spring profile campaign has completed. The corrected verifier rejects all 12
+unchanged correct-subject outputs at compilation, with no XML reports or mutation credit. Source
+selection omitted the approved conventions document; this remains a retrieval defect to repair
+before another native qualification. It cannot be cured by adding fixture-specific APIs to the
+customer skill or by reclassifying compilation failures as successful tests.

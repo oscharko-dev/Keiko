@@ -1430,8 +1430,17 @@ it("releases a settled failed initial intent when its Files owner closes", async
   expect(mocks.serverChat?.connectedScopes).toEqual([]);
 });
 
-it("retains a detached hold when canonical compensation fails", async () => {
+async function mountDetachedFilesCompensationFailure(
+  failedFile?: string,
+  canonicalRoot = "/manuals/New",
+): Promise<void> {
   const initial = fixture(["/manuals/Old"]);
+  initial.wins.push(
+    windowRecord("files-1", "files", {
+      root: "/manuals/Independent",
+      resolvedRoot: "/manuals/Independent",
+    }),
+  );
   mocks.initialChat = chat([scope("/manuals/Old")]);
   mocks.serverChat = mocks.initialChat;
   persist(initial.wins, initial.conns);
@@ -1443,7 +1452,11 @@ it("retains a detached hold when canonical compensation fails", async () => {
     .mockRejectedValueOnce(new ApiError("UNAVAILABLE", "Unavailable", 503));
   await act(async () =>
     mocks.workspace?.api.update("files-0", {
-      cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
+      cfg: {
+        root: "/manuals/New",
+        resolvedRoot: "/manuals/New",
+        ...(failedFile === undefined ? {} : { activeFilePath: failedFile }),
+      },
     }),
   );
   await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
@@ -1452,11 +1465,17 @@ it("retains a detached hold when canonical compensation fails", async () => {
   );
   expect(chatScopeTransition("chat-1")).toBe("pending");
   await act(async () => {
-    mocks.serverChat = chat([scope("/manuals/New")], 2);
+    const submitted = mocks.updateChatConnectedScopes.mock.calls[0]?.[1]?.at(-1);
+    if (submitted === undefined) throw new TypeError("Missing original Files request");
+    mocks.serverChat = chat([{ ...submitted, root: canonicalRoot }], 2);
     pending.resolve({ chat: mocks.serverChat });
   });
   expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
   expect(chatScopeTransition("chat-1")).toBe("failed");
+}
+
+it("retains a detached hold when canonical compensation fails", async () => {
+  await mountDetachedFilesCompensationFailure();
 });
 
 it.each([true, false])(
@@ -1494,3 +1513,184 @@ it.each([true, false])(
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
   },
 );
+
+it("recovers a settled detached compensation failure after verified same-source rebind", async () => {
+  await mountDetachedFilesCompensationFailure();
+  await act(async () =>
+    mocks.workspace?.api.update("chat-window", { cfg: { chatId: "chat-1", projectPath: "/repo" } }),
+  );
+  fireEvent.pointerDown(document.body);
+  const readsBefore = mocks.fetchChats.mock.calls.length;
+  await auditConnect();
+  await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+  expect(mocks.fetchChats.mock.calls.length).toBeGreaterThan(readsBefore);
+  expect(mocks.serverChat?.connectedScopes?.map((scope) => scope.root)).toEqual(["/manuals/New"]);
+  expect(chatScopeTransition("chat-1")).toBeUndefined();
+});
+
+function assertDetachedRecoveryResult(recovery: string): void {
+  expect(mocks.workspace?.conns).toHaveLength(recovery === "lookup-refused" ? 0 : 1);
+  if (recovery === "different-file") {
+    expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe("files");
+    expect(mocks.serverChat?.connectedScopes?.map((scope) => scope.relativePaths)).toEqual([
+      ["first.txt"],
+      ["selected.txt"],
+    ]);
+  }
+  expect(chatScopeTransition("chat-1")).toBe("failed");
+}
+
+it.each([
+  "lookup-refused",
+  "different-source",
+  "different-root",
+  "different-file",
+  "different-conversation",
+])("retains a detached compensation hold after %s rebind", async (recovery) => {
+  await mountDetachedFilesCompensationFailure(
+    recovery === "different-file" ? "first.txt" : undefined,
+  );
+  const chatId = recovery === "different-conversation" ? "chat-2" : "chat-1";
+  if (chatId === "chat-2") mocks.serverChat = { ...chat([scope("/manuals/New")], 3), id: chatId };
+  await act(async () =>
+    mocks.workspace?.api.update("chat-window", { cfg: { chatId, projectPath: "/repo" } }),
+  );
+  if (recovery === "different-root")
+    await act(async () =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/Different", resolvedRoot: "/manuals/Different" },
+      }),
+    );
+  if (recovery === "different-file")
+    await act(async () =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New", activeFilePath: "selected.txt" },
+      }),
+    );
+  fireEvent.pointerDown(document.body);
+  if (recovery === "lookup-refused")
+    mocks.fetchChats.mockRejectedValueOnce(new ApiError("UNAVAILABLE", "Unavailable", 503));
+  await auditConnect(recovery === "different-source" ? "files-1" : "files-0");
+  assertDetachedRecoveryResult(recovery);
+});
+
+async function assertBlockedDetachedRebind(): Promise<void> {
+  await act(async () =>
+    mocks.workspace?.api.update("chat-window", { cfg: { chatId: "chat-1", projectPath: "/repo" } }),
+  );
+  fireEvent.pointerDown(document.body);
+  await auditConnect();
+  expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+  expect(mocks.workspace?.conns).toHaveLength(0);
+  expect(chatScopeTransition("chat-1")).toBe("failed");
+}
+
+it("blocks detached recovery until the original compensation settles", async () => {
+  const initial = fixture(["/manuals/Old"]);
+  mocks.initialChat = chat([scope("/manuals/Old")]);
+  mocks.serverChat = mocks.initialChat;
+  persist(initial.wins, initial.conns);
+  render(<AppShell />);
+  await screen.findByTestId("workspace");
+  const pending = deferred<{ readonly chat: Chat }>();
+  const compensation = deferred<{ readonly chat: Chat }>();
+  mocks.updateChatConnectedScopes
+    .mockReturnValueOnce(pending.promise)
+    .mockReturnValueOnce(compensation.promise);
+  vi.useFakeTimers();
+  try {
+    await act(async () =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
+      }),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS));
+    expect(chatScopeTransition("chat-1")).toBe("failed");
+    await act(async () =>
+      mocks.workspace?.api.update("chat-window", {
+        cfg: { chatId: "chat-2", projectPath: "/repo" },
+      }),
+    );
+    expect(chatScopeTransition("chat-1")).toBe("failed");
+    await act(async () => {
+      mocks.serverChat = chat([scope("/manuals/New")], 2);
+      pending.resolve({ chat: mocks.serverChat });
+    });
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    expect(chatScopeTransition("chat-1")).toBe("failed");
+    await assertBlockedDetachedRebind();
+    await act(async () => {
+      mocks.serverChat = chat([scope("/manuals/Old")], 3);
+      compensation.resolve({ chat: mocks.serverChat });
+    });
+    expect(chatScopeTransition("chat-1")).toBe("failed");
+    await auditConnect();
+    expect(chatScopeTransition("chat-1")).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["/private/manuals/New", "/private/manuals/Retargeted"])(
+  "reconciles detached canonical alias recovery only for the confirmed target: %s",
+  async (canonicalRoot) => {
+    const priorCanonical = "/private/manuals/New";
+    await mountDetachedFilesCompensationFailure(undefined, priorCanonical);
+    await act(async () =>
+      mocks.workspace?.api.update("chat-window", {
+        cfg: { chatId: "chat-1", projectPath: "/repo" },
+      }),
+    );
+    fireEvent.pointerDown(document.body);
+    mocks.updateChatConnectedScopes.mockImplementation(
+      async (_id: string, scopes: readonly ChatConnectedScope[] | null) => {
+        const normalized = (scopes ?? []).map((item) =>
+          item.root === "/manuals/New" ? { ...item, root: canonicalRoot } : item,
+        );
+        const unique = normalized.filter(
+          (item, index) =>
+            normalized.findLastIndex(
+              (peer) => connectedScopeFingerprint(peer) === connectedScopeFingerprint(item),
+            ) === index,
+        );
+        mocks.serverChat = chat(unique, 3);
+        return { chat: mocks.serverChat };
+      },
+    );
+    const readsBefore = mocks.fetchChats.mock.calls.length;
+    await auditConnect();
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+    expect(mocks.fetchChats.mock.calls.length).toBeGreaterThan(readsBefore);
+    expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+      connectedScopeFingerprint(scope(canonicalRoot)),
+    );
+    expect(mocks.workspace?.wins?.find((win) => win.id === "files-0")?.cfg["root"]).toBe(
+      canonicalRoot,
+    );
+    expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual(
+      canonicalRoot === priorCanonical ? [priorCanonical] : [priorCanonical, canonicalRoot],
+    );
+    expect(chatScopeTransition("chat-1")).toBe(
+      canonicalRoot === priorCanonical ? undefined : "failed",
+    );
+  },
+);
+
+it("releases a failed unbind hold after its owned edge is removed", async () => {
+  const initial = fixture(["/manuals/Old"]);
+  mocks.initialChat = chat([scope("/manuals/Old")]);
+  mocks.serverChat = mocks.initialChat;
+  persist(initial.wins, initial.conns);
+  render(<AppShell />);
+  await screen.findByTestId("workspace");
+  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
+    new ApiError("UNAVAILABLE", "Unavailable", 503),
+  );
+  await act(async () => mocks.workspace?.api.removeConn("edge-0"));
+  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+  expect(mocks.workspace?.conns.some((edge) => edge.id === "edge-0")).toBe(true);
+  await act(async () => mocks.workspace?.api.removeConn("edge-0", { unbind: false }));
+  await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
+  await waitFor(() => expect(chatScopeTransition("chat-1")).toBeUndefined());
+  expect(mocks.serverChat?.connectedScopes).toEqual(mocks.initialChat.connectedScopes);
+});

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as workspaceSearch from "@oscharko-dev/keiko-workspace";
 import type { EvidenceAtom, RetrievalQuery, SelectedScope } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -2700,7 +2701,7 @@ function quotaFanoutFiles(): Record<string, string> {
     "}",
     ...names.map(
       (name, index) =>
-        `function ${name}(quota: number): boolean { return quota <= ${String(20 + index)}; }`,
+        `function ${name}(quota: number): boolean { return quota <= ${String(20 + index)}; } // ${"x".repeat(index * 8)}`,
     ),
   ].join("\n");
   return { "src/gates.ts": content };
@@ -2798,6 +2799,17 @@ it("bounds physical source reads for a same-file callable fanout", async () => {
       ),
     ).size,
   ).toBeGreaterThanOrEqual(24);
+  const lines = quotaFanoutFiles()["src/gates.ts"]?.split("\n");
+  if (lines === undefined) throw new TypeError("Missing fanout source");
+  for (const atom of definitions) {
+    const entry = result.routeCoverage?.entries.find((candidate) => candidate.atom === atom);
+    const range = atom.lineRange;
+    if (entry === undefined || range === undefined) throw new TypeError("Missing certificate");
+    const expected = lines.slice(range.startLine - 1, range.endLine);
+    expect(entry.observedLines?.startLine).toBe(range.startLine);
+    expect(entry.observedLines?.lineBytes).toEqual(expected.map((line) => Buffer.byteLength(line)));
+    expect(entry.observedBytes).toBe(Buffer.byteLength(expected.join("\n")));
+  }
   expect(fixture.reads()).toBeGreaterThan(0);
   expect(fixture.reads()).toBeLessThanOrEqual(12);
 });
@@ -2812,4 +2824,96 @@ it("never certifies a callable cohort whose source changes during its physical r
   expect(
     result?.atoms.filter((atom) => atom.provenance.tool === "discovered-symbol-definition") ?? [],
   ).toEqual([]);
+});
+
+it("real lexical discovery preserves a current witness after another old range disappears", async () => {
+  const files = contextualLiteralFiles();
+  const current = files["src/operation.ts"];
+  if (current === undefined) throw new TypeError("source required");
+  files["src/operation.ts"] =
+    current + "\n".repeat(40) + 'export function oldMarker() { return "cobalt-marker:"; }';
+  const fs = memFs(WORKSPACE_ROOT, files);
+  const query = contextualLiteralQuery();
+  const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
+  const observed = await searchText(searchScope, query, GROUNDED_TRACE_SEARCH_LIMITS, {
+    fs,
+    nowMs: () => NOW,
+  });
+  expect(observed.atoms.some((atom) => (atom.lineRange?.startLine ?? 0) > 20)).toBe(true);
+  expect(observed.atoms.some((atom) => (atom.lineRange?.startLine ?? 100) < 10)).toBe(true);
+  files["src/operation.ts"] = current;
+  const requestContext = createStructuralAdapterRequestContext(
+    searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    fs,
+    { nowMs: () => NOW },
+  );
+  const input = {
+    scope: selectedScope(),
+    query,
+    anchors: extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors,
+    retrievalIntent: "targeted-code-search" as const,
+    searchScope,
+    fs,
+    nowMs: (): number => NOW,
+    atoms: observed.atoms,
+    requestContext,
+  };
+  const healthy = await collectDiscoveredSymbolTraceEvidence({
+    ...input,
+    atoms: observed.atoms.filter((atom) => (atom.lineRange?.startLine ?? 100) < 10),
+  });
+  expect(
+    healthy.routeCoverage?.entries.some((entry) => entry.atom.scopePath === "lib/output.ts"),
+  ).toBe(true);
+  const unavailable = await collectDiscoveredSymbolTraceEvidence({
+    ...input,
+    atoms: observed.atoms.filter((atom) => (atom.lineRange?.startLine ?? 0) > 20),
+  });
+  expect(unavailable.atoms).toEqual([]);
+  expect(unavailable.uncertainty).toContainEqual(
+    expect.objectContaining({ kind: "tool-unavailable" }),
+  );
+  const result = await collectDiscoveredSymbolTraceEvidence(input);
+  expect(result.uncertainty.length).toBeGreaterThan(0);
+  expect(
+    result.routeCoverage?.entries.some((entry) => entry.atom.scopePath === "lib/output.ts"),
+  ).toBe(true);
+});
+
+it("observes each certified fanout declaration in its actual returned source window", async () => {
+  const fixture = await physicalFanoutFixture();
+  const read = vi.spyOn(workspaceSearch, "readExcerpt");
+  try {
+    const result = await fixture.trace();
+    const returned = read.mock.results.flatMap((entry) =>
+      entry.type === "return" ? [entry.value] : [],
+    );
+    const windows = (await Promise.all(returned)).flatMap((entry) => entry.windows ?? [entry]);
+    const definitions = result.atoms.filter(
+      (atom) => atom.provenance.tool === "discovered-symbol-definition",
+    );
+    const lines = quotaFanoutFiles()["src/gates.ts"]?.split("\n");
+    if (lines === undefined) throw new TypeError("Missing fanout source");
+    expect(definitions.length).toBeGreaterThanOrEqual(24);
+    expect(read).toHaveBeenCalled();
+    for (const atom of definitions) {
+      const line = atom.lineRange?.startLine;
+      const declaration = line === undefined ? undefined : lines[line - 1];
+      if (line === undefined || declaration === undefined)
+        throw new TypeError("Missing certified declaration");
+      const observed = windows.filter(
+        (window) =>
+          window.atom.scopePath === atom.scopePath &&
+          window.atom.lineRange !== undefined &&
+          window.atom.lineRange.startLine <= line &&
+          window.atom.lineRange.endLine >= line,
+      );
+      expect(observed.map((window) => window.content).join("\n")).toContain(declaration);
+    }
+    expect(fixture.reads()).toBeGreaterThan(0);
+    expect(fixture.reads()).toBeLessThanOrEqual(12);
+  } finally {
+    read.mockRestore();
+  }
 });

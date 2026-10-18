@@ -108,6 +108,7 @@ import {
   chatWindowRuntimeTarget,
   releaseFailedChatScopeTransition,
   releaseObsoleteFailedChatScopeTransitions,
+  releaseDetachedFailedChatScopeTransitions,
 } from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
 import { workspaceInteractionLocked } from "./interactionGuards";
@@ -544,6 +545,16 @@ function currentFilesOwnedScope(
     : restored;
 }
 
+function filesScopeOwnerKey(
+  chatWindowId: string,
+  target: ChatBindingTarget | undefined,
+  scope: ChatConnectedScope | undefined,
+): string | undefined {
+  const fingerprint = scope === undefined ? undefined : connectedScopeFingerprint(scope);
+  if (target?.sourceWindowId === undefined || fingerprint === undefined) return undefined;
+  return `${chatWindowId}:${target.sourceWindowId}:${fingerprint}`;
+}
+
 interface FilesPatchAcknowledgement {
   chat?: Chat;
   scope?: ChatConnectedScope;
@@ -940,6 +951,11 @@ interface ChatMutationAttempt {
 
 type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
 
+type FilesScopeIntentInput = Pick<
+  FilesScopeRequest,
+  "chatWindowId" | "chatKey" | "target" | "connectionId" | "nextScope"
+> & { readonly acknowledgement: FilesPatchAcknowledgement };
+
 function latestGroundingChat(
   sessionChat: Chat | undefined,
   confirmed: Chat | undefined,
@@ -1120,6 +1136,7 @@ async function persistCurrentChatScopes<T>(
     readonly expectedIdentity?: string | undefined;
     readonly chat?: Chat;
     readonly refreshed?: (chat: Chat) => void;
+    readonly observed?: (chat: Chat) => void;
   },
 ): Promise<Chat | undefined> {
   const { remember, expectedIdentity } = confirmation;
@@ -1134,6 +1151,7 @@ async function persistCurrentChatScopes<T>(
     confirmation.chat === undefined
       ? await mutation()
       : await withGroundingScopeRefresh(confirmation.chat, mutation, refresh);
+  confirmation.observed?.(response.chat);
   remember(response.chat);
   if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) return response.chat;
   try {
@@ -1923,10 +1941,14 @@ function AppShellInner(): ReactNode {
         effectiveScopes(chat),
         next,
         updateChatConnectedScopes,
-        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
+        {
+          remember: rememberGroundingChat,
+          expectedIdentity: chat.groundingScopeIdentity,
+          observed: (observedChat): void =>
+            captureFilesPatchAcknowledgement(acknowledgement, next, scope, observedChat),
+        },
       );
       if (persisted === undefined) return false;
-      captureFilesPatchAcknowledgement(acknowledgement, next, scope, persisted);
       session.replaceChat(persisted);
       setSourceConnectionNotice(null);
       // Epic #532 unification — also record the green edge as a governed reads-context
@@ -1988,13 +2010,11 @@ function AppShellInner(): ReactNode {
     },
     [replaceFilesScopeNow],
   );
-  const beginFilesScopeTransition = useCallback(
+  const beginFilesIntent = useCallback(
     (
-      chatWindowId: string,
-      chatKey: string,
-      target: ChatBindingTarget | undefined,
-      connectionId: string | undefined,
+      binding: FilesScopeIntentInput,
     ): ReturnType<typeof beginChatScopeTransition> & { readonly requireRecovery: () => void } => {
+      const { chatWindowId, chatKey, target, connectionId, nextScope, acknowledgement } = binding;
       let recoveryRequired = false;
       const transition = beginChatScopeTransition(
         chatKey,
@@ -2005,6 +2025,12 @@ function AppShellInner(): ReactNode {
           (groundingOwnerMountedRef.current &&
             (target?.isCurrent() ?? true) &&
             mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) === chatKey),
+        (): string | undefined =>
+          filesScopeOwnerKey(
+            chatWindowId,
+            target,
+            acknowledgement.scope ?? (recoveryRequired ? undefined : nextScope),
+          ),
       );
       return {
         ...transition,
@@ -2026,7 +2052,18 @@ function AppShellInner(): ReactNode {
       acknowledgement?: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
       const chatKey = groundingMutationKey(chatWindowId, target);
-      const transition = beginFilesScopeTransition(chatWindowId, chatKey, target, connectionId);
+      const observed = acknowledgement ?? {};
+      const binding = {
+        chatWindowId,
+        nextScope,
+        previousScope,
+        target,
+        connectionId,
+        automatic,
+        chatKey,
+        acknowledgement: observed,
+      };
+      const transition = beginFilesIntent(binding);
       let accepted = false;
       try {
         const edgeKey = connectionId === undefined ? undefined : `${connectionId}\u0000${chatKey}`;
@@ -2038,17 +2075,10 @@ function AppShellInner(): ReactNode {
           chatKey,
           (attempt): Promise<boolean> =>
             applyFilesScopeRequest({
-              chatWindowId,
-              nextScope,
-              previousScope,
+              ...binding,
               attempt,
-              target,
-              connectionId,
-              automatic,
               edgeKey,
-              chatKey,
               request,
-              ...(acknowledgement === undefined ? {} : { acknowledgement }),
             }),
           "files",
           transition.correlationId,
@@ -2062,13 +2092,7 @@ function AppShellInner(): ReactNode {
         transition.settle(accepted);
       }
     },
-    [
-      beginFilesScopeTransition,
-      groundingMutationKey,
-      rejectForConnectionFailure,
-      applyFilesScopeRequest,
-      t,
-    ],
+    [beginFilesIntent, groundingMutationKey, rejectForConnectionFailure, applyFilesScopeRequest, t],
   );
   const handleScopeBind = useCallback(
     async (
@@ -2086,9 +2110,17 @@ function AppShellInner(): ReactNode {
         false,
         acknowledgement,
       );
+      const ownerKey = filesScopeOwnerKey(chatWindowId, target, acknowledgement.scope);
+      if (accepted && ownerKey !== undefined && target?.isCurrent()) {
+        releaseDetachedFailedChatScopeTransitions(
+          groundingMutationKey(chatWindowId, target),
+          ownerKey,
+          new Set(wsConnectionsForBindingRef.current.map((edge) => edge.id)),
+        );
+      }
       return accepted ? (acknowledgement.scope ?? scope) : false;
     },
-    [replaceFilesScope],
+    [groundingMutationKey, replaceFilesScope],
   );
   const unbindFilesScopeNow = useCallback(
     async (input: FilesScopeUnbindInput, attempt: ChatMutationAttempt): Promise<boolean> => {
@@ -2160,7 +2192,17 @@ function AppShellInner(): ReactNode {
     ): Promise<boolean> => {
       const chatKey = groundingMutationKey(chatWindowId, target);
       const transition =
-        connectionId === undefined ? undefined : beginChatScopeTransition(chatKey, connectionId);
+        connectionId === undefined
+          ? undefined
+          : beginChatScopeTransition(
+              chatKey,
+              connectionId,
+              (): boolean =>
+                groundingMutationQueueRef.current.blocked.has(chatKey) ||
+                (groundingOwnerMountedRef.current &&
+                  wsConnectionsForBindingRef.current.some((edge) => edge.id === connectionId) &&
+                  mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) === chatKey),
+            );
       let accepted = false;
       try {
         accepted = await serializeChatMutation(
@@ -2553,6 +2595,7 @@ function AppShellInner(): ReactNode {
       return;
     const target: ChatBindingTarget = {
       conversationId,
+      sourceWindowId: a.type === "files" ? a.id : b.id,
       projectPath:
         persistedChatProjectPath(chatWindow) ??
         runtimeProjectPathForChat(chatWindowId, conversationId),

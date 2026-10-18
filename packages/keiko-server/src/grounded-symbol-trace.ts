@@ -332,7 +332,7 @@ async function discoveryPathObservations(
   input: DiscoveredSymbolTraceEvidenceInput,
   path: string,
   atoms: readonly EvidenceAtom[],
-): Promise<readonly ReadExcerptResult[]> {
+): Promise<ReadonlyMap<EvidenceAtom, ReadExcerptResult>> {
   const ranges = atoms.flatMap((atom) => {
     const range = discoveryRange(atom);
     return range === undefined ? [] : [range];
@@ -358,9 +358,29 @@ async function discoveryPathObservations(
     },
   );
   const windows = result.windows ?? [result];
-  if (windows.length !== atoms.length)
-    throw new RepoSearchUnsupportedFileError("Discovery ranges changed during read", "io-error");
-  return windows;
+  const byRange = new Map(windows.map((window) => [window.requestedRangeIndex, window]));
+  const unavailable = atoms.filter((_atom, index) => !byRange.has(index));
+  if (unavailable.length > 0)
+    contextualUnavailableObservation(
+      input,
+      unavailable.map((atom) => atom.stableId),
+    );
+  return new Map(
+    atoms.flatMap((atom, index) => {
+      const window = byRange.get(index);
+      return window === undefined ? [] : [[atom, window] as const];
+    }),
+  );
+}
+
+async function* discoveryPathReads(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atoms: readonly EvidenceAtom[],
+): AsyncIterable<ReadonlyMap<EvidenceAtom, ReadExcerptResult>> {
+  for (const [path, group] of discoveryAtomsByPath(input, atoms)) {
+    if (traceWorkStopped(input)) break;
+    yield discoveryPathObservations(input, path, group);
+  }
 }
 
 async function discoveryExcerptObservations(
@@ -369,12 +389,8 @@ async function discoveryExcerptObservations(
 ): Promise<ReadonlyMap<EvidenceAtom, DiscoveryExcerptObservation>> {
   const observations = new Map(atoms.map((atom) => [atom, unavailableDiscoveryObservation(atom)]));
   if (traceWorkStopped(input)) return observations;
-  for (const [path, group] of discoveryAtomsByPath(input, atoms)) {
-    if (traceWorkStopped(input)) break;
-    const windows = await discoveryPathObservations(input, path, group);
-    for (const [index, atom] of group.entries()) {
-      const window = windows[index];
-      if (window === undefined) throw new TypeError("Missing discovery batch observation");
+  for await (const windows of discoveryPathReads(input, atoms)) {
+    for (const [atom, window] of windows) {
       observations.set(atom, retainDiscoveryObservation(input, atom, window));
     }
   }
@@ -879,28 +895,45 @@ async function contextualExcerptObservations(
   atoms: readonly EvidenceAtom[],
 ): Promise<readonly DiscoveryExcerptObservation[]> {
   const observations = new Map<EvidenceAtom, DiscoveryExcerptObservation>();
-  for (const group of discoveryAtomsByPath(input, atoms).values()) {
-    try {
-      for (const [atom, observation] of await discoveryExcerptObservations(input, group))
-        observations.set(atom, observation);
-    } catch (error) {
-      if (!contextualReadUnavailable(error)) throw error;
-      contextualUnavailableObservation(
-        input,
-        group.map((atom) => atom.stableId),
-      );
-    }
-  }
+  for await (const group of contextualPathReads(input, atoms))
+    for (const [atom, observation] of group) observations.set(atom, observation);
   return atoms.flatMap((atom) => {
     const observation = observations.get(atom);
     return observation === undefined ? [] : [observation];
   });
 }
 
+async function contextualPathObservations(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  group: readonly EvidenceAtom[],
+): Promise<ReadonlyMap<EvidenceAtom, DiscoveryExcerptObservation>> {
+  try {
+    return await discoveryExcerptObservations(input, group);
+  } catch (error) {
+    if (!contextualReadUnavailable(error)) throw error;
+    contextualUnavailableObservation(
+      input,
+      group.map((atom) => atom.stableId),
+    );
+    return new Map();
+  }
+}
+
+async function* contextualPathReads(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atoms: readonly EvidenceAtom[],
+): AsyncIterable<ReadonlyMap<EvidenceAtom, DiscoveryExcerptObservation>> {
+  for (const group of discoveryAtomsByPath(input, atoms).values())
+    yield contextualPathObservations(input, group);
+}
+
 function contextualReadUnavailable(error: unknown): boolean {
   return (
     error instanceof RepoSearchUnsupportedFileError &&
-    (error.reason === "file-unreadable" || error.reason === "io-error" || error.reason === "binary")
+    (error.reason === "file-unreadable" ||
+      error.reason === "io-error" ||
+      error.reason === "binary" ||
+      error.reason === "outside-range")
   );
 }
 
@@ -1548,14 +1581,24 @@ async function observedTargetFrontier(
   index: CodeIntelligenceIndex,
   capacity: number,
 ): Promise<{ readonly atoms: EvidenceAtom[]; readonly omitted: number }> {
-  const atoms: EvidenceAtom[] = [];
-  let consumed = 0;
-  while (consumed < targets.length && atoms.length < capacity) {
-    const pending = targets.slice(consumed, consumed + capacity - atoms.length);
-    consumed += pending.length;
-    atoms.push(...(await observedTargetBatch(input, pending, index)));
+  const state = { atoms: [] as EvidenceAtom[], consumed: 0 };
+  for await (const atoms of observedTargetBatches(input, targets, index, capacity, state))
+    state.atoms.push(...atoms);
+  return { atoms: state.atoms, omitted: targets.length - state.consumed };
+}
+
+async function* observedTargetBatches(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  targets: readonly ObservedBodyTarget[],
+  index: CodeIntelligenceIndex,
+  capacity: number,
+  state: { readonly atoms: EvidenceAtom[]; consumed: number },
+): AsyncIterable<readonly EvidenceAtom[]> {
+  while (state.consumed < targets.length && state.atoms.length < capacity) {
+    const pending = targets.slice(state.consumed, state.consumed + capacity - state.atoms.length);
+    state.consumed += pending.length;
+    yield observedTargetBatch(input, pending, index);
   }
-  return { atoms, omitted: targets.length - consumed };
 }
 
 async function nextDefinitionFrontier(
