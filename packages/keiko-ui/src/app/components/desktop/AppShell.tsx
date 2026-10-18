@@ -685,10 +685,17 @@ function filesBindingTargetIsCurrent(
   const edgePresent = connections.some(
     (edge) => edge.id === connection.id && edge.a === connection.a && edge.b === connection.b,
   );
-  const currentId =
-    chatIdFromWindow(windows?.find((win) => win.id === chatWindowId)) ??
-    chatWindowRuntimeTarget(chatWindowId)?.conversationId;
+  const currentId = mountedChatConversationId(windows, chatWindowId);
   return edgePresent && currentId === conversationId;
+}
+
+function mountedChatConversationId(
+  windows: readonly AppWindow[] | null | undefined,
+  windowId: string,
+): string | undefined {
+  const window = windows?.find((candidate) => candidate.id === windowId);
+  if (window?.type !== "chat") return undefined;
+  return chatIdFromWindow(window) ?? chatWindowRuntimeTarget(windowId)?.conversationId;
 }
 
 function pruneReleasedFilesConnections(
@@ -1740,8 +1747,8 @@ function AppShellInner(): ReactNode {
         const response = await fetchChats(projectPath, correlationId, chatId);
         if (!chatLookupTargetIsCurrent(target)) return undefined;
         if (chatLookupRequiresMountedWindow(target)) {
-          const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
-          if (chatIdFromWindow(currentWindow) !== chatId) return undefined;
+          if (mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) !== chatId)
+            return undefined;
         }
         const resolved = response.chats.find((candidate) => candidate.id === chatId);
         if (resolved === undefined || resolved.status === "closed") return undefined;
@@ -2434,16 +2441,18 @@ function AppShellInner(): ReactNode {
     const chatWindowId =
       connection.boundChatWindowId ??
       [connection.a, connection.b].find((id) => ws.winsById.get(id)?.type === "chat");
+    const chatId =
+      chatWindowId === undefined ? undefined : mountedChatConversationId(ws.wins, chatWindowId);
     if (
       chatWindowId === undefined ||
-      !releaseFailedChatScopeTransition(groundingMutationKey(chatWindowId), connection.id)
+      !releaseFailedChatScopeTransition(chatId ?? groundingMutationKey(chatWindowId), connection.id)
     )
       return;
     ws.api.removeConn(unownedFilesConnectionId, { unbind: false });
     reportFilesScopeDecision(newClientCorrelationId(), { decision: "released" });
     setUnownedFilesConnectionId(null);
     setSourceConnectionNotice(null);
-  }, [unownedFilesConnectionId, ws.api, ws.conns, ws.winsById, groundingMutationKey]);
+  }, [unownedFilesConnectionId, ws.api, ws.conns, ws.wins, ws.winsById, groundingMutationKey]);
 
   // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
   // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,

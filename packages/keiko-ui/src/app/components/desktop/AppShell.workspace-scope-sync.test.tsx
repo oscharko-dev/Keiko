@@ -295,8 +295,15 @@ async function storageReplay(
   });
 }
 
-async function mountAmbiguousFiles(): Promise<{ wins: AppWindow[]; conns: Connection[] }> {
+async function mountAmbiguousFiles(
+  runtimeOnly = false,
+): Promise<{ wins: AppWindow[]; conns: Connection[] }> {
   const initial = fixture(["/manuals/New"]);
+  if (runtimeOnly) {
+    const chatWindow = initial.wins.find((win) => win.type === "chat");
+    if (chatWindow === undefined) throw new TypeError("Missing Chat window");
+    delete chatWindow.cfg["chatId"];
+  }
   initial.wins.push(windowRecord("unconnected-files", "files", { root: "/unrelated" }));
   const conns: Connection[] = [
     { id: "edge-0", a: "files-0", b: "chat-window", boundScopeElided: true },
@@ -850,23 +857,36 @@ describe("AppShell canonical workspace scope synchronization", () => {
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
   });
 
-  it("lets the user forget an ambiguous connection without changing chat sources", async () => {
-    await mountAmbiguousFiles();
-    const canonical = mocks.serverChat;
-    await act(async () => mocks.workspace?.api.removeConn("edge-0"));
-    expect(chatScopeTransition("chat-1")).toBe("failed");
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Remove connection only; keep chat sources" }),
-    );
-    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
-    expect(chatScopeTransition("chat-1")).toBeUndefined();
-    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
-    expect(mocks.serverChat).toEqual(canonical);
-    expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
-      decision: "released",
-    });
-    expect(screen.queryByText(/cannot be restored uniquely/u)).not.toBeInTheDocument();
-  });
+  it.each([false, true])(
+    "lets the user forget an ambiguous connection without changing chat sources (runtimeOnly=%s)",
+    async (runtimeOnly) => {
+      const release = runtimeOnly
+        ? registerChatWindowRuntime("chat-window", {
+            conversationId: "chat-1",
+            projectPath: "/repo",
+          })
+        : (): void => undefined;
+      try {
+        await mountAmbiguousFiles(runtimeOnly);
+        const canonical = mocks.serverChat;
+        await act(async () => mocks.workspace?.api.removeConn("edge-0"));
+        expect(chatScopeTransition("chat-1")).toBe("failed");
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Remove connection only; keep chat sources" }),
+        );
+        await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
+        expect(chatScopeTransition("chat-1")).toBeUndefined();
+        expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+        expect(mocks.serverChat).toEqual(canonical);
+        expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+          decision: "released",
+        });
+        expect(screen.queryByText(/cannot be restored uniquely/u)).not.toBeInTheDocument();
+      } finally {
+        release();
+      }
+    },
+  );
 
   it("acknowledges an unchanged sanitized storage replay without scope writes or relationships", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale", "/manuals/Distinct"]);

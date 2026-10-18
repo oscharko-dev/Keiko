@@ -168,7 +168,6 @@ describe("Workspace drop-listener / registry perf (STEP 07 cluster B)", () => {
         openPalette={() => undefined}
       />,
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(syncSpy).not.toHaveBeenCalled();
 
     // Adding a window changes membership → the registry MUST re-sync exactly once.

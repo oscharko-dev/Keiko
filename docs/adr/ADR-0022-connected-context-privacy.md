@@ -265,6 +265,14 @@ promote that context to source evidence. System authority, citation validation a
 input/output grants remain unchanged. Existing final-prompt selection and gateway admission
 events describe the actual fitted source counts and token costs; ordering is not proof that a
 model answered correctly.
+Marker repair asks for a bounded JSON insertion plan rather than a regenerated answer. Each of
+at most 32 entries identifies unique original prose (at most 512 UTF-16 units) and a supported
+citation marker. The existing repair owner inserts markers at original coordinates, then runs
+the unchanged verbatim-content, code, assessment, token-boundary, sent-evidence and size guards.
+Ambiguous anchors, duplicate coordinates, extra schema fields and unsupported ranges fail
+closed. Existing literal marker-only responses remain compatible under those guards. This
+changes neither the turn's physical-attempt ceiling nor its remaining input/output/time grants;
+existing answer-details and reconciliation events record the actual disposition without bodies.
 When that budget requires shrinking a located excerpt, a complete matching line that fits the
 remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
 lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and

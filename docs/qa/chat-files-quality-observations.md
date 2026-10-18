@@ -1059,3 +1059,124 @@ existing retry then failed authority admission after expiry (HTTP 403); no secon
 request was sent. Shutdown canceled the outstanding automatic readiness probe. This is a failed
 fresh baseline, not historical replay or budget/citation acceptance. Subsequent diagnosis will
 retain the original limits and inspect actual prompt composition before proposing a correction.
+
+## Bounded citation annotation candidate and new independent inputs, 2026-10-18
+
+The observed long-code citation repair failure motivated a generic candidate: request only
+bounded marker insertion annotations instead of asking the model to reproduce its entire
+answer. The owning regression first rejected a valid annotation while retaining the uncited
+answer; after correction the existing repair owner constructs the candidate locally and still
+runs its original faithful-content and sent-evidence validation. The initial 71 repair controls
+pass, including code/assessment and token-splitting denials, ambiguous anchors, malformed plans,
+unsupported ranges, raw/constructed size ceilings, numeric authority and the 32-marker cap.
+Existing literal marker-only responses retain their original acceptance path. This is controlled
+handler evidence, not yet a native-model acceptance claim. Physical call, cumulative token and
+absolute deadline admission remain owned by the existing repair path.
+
+The new fulfillment held-out fixture has ten synthetic files (7,456 source bytes), a fixed-clock
+Java reservation service and a React replacement-request/abort component. Customer profile B
+requires Given/When/Then structure and names. Independently authored reference oracles passed
+on correct inputs (two Java, three React controls) and detected all five Java and six React
+mutations offline with unchanged test bytes. These reference tests validate the new inputs;
+they are not generated-model results and are excluded from skill effectiveness counts.
+A separate newly generated ordinary-folder corpus has exactly 100,000 files, three authoritative
+manuals, no Git metadata and a 72-level target. Its private witness binds the actual census and
+content-tree digest. Neither new input is represented as the missing historical fixture.
+
+After the large native prompt, the local MLX runner remained in `Stopping...` and failed the
+next readiness probe. All six planned React revision-four generations were refused before any
+answer returned (HTTP 400); zero suites ran or passed. Their watcher was stopped once every
+case was terminal. The local Ollama service was restarted through its existing service manager
+without configuration changes, and a fresh fully declared batch was started. Its first skill
+answer returned with five validated citations; unchanged output passed all nine tests and
+all five mutations. The remaining repetitions are pending and receive no passing credit.
+
+### Original-provider attribution correction
+
+A renewed direct read of #4017 established a setup mismatch in the first fresh source-budget
+trial: it used this lab's 300,000 ms provider timeout, whereas the historical issue records
+1,365,000 ms and a 2,760,000 ms transport request budget, with one retry. The actual failed
+receipt remains intact, with an explicit correction receipt beside it. Its token grants match,
+but it is not an original-provider-configuration qualification. References to an unchanged
+300-second limit mean the lab's configured limit only and do not establish #4017 acceptance.
+A subsequent fresh baseline must use the documented historical provider/transport values and
+still disclose the unavailable original history/corpus. No chronology or failure is overwritten.
+
+## Review-driven ownership refinement and gate corrections, 2026-10-18
+
+Four current-head review findings were checked against the implementation. The CI aggregate
+comment now describes only admitted runs, preserving the unchanged condition and all eight
+Zizmor anchors. The unnecessary zero-delay test timer was removed. An independently injected
+geometry-dependency regression still fails the existing performance control; Workspace was
+restored byte-for-byte afterward. The directory reader's status/publication helpers reduce its
+function size below the enforced limit, and the existing FilesWidget suppression count shrank
+from eight to seven. No new suppression was added.
+
+A valid runtime-only Chat control found a fresh-lookup guard that required a persisted cfg id
+instead of the mounted runtime identity. Once that earlier defect was corrected, the same
+control failed at the review's exact recovery assertion: the edge disappeared but its actual
+conversation's hold remained. Recovery and refresh now share the mounted identity resolver.
+The first draft of this fixture omitted runtime registration and is excluded from causal credit.
+The valid control and prior owning suites pass (279 controls across nine UI suites).
+
+The first expanded citation-repair prompt exhausted a small positive control's remaining
+input grant. It was shortened without increasing that grant; all 458 then-existing single,
+plural, hybrid and repair controls passed again. A new malformed-JSON control additionally
+proves that completed repair token spend and response count survive format failure. Invalid
+JSON propagates to the existing repair owner, which records its body-free failure; it is not
+silently swallowed or added to the observability exception register.
+
+A Sonar run was invalidated by source edits made during analysis (the server reported 221
+source lines against 227 analyzed). That was an execution error, not a clean scan. The fresh
+frozen-source rerun passed. An initial full quality run overlapped source corrections and was
+explicitly interrupted without a final quality claim; the final run must follow the frozen
+review repairs. The full Activity Log rerun passed all seven checks after propagating parse
+failure through its existing owner. Each earlier failed gate remains retained.
+
+The next core React sample passed TypeScript but failed three of nine tests on the correct
+subject by inventing an `output` ARIA role. It also retained zero validated citations after
+legacy content-changing repair. The candidate now explicitly requires actual accessible
+semantics and label queries instead of deriving roles from HTML tag names. This generic
+refinement is a new candidate; earlier outputs remain untouched. Held-out skill bytes and
+customer-profile revisions are captured before their separate native requests.
+
+Controlled retrieval-only runs on the new 100,000-file corpus selected the authoritative
+content-only manual and the exact 72-level manual. They read one file each (115/73 excerpt
+bytes) and took 17,567/22,673 ms while other checks were active. These are measured developer
+machine observations, not a latency-floor pass, browser/model answer or historical-corpus replay.
+
+### Independent audit and frozen review increment
+
+The independent read-only auditor reproduced three additional source lifecycle gaps at
+`c4c0ec757c0973dcf5ccc2ce5c9ce38582c35569`. All three also fail in a separate developer-owned
+snapshot of the current candidate: first Files bind lacks a pending admission hold; returning to
+the acknowledged root after a failed navigation skips fresh reconciliation; switching away and
+back can leave a failed hold without its connection's recovery path. These findings remain open
+for the next causal repair increment. Pending operations, independent sources and canonical
+server authority must remain protected throughout those repairs.
+
+The current frozen implementation passes separate root typecheck, lint and format checks,
+all seven Activity Log checks, architecture checks, the existing retrieval/grounded/faithfulness/
+context gates, and the real local Sonar analyzer. The pinned Node 24.18.0 production UI export
+contains 22 first-load scripts totaling 347,980 gzip bytes against the unchanged 349,184-byte
+ceiling. Editor isolation, runtime/worker evidence, updater evidence and E2E wiring checks pass.
+The full quality coverage chain is running; it is not yet a completed quality result.
+
+Exact-head CI exposed two stale generated inventories introduced with the lazy PDF helper:
+the support code inventory omitted its module and the UI source count remained 535 instead of 536. Both owning inventory controls failed locally before repair. The governed generator and
+source-inventory-only refresh restore 77 passing controls without lowering coverage floors,
+changing measured coverage values or adding exceptions. These failures and their logs are retained.
+
+The completed React v5 batch has three matched pairs. Two skill outputs pass all nine tests on
+the correct subject and detect all five independent mutants; the other skill output fails three
+of nine tests on the correct subject (invented accessible role) and receives no mutation credit.
+All three controls fail the correct subject (2/5, 2/4 and 3/5 failed tests). These unchanged native
+outputs remain separate from the newer accessible-semantics instruction candidate.
+
+The first held-out fulfillment driver resolved its fixture from the held runtime checkout and
+failed before any model request. That setup attempt is retained as not started. Corrected v2
+uses the authoring fixture while retaining the clean runtime source hold and captures all skill
+and customer-profile bytes before requests. Its first Java skill answer passes 15 tests on the
+correct subject and detects four of five independent mutants; the upper-quantity boundary mutant
+survives. This is an explicit defect-detection gap, not full skill qualification. Further paired
+runs and semantic/citation inspection remain pending.

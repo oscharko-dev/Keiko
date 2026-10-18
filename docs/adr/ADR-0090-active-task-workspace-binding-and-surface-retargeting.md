@@ -153,6 +153,10 @@ When a human explicitly forgets a failed ambiguous Files edge while retaining ca
 sources, only that edge's failed admission hold is released. Pending mutations refuse this recovery
 action, and independent source holds remain unchanged. Release evidence uses the original intent
 correlation on the existing body-free Files scope-decision log.
+While the Chat window remains mounted, its published runtime conversation identity is authoritative
+when the persisted cfg id is absent. Source refresh revalidates that identity after asynchronous
+lookup, and failed-edge recovery releases the hold under the same conversation id. A closed or
+retargeted window cannot reuse an old runtime identity.
 Explicit Editor root changes
 reuse project registration and require current workspace membership before committing
 the canonical root, including ordinary folders without Git, so local history retains

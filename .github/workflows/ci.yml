@@ -1132,8 +1132,8 @@ jobs:
 
   ci:
     name: ci
-    # `always()`, not `!cancelled()`: the required aggregate reports on every run, a cancelled one
-    # included, and fails closed there. It waits on its needs, so it holds a run open only briefly.
+    # `always()`, not `!cancelled()`: admitted runs report even when a need is cancelled and fail
+    # closed. Closed PR events are excluded below; admitted runs wait briefly on their needs.
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     needs:
       - change-scope

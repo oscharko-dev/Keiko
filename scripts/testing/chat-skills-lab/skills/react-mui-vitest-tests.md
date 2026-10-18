@@ -37,6 +37,8 @@ Check the resulting file against the chosen naming, structure, mock policy and m
    then assert on `output`. Never pass a `findBy` promise to an element matcher. If the contract
    requires the exact returned value, use `expect(output.textContent).toBe(expectedResult)`;
    a substring assertion cannot prove that result. Apply this rule to success and retry cases.
+   An HTML tag name is not automatically an ARIA role: use actual accessible semantics. For a
+   labelled output element, query its accessible label instead of inventing an `"output"` role.
 
 Use this blank-safe interaction when replacing text, adapting the names to the actual test:
 

@@ -188,6 +188,20 @@ interface DirectoryState {
   readonly notice: "no-root" | null;
 }
 
+function directoryReadState(
+  previous: DirectoryState | undefined,
+  patch: Partial<DirectoryState>,
+): DirectoryState {
+  return {
+    entries: previous?.entries ?? [],
+    truncated: previous?.truncated ?? false,
+    loading: false,
+    error: null,
+    notice: null,
+    ...patch,
+  };
+}
+
 interface GitStatusState {
   readonly loading: boolean;
   readonly status: GitRepositoryStatusResponse | null;
@@ -1082,22 +1096,52 @@ export function FilesWidget({
     [observeRoot],
   );
 
+  const patchDirectory = useCallback((path: string, patch: Partial<DirectoryState>): void => {
+    setDirectories((current) => ({
+      ...current,
+      [path]: directoryReadState(current[path], patch),
+    }));
+  }, []);
+  const publishDirectoryRead = useCallback(
+    (path: string, response: FilesTreeResponse): void => {
+      touchDirectoryAccess(path);
+      setDirectories((current) =>
+        pruneDirectoryCache(
+          {
+            ...current,
+            [path]: directoryReadState(undefined, {
+              entries: response.entries,
+              truncated: response.truncated,
+            }),
+          },
+          directoryAccessOrderRef.current,
+          pinnedDirectoryPaths(
+            new Set([...expandedRef.current, currentDirectoryRef.current ?? ""]),
+          ),
+        ),
+      );
+    },
+    [touchDirectoryAccess],
+  );
+  const failDirectoryRead = useCallback(
+    (path: string, error: unknown): void => {
+      const refusal = directoryRefusalMessage(error, tGit);
+      patchDirectory(path, {
+        error: refusal ?? t("filesWidget.error.unableToReadFolder"),
+        expectedRefusal: refusal !== null,
+        correlationId: correlationIdOf(error),
+      });
+    },
+    [patchDirectory, t, tGit],
+  );
+
   const loadDirectory = useCallback(
     async function readDirectory(path: string, fresh = false): Promise<void> {
       const requestSeq = directoryLoadSeqRef.current;
       const requestRoot = apiRoot;
       const requestResolvedRoot = observedRootRef.current?.resolved;
       if (apiRoot.length === 0) {
-        setDirectories((current) => ({
-          ...current,
-          [path]: {
-            entries: [],
-            truncated: false,
-            loading: false,
-            error: null,
-            notice: "no-root",
-          },
-        }));
+        patchDirectory(path, { entries: [], truncated: false, notice: "no-root" });
         return;
       }
       const owner = claimDirectoryRead(directoryReadOwnersRef.current, path);
@@ -1105,16 +1149,7 @@ export function FilesWidget({
         requestSeq !== directoryLoadSeqRef.current ||
         requestRoot !== apiRootRef.current ||
         !owner.isCurrent();
-      setDirectories((current) => ({
-        ...current,
-        [path]: {
-          entries: current[path]?.entries ?? [],
-          truncated: current[path]?.truncated ?? false,
-          loading: true,
-          error: null,
-          notice: null,
-        },
-      }));
+      patchDirectory(path, { loading: true });
       try {
         const { response, correlationId } = await readSharedFilesTree(
           apiRoot,
@@ -1138,47 +1173,22 @@ export function FilesWidget({
           })
         )
           return;
-        touchDirectoryAccess(path);
-        setDirectories((current) => {
-          const next = {
-            ...current,
-            [path]: {
-              entries: response.entries,
-              truncated: response.truncated,
-              loading: false,
-              error: null,
-              notice: null,
-            },
-          };
-          // GEN-PERF-MEMORY-005 — bound the cache, pinning the visible expanded chain.
-          return pruneDirectoryCache(
-            next,
-            directoryAccessOrderRef.current,
-            pinnedDirectoryPaths(
-              new Set([...expandedRef.current, currentDirectoryRef.current ?? ""]),
-            ),
-          );
-        });
+        publishDirectoryRead(path, response);
       } catch (error: unknown) {
         if (isStale()) return;
-        const refusal = directoryRefusalMessage(error, tGit);
-        setDirectories((current) => ({
-          ...current,
-          [path]: {
-            entries: current[path]?.entries ?? [],
-            truncated: current[path]?.truncated ?? false,
-            loading: false,
-            error: refusal ?? t("filesWidget.error.unableToReadFolder"),
-            expectedRefusal: refusal !== null,
-            correlationId: correlationIdOf(error),
-            notice: null,
-          },
-        }));
+        failDirectoryRead(path, error);
       } finally {
         owner.release();
       }
     },
-    [apiRoot, observeDirectoryRoot, takeNavigationRead, t, tGit, touchDirectoryAccess],
+    [
+      apiRoot,
+      observeDirectoryRoot,
+      takeNavigationRead,
+      patchDirectory,
+      publishDirectoryRead,
+      failDirectoryRead,
+    ],
   );
 
   useEffect(() => {

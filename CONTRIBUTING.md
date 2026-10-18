@@ -115,6 +115,10 @@ multi-source marker repair; hybrid repair already appends its task. Governed mem
 continuity remain untrusted context inside that unchanged task block. Existing final-prompt
 selection and gateway admission record fitted counts and costs; citation validation and
 original input/output grants remain authoritative.
+Marker repair requests bounded insertion annotations anchored by unique original prose, so
+models need not copy generated code. The existing owner constructs the candidate and reuses
+all unchanged marker-only, code/assessment, fitted-evidence and cumulative-budget validation.
+Literal marker-only responses remain compatible under the same checks.
 Endpoint definition traversal binds a registration's observed handler reference to its current
 lexical AST target. Further calls retain their exact callable owner and complete observed spans;
 same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -743,6 +747,8 @@ resolves elsewhere, outstanding child reads cannot restore its previous tree or 
 Explicitly forgetting an ambiguous failed connection while retaining canonical Chat sources
 releases that edge's failed admission hold only. Pending source work cannot be forgotten through
 this recovery action; unrelated source holds remain in force.
+A mounted Chat's runtime conversation identity remains valid before its window cfg id persists;
+refresh admission and failed-edge recovery resolve that same identity.
 
 The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
 `request-superseded`, joined to directory-read correlations without paths or source bodies.

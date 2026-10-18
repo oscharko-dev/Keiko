@@ -869,7 +869,7 @@
       "count": 3
     },
     "max-lines-per-function": {
-      "count": 8
+      "count": 7
     }
   },
   "src/app/components/desktop/widgets/cards/GitDeliveryActionSheetCard.tsx": {

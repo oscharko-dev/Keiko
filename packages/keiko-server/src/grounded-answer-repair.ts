@@ -23,7 +23,7 @@ import {
   reconcileInlineCitations,
   reconcileNumericCitations,
 } from "./grounded-faithfulness.js";
-import { fitsCitationRepairTextLimit, validateCitationRepair } from "./grounded-citation-repair.js";
+import { citationRepairContent, fitsCitationRepairTextLimit } from "./grounded-citation-repair.js";
 
 export interface GroundedRepairContext {
   readonly numericMarkers?: ReadonlySet<number> | undefined;
@@ -112,16 +112,17 @@ function combinedRepairAnswer(
   const index = buildPackCitationIndex(
     ctx.answer.sentEvidencePacks ?? (ctx.pack === undefined ? [] : [ctx.pack]),
   );
-  const accepted =
-    repaired.modelInvoked !== false &&
-    validateCitationRepair(ctx.answer.content, repaired.content, index, ctx.numericMarkers);
+  const content =
+    repaired.modelInvoked === false
+      ? undefined
+      : citationRepairContent(ctx.answer.content, repaired.content, index, ctx.numericMarkers);
   return {
-    disposition: accepted ? "applied" : "rejected-content-changed",
+    disposition: content === undefined ? "rejected-content-changed" : "applied",
     answer: {
       ...ctx.answer,
-      ...(accepted
-        ? { content: repaired.content, citationBehaviour: "cites-after-repair" as const }
-        : {}),
+      ...(content === undefined
+        ? {}
+        : { content, citationBehaviour: "cites-after-repair" as const }),
       ...combinedGroundedSynthesisFields(ctx.answer, repaired),
     },
   };
@@ -134,15 +135,17 @@ export async function repairGroundedAnswer(
   if (disposition !== undefined) return { answer: ctx.answer, disposition };
   const repair = repairInvoker(ctx);
   if (repair === undefined) return { answer: ctx.answer, disposition: "skipped-capability" };
+  let repaired: GroundedAnswerResult | undefined;
   try {
-    const repaired = normalizeGroundedAnswerPayload(
-      await repair(ctx.answer.content, repairOptions(ctx)),
-    );
+    repaired = normalizeGroundedAnswerPayload(await repair(ctx.answer.content, repairOptions(ctx)));
     return combinedRepairAnswer(ctx, repaired);
   } catch (error_) {
     if (ctx.deps.signal?.aborted === true) throw error_;
     return {
-      answer: retainFailedGroundedSynthesis(ctx.answer, ctx.deps.answerer),
+      answer:
+        repaired === undefined
+          ? retainFailedGroundedSynthesis(ctx.answer, ctx.deps.answerer)
+          : { ...ctx.answer, ...combinedGroundedSynthesisFields(ctx.answer, repaired) },
       disposition: "failed",
       failure: error_,
     };

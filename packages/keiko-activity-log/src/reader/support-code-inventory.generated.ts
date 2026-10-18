@@ -2141,6 +2141,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-ui/app/components/desktop/widgets/cards/git-client/sync-outcome",
   "keiko-ui/app/components/desktop/widgets/cards/git-repository-state-events",
   "keiko-ui/app/components/desktop/widgets/cards/pdf-citation-preview-session",
+  "keiko-ui/app/components/desktop/widgets/cards/pdf-citation-preview-workspace",
   "keiko-ui/app/components/desktop/widgets/cards/shared/diffParser",
   "keiko-ui/app/components/desktop/widgets/cards/shared/diffView",
   "keiko-ui/app/components/desktop/widgets/cards/shared/syntaxHighlight",

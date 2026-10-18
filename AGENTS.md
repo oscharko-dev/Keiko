@@ -468,6 +468,10 @@ system that exists, never beside it:
   continuity remain untrusted context inside that unchanged task block. Existing final-prompt
   selection and gateway admission record fitted counts and costs; citation validation and
   original input/output grants remain authoritative.
+  Marker repair requests at most 32 unique-prose insertion annotations instead of regenerating
+  the answer. The existing repair owner constructs the candidate locally, then applies the
+  unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
+  Literal marker-only responses remain subject to those same guards.
   Endpoint definition traversal binds a registration's observed handler reference to its current
   lexical AST target. Further calls retain their exact callable owner and complete observed spans;
   same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -828,6 +832,8 @@ system that exists, never beside it:
   Activity Log under their directory-read correlation, without paths or contents.
   Explicitly forgetting a failed Files edge releases only its own failed admission hold;
   pending work and independent source holds remain protected.
+  A mounted Chat may establish its conversation through the existing runtime before its id is
+  persisted in window cfg; refresh admission and failed-edge recovery use that same live identity.
   Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
   retains per-source pending/failed admission holds and releases only the current accepted token;
   drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision
