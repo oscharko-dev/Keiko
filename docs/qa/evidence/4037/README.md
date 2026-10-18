@@ -22,6 +22,15 @@ inherited 96-criterion ledger.
   under concurrent local work is an observation, not latency qualification.
 
 Raw source/prompt/answer content, provider locations and credentials stay outside the checkout.
+
+`github-pr-lifecycle.json` records a separate native GitHub fixture with the three product job
+name/admission expressions copied verbatim. Open and reopened runs publish canonical required
+names; closed metadata edits and a rerun of that closed payload skip the jobs without those names.
+GitHub labels skipped jobs with their unexpanded name expressions. The initial expectation of
+literal inactive labels failed and is retained. These results qualify name/admission semantics,
+not the complete product matrix or strict merge-candidate verification. The isolated fixture PR
+is closed without merging; product delivery remains governed by PR #4046.
+
 The existing Chat skills lab owns runtime pairing, selected-skill import/accounting, real product
 requests and offline execution. Private run receipts preserve failed setup, transport, interrupted
 and unavailable-history attempts. Fresh recreated environments never establish a byte-exact

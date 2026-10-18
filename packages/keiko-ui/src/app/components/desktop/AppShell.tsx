@@ -556,6 +556,7 @@ function filesScopeOwnerKey(
 }
 
 interface FilesPatchAcknowledgement {
+  persistenceEntered?: boolean;
   chat?: Chat;
   scope?: ChatConnectedScope;
 }
@@ -1807,9 +1808,11 @@ function AppShellInner(): ReactNode {
       current: readonly ChatConnectedScope[],
       attempt: ChatMutationAttempt,
       target: ChatBindingTarget | undefined,
+      acknowledgement: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
       rememberGroundingChat(chat);
       if (ownedScope === null) return true;
+      acknowledgement.persistenceEntered = true;
       const persisted = await persistCurrentChatScopes(
         target,
         attempt,
@@ -1920,7 +1923,14 @@ function AppShellInner(): ReactNode {
           : removeConnectedScope(canonicalScopes, ownedScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isScopeConnected(current, nextScope)) {
-        return retainConnectedFilesScope(chat, ownedScope, current, attempt, target);
+        return retainConnectedFilesScope(
+          chat,
+          ownedScope,
+          current,
+          attempt,
+          target,
+          acknowledgement,
+        );
       }
       const cap = totalSourceCap(groundingLimits);
       if (current.length + lkScopes.length >= cap) {
@@ -1934,6 +1944,7 @@ function AppShellInner(): ReactNode {
       if (next === current) {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
+      acknowledgement.persistenceEntered = true;
       const persisted = await persistCurrentChatScopes(
         target,
         attempt,
@@ -2015,16 +2026,22 @@ function AppShellInner(): ReactNode {
       binding: FilesScopeIntentInput,
     ): ReturnType<typeof beginChatScopeTransition> & { readonly requireRecovery: () => void } => {
       const { chatWindowId, chatKey, target, connectionId, nextScope, acknowledgement } = binding;
+      const sourceId =
+        connectionId ?? `bind:${chatWindowId}:${target?.sourceWindowId ?? chatWindowId}`;
+      const initial =
+        connectionId === undefined && chatScopeSourceTransition(chatKey, sourceId) === undefined;
       let recoveryRequired = false;
+      let refusedBeforeWrite = false;
       const transition = beginChatScopeTransition(
         chatKey,
-        connectionId ?? `bind:${chatWindowId}:${target?.sourceWindowId ?? chatWindowId}`,
+        sourceId,
         (): boolean =>
-          recoveryRequired ||
-          groundingMutationQueueRef.current.blocked.has(chatKey) ||
-          (groundingOwnerMountedRef.current &&
-            (target?.isCurrent() ?? true) &&
-            mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) === chatKey),
+          !refusedBeforeWrite &&
+          (recoveryRequired ||
+            groundingMutationQueueRef.current.blocked.has(chatKey) ||
+            (groundingOwnerMountedRef.current &&
+              (target?.isCurrent() ?? true) &&
+              mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) === chatKey)),
         (): string | undefined =>
           filesScopeOwnerKey(
             chatWindowId,
@@ -2034,6 +2051,16 @@ function AppShellInner(): ReactNode {
       );
       return {
         ...transition,
+        settle(accepted): void {
+          // A clean initial refusal leaves no changed source or edge requiring recovery.
+          refusedBeforeWrite =
+            !accepted &&
+            initial &&
+            !acknowledgement.persistenceEntered &&
+            !recoveryRequired &&
+            !groundingMutationQueueRef.current.blocked.has(chatKey);
+          transition.settle(accepted);
+        },
         requireRecovery(): void {
           recoveryRequired = true;
         },

@@ -1315,3 +1315,52 @@ unchanged correct-subject outputs at compilation, with no XML reports or mutatio
 selection omitted the approved conventions document; this remains a retrieval defect to repair
 before another native qualification. It cannot be cured by adding fixture-specific APIs to the
 customer skill or by reclassifying compilation failures as successful tests.
+
+### Unicode repair boundaries and native workflow lifecycle
+
+The auditor reproduced annotations that split a UTF-16 surrogate pair or a supplementary-plane
+word. The same weakness affects legacy marker-only responses. Eleven negative controls fail
+before the repair, including emoji joiner/skin-tone/flag boundaries; three healthy controls pass.
+The existing shared validator now checks bounded grapheme boundaries using the standard runtime
+segmenter and checks adjacent complete code points for its unchanged word/separator restrictions.
+All 68 owning controls pass. Code, assessment, sent-evidence, insertion-count, text-size and
+cumulative physical-attempt usage guards retain their existing owners. Existing repair rejection
+and completion evidence records the changed verdict without recording response text.
+
+A separate native GitHub fixture copies the three product job-name/admission expressions exactly.
+Open and reopened runs on the same signed head publish all three canonical required names. Closed
+metadata edits and rerunning the retained closed payload skip those jobs and publish none of those
+names. GitHub's actual skipped-job name is the unexpanded expression; the initial literal inactive
+label expectation failed and is retained. `evidence/4037/github-pr-lifecycle.json` binds the source,
+fixture hashes, attempts, native run IDs, names and conclusions. Independent audit confirms the
+deployed fixture bytes and observed check names. The fixture PR is closed without merge. This is
+native lifecycle/name evidence, not a replacement for the product's full matrix or strict candidate
+identity checks.
+
+The owner also accepted the customer updater regression as #4047, a child of #4037. Screenshots
+show a setup-only portable state labelled as an available update. The existing UI test explicitly
+expects that misleading title; changing its expectation reproduces the failure. Investigation and
+implementation use an isolated checkout while the Chat delivery head is measured. Browser/Draft
+work remains under #4043. All additional update/version/cache/setup/packaged-restart/SSD acceptance
+criteria remain open; no customer installation is replaced during isolated qualification.
+
+### Initial source-cap refusal
+
+An actual Files-to-Chat gesture at the existing source ceiling produced no PATCH, changed no
+canonical source and created no edge, but left a failed send-admission hold. Its new regression
+fails on the delivered implementation. The existing intent owner now releases only a previously
+clean, new edge-less request refused before entering persistence, with no recovery requirement or
+blocked mutation queue. The existing registry emits `released`, never a fabricated acceptance.
+A second real-gesture control first establishes late canonical acknowledgement plus failed
+compensation, then retries the identical bind key with an unavailable canonical lookup: that
+uncertainty still blocks sends. All 55 initial owning controls pass in the isolated candidate. Four additional controls preserve
+unrelated pending/failed holds, a prior same-key pending hold and a newer same-key token. The final
+59 AppShell and ten registry controls pass together. Independent audit passes its 282-control
+AppShell/session/registry selection. Final exact-head CI and native qualification remain required.
+
+A captured canonical Voice request for conversation A survives navigation to B as ADR-0154
+requires. The auditor also found that a later A source intent reaches only runtimes currently
+displaying A. Real server handler controls reject changed source identities and prevent stale
+persistence; terminal captured-Voice controls do not retry into new authority. These safe outcomes
+do not establish the immediate client cancellation required by #4040. That request-ownership
+boundary remains open and will be repaired separately with a navigation-survival countercontrol.

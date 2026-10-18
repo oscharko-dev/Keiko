@@ -12,6 +12,7 @@ const REPAIR_TEXT_MAX = 131_072;
 const INSERTION_MAX = 32;
 const MARKER_BODY_LENGTH_RE = /^.{1,512}$/su;
 const PADDING_MAX = 16;
+const REPAIR_GRAPHEMES = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 export function fitsCitationRepairTextLimit(text: string): boolean {
   return text.length <= REPAIR_TEXT_MAX;
@@ -139,14 +140,41 @@ function paddingEnd(text: string, offset: number): number {
   return end;
 }
 
+function previousCodePoint(text: string, offset: number): string {
+  return Array.from(text.slice(Math.max(0, offset - 2), offset)).at(-1) ?? "";
+}
+
+function nextCodePoint(text: string, offset: number): string {
+  const point = text.codePointAt(offset);
+  return point === undefined ? "" : String.fromCodePoint(point);
+}
+
+function splitsGrapheme(text: string, offset: number): boolean {
+  return (
+    offset > 0 &&
+    offset < text.length &&
+    REPAIR_GRAPHEMES.segment(text).containing(offset)?.index !== offset
+  );
+}
+
 function splitsSubstantiveToken(text: string, offset: number): boolean {
+  if (splitsGrapheme(text, offset)) return true;
   const word = /[\p{L}\p{M}\p{N}_$]/u;
   const separator = /[.,/:\\-]/u;
-  const before = text.charAt(offset - 1);
-  const after = text.charAt(offset);
+  const before = previousCodePoint(text, offset);
+  const after = nextCodePoint(text, offset);
   if (word.test(before) && word.test(after)) return true;
-  if (word.test(before) && separator.test(after) && word.test(text.charAt(offset + 1))) return true;
-  return separator.test(before) && word.test(text.charAt(offset - 2)) && word.test(after);
+  if (
+    word.test(before) &&
+    separator.test(after) &&
+    word.test(nextCodePoint(text, offset + after.length))
+  )
+    return true;
+  return (
+    separator.test(before) &&
+    word.test(previousCodePoint(text, offset - before.length)) &&
+    word.test(after)
+  );
 }
 
 function unchangedWithInsertions(

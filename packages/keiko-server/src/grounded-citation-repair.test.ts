@@ -284,3 +284,45 @@ describe("bounded marker-only citation repair", () => {
     expect(prompt).toContain("[path:line-range]");
   });
 });
+
+it.each([
+  ["𝒜uthorizedValue is preserved.", "𝒜"],
+  ["Q𝒜Value is preserved.", "Q"],
+  ["𝒜Value is preserved.", "\ud835"],
+  ["The 😀 icon is preserved.", "The \ud83d"],
+])("rejects annotation splitting a Unicode token or scalar: %s", (original, after) => {
+  expect(citationRepairContent(original, annotationResponse(after), index)).toBeUndefined();
+});
+
+it.each(["𝒜uthorizedValue", "😀"])(
+  "preserves complete Unicode text at a prose boundary: %s",
+  (value) => {
+    const original = `${value} is preserved.`;
+    expect(citationRepairContent(original, annotationResponse(original), index)).toBe(
+      original + " [src/Feature.ts:3]",
+    );
+  },
+);
+
+it.each([
+  ["𝒜uthorizedValue is preserved.", "𝒜"],
+  ["Q𝒜Value is preserved.", "Q"],
+  ["𝒜Value is preserved.", "\ud835"],
+  ["The 😀 icon is preserved.", "The \ud83d"],
+])("legacy marker-only repair rejects the same Unicode split: %s", (original, after) => {
+  const offset = original.indexOf(after) + after.length;
+  const candidate = original.slice(0, offset) + " [src/Feature.ts:3]" + original.slice(offset);
+  expect(validateCitationRepair(original, candidate, index)).toBe(false);
+});
+
+it.each([
+  ["The 👩🏽‍💻 icon is preserved.", "The 👩"],
+  ["The 👩🏽‍💻 icon is preserved.", "The 👩🏽‍"],
+  ["The 🇩🇪 flag is preserved.", "The 🇩"],
+  ["The e\u0301 mark is preserved.", "The e"],
+])("rejects both protocols inside a complete grapheme in %s", (original, after) => {
+  expect(citationRepairContent(original, annotationResponse(after), index)).toBeUndefined();
+  const offset = after.length;
+  const legacy = original.slice(0, offset) + " [src/Feature.ts:3]" + original.slice(offset);
+  expect(validateCitationRepair(original, legacy, index)).toBe(false);
+});
