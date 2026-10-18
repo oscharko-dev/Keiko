@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-18T08:12:08.843802+00:00",
+  "recordedAt": "2026-10-18T18:34:54.486374+00:00",
   "classification": "bounded observations; no epic acceptance or native current-head qualification",
   "boundaries": [
     "Raw prompts, source bodies, answers, credentials and provider locations remain outside the checkout.",
@@ -2687,6 +2687,668 @@
           "allDeclaredMutantsDetected": false
         }
       ]
+    },
+    {
+      "id": "generation-reservation-unit-v1",
+      "classification": "fresh predeclared synthetic Spring service unit fixture; completed twelve-case matched comparison, no final skill acceptance or superiority; not missing historical replay",
+      "sourceHead": "3fdde3b4774938dbae167c4be33841fcc3781f1a",
+      "sourceDiffDigest": "f9795a0ff342fb5b2e762c08a2d8e80f72efd65eda43cf60fd5639183b2ed25f",
+      "fixture": "reservation-unit-heldout-v1",
+      "fixtureDigest": "393739f00a85ed679104a3ff1f5594375126d1c209cc57dc588a47ed4c5184c0",
+      "model": "gemma-4-31b-it",
+      "contextWindow": 131072,
+      "physicalOutputGrant": 8192,
+      "inputGrant": 118784,
+      "providerTimeoutMs": 1365000,
+      "providerMaxRetries": 1,
+      "transportTimeoutMs": 2760000,
+      "repetitions": 3,
+      "pairedControls": true,
+      "profileMatchedControls": true,
+      "profiles": [
+        {
+          "id": "aaa",
+          "names": "English camelCase method names describing expected behavior",
+          "structure": "Arrange/Act/Assert with explicit Arrange, Act and Assert sections",
+          "skillDigest": "0447b2fbcef56878ea0f2be5e963fb0170e6c1da809f73b82da0bdc8d2136ae4",
+          "questionDigest": "283e86b78ca71c1de5693f7bbc24dba236580e0fa350a803cbd03c1e869676f6"
+        },
+        {
+          "id": "gwt",
+          "names": "English given_context_when_action_then_outcome snake_case method names",
+          "structure": "Given/When/Then with explicit Given, When and Then sections",
+          "skillDigest": "f279bdfc8daffd309106d4ad07227c57703e1031b3839bc35b79896f54f15a65",
+          "questionDigest": "c15490f9d8f5103b5c70e61ba9c9de56813bc48172f0014f3ecb90b048dda647"
+        }
+      ],
+      "cases": [
+        {
+          "id": "java-aaa-skill-1",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "ff3f447863795ef2da0067f4d3a92bbed4ff45f2c32fe01cd3c2a64987231de7",
+          "outputBytes": 9127,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "eb2671031dbfd0833a50656003bf8ea93f8712f9bd494639b7bde6005d9cf506",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2888
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          },
+          "profileFailure": "eleven-test-methods-violate-camelCase"
+        },
+        {
+          "id": "java-aaa-control-1",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "a196349d6b67e75d23e5c6a125f16d6f34a3b800c5cfa15679011d614c0b9aaf",
+          "outputBytes": 8147,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "6a360f370e8cdeff6172baf8e3922f06d40a32c6b76e5979d9942af2d199fe3a",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 15,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-control-2",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "304e2d4f75ef73f0ce2aa34c19d23348cdb1f398ea751fc95ec0b55e47dadd85",
+          "outputBytes": 7722,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "8fae640735c976db31e9d616a6bbb974e250c2cb43ff7bd8c748d1be0ad1fb37",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-skill-2",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "2f27afc4b64d3c6aabc6ec16c02e0490e3393d1791607255047104b4cd2e795e",
+          "outputBytes": 8139,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "6983fa53567d115145ef805b963ca7c4525458f1c559e322c6b3c2bf1451457d",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2888
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 22,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-skill-3",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "ace6d8360f876ae67db470ec76df7b810d7937773116b05abaf9563feb6aab51",
+          "outputBytes": 8060,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "03efe75896fb1a62240a9a84a9e0566b1261ff30128fd5d9593926f4ef97405d",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2888
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 20,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-control-3",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "f2fd73f6ae89fe36b7df70ae8c10626f6f2b029700e0e382c60b245fc82dfdaf",
+          "outputBytes": 6861,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "77cf4fc727796d0a3ea0d4fb970927b39fe415909797196b2ac0b74a45fdbb20",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-skill-1",
+          "profile": "gwt",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "9a49d9afea1cb10226654ee89e649aba5816b9aa247b2d713319b1a29ba0de26",
+          "outputBytes": 6490,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "3967eb41cb4206cbb29fd4b47ef3d5972d2922e849ac88726526419c9dee551d",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2889
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 18,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-control-1",
+          "profile": "gwt",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "7b99f61b4eae836b5a12cc1dbd74332cd01416c197d44c59de6f93ca5a5e21e9",
+          "outputBytes": 6481,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "a2ff5dc87763e01de6b887bad16cb2408ed2a3d2351db447f89ef0f8f56e7fa4",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": ["discount-too-early"]
+          }
+        },
+        {
+          "id": "java-gwt-control-2",
+          "profile": "gwt",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "d21365dd619080c241324add53411606f41693b557a73c306399ca2b289f5159",
+          "outputBytes": 6910,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "8941b09c258d11197ccff7556e2a2c0ed97d2b2f439293f72f7b5ffd20921e7a",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-skill-2",
+          "profile": "gwt",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "aeed4a40c0f5a8dc1a74aca30c4ee01629ccb04ad1560d7c6d3ffa1738600bcd",
+          "outputBytes": 7076,
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "5d5238b0482dc3d84aa26892988dedb508ee2f40f0fc63c8856325cfda62b72c",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2889
+          },
+          "correctSubject": {
+            "exitCode": 1,
+            "tests": 14,
+            "failures": 0,
+            "errors": 1,
+            "skipped": 0,
+            "baselineEligible": false
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 0,
+            "detected": [],
+            "survived": []
+          },
+          "failureClass": "invalid-blank-CsvSource-record-before-application-assertion"
+        },
+        {
+          "id": "java-gwt-skill-3",
+          "profile": "gwt",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "0e8f71ce12819d33870185d0ddb29881ac78208525d308a796b4fc03413a5b89",
+          "outputBytes": 6171,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "3e792e5c789894283eb4c8562da650e41ea3b4e0c5d4701c3bfd10b8a5ba07f7",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2889
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-control-3",
+          "profile": "gwt",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "efebe12477917c55907ae06d7f58e75bddadc09176bfa91fac95514d8761ef76",
+          "outputBytes": 6008,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "b3cff4150c8e4c41c07dd2960e6167f2f3d43feb1c505626eab9ae9829b76c8e",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        }
+      ],
+      "comparison": {
+        "selectedCorrectSubjects": 5,
+        "selectedPlanned": 6,
+        "controlCorrectSubjects": 6,
+        "controlPlanned": 6,
+        "selectedExecutedDeclaredMutants": 30,
+        "selectedPlannedDeclaredMutants": 36,
+        "selectedDetectedDeclaredMutants": 30,
+        "controlExecutedDeclaredMutants": 36,
+        "controlDetectedDeclaredMutants": 35,
+        "roundingModeMutantInFrozenScore": false,
+        "roundingAcceptance": "not-qualified",
+        "completeProfileAcceptance": "not-qualified",
+        "skillAcceptance": "failed"
+      },
+      "reviewLimits": [
+        "No output is repaired or replaced. Correct-subject failure receives no mutant credit.",
+        "The last GWT control (java-gwt-control-3) uses two observed physical calls under the same cumulative8192 output grant; no actual compaction was observed.",
+        "Literal profile screens require semantic review of shared setup and combined action/assertion sections.",
+        "The missing five-seat rounding tie means whole-requirement acceptance is unproved despite six-mutant detection. Any later rounding experiment is separate.",
+        "The revised skill needs a new predeclared regression comparison and independent heldout tasks; this old run cannot qualify it."
+      ],
+      "roundingExploratory": {
+        "classification": "separate post-matrix exploratory check; original six-mutant score and denominators unchanged",
+        "predeclaredExperimentDigest": "388b860d1c2f5ad6f99487504f8202114424ef3f1f2a74fac42bdf1b4e88e408",
+        "unchangedEligibleModelOutputs": 11,
+        "roundDownDetectedByModelOutputs": 0,
+        "correctSubjectFailureExcluded": 1,
+        "manualSensitivity": {
+          "classification": "manual fixture validation only, never supplied to model",
+          "tests": 18,
+          "correctSubjectPassed": true,
+          "roundDownDetected": true,
+          "halfEvenDetected": false,
+          "limitation": "The accepted input domain provides no half-even/half-up discriminator for this price rule; no invented out-of-domain input is accepted."
+        },
+        "retainedReportIndexDigest": "aded8a2030f79ab309a374fac9e16a60224321ced42028bac9e55755898e2759",
+        "actualReportCount": 14
+      },
+      "retainedArtifactDigests": {
+        "generationLedger": "2b48f1044bcbd9849e368355b8148fe6575c0430b4e0169fd1558196d83f58bf",
+        "executionReportsIndex": "88d7778a654b735c8c0ef16c5be0590b6190d539616c581b28ba95006dbe4f3c",
+        "independentSourceAndReportJoin": "4db550052cd1d4951d285f25dc31e0c57b4c37460023d3c81f1dd18eab82448e"
+      }
+    },
+    {
+      "id": "generation-reservation-unit-v2-superseded-diagnostic",
+      "classification": "cancelled diagnostic variation after owner clarified customer skill scope; partial outcomes retained, not a completed12-case comparison",
+      "reason": "detailed framework-specific instructions superseded by concise method/convention customer skills",
+      "sourceHead": "1aed722a5fd2135c634f497d087a06853f1b546f",
+      "sourceDiffDigest": "c3f98ad9175396bdc9a910d248fc378e2e03bfc8340aafaf5dca1451f5054a96",
+      "plannedCases": 12,
+      "terminalCasesAtCancellation": 4,
+      "cancelledInFlight": 1,
+      "notDispatched": 7,
+      "completeComparison": false,
+      "skillAcceptance": "not-qualified",
+      "cases": [
+        {
+          "id": "java-aaa-skill-1",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "eb8cec18da6be5fc034126ce6eeba2782d49f44d4cbeaec1bc21cd426504cf0c",
+          "outputBytes": 6400,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-control-1",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "e36474edfd0ee612fe910314b64a054b7b61f693d24a558c46dcc01d3563a91f",
+          "outputBytes": 7167,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-skill-2",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "95aa8bdf2cca1ce16c4b896c9b4d7c973bbb85a968b74e8bdb3d5905900906d9",
+          "outputBytes": 6655,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-control-2",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "3b1e481b40544d443ec0b68ace68d413ef9b4387c0afce54d62364f2434f66bf",
+          "outputBytes": 7820,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-skill-3",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 3,
+          "status": "started",
+          "disposition": "cancelled-in-flight-final-accounting-unavailable"
+        },
+        {
+          "id": "java-aaa-control-3",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-skill-1",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-control-1",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-skill-2",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-control-2",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-skill-3",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-control-3",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        }
+      ],
+      "currentSkillBoundary": "Neither this detailed diagnostic variation nor any surviving output qualifies the later compact customer skills. Outputs and partial execution results remain unchanged."
     }
   ]
 }

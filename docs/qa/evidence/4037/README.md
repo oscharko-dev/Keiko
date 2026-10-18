@@ -388,3 +388,54 @@ These are actual C reply-policy and source-join controls with inert ports. They 
 Endpoint Security service availability, durable process absence after daemon failure, safe live
 generation transfer or a successful sequence of two installed updates. Those native proof and
 implementation obligations remain open.
+
+## Checkpoint 19: pairing clock safety and unaccepted Java skill comparison
+
+The pairing port's bounded consumed-request cache must not make an expired claim reusable after
+a wall-clock correction. An owning actual-channel/registry control reproduces a second session
+after prune and rewind, and an invalid positive-infinite clock independently evicts replay state.
+Both fail before the fix; fifteen controls remain healthy. The existing port now refuses invalid
+or decreasing observed time before pruning. Equal/increasing time, inclusive freshness, finite
+capacity recovery, HMAC authority and existing sessions retain their policies. New pairing can be
+temporarily unavailable after a forward jump is corrected, until time catches up. Existing
+count-only pairing-denial diagnostics cover this refusal without publishing claim or clock data.
+All thirteen app-session suites pass 171 tests locally; this is not remembered-browser acceptance.
+
+The observations JSON adds all twelve original reservation-service cases, independently joined
+to exact returned outputs, unchanged test files and 78 actual Surefire reports. Correct-subject
+execution is **selected skill 5/6 versus matched controls 6/6**. The failed selected GWT repetition2
+contains a blank CSV record; selected AAA repetition1 violates all eleven camelCase method names.
+The planned mutation denominators remain 36 per group: the five eligible selected outputs detect
+30/30 executed mutants, while controls detect 35/36. The failed correct subject has no mutant
+credit. These numbers do not establish skill superiority or full requirement/profile acceptance.
+The six declared mutants contain no rounding-mode change, and independent rounding coverage is
+not qualified. The last GWT control uses two physical calls within its original cumulative8192
+output grant; no actual compaction is observed. Missing historical replay remains missing.
+
+A longer Java diagnostic variation added technical parameter-source and rounding instructions.
+The owner clarified that the customer skills must remain compact method/convention profiles;
+that variation was stopped with four terminal outputs, one cancelled in flight and seven undispatched
+cases out of twelve planned. It is not a completed comparison or a customer-skill candidate.
+The cancellation and missing final accounting remain explicit; the outputs are not rewritten.
+
+Both current customer candidates retain the editable naming/structure/assertion/mock/mandatory-case
+profile and general test-design/delivery checks. Detailed API recipes and executable helper snippets
+were removed. This follows #4037's explicit two-compact-skills outcome and the owner's clarified
+scope. The independent auditor reviewed the exact Java44-line and React46-line scope; that review
+is not functional acceptance. The original and diagnostic outputs cannot qualify these changed
+skill bytes. Matched native comparisons and untouched heldout execution remain required.
+
+A separately predeclared exploratory HALF_UP-to-DOWN check leaves all eleven eligible original
+model outputs green: none detects this required rounding error. The failed correct subject is
+excluded, and the frozen six-mutant score is unchanged. A separate manual oracle extended with
+one literal tie example passes18 tests on the correct source and fails on DOWN. HALF_EVEN remains
+indistinguishable within this fixture's accepted price/input domain; no out-of-domain example is
+invented. This manually validated sensitivity is not model or skill credit.
+
+The updater FIFO reader fixture now matches each actual refusal owner: exact plan/receipt/source
+errors, registration refusal before coordinator copying, direct directory ENOTDIR/open, or the
+existing copy-directory cleanup aggregate with ENOTDIR/lstat causes. Arbitrary errors and false
+returns no longer count as successful FIFO refusals. Two injected unrelated-open controls fail
+before this tightening while thirteen healthy/FIFO controls pass; all fifteen pass after it.
+Native execution remains forbidden. The directory-race control additionally reaches the actual
+open boundary; the copy cleanup aggregate is verified rather than mistaken for a direct error.

@@ -3,13 +3,18 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { createPortableHandoffCoordinator } from "../../packages/keiko-server/dist/update-portable-handoff.js";
 import {
+  PortableHandoffCoordinatorError,
+  createPortableHandoffCoordinator,
+} from "../../packages/keiko-server/dist/update-portable-handoff.js";
+import {
+  PortableHandoffPlanError,
   portableHandoffPlanSha256,
   readPortableHandoffPlan,
   syncPortableHandoffDirectory,
 } from "../../packages/keiko-server/dist/update-portable-handoff-plan.js";
 import {
+  PortableHandoffReceiptError,
   appendPortableHandoffReceipt,
   portableHandoffVerifiedAckMatches,
   publishPortableHandoffVerifiedAck,
@@ -19,6 +24,70 @@ import {
   prepare,
   type HandoffFixture,
 } from "../../packages/keiko-server/dist/__tests__/portable-handoff-fixture.js";
+type Refusal = (error: unknown) => boolean;
+function directoryRefusal(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "ENOTDIR" &&
+    "syscall" in error &&
+    error.syscall === "open"
+  );
+}
+function sourceRefusal(error: unknown): boolean {
+  return (
+    error instanceof PortableHandoffCoordinatorError &&
+    error.message === "portable handoff native source is unsafe"
+  );
+}
+function missingParentRefusal(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "ENOTDIR" &&
+    "syscall" in error &&
+    error.syscall === "lstat"
+  );
+}
+function copyDirectoryRefusal(error: unknown): boolean {
+  if (
+    !(error instanceof PortableHandoffCoordinatorError) ||
+    error.message !== "portable handoff preparation cleanup failed" ||
+    error.nativeAuthorityMayBeLive ||
+    !(error.cause instanceof AggregateError)
+  )
+    return false;
+  const causes: readonly unknown[] = error.cause.errors;
+  const cleanup = causes[1];
+  return (
+    causes.length === 2 &&
+    missingParentRefusal(causes[0]) &&
+    cleanup instanceof AggregateError &&
+    cleanup.message === "prepared artifact cleanup failed" &&
+    cleanup.errors.length === 2 &&
+    cleanup.errors.every(missingParentRefusal)
+  );
+}
+function copyRefusal(subject: string): Refusal {
+  if (subject === "copy-directory-race") return copyDirectoryRefusal;
+  if (subject === "copy-coordinator") {
+    return (error): boolean =>
+      error instanceof PortableHandoffCoordinatorError &&
+      error.message === "portable handoff current managed registration is invalid";
+  }
+  return sourceRefusal;
+}
+function readerRefusal(kind: string): Refusal {
+  if (kind === "plan") {
+    return (error): boolean =>
+      error instanceof PortableHandoffPlanError &&
+      error.message === "portable handoff plan is unsafe";
+  }
+  const label = kind === "receipt" ? "receipt" : "verified acknowledgement";
+  return (error): boolean =>
+    error instanceof PortableHandoffReceiptError &&
+    error.message === `portable handoff ${label} is unsafe`;
+}
 function replaceWithFifo(path: string): void {
   fs.rmSync(path, { recursive: true, force: true });
   execFileSync("/usr/bin/mkfifo", [path], { timeout: 5_000 });
@@ -29,6 +98,9 @@ function replaceAtOpen(selected: string): () => void {
   fs.openSync = (path, flags, mode): number => {
     if (!replaced && path === selected) {
       replaced = true;
+      if (process.argv[5] === "unrelated-error") {
+        throw new TypeError("Injected unrelated open error");
+      }
       replaceWithFifo(selected);
     }
     return original(path, flags, mode);
@@ -40,7 +112,10 @@ function replaceAtOpen(selected: string): () => void {
     if (!replaced) throw new Error("The selected open boundary was not reached");
   };
 }
-async function coordinator(fixture: HandoffFixture): Promise<boolean> {
+async function coordinator(
+  fixture: HandoffFixture,
+  refused: Refusal = (): boolean => false,
+): Promise<boolean> {
   const stop = new Error("Controlled stop before native execution");
   let verifications = 0;
   let prepared = 0;
@@ -68,8 +143,10 @@ async function coordinator(fixture: HandoffFixture): Promise<boolean> {
       activationId: fixture.plan.activationId,
     });
   } catch (error) {
-    if (!(error instanceof Error) || spawns !== 0) throw error;
-    return error === stop && verifications === 2 && prepared === 1;
+    if (spawns !== 0) throw error;
+    if (error === stop && verifications === 2 && prepared === 1) return true;
+    if (prepared === 0 && verifications === 0 && refused(error)) return false;
+    throw error;
   }
   throw new Error("The controlled preparation stop was not reached");
 }
@@ -88,7 +165,9 @@ async function copyScenario(
     replaceWithFifo(subject === "copy-coordinator" ? fixture.coordinator : fixture.supervisor);
   }
   try {
-    if (await coordinator(fixture)) throw new Error("Unsafe copy was accepted");
+    if (await coordinator(fixture, copyRefusal(subject))) {
+      throw new Error("Unsafe copy was accepted");
+    }
   } finally {
     restore?.();
   }
@@ -113,11 +192,11 @@ function reader(fixture: HandoffFixture, kind: string): () => boolean {
     return (): boolean => readPortableHandoffReceipts(stateDir, activationId).length === 1;
   return (): boolean => portableHandoffVerifiedAckMatches({ stateDir, activationId, planSha256 });
 }
-function assertRefused(read: () => unknown): void {
+function assertRefused(read: () => unknown, refused: Refusal): void {
   try {
-    if (read() === false) return;
+    read();
   } catch (error) {
-    if (error instanceof Error) return;
+    if (refused(error)) return;
     throw error;
   }
   throw new Error("Unsafe input was accepted");
@@ -138,7 +217,7 @@ function readScenario(root: string, subject: string): void {
   const restore = subject.endsWith("-race") ? replaceAtOpen(selected) : undefined;
   if (restore === undefined) replaceWithFifo(selected);
   try {
-    assertRefused(read);
+    assertRefused(read, readerRefusal(kind));
   } finally {
     restore?.();
   }
@@ -151,13 +230,18 @@ async function main(): Promise<void> {
     throw new TypeError("Invalid FIFO fixture arguments");
   }
   if (subject.startsWith("copy-")) await copyScenario(root, subject, target);
-  else if (subject === "directory-fifo") {
+  else if (subject.startsWith("directory-")) {
     fs.mkdirSync(root, { recursive: true });
     syncPortableHandoffDirectory(root);
-    replaceWithFifo(root);
-    assertRefused(() => {
-      syncPortableHandoffDirectory(root);
-    });
+    const restore = subject.endsWith("-race") ? replaceAtOpen(root) : undefined;
+    if (restore === undefined) replaceWithFifo(root);
+    try {
+      assertRefused(() => {
+        syncPortableHandoffDirectory(root);
+      }, directoryRefusal);
+    } finally {
+      restore?.();
+    }
   } else readScenario(root, subject);
   process.stdout.write("refused-after-healthy-control");
 }

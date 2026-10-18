@@ -95,6 +95,15 @@ returns the content-free projection. The exact launcher-to-browser delivery of t
 finalized with the UI plumbing in W1.5; the server-side authority, the session, and the channel are
 complete and independently testable through the port here.
 
+Expired single-use request IDs may be pruned only without restoring their authority after a
+clock correction. The existing pairing port retains its highest finite observed wall time and
+refuses new attestations while time is invalid or behind that observation. Equal or increasing
+time preserves the inclusive freshness boundaries and bounded replay cache. After a forward jump
+is corrected, new pairing remains unavailable until time catches up; existing sessions retain
+their own lifetime policy. Refusals use the same content-free acknowledgement and existing
+count-only denial aggregate, without exposing the clock or claim. This does not extend grants,
+renew cookies, or make a replay valid.
+
 The local-session restore route only confirms an existing valid bearer and refreshes its exact
 scoped cookie projections. Their browser Max-Age is bounded by the verified registry lifetime
 remaining on its own clock and the existing cookie lifetime ceiling. The registered confirmation

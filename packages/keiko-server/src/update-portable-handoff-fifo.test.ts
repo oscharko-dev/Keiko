@@ -16,6 +16,23 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("portable handoff FIFO boundaries", () => {
+  it.each(["directory-race", "copy-directory-race"])(
+    "rejects an unrelated error instead of crediting %s as FIFO refusal",
+    (subject) => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-handoff-fifo-")));
+      roots.push(root);
+      const child = spawnSync(
+        process.execPath,
+        [fileURLToPath(childModule), root, subject, "linux-x64", "unrelated-error"],
+        { encoding: "utf8", timeout: 3_500, killSignal: "SIGKILL" },
+      );
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(1);
+      expect(child.stdout).toBe("");
+      expect(child.stderr).toContain("TypeError: Injected unrelated open error");
+    },
+  );
+
   it.each([
     ["copy-coordinator", "linux-x64"],
     ["copy-supervisor", "linux-x64"],
@@ -29,6 +46,7 @@ describe.skipIf(process.platform === "win32")("portable handoff FIFO boundaries"
     ["receipt-fifo", "linux-x64"],
     ["ack-fifo", "linux-x64"],
     ["directory-fifo", "linux-x64"],
+    ["directory-race", "linux-x64"],
   ])("refuses %s on %s after a reachable healthy control", (subject, target) => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-handoff-fifo-")));
     roots.push(root);
