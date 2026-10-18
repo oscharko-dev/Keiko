@@ -15,6 +15,7 @@
 // user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -552,6 +553,7 @@ type GroundingCoverageIdentity =
   Omit<NonNullable<ConnectedGroundedAnswer["contextPack"]["coverage"]>, "elapsedMs"> | undefined;
 
 interface GroundingIdentity {
+  readonly promptContext: NonNullable<GroundedAnswer["promptContext"]>;
   readonly citations: readonly GroundingCitationIdentity[];
   readonly content: string;
   readonly contextPack: {
@@ -573,9 +575,14 @@ interface GroundingIdentity {
   readonly uncertainty: ConnectedGroundedAnswer["uncertainty"];
 }
 
-type RetrievalParityIdentity = Omit<GroundingIdentity, "citations" | "contextPack"> & {
+type RetrievalParityIdentity = Omit<
+  GroundingIdentity,
+  "citations" | "contextPack" | "promptContext"
+> & {
   readonly citations: readonly Omit<GroundingCitationIdentity, "stableId">[];
-  readonly contextPack: Omit<GroundingIdentity["contextPack"], "scopeId">;
+  readonly contextPack: Omit<GroundingIdentity["contextPack"], "scopeId" | "usage"> & {
+    readonly usage: Omit<GroundingIdentity["contextPack"]["usage"], "modelInputTokens">;
+  };
 };
 
 interface PersistedGroundingSnapshot {
@@ -595,7 +602,9 @@ function groundingCoverageIdentity(
 
 function groundingIdentity(answer: ConnectedGroundedAnswer): GroundingIdentity {
   const { contextPack } = answer;
+  if (answer.promptContext === undefined) throw new Error("Grounding prompt accounting was absent");
   return {
+    promptContext: answer.promptContext,
     citations: answer.citations.map((citation) => ({
       lineRange: citation.lineRange,
       scopePath: citation.scopePath,
@@ -631,8 +640,10 @@ function groundingIdentity(answer: ConnectedGroundedAnswer): GroundingIdentity {
 }
 
 function retrievalParityIdentity(identity: GroundingIdentity): RetrievalParityIdentity {
-  const { scopeId, ...contextPack } = identity.contextPack;
+  const { scopeId, usage, ...contextPack } = identity.contextPack;
+  const { modelInputTokens, ...retrievalUsage } = usage;
   if (scopeId.length === 0) throw new Error("Grounding scope identity was empty");
+  expect(modelInputTokens).toBeGreaterThan(0);
   return {
     citations: identity.citations.map((citation) => ({
       lineRange: citation.lineRange,
@@ -640,10 +651,91 @@ function retrievalParityIdentity(identity: GroundingIdentity): RetrievalParityId
       score: citation.score,
     })),
     content: identity.content,
-    contextPack,
+    contextPack: { ...contextPack, usage: retrievalUsage },
     omittedCount: identity.omittedCount,
     uncertainty: identity.uncertainty,
   };
+}
+
+interface GroundingAccountingSnapshot {
+  readonly totalCalls: number;
+  readonly witnesses: readonly {
+    readonly requestSha256: string;
+    readonly requestModelSha256: string | null;
+    readonly outputTokensMax: number | null;
+    readonly outputCapFields: number;
+    readonly supportedTextOnly: boolean;
+    readonly canonicalPromptTokens: number | null;
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+    readonly accountedPromptTokens: number | null;
+  }[];
+}
+
+async function groundingAccountingSnapshot(
+  request: APIRequestContext,
+): Promise<GroundingAccountingSnapshot> {
+  const port = process.env.KEIKO_E2E_MODEL_PORT ?? "32186";
+  const response = await request.get(`http://127.0.0.1:${port}/grounding-accounting`);
+  expect(response.ok()).toBe(true);
+  return (await response.json()) as GroundingAccountingSnapshot;
+}
+
+async function attachGroundingAccounting(
+  identity: GroundingIdentity,
+  snapshot: GroundingAccountingSnapshot,
+): Promise<void> {
+  const { promptContext, contextPack } = identity;
+  await test.info().attach(`grounding-accounting-${String(snapshot.totalCalls)}`, {
+    body: Buffer.from(
+      JSON.stringify({
+        witness: snapshot.witnesses.at(-1),
+        totalCalls: snapshot.totalCalls,
+        promptContext,
+        budget: contextPack.budget,
+        usage: contextPack.usage,
+      }),
+    ),
+    contentType: "application/json",
+  });
+}
+
+async function expectGroundingAccounting(
+  request: APIRequestContext,
+  identity: GroundingIdentity,
+  previousCalls: number,
+): Promise<number> {
+  const snapshot = await groundingAccountingSnapshot(request);
+  expect(snapshot.totalCalls).toBe(previousCalls + 1);
+  const witness = snapshot.witnesses.at(-1);
+  expect(witness?.supportedTextOnly).toBe(true);
+  expect(witness?.requestSha256).toMatch(/^[a-f0-9]{64}$/u);
+  expect(witness?.requestModelSha256).toBe(
+    createHash("sha256").update(CHAT_MODEL_ID).digest("hex"),
+  );
+  expect(witness?.outputCapFields).toBe(1);
+  expect(witness?.outputTokensMax).toBe(identity.promptContext.reservedOutputTokens);
+  expect(identity.promptContext).toMatchObject({
+    modelId: CHAT_MODEL_ID,
+    promptTokens: witness?.promptTokens,
+    promptTokensMeasured: true,
+    estimatedPromptTokens: witness?.canonicalPromptTokens,
+    contextWindowTokens: 8192,
+    inputBudgetTokens: 6912,
+    reservedOutputTokens: 1024,
+  });
+  expect(identity.contextPack.usage.modelInputTokens).toBe(witness?.accountedPromptTokens);
+  expect(identity.contextPack.usage.modelOutputTokens).toBe(witness?.completionTokens);
+  expect(identity.promptContext.instructionTokens).toBeGreaterThan(0);
+  expect(identity.promptContext.sourceTokens).toBeGreaterThan(0);
+  expect(identity.promptContext.sourceTokens).toBeLessThanOrEqual(
+    identity.contextPack.usage.modelInputTokens,
+  );
+  expect(identity.contextPack.usage.modelInputTokens).toBeLessThanOrEqual(
+    identity.contextPack.budget.modelInputTokensMax,
+  );
+  await attachGroundingAccounting(identity, snapshot);
+  return snapshot.totalCalls;
 }
 
 function connectedGroundedAnswer(message: ChatMessage): ConnectedGroundedAnswer | undefined {
@@ -1078,6 +1170,7 @@ function expectGroundingCitationIdentity(identity: GroundingIdentity): void {
 }
 
 async function groundingParityFlow(page: Page, request: APIRequestContext): Promise<void> {
+  const initialCalls = (await groundingAccountingSnapshot(request)).totalCalls;
   const projectPath = createGroundingParityFixture();
   await ensureGroundingParityProject(request, projectPath);
   const typedChat = await createGroundingParityChat(request, projectPath, "E2E Composer parity");
@@ -1086,6 +1179,7 @@ async function groundingParityFlow(page: Page, request: APIRequestContext): Prom
   await sendTypedGroundingTurn(page, typedChat);
   expect(typedSpeech).toEqual([]);
   const typedIdentity = await requirePersistedGroundingIdentity(request, typedChat);
+  const typedCalls = await expectGroundingAccounting(request, typedIdentity, initialCalls);
 
   const voiceChat = await createGroundingParityChat(request, projectPath, "E2E Voice parity");
   const voicePage = await page.context().newPage();
@@ -1099,6 +1193,7 @@ async function groundingParityFlow(page: Page, request: APIRequestContext): Prom
   await expect.poll(() => voiceSpeech).toEqual([GROUNDING_PARITY_ANSWER]);
   await expect.poll(() => canonicalTtsPlays(voicePage)).toBe(1);
   const voiceIdentity = await requirePersistedGroundingIdentity(request, voiceChat);
+  await expectGroundingAccounting(request, voiceIdentity, typedCalls);
 
   expectGroundedSendParity(typedSends, voiceSends, typedChat, voiceChat);
   expectGroundingCitationIdentity(typedIdentity);

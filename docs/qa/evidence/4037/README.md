@@ -558,12 +558,12 @@ The production reference counter already excluded those zero-length bodies. A tw
 filter aligns presentation with that boundary without removing metadata or changing selection.
 Nonempty whitespace lines and document labels/bodies remain intact.
 
-The identical final seven controls produce five failures and two healthy controls on published22,
+The identical final seven controls produce five failures and two healthy controls on published checkpoint 22,
 then seven passes after. The actual fresh React corpus is retrieved once and passed to both final
 protected-skill fitters with the actual configured model-profile accounting: 19,298 to 14,170 UTF-8
 prompt bytes, and 6,350 to 4,641 accounted input tokens. The input grant stays 118,784. All positive
 bodies and retained packs are byte-identical; the complete component and eight complete accepted
-requirements remain present, and the selected skill occurs exactly once. All38 metadata aliases
+requirements remain present, and the selected skill occurs exactly once. All 38 metadata aliases
 remain in the pack. This is a measured serialization saving, not an inference-quality or latency
 claim. Existing final-prompt and gateway cost/reference observations describe the result.
 
@@ -573,9 +573,9 @@ its scores must not be pooled with the older immutable19 campaign as identical i
 skills, prompt instructions, provider selection, source reads and cumulative grants are unchanged.
 The broader platform, browser, model-quality, historical and exact-head acceptance holds remain.
 
-The published22 Core quality run exposed an unlisted transitive test import of the actual Vitest
+The published checkpoint 22 Core quality run exposed an unlisted transitive test import of the actual Vitest
 error serializer. The same `check:knip` failure is reproduced locally. The serializer is now an
-explicit test-only dependency at its already resolved4.1.11 version. No resolved package changes,
+explicit test-only dependency at its already resolved 4.1.11 version. No resolved package changes,
 test assertions or dead-code exceptions are introduced; the dependency disposition is recorded in
 the existing closeout table.
 
@@ -587,11 +587,11 @@ five-second socket timeout was also an inactivity timer, not a total frame deadl
 keep a partial read alive by sending individual bytes.
 
 The final whole-source fixture executes actual admission, code checks, deadline and allocation with
-only external framework/socket/clock/log ports made inert. The same final15 controls produce seven
-failures and eight healthy controls on published23, then15 passes after. The counts include mechanism
+only external framework/socket/clock/log ports made inert. The same final 15 controls produce seven
+failures and eight healthy controls on published checkpoint 23, then 15 passes after. The counts include mechanism
 and new clock-failure refusal checks; they are not distinct bug counts. A one-byte/every-four-second
-virtual stream completes after176 simulated seconds before and refuses at five simulated seconds
-after. No live resource exhaustion or wall-clock performance claim is inferred. The original31
+virtual stream completes after 176 simulated seconds before and refuses at five simulated seconds
+after. No live resource exhaustion or wall-clock performance claim is inferred. The original 31
 lifecycle/signaling controls retain their assertions through the internal allocation argument update.
 
 Independent review rejected an initial unpublished candidate because it moved all code verification
@@ -599,7 +599,7 @@ after the first blocking read. Its sources, tests, successful local gates and So
 retained as that withdrawn candidate, and do not qualify the corrected source. The strengthened final
 controls also fail that candidate. No affected candidate was pushed.
 
-Final admission captures one credential-checked token and uses its exact32-byte CFData with the
+Final admission captures one credential-checked token and uses its exact 32-byte CFData with the
 public Security guest API. The code/team preflight rejects invalid peers before any frame wait;
 that decision cannot grant allocation. After the complete bounded frame, the same captured token
 is checked again and passed to allocation without another token or numeric code lookup. A monotonic
@@ -617,3 +617,37 @@ This fixes coherent identity admission and total first-frame waiting. LOCAL_PEER
 prove the immutable original socket writer. Full peer lifetime, functional generation transfer,
 durable monitor-loss recovery, Linux support and consecutive actual updates remain separate open
 requirements. No native wire layout, signing requirement or runtime authority is widened.
+
+## Checkpoint 25: verify each voice/composer turn against its actual provider wire
+
+The exact published-23 UI failure compared input costs from two different prompts. Retrieval timing
+is serialized into those prompts, so equal source results do not imply equal canonical input cost.
+The existing semantic, source, citation-range and resource-grant equality checks remain. Each turn
+now independently joins its persisted estimate, measured provider usage and charged input/output to
+its one actual grounded provider request. Actual model identity and the single request output cap
+are bound to the fixture profile. The existing gateway counter and synthesis-usage producer own the
+calculations; no production accounting formula, prompt or authority changes.
+
+The bounded provider witness and successful browser attachments retain counts, hashes and grants.
+The witness explicitly refuses richer message/tool/schema shapes and uses the existing uncalibrated
+text-only fixture. Eight owning helper controls pass. The actual unchanged spec helpers additionally
+pass 26 isolated controls: two observed healthy turns and 24 corruptions of cost, measurement,
+output, call count, wire shape, model identity, cap, window or budget. HTTP and attachment ports are
+inert in those isolated controls; their original observations come from the real browser run.
+
+The first full macOS smoke exposed a separate fixture-root mismatch: 104 passed and six failed.
+The fixture kept the temporary-directory alias while product navigation and five actual hot-exit
+writes used the canonical root. The fixture now canonicalizes its newly created root once. Every
+exact path, content, pane and window assertion remains. All six failing journeys plus voice parity
+pass targeted, then the complete final Chromium smoke passes 110/110 with no retries, skips or flaky
+cases. The initial failed run and a rejected extra cross-request source-share assertion are retained.
+`voice-parity-accounting.json` binds final sources, actual count observations and proof boundaries.
+
+The untouched native React comparison is also complete: all twelve original generations and
+executions remain. Both skill and no-skill groups have zero of six eligible correct-subject outputs.
+Eight outputs fail strict typing; four compile but fail their correct-subject tests. No seeded
+mutation is dispatched or credited. All 23 case requests retain the full component, all eight rules
+and the exact selected-skill presence within the original cumulative output grants; 15 other
+physical records remain separately classified. These failures do not establish a useful skill.
+Further cause diagnostics and any candidate method changes remain separate, without rewriting or
+recrediting the original campaign. The broader functional/platform/model acceptance holds remain.

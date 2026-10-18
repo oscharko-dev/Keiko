@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -50,7 +50,7 @@ function collectPageErrors(page: Page): () => void {
 }
 
 function createProjectFixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-e2e-project-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-e2e-project-")));
   tempProjects.push(root);
   mkdirSync(join(root, "docs"), { recursive: true });
   mkdirSync(join(root, "packages", "keiko-cli", "src"), { recursive: true });
