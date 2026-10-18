@@ -62,6 +62,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 ```
 
 Use the callback's resolved result type for `T`, such as `Awaited<ReturnType<typeof callback>>`.
+Tie each mock to the actual callable type, for example `vi.fn<Props["onSave"]>()` only when that
+interface and property exist in the supplied source. Otherwise derive the type from the actual
+export or reproduce its exact signature. Do not import an unused props type and leave `vi.fn()`
+untyped. Use the project's installed Vitest API; do not weaken strictness with casts.
 After submission, assert disabled controls only when the contract requires them and verify the
 expected dispatch count; then `await act(async () => { pending.resolve(actualResult); });`. Await the visible
 result with a `findBy` query. For a separate failure/retry case, use a typed mock with
@@ -104,6 +108,17 @@ Derive examples from the contract: exact boundaries and neighbors, invalid-input
 callback payload, pending state, actual success output, failure and successful retry. Match money,
 dates and timezone semantics actually specified; do not infer business rules from implementation.
 
+When the contract requires an exact returned value, assert the whole value, for example
+`expect(output.textContent).toBe(expectedResult)`. A string passed to `toHaveTextContent` matches
+a substring: it can miss appended digits or stale surrounding text. Use partial matches only for
+contracts that permit them. Check exact callback arguments and counts; use distinct response values
+when proving a successful retry or replacement so an old result cannot satisfy the new assertion.
+
+For subjects that own concurrent requests, cancellation or debounce, use a separate controlled
+promise for each request and resolve them in the order that exercises the specified race. Check
+observable ownership, cleanup and rejected work, not merely that a callback ran. Do not invent
+race guarantees, timers or cancellation APIs that the supplied contract does not provide.
+
 Create `userEvent.setup()` per test and await interactions. Keep actions outside `waitFor`.
 Prefer real timers; if timing is the behavior, use the installed Vitest/user-event timer APIs,
 including `advanceTimers`, and restore timers. Preserve isolation, cleanup and mock lifecycle.
@@ -111,7 +126,9 @@ including `advanceTimers`, and restore timers. Preserve isolation, cleanup and m
 ## Check the proposed file before returning it
 
 Check every import, callback/result type, resolver initialization, blank-input interaction and
-disabled-control interaction. No `any`, invented exports, type suppressions, ellipses or unhandled
+disabled-control interaction. Check whole-value assertions and the distinct failure each case
+would expose. Remove unused imports. Name dependency versions only when supplied build or resolved
+dependency evidence establishes them. No `any`, invented exports, type suppressions, ellipses or unhandled
 async work. Each assertion must distinguish a plausible application defect; compilation or runner
 failure is not defect detection.
 

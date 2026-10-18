@@ -14,7 +14,8 @@ criteria, with simple extensions of existing owners. The clean starting checkout
 `dev` both identify `babee4b4cf5ede0d4eb8a7cec3ddf96493fee652` (1.2.4).
 PR #4039 is merged and #4038 is closed. Their bounded delivery does not qualify the deferred
 criteria. This continuation uses `codex/chat-native-qualification`, with one serial implementation
-owner. Current open PRs #4030 and #4041 update dependencies; #4013 targets a separate quality
+owner and regular [PR #4046](https://github.com/oscharko-dev/Keiko/pull/4046), with auto-merge
+disabled. Current open PRs #4030 and #4041 update dependencies; #4013 targets a separate quality
 branch. Recheck overlap before delivery.
 
 | Tracker                 | Current disposition                                                                                                            | Remaining acceptance and evidence                                                                                                                                                                                                                                                        |

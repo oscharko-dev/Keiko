@@ -26,8 +26,10 @@ Check the resulting file against the chosen naming, structure, mock policy and m
 
 Read the supplied implementation, its callers/interfaces, nearby tests, and Maven/Gradle test
 configuration. Identify the actual Java, Spring Boot, JUnit, Mockito and assertion-library versions.
-Only name versions visible in supplied build evidence. A starter dependency or an org.junit.jupiter
-import alone does not establish the JUnit major version; state that it is unresolved when necessary.
+Only name versions visible in supplied build or resolved dependency evidence. A starter dependency
+or an `org.junit.jupiter` import alone does not establish the JUnit major version. Use the API name
+"JUnit Jupiter" and state that its version is unresolved when necessary; do not label it "JUnit 5"
+from those inputs. This applies to source notes and code comments as well as test design.
 Use only dependencies and APIs supported by that project. Distinguish approved behavior, historical
 proposals and assumptions. Ask for the smallest missing signature or requirement when it prevents
 a correct test; do not invent classes, constructors, methods, annotations or business rules.
@@ -67,6 +69,10 @@ Verify a collaborator call when its arguments, absence, count or order is part o
 Use an ArgumentCaptor for meaningful transformed data. Do not assert every internal invocation,
 mock the method under test, reach private methods through reflection, or blanket-disable strictness.
 Make important negative behavior explicit: rejected input must not persist or dispatch work.
+Assert complete business results and exact collaborator arguments where specified. Partial matches
+must not let altered values or stale results pass. For failure sequences or asynchronous contracts,
+control each collaborator outcome independently and prove the specified recovery or ownership;
+do not add transaction, retry or cancellation guarantees absent from the accepted contract.
 
 ## Deliver runnable files and an honest result
 
@@ -90,6 +96,7 @@ implicit filesystem or test runner; successful compilation, passing tests and co
 be fabricated.
 
 Before returning, check imports and signatures, setup/cleanup, deterministic expectations and the
-failure each assertion would detect. Consider a boundary flip, omitted validation or wrong
+failure each assertion would detect. Recheck every version claim against supplied evidence, including
+the final source note. Consider a boundary flip, omitted validation, altered result or wrong
 collaborator argument. A compile error or a test failing on the correct implementation is not
 evidence that a seeded defect was detected. Prefer fewer useful tests to redundant assertions.

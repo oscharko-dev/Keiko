@@ -915,3 +915,42 @@ Raw answers, histories, provider observations, dependency caches and execution l
 Only synthetic inputs and body-free aggregate observations belong in this repository. The native
 N+1/browser compaction, scale, pressure, held-out tasks, repeated skill comparison and original
 96-criterion ledger remain open.
+
+## Workflow lifecycle and candidate skill revision, 2026-10-18
+
+The initial repair is signed commit `7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8`, published in
+regular [PR #4046](https://github.com/oscharko-dev/Keiko/pull/4046) against `dev`, with native
+auto-merge absent. GitHub verified the signature. The assembled-package gate passed last
+(6,338 files); committed-diff i18n and formatting checks passed. CodeRabbit approved that head
+without actionable comments; this does not replace exact-head required CI or native acceptance.
+
+For #4042, nine behavior controls first failed because closed PR events could enter candidate
+jobs. The workflow now requires an open PR for PR events before every candidate job and the
+aggregate; its existing push-only provenance job already excludes them. Open metadata/code
+triggers and non-PR entry paths retain positive controls. The merge-candidate verifier, signed
+delivery and aggregation bodies are unchanged. The e2e wiring classifier explicitly models live
+PR state rather than treating the new predicate as unknown. Existing reuse/coverage/Activity Log
+condition pins were extended with the exact lifecycle constraint, not relaxed. Five Zizmor cache
+anchors were re-pinned by the existing producer after their reviewed steps moved.
+The affected 32 root consumer suites passed 1,233 tests; the UI workflow consumer passed
+98 tests. E2e wiring, branch parity, required-workflow names, dependency currency, scoped ESLint,
+the complete Activity Log gate and fresh local Sonar passed. The exact CI actionlint 1.7.12
+archive was SHA-256-verified and ran successfully in Linux; digest-verified zizmor 1.26.1
+reported no findings under the unchanged reviewed configuration (eight ignored, 43 suppressed).
+
+Gemma reviewed the measured skill defects and proposed minimal generic refinements. The revision
+adds exact business-output comparisons, callable types on mocks, independently controlled async
+outcomes where the contract needs them, and a final version-claim check. Existing blank-safe input,
+real MUI, disabled-control, smallest-test and authority rules remain. A blanket ban on text
+matchers and a requirement to use one particular type expression were rejected: the requirement
+determines the assertion, and actual exported signatures determine the type. The documented
+[jest-dom text matcher semantics](https://github.com/testing-library/jest-dom#tohavetextcontent)
+explain the substring mutant observed above.
+
+The revised skills are candidates, not qualified customer acceptance. Three paired repetitions
+per language are being run against an independent, clean checkout of the signed runtime head,
+with skill bytes captured and hashed before the first request. The existing lab observes actual
+serialized skill occurrences, canonical protected-context accounting, Activity Log evidence and
+returned/persisted agreement. This isolates model attempts from ongoing workflow repairs. Results
+will be recorded after unchanged-output execution and semantic inspection; no pending run counts
+as a pass.
