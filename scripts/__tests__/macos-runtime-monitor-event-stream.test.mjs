@@ -60,6 +60,28 @@ describe.skipIf(process.platform !== "darwin")("actual macOS monitor observation
     "overflow",
     "no-baseline",
     "startup-failure",
+    "pending-stop",
+    "pending-disconnect",
+    "no-root-disconnect",
+    "no-root-exited",
+    "pending-owner-exit",
+    "no-root-capacity",
+    "recycled-stop",
+    "late-recycled-fork",
+    "process-limit",
+    "supervisor-reuse",
+    "exec-transition",
+    "exec-before-stop",
+    "signal-refusal",
+    "kernel-token-signal",
+    "peer-unavailable",
+    "peer-short-token",
+    "peer-wrong-pid",
+    "peer-wrong-uid",
+    "late-signal-refusal",
+    "wrong-exec-identity",
+    "overlapping-owner",
+    "pending-exec-owner",
   ])("preserves zero-proof authority for %s", (scenario) => {
     const result = spawnSync(executable, [scenario], {
       encoding: "utf8",
@@ -68,7 +90,12 @@ describe.skipIf(process.platform !== "darwin")("actual macOS monitor observation
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ case: scenario, passed: 1, signalCalls: 0 });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      case: scenario,
+      passed: 1,
+      signalCalls: 0,
+      wrongGenerationSignals: 0,
+    });
     expect(result.stderr).toBe("");
   });
 });

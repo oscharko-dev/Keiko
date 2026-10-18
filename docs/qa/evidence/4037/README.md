@@ -409,7 +409,7 @@ The planned mutation denominators remain 36 per group: the five eligible selecte
 30/30 executed mutants, while controls detect 35/36. The failed correct subject has no mutant
 credit. These numbers do not establish skill superiority or full requirement/profile acceptance.
 The six declared mutants contain no rounding-mode change, and independent rounding coverage is
-not qualified. The last GWT control uses two physical calls within its original cumulative8192
+not qualified. The last GWT control uses two physical calls within its original cumulative 8192
 output grant; no actual compaction is observed. Missing historical replay remains missing.
 
 A longer Java diagnostic variation added technical parameter-source and rounding instructions.
@@ -428,7 +428,7 @@ skill bytes. Matched native comparisons and untouched heldout execution remain r
 A separately predeclared exploratory HALF_UP-to-DOWN check leaves all eleven eligible original
 model outputs green: none detects this required rounding error. The failed correct subject is
 excluded, and the frozen six-mutant score is unchanged. A separate manual oracle extended with
-one literal tie example passes18 tests on the correct source and fails on DOWN. HALF_EVEN remains
+one literal tie example passes 18 tests on the correct source and fails on DOWN. HALF_EVEN remains
 indistinguishable within this fixture's accepted price/input domain; no out-of-domain example is
 invented. This manually validated sensitivity is not model or skill credit.
 
@@ -459,3 +459,49 @@ The owning fixture checks skipped, duplicate, backward and overflowing counters,
 missing initial baseline and startup failure. Healthy controls retain their zero-live proof and
 all fixture signal counts remain zero. This repairs observation integrity only; signed native
 execution, durable recovery, authenticated generation transfer and consecutive updates remain open.
+
+## Checkpoint 21: pending lifecycle ownership and process-generation-safe signals
+
+A whole-source fixture compiles the actual monitor with the existing production builder's compiler
+arguments and unchanged protocol header. Its identical final bytes produce twenty failures and
+eleven healthy controls on published checkpoint20, then pass all31 controls on the candidate.
+Synthetic, ordered Endpoint Security events and inert external ports isolate the owning lifecycle;
+these controls do not claim an entitled client, real kernel queue delivery or a complete update.
+
+Stop before the first delivered fork no longer certifies an empty tree. Disconnect retains pending
+ownership, late descendants remain tracked, and a closed session is retired only after the actual
+matching supervisor exit and all observed descendants exit. A failed spawn with no child releases
+its slot after the actual supervisor exit; seventeen successive cycles verify bounded capacity.
+Process membership and all three signaling paths retain copied audit tokens. PID plus PID version
+prevents a recycled numeric PID from inheriting ownership or receiving an old session's signal.
+NOTIFY_EXEC updates the pre-exec identity to its actual post-exec target. A stale-token ESRCH never
+counts as an exit; a queued exec notification can supply the current owned identity and retry stop.
+Other signal refusals block proof and emit the existing native body-free diagnostic. The inventory
+limit retains its refusal and token-bound fan-out. An already owned descendant cannot arm a second
+session; authenticated generation transfer remains unimplemented.
+
+One additional compatibility control actually forks its own child, receives that child's kernel
+Mach task audit token, verifies correct-token SIGCONT success and wrong-version refusal, terminates
+only that child through the token-bound SIGKILL, and awaits its actual signaled exit. A stale token
+then refuses. This passes on macOS27.0.1/build26A434 with SDK27.0 and does not qualify older platforms.
+The first private probe used unsupported signal0 and is retained as a fixture error, not a product
+failure. libproc declares this signaling interface private/SPI; no public stability promise or
+numeric fallback is inferred. LOCAL_PEERTOKEN is a current-PID lookup, not an immutable socket-owner
+certificate. Full peer-lifetime authentication, native generation transfer, durable recovery, Linux
+supervision and consecutive real updates remain open.
+
+The compact-skill Java comparison on immutable published19 has finished all twelve predeclared
+cases and 82 actual Surefire reports. Selected and control arms each pass five of six correct
+applications; each detects all 30 executed original mutants of 36 planned. Each misses all five
+executed DOWN rounding mutants of six planned. Selected GWT outputs and one control AAA output
+also violate explicit naming conventions. All fourteen physical answer calls carry the canonical
+complete service and all seven complete requirement spans, within the original cumulative grants.
+Missing source context is therefore not an explanation for these failures. This known-fixture
+regression is neither a new untouched heldout nor evidence of skill superiority or acceptance.
+
+Fresh React manual-oracle source, type-check and actual JSON-report joins are retained. Independent
+review found that the existing JSON-reporter/verifier path does not observe global unhandled errors
+and can misclassify runtime-only failures as defect detection. The initial private classifier also
+rejects legitimate Testing Library/jest-dom assertion failures. Those measurement defects remain
+open in the existing verification owner; no model dispatch or clean-runtime qualification is
+claimed from absent JSON fields. No additional customer prompt rules are added.

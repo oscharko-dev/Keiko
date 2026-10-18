@@ -235,6 +235,24 @@ existing behavior; this refusal does not prove that an unobserved descendant was
 Native recovery, generation transfer and real Endpoint Security qualification remain separate
 requirements, including after monitor restart.
 
+Stop and socket EOF are not event-queue barriers. An armed session with no observed root retains
+its pending ownership; it cannot emit ZERO_LIVE merely because the current inventory is empty.
+Root observation or the matching supervisor EXIT, together with intact event continuity, establishes
+the observation boundary. A disconnected session is retired only after that supervisor EXIT and
+the final observed descendant EXIT, including failed-spawn sessions that never produced a child.
+
+Observed process membership copies audit tokens and matches PID plus PID version. NOTIFY_EXEC
+updates the stored pre-exec identity to its actual post-exec target before further fork, exec or
+exit handling. Every stop, late-fork and inventory-exhaustion signal uses the token-bound libproc
+SPI, with no numeric-PID fallback. ESRCH is not exit evidence: it may mean an exec notification is
+pending. Other signaling refusals invalidate the session's proof; both decisions have bounded,
+body-free native diagnostics. The SPI is private and subject to OS compatibility qualification;
+current-SDK linkage and a fixture-owned kernel signal test do not qualify every supported OS.
+LOCAL_PEERTOKEN supplies a current PID token, not an immutable connect-time peer certificate.
+Existing credentials and code admission remain required, and full peer-lifetime authentication
+remains a separate qualification requirement. ARM refuses an identity still owned by another
+session; this safety refusal does not implement working update-generation ownership transfer.
+
 The activation manager submits exactly Keiko's bundled extension through Apple's SystemExtensions
 framework and keeps the request alive while local-user approval is pending. After system-extension
 activation, the monitor reports a closed `needs-full-disk-access` state when `es_new_client`
