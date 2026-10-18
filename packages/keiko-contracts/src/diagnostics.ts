@@ -2208,6 +2208,12 @@ export const CLIENT_FILES_SCOPE_DECISIONS = [
   "timeout-recovered",
   "timeout-rejected",
   "request-superseded",
+  "root-normalized",
+  "root-replaced",
+  "intent-pending",
+  "intent-applied",
+  "intent-failed",
+  "intent-send-refused",
 ] as const;
 export interface ClientFilesScopeDecision {
   readonly decision: (typeof CLIENT_FILES_SCOPE_DECISIONS)[number];

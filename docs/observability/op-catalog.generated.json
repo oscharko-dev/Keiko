@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b9f8b200288b2472539fc3ad23f20cda5a9e34da4811e1b6a1ff2014a942e6b2",
+    "catalogDigest": "6d0a9c20e9627dc897cae553f42df04c54e80052e1ab8ba9210d6842e5c78d87",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3922,7 +3922,13 @@
               "timeout-blocked",
               "timeout-recovered",
               "timeout-rejected",
-              "request-superseded"
+              "request-superseded",
+              "root-normalized",
+              "root-replaced",
+              "intent-pending",
+              "intent-applied",
+              "intent-failed",
+              "intent-send-refused"
             ]
           },
           "sourceCount": {

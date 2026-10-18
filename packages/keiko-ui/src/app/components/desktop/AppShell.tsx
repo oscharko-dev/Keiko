@@ -9,7 +9,7 @@ import {
 import type { ClientFilesScopeDecision } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
 // Installs the browser transport for reportClientDiagnostic at module scope, so a diagnostic
 // raised during hydration or an early boot crash is delivered rather than only buffered.
@@ -102,7 +102,7 @@ import { WINDOW_LAUNCHER_TYPES, COMMAND_TOOL_TYPES, type Command } from "./works
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
-import { chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
+import { beginChatScopeTransition, chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
 import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
@@ -1189,8 +1189,8 @@ async function serializeChatMutation<T>(
   chatKey: string,
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
   surface: GroundingMutationSurface = "files",
+  correlationId = newClientCorrelationId(),
 ): Promise<T> {
-  const correlationId = newClientCorrelationId();
   assertMutationQueueAvailable(queue, chatKey, correlationId, surface);
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
@@ -1976,13 +1976,16 @@ function AppShellInner(): ReactNode {
       automatic = false,
       acknowledgement?: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
+      const chatKey = groundingMutationKey(chatWindowId, target);
+      const transition =
+        connectionId === undefined ? undefined : beginChatScopeTransition(chatKey, connectionId);
+      let accepted = false;
       try {
-        const chatKey = groundingMutationKey(chatWindowId, target);
         const edgeKey = connectionId === undefined ? undefined : `${connectionId}\u0000${chatKey}`;
         const request = Symbol();
         if (automatic && edgeKey !== undefined)
           automaticFilesRequestsRef.current.set(edgeKey, request);
-        return await serializeChatMutation(
+        accepted = await serializeChatMutation(
           groundingMutationQueueRef.current,
           chatKey,
           (attempt): Promise<boolean> =>
@@ -2000,11 +2003,15 @@ function AppShellInner(): ReactNode {
               ...(acknowledgement === undefined ? {} : { acknowledgement }),
             }),
           "files",
+          transition?.correlationId,
         );
+        return accepted;
       } catch (error: unknown) {
         return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
         );
+      } finally {
+        transition?.settle(accepted);
       }
     },
     [groundingMutationKey, rejectForConnectionFailure, applyFilesScopeRequest, t],
@@ -2097,22 +2104,30 @@ function AppShellInner(): ReactNode {
       target?: ChatUnbindTarget,
       connectionId?: string,
     ): Promise<boolean> => {
+      const chatKey = groundingMutationKey(chatWindowId, target);
+      const transition =
+        connectionId === undefined ? undefined : beginChatScopeTransition(chatKey, connectionId);
+      let accepted = false;
       try {
-        return await serializeChatMutation(
+        accepted = await serializeChatMutation(
           groundingMutationQueueRef.current,
-          groundingMutationKey(chatWindowId, target),
+          chatKey,
           (attempt) =>
             retryGroundingScopeIntent(
               () => unbindFilesScopeNow({ chatWindowId, scope, target, connectionId }, attempt),
               attempt,
             ),
           "files",
+          transition?.correlationId,
         );
+        return accepted;
       } catch (error: unknown) {
         if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
         return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "scope.disconnect.error")),
         );
+      } finally {
+        transition?.settle(accepted);
       }
     },
     [groundingMutationKey, rejectForConnectionFailure, unbindFilesScopeNow, t],
@@ -2425,7 +2440,7 @@ function AppShellInner(): ReactNode {
   const workspaceLinkRevision = useLinkRevision(ws.wins, ws.conns);
   const chatConversationIdsRef = useRef<ReadonlyMap<string, string | undefined>>(new Map());
   const changedChatWindowIdsRef = useRef<ReadonlySet<string>>(new Set());
-  useEffect((): void => {
+  useLayoutEffect((): void => {
     if (ws.wins === null) {
       changedChatWindowIdsRef.current = new Set();
       return;
@@ -2492,7 +2507,7 @@ function AppShellInner(): ReactNode {
         ),
     );
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (ws.wins === null) return;
     reconcileFilesAcknowledgementFingerprints(
       ws.conns,

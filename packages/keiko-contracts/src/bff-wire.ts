@@ -2111,6 +2111,7 @@ export function isExpandableDirectory(entry: FilesTreeEntry): boolean {
 }
 
 export interface FilesTreeResponse {
+  /** Guarded canonical root that produced these entries, including for a selected alias. */
   readonly root: string;
   readonly path: string;
   readonly entries: readonly FilesTreeEntry[];

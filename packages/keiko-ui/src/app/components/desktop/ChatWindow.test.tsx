@@ -1143,6 +1143,36 @@ describe("ChatWindow cancel button", () => {
       resetClientDiagnosticWriter();
     }
   });
+
+  it.each(["pending", "failed"] as const)(
+    "keeps the draft visible and Send inert while a source update is %s",
+    async (groundingScopeTransition) => {
+      const sendMessage = vi.fn();
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          draft: "Preserve this question",
+          groundingScopeTransition,
+          sendMessage,
+        }),
+      );
+      const send = screen.getByRole("button", { name: "Send message" });
+      expect(send).toHaveAttribute("aria-disabled", "true");
+      expect(send).toHaveAttribute("type", "button");
+      expect(
+        screen.getByText(
+          groundingScopeTransition === "pending"
+            ? /Updating connected sources/u
+            : /Could not update connected sources/u,
+        ),
+      ).toHaveAttribute("role", "status");
+      await userEvent.click(send);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+        "Preserve this question",
+      );
+    },
+  );
 });
 
 describe("ChatWindow memory disclosure", () => {

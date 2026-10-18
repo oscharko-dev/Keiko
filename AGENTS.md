@@ -821,6 +821,13 @@ system that exists, never beside it:
   `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
   folder or asks for confirmation. The existing timeline carries these dispositions and counts
   without scope paths or notice text.
+  Files directory responses identify the guarded canonical root, including for symbolic aliases.
+  Root normalization/replacement and superseded child reads use the existing Files scope-decision
+  Activity Log under their directory-read correlation, without paths or contents.
+  Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
+  retains per-source pending/failed admission holds and releases only the current accepted token;
+  drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision
+  operation and the serialized mutation correlation.
   `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
   `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
   `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch

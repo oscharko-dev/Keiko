@@ -182,6 +182,17 @@ stale source mutation or run against newly connected sources. The grounded path 
 scope before committing its answer. Legacy requests without a precondition still undergo the
 existing grounding-mode and access checks; absence is not a matching-identity claim.
 
+Connected Files navigation establishes a client admission hold before its serialized scope update
+is acknowledged. The existing Chat window runtime cancels the affected conversation immediately;
+typed, spoken and regeneration dispatches cannot consume the previous authority while any source
+intent is pending or failed. Holds contain only per-source ownership tokens and lifecycle state,
+not another scope list. Only the current token's successful acknowledgement releases its hold;
+independent sources and superseded responses cannot release one another. Failed intent survives
+Chat window changes until a successful source retry/disconnection or deletion of that chat.
+The composer preserves drafts and displays localized pending/failure status. Existing
+`client.files-scope.decision` evidence joins `intent-pending`, `intent-applied`, `intent-failed`
+and `intent-send-refused` to the mutation correlation without paths, prompts or answers.
+
 Git-change description authority is independent of source connectivity. Buffered and streaming
 turns require authority for the exact active comparison and return 409
 `GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED` when admission fails. Ordinary chat regeneration rejects

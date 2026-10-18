@@ -3753,6 +3753,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "timeout-recovered",
           "timeout-rejected",
           "request-superseded",
+          "root-normalized",
+          "root-replaced",
+          "intent-pending",
+          "intent-applied",
+          "intent-failed",
+          "intent-send-refused",
         ],
       },
       sourceCount: {

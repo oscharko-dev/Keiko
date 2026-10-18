@@ -22,6 +22,12 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { useTranslate } from "@/lib/i18n";
 import {
+  clearChatScopeTransitions,
+  refuseChatScopeSend,
+  useChatScopeTransition,
+  type ChatScopeTransition,
+} from "../windows/chatWindowActivity";
+import {
   ATTACHMENT_CLEANUP_DEFERRED_ERROR,
   DRAFT_ATTACHMENTS_UNSAVED_ERROR,
   SKILL_SELECTION_UNAVAILABLE_ERROR,
@@ -738,6 +744,7 @@ export function notifyChatUpsert(chat: Chat): void {
 }
 
 export function notifyChatDeleted(chatId: string): void {
+  clearChatScopeTransitions(chatId);
   invalidateSharedBootstrap();
   removeConversationMemorySettings(chatId);
   if (typeof window === "undefined") return;
@@ -1592,6 +1599,7 @@ export interface UseChatSessionResult {
   // Issue #185 AC3 — aborts the in-flight grounded request and clears the sending state.
   // No-op when no grounded request is in flight.
   cancelGrounded: () => void;
+  readonly groundingScopeTransition?: ChatScopeTransition;
   // Issue #147 — client-side attachment intake (AC #1–#4).
   // Server-side enforcement is deferred to #149.
   readonly pendingAttachments: readonly PendingAttachment[];
@@ -2759,6 +2767,11 @@ function nonRetryableFailure(userPersisted: boolean): SendMessageOutcome {
     : { status: "failed", retryable: false };
 }
 
+function admitCurrentSource(admission: SendMessageAdmission): SendMessageAdmission {
+  if (admission.kind === "rejected") return admission;
+  return refuseChatScopeSend(admission.chat.id) === undefined ? admission : { kind: "rejected" };
+}
+
 function terminalFailureRefusal(
   terminal: FailedSendOutcome,
   persistence: UserPersistenceProof,
@@ -3006,6 +3019,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const autoCreate = options.autoCreate ?? true;
   const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
+  const groundingScopeTransition = useChatScopeTransition(state.activeChat);
   const markdownSkill = useChatMarkdownSkill(state.activeChat?.id);
   const sessionStateRef = useRef<SessionState>(state);
   sessionStateRef.current = state;
@@ -4584,16 +4598,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
-      const admission = resolveSendMessageAdmission({
-        options,
-        draft: draftState,
-        activeChat: state.activeChat,
-        selectedModel: state.selectedModel,
-        models: state.models,
-        selectionUnavailable,
-        pendingAttachmentCount: pendingAttachments.length,
-        sendInFlight: isInFlight(sendStatusRef.current),
-      });
+      const admission = admitCurrentSource(
+        resolveSendMessageAdmission({
+          options,
+          draft: draftState,
+          activeChat: state.activeChat,
+          selectedModel: state.selectedModel,
+          models: state.models,
+          selectionUnavailable,
+          pendingAttachmentCount: pendingAttachments.length,
+          sendInFlight: isInFlight(sendStatusRef.current),
+        }),
+      );
       if (admission.kind === "rejected") {
         if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
           refuseHeldSelection();
@@ -5130,6 +5146,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const project = state.activeProject;
       const modelId = selectedSessionModelId;
       if (chat === undefined || project === undefined || modelId === undefined) return;
+      if (refuseChatScopeSend(chat.id) !== undefined) return;
       updateSendStatus("queued");
       setRegeneratingMessageId(assistantMessageId);
       setError(undefined);
@@ -5279,6 +5296,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       replaceChat,
       latestGrounded,
       cancelGrounded,
+      groundingScopeTransition,
       pendingAttachments,
       addPendingAttachment,
       removePendingAttachment,
@@ -5337,6 +5355,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       replaceChat,
       latestGrounded,
       cancelGrounded,
+      groundingScopeTransition,
       pendingAttachments,
       addPendingAttachment,
       removePendingAttachment,

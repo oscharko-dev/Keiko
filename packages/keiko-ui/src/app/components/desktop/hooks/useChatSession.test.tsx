@@ -74,6 +74,7 @@ import {
 
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import { beginChatScopeTransition, clearChatScopeTransitions } from "../windows/chatWindowActivity";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -136,6 +137,7 @@ vi.mock("@/lib/chat-draft-api", () => ({
 }));
 
 afterEach(() => {
+  clearChatScopeTransitions("chat-1");
   vi.useRealTimers();
   clearCanonicalVoicePageOutboxForTests();
   vi.clearAllMocks();
@@ -1453,6 +1455,28 @@ describe("useChatSession conversation switch — composer isolation", () => {
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
     return rendered;
   }
+
+  it.each(["pending", "failed"] as const)(
+    "refuses sends and regeneration while a source change is %s without consuming the draft",
+    async (status) => {
+      const { result } = await setupTwoChatSession();
+      act(() => result.current.setDraft("Keep this draft until the sources are confirmed."));
+      act(() => {
+        const intent = beginChatScopeTransition("chat-1", "files-a");
+        if (status === "failed") intent.settle(false);
+      });
+      let outcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        outcome = await result.current.sendMessage({ forceBuffered: true, reportOutcome: true });
+        await result.current.regenerateMessage("assistant-1");
+      });
+      expect(outcome).toEqual({ status: "not-sent" });
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+      expect(askGrounded).not.toHaveBeenCalled();
+      expect(regenerateDesktopChat).not.toHaveBeenCalled();
+      expect(result.current.draft).toBe("Keep this draft until the sources are confirmed.");
+    },
+  );
 
   it("drops the draft and the staged attachments when another chat is opened", async () => {
     const { result } = await setupTwoChatSession();

@@ -29,6 +29,12 @@ same Node 24.18.0 runtime. All eight unchanged tests passed; only `11-progress-s
 PNG bytes, and the three JSON records now bind the updated English/German message sources.
 The evidence freshness check passed. This remains updater fixture evidence, not Chat scope proof.
 
+The source-intent repair for #4040 regenerated the original producer again on 2026-10-18
+using Node 24.18.0. All eight unchanged Chromium cases passed in 46.7 seconds, including
+the real-BFF outage case. Two PNGs changed bytes (`10-responsive-manual-path.png` and
+`11-progress-state.png`); the three JSON records now bind the current message catalogs.
+The evidence freshness gate passed. This remains updater evidence, not Chat acceptance.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

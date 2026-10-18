@@ -137,7 +137,13 @@ history is bounded, preserves Back/Forward across explicitly selected roots and
 resets when a task-bound root switches. Files titles use the resolved root and an
 empty Editor shows its project root, so neither can label another root as the
 selected project. Navigation and directory reads emit body-free client stage
-lifecycle evidence through the existing Activity Log. Explicit Editor root changes
+lifecycle evidence through the existing Activity Log.
+Directory responses identify their guarded canonical root, including when the selected path is
+a symbolic alias. Re-resolving an unchanged alias to a different root invalidates outstanding
+child reads, cached entries, selection and directory navigation before publishing the new root.
+The existing Files scope-decision Activity Log records root normalization/replacement and
+superseded reads without paths or contents, under the producing directory read's correlation.
+Explicit Editor root changes
 reuse project registration and require current workspace membership before committing
 the canonical root, including ordinary folders without Git, so local history retains
 its identity checks. A failed connection preserves the previous editor and its buffers.

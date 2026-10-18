@@ -18,7 +18,12 @@ import { registerWindowRender } from "./windows/WindowsRegistry";
 import { WindowFrame } from "./windows/WindowFrame";
 import { useLinkRevision } from "./hooks/useLinkRevision";
 import { nativeFilesChatFixture } from "../../../../../../tests/support/files-chat-native-support";
-import { usePublishChatWindowRuntime } from "./windows/chatWindowActivity";
+import {
+  usePublishChatWindowRuntime,
+  registerChatWindowRuntime,
+  chatScopeTransition,
+  clearChatScopeTransitions,
+} from "./windows/chatWindowActivity";
 import { notifyWorkspaceFileMutated } from "./widgets/cards/workspace-file-events";
 
 const mocks = vi.hoisted(() => ({
@@ -337,6 +342,7 @@ beforeEach((): void => {
 });
 afterEach((): void => {
   cleanup();
+  clearChatScopeTransitions("chat-1");
   resetClientDiagnosticWriter();
   Reflect.deleteProperty(navigator, "webdriver");
   vi.restoreAllMocks();
@@ -384,6 +390,48 @@ async function mountNativeFilesSession(
 }
 
 describe("AppShell canonical workspace scope synchronization", () => {
+  it("cancels the bound response before a navigation PATCH acknowledgement", async () => {
+    const initial = fixture(["/manuals/Old"]);
+    mocks.initialChat = chat([scope("/manuals/Old")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    const pending = deferred<{ readonly chat: Chat }>();
+    const cancel = vi.fn();
+    const release = registerChatWindowRuntime(
+      "chat-window",
+      { conversationId: "chat-1", projectPath: "/repo" },
+      undefined,
+      undefined,
+      cancel,
+    );
+    try {
+      render(<AppShell />);
+      await screen.findByTestId("workspace");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      cancel.mockClear();
+      mocks.updateChatConnectedScopes.mockClear();
+      mocks.updateChatConnectedScopes.mockReturnValueOnce(pending.promise);
+      await act(async () => {
+        mocks.workspace?.api.update("files-0", {
+          cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
+        });
+      });
+      await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(chatScopeTransition("chat-1")).toBe("pending");
+      await act(async () => {
+        mocks.serverChat = chat([scope("/manuals/New")], 2);
+        pending.resolve({ chat: mocks.serverChat });
+      });
+      await waitFor(() => expect(chatScopeTransition("chat-1")).toBeUndefined());
+    } finally {
+      pending.resolve({ chat: chat([scope("/manuals/New")], 2) });
+      release();
+    }
+  });
+
   it.each([
     ["canonical", "file"],
     ["symlink", "file"],

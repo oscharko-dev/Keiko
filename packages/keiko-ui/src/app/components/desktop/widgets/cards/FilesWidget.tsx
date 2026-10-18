@@ -50,6 +50,8 @@ import {
 import { FilesRootBar } from "./FilesRootBar";
 import { SupportReportButton } from "../../SupportReportButton";
 import { correlationIdOf } from "@/lib/client-error-summary";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportFilesScopeDecision } from "@/lib/client-diagnostics";
 import { useFilesNavigation } from "./useFilesNavigation";
 import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
@@ -598,23 +600,36 @@ function gitDirectoryLabel(aggregate: GitDirectoryAggregate, t: FilesWidgetTrans
   return t(gitDirectoryLabelKey(aggregate), { count: aggregate.count });
 }
 
-const filesTreeRequests = new Map<string, Promise<FilesTreeResponse>>();
+interface FilesTreeRead {
+  readonly response: FilesTreeResponse;
+  readonly correlationId: string;
+}
+const filesTreeRequests = new Map<string, Promise<FilesTreeRead>>();
 const gitStatusRequests = new Map<string, Promise<GitRepositoryStatusResponse>>();
+
+function reportRootResolution(correlationId: string, replaced: boolean): void {
+  reportFilesScopeDecision(correlationId, {
+    decision: replaced ? "root-replaced" : "root-normalized",
+  });
+}
 
 function readSharedFilesTree(
   root: string,
   path: string,
   navigation?: FilesNavigationRead,
-): Promise<FilesTreeResponse> {
+): Promise<FilesTreeRead> {
   const key = `${root}\u0000${path}\u0000${navigation?.correlationId ?? ""}`;
   const existing = filesTreeRequests.get(key);
   if (existing !== undefined) return existing;
+  const correlationId = navigation?.correlationId ?? newClientCorrelationId();
   const request = observeFilesDirectoryRead(
-    (correlationId) => fetchFilesTree(root, path, correlationId),
-    navigation,
-  ).finally(() => {
-    filesTreeRequests.delete(key);
-  });
+    (readCorrelation) => fetchFilesTree(root, path, readCorrelation),
+    navigation ?? { correlationId, settle: (): void => undefined },
+  )
+    .then((response): FilesTreeRead => ({ response, correlationId }))
+    .finally(() => {
+      filesTreeRequests.delete(key);
+    });
   filesTreeRequests.set(key, request);
   return request;
 }
@@ -981,13 +996,16 @@ export function FilesWidget({
   }, []);
 
   const observeRoot = useCallback(
-    (requestRoot: string, resolved: string): void => {
+    (requestRoot: string, resolved: string, correlationId: string): void => {
       const observed = observedRootRef.current;
       const previousRoot = observed?.resolved ?? requestRoot;
       const sameRoot = previousRoot === resolved;
       const changedRoot = observed !== null && !sameRoot;
       const selected = sameRoot ? selectedPathRef.current : null;
-      if (!sameRoot) setSelectedPath(null);
+      if (!sameRoot) {
+        reportRootResolution(correlationId, changedRoot);
+        setSelectedPath(null);
+      }
       if (changedRoot) {
         directoryLoadSeqRef.current += 1;
         resetVisibleFiles();
@@ -1034,9 +1052,19 @@ export function FilesWidget({
         },
       }));
       try {
-        const response = await readSharedFilesTree(apiRoot, path, takeNavigationRead(path));
-        if (isStale()) return;
-        if (path === "") observeRoot(requestRoot, response.root);
+        const { response, correlationId } = await readSharedFilesTree(
+          apiRoot,
+          path,
+          takeNavigationRead(path),
+        );
+        if (isStale()) {
+          reportFilesScopeDecision(correlationId, {
+            decision: "request-superseded",
+            mutationSurface: "files",
+          });
+          return;
+        }
+        if (path === "") observeRoot(requestRoot, response.root, correlationId);
         touchDirectoryAccess(path);
         setDirectories((current) => {
           const next = {

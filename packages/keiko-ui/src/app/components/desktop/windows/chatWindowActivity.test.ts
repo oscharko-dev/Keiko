@@ -1,12 +1,60 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   chatWindowRuntimeTarget,
   registerChatWindowRuntime,
   groundingIntensity,
+  beginChatScopeTransition,
+  chatScopeTransition,
+  clearChatScopeTransitions,
 } from "./chatWindowActivity";
 
 const TARGET = { conversationId: "chat-a", projectPath: "/repo" };
+afterEach((): void => {
+  clearChatScopeTransitions(TARGET.conversationId);
+});
+
+describe("chat source-intent admission", () => {
+  it("cancels every runtime of the affected chat synchronously and preserves other chats", () => {
+    const cancel = vi.fn();
+    const other = vi.fn();
+    const release = registerChatWindowRuntime("chat-window", TARGET, undefined, undefined, cancel);
+    const releaseOther = registerChatWindowRuntime(
+      "other-window",
+      { conversationId: "other", projectPath: "/repo" },
+      undefined,
+      undefined,
+      other,
+    );
+    try {
+      const intent = beginChatScopeTransition(TARGET.conversationId, "files-a");
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(other).not.toHaveBeenCalled();
+      expect(chatScopeTransition(TARGET.conversationId)).toBe("pending");
+      intent.settle(false);
+      expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+      intent.settle(true);
+      expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+    } finally {
+      release();
+      releaseOther();
+    }
+  });
+
+  it("keeps independent source holds and refuses obsolete acknowledgements", () => {
+    const old = beginChatScopeTransition(TARGET.conversationId, "files-a");
+    const current = beginChatScopeTransition(TARGET.conversationId, "files-a");
+    const other = beginChatScopeTransition(TARGET.conversationId, "files-b");
+    old.settle(true);
+    other.settle(false);
+    current.settle(true);
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+    const recovery = beginChatScopeTransition(TARGET.conversationId, "files-b");
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("pending");
+    recovery.settle(true);
+    expect(chatScopeTransition(TARGET.conversationId)).toBeUndefined();
+  });
+});
 
 describe("chat window runtime identity", () => {
   it("retains the exact chat and project identity for normal window actions", () => {

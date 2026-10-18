@@ -7,6 +7,68 @@ updated pull request against `dev`.
 Tracking: [Epic #4037](https://github.com/oscharko-dev/Keiko/issues/4037),
 [execution task #4038](https://github.com/oscharko-dev/Keiko/issues/4038).
 
+## Resumed acceptance plan — 2026-10-18
+
+The owner scheduled the complete remaining campaign, including all substantive acceptance
+criteria, with simple extensions of existing owners. The clean starting checkout and remote
+`dev` both identify `babee4b4cf5ede0d4eb8a7cec3ddf96493fee652` (1.2.4).
+PR #4039 is merged and #4038 is closed. Their bounded delivery does not qualify the deferred
+criteria. This continuation uses `codex/chat-native-qualification`, with one serial implementation
+owner. Current open PRs #4030 and #4041 update dependencies; #4013 targets a separate quality
+branch. Recheck overlap before delivery.
+
+| Tracker                 | Current disposition                                                                                                            | Remaining acceptance and evidence                                                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #4037                   | Open; #4038 delivered                                                                                                          | Complete the declared browser/model matrix, executable defect-detecting tests, causal repairs, current-head gates and review settlement. Retain every failed attempt and explicit limit.                                                                                                 |
+| #4040: sources          | Server cancellation, source identity, compact controls and refresh preservation delivered; immediate client intent unqualified | Cancel before ACK; reject late answers; block stale sends during pending/failed changes; independent N+1 sources, deduplication, provenance, reordered/failed ACKs, navigation, disconnect/reconnect and Chat lifecycle recovery.                                                        |
+| #4040: history          | Existing separate history/source lanes; native multi-source acceptance open                                                    | Actual Gemma/browser compaction preserves completed findings, retrieves current evidence each turn and never restores removed-source authority.                                                                                                                                          |
+| #4040: refresh          | Alias/root reset regression exists; held-child variant open                                                                    | Hold an old child response across an unchanged alias resolving to a new real root; release it and prove tree and authority remain current.                                                                                                                                               |
+| #4040: skills and scale | Candidate skills and isolated runs exist; complete comparison open                                                             | Three matched skill/control repetitions per core task, untouched Java/Spring and React/MUI/Vitest held-out tasks; execute unchanged tests on correct fixtures and independent defects in restricted containers; complete scale, freshness, pressure, injection and shared-gateway cases. |
+| #4042                   | Open, newly discovered native child of #4037                                                                                   | Closed/merged metadata edits must not admit the live candidate matrix; open edits/base retargets and existing code-head, queue, protected-push and dispatch checks remain strict.                                                                                                        |
+| #4017 / #4018           | AC1 open; earlier real answers failed                                                                                          | Original question under original history/corpus/grants: correct distinction between physical read/bytes and cumulative model tokens, remaining grants and absolute deadline, under 200 words, supported by evidence actually sent.                                                       |
+| #4017 / #4019           | AC2 open; faithful rejection already enforced                                                                                  | Valid canonical citations; bounded marker repair preserves meaning, rejects content changes and retains single/plural/hybrid answer-kind and physical-attempt controls.                                                                                                                  |
+| #4017 / #4020           | AC3 open                                                                                                                       | Repeated native candidate and delivered-head replays, positive sent-range joins, returned/persisted equality, 3 × 5 retrieval controls, denial/zero-grant, cumulative accounting and cleanup. Retain original latency limits.                                                            |
+| #4017 / #4021           | AC4 open                                                                                                                       | Reconcile all 96 original criterion identities without relabeling fixture/historical evidence; inherited exact-head local matrix, app-bound CI, reviewed integration and final connected-chat closeout.                                                                                  |
+
+Execution order:
+
+1. Revalidate every criterion against existing code, receipts and native behavior. Locate the
+   private original-history fixture; preserve it and all original grants. Verify local Gemma
+   availability and ask it to challenge the plan. Its suggestions are hypotheses, not evidence.
+2. Add failure-first proofs and repair source-intent admission and held-child ownership through
+   the existing mutation serializer, Chat runtime registry and Files read generations. Keep
+   canonical identities, independently owned edges and original authority intact.
+3. Diagnose the original native answer from Activity Log evidence; repair generic grounded
+   evidence/prompt/citation owners only when a causal regression proves the defect. No question,
+   filename or model-specific answer substitution.
+4. Execute the complete predeclared browser/model and skill/control matrix, including actual
+   compaction, freshness, scale and correlated 60/120/180-second gateway delays. Keep raw
+   artifacts private and publish only reviewed body-free results with denominators.
+5. Repair #4042 through existing workflow admission, with failing-first lifecycle controls and
+   all affected consumers. Never relax the strict merge-candidate verifier.
+6. Run applicable minimum, coverage, Activity Log, retrieval/context, UI/evidence, local Linux,
+   Sonar and inherited closeout gates. Run assembled-package verification last. Settle exact-head
+   CI and reviews; formal completion additionally requires verified authorized integration and
+   the post-integration native results required by #4020/#4021.
+
+Initial environment observations: the local Docker daemon was stopped and is now running;
+LiteLLM discovery exposes `gemma-4-31b-it` with a 131,072-token context and a 16,384-token output
+ceiling. These catalog values do not widen any qualification grant. The original private replay
+fixture has not yet been located. GitHub sub-issue relationships were read directly. The eight
+open epic/task cards (#4037, #4040, #4017–#4021 and #4042) are now on the public delivery
+project with classification, priority, workflow, owner and branch; PR linkage follows creation. No acceptance criterion is marked passed
+by this planning inventory.
+
+The owner clarified on 2026-10-18 that unavailable test environments, repositories, projects and
+fixtures must be recreated rather than block the campaign. The supplied archive contains an old
+checkout and a four-message/two-chat database, but no exact original-budget question. Newly
+authored histories and corpora will therefore be declared fresh baselines and qualified with the
+original question and unchanged grants wherever retained. They cannot be represented as byte-exact
+historical replays. Historical receipts and the original 96 identities retain their attribution;
+original-fixture repeatability stays explicitly unavailable unless that fixture is recovered.
+The two customer deliverables remain the existing Java/Spring Boot unit-test and
+TypeScript/React/MUI/Vitest skills, optimized from actual local Gemma execution comparisons.
+
 ## Purpose and boundaries
 
 Exercise Keiko through the actual In-App Browser with local LiteLLM and Gemma 4. Qualify recursive

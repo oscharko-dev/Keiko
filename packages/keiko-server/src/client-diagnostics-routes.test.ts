@@ -1621,6 +1621,12 @@ describe("POST /api/diagnostics/client", () => {
     "timeout-recovered",
     "timeout-rejected",
     "request-superseded",
+    "root-normalized",
+    "root-replaced",
+    "intent-pending",
+    "intent-applied",
+    "intent-failed",
+    "intent-send-refused",
   ])(
     "persists the closed Files ownership decision %s as routine causal evidence",
     async (decision) => {

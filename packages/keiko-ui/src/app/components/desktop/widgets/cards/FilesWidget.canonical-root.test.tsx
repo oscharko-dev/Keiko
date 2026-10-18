@@ -1,7 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Suspense, startTransition, type ComponentProps, type ReactNode } from "react";
+import { symlinkSync, unlinkSync } from "node:fs";
 import { fetchFilesTree } from "@/lib/api";
+import { reportFilesScopeDecision } from "@/lib/client-diagnostics";
 import { FilesWidget } from "./FilesWidget";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import { nativeFilesChatFixture } from "../../../../../../../../tests/support/files-chat-native-support";
@@ -40,6 +42,7 @@ vi.mock("@/lib/api", async (original) => ({
 vi.mock("@/lib/client-diagnostics", async (original) => ({
   ...(await original<typeof import("@/lib/client-diagnostics")>()),
   reportClientDiagnostic: vi.fn(),
+  reportFilesScopeDecision: vi.fn(),
 }));
 
 afterEach(() => {
@@ -91,6 +94,49 @@ async function canonicalRoot(native: NativeFixture): Promise<string> {
 }
 
 describe("Files canonical root while a child is loading", () => {
+  it("rejects a held child after the same alias resolves to another actual root", async () => {
+    const native = await nativeFilesChatFixture(true);
+    const pending = delayedChild(native);
+    try {
+      const active = vi.fn();
+      render(
+        <FilesWidget
+          root={native.alias}
+          initialDirectoryPath="Alpha"
+          onActiveFileChange={active}
+          watchActive={false}
+        />,
+      );
+      fireEvent.click(await screen.findByRole("treeitem", { name: /^nested$/u }));
+      await act(async () => pending.entered);
+      const replacement = `${native.root}/Beta`;
+      unlinkSync(native.alias);
+      symlinkSync(replacement, native.alias, "dir");
+      expect((await native.tree(native.alias)).root).toBe(replacement);
+      act(() => notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" }));
+      await screen.findByRole("treeitem", { name: /two\.ts/u });
+      expect(active).toHaveBeenLastCalledWith(null, replacement, null);
+      expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+        decision: "root-replaced",
+      });
+      active.mockClear();
+      await pending.release();
+      expect(screen.queryByRole("treeitem", { name: /nested\.ts/u })).toBeNull();
+      expect(screen.getByRole("treeitem", { name: /two\.ts/u })).toBeInTheDocument();
+      expect(active).not.toHaveBeenCalled();
+      expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+        decision: "request-superseded",
+        mutationSurface: "files",
+      });
+      fireEvent.click(screen.getByRole("treeitem", { name: /two\.ts/u }));
+      expect(active).toHaveBeenLastCalledWith("two.ts", replacement);
+    } finally {
+      await pending.release();
+      cleanup();
+      await native.close();
+    }
+  });
+
   it("reloads the pending child after the native canonical ACK without a watcher", async () => {
     const native = await nativeFilesChatFixture(true);
     try {

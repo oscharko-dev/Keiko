@@ -589,6 +589,9 @@ export const EN_MESSAGES = {
     "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
   "chat.grounding.connectSourceFailed":
     "Keiko could not connect that source. Check that it is still available and try again.",
+  "chat.grounding.sourceUpdatePending": "Updating connected sources. Your draft is preserved.",
+  "chat.grounding.sourceUpdateFailed":
+    "Could not update connected sources. Reconnect the source before sending; your draft is preserved.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
   "chat.grounding.gitChangeSavedRefreshUnavailable":

@@ -729,6 +729,15 @@ bounded and clears on task-bound root switches. Files titles reflect their resol
 root; an empty Editor names its project. Navigation and directory reads record
 body-free client stage lifecycle evidence on the existing Activity Log.
 
+Files directory responses identify the actual guarded canonical root. When an unchanged alias
+resolves elsewhere, outstanding child reads cannot restore its previous tree or selection.
+The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
+`request-superseded`, joined to directory-read correlations without paths or source bodies.
+Connected Files navigation additionally cancels the bound response before a delayed scope ACK.
+Per-source admission holds in the existing Chat runtime preserve drafts and block sends and
+regeneration until the current intent succeeds. Pending, applied, failed and send-refused intent
+decisions share the serialized mutation's body-free Activity Log correlation.
+
 The ordinary Editor is human-operated. The owner decision of 2026-10-03 retires its agent
 presence/history, incoming actions, selection-to-chat handoff and Chat **Apply to editor** command.
 Keep the existing manual edit/save/format/history flow and content-free dirty-buffer protection.

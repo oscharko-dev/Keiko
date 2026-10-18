@@ -606,6 +606,10 @@ export const DE_MESSAGES = {
     "Das Chat-Grounding ist nach einer Zeitüberschreitung blockiert. Lade den Chat neu, bevor du es erneut versuchst.",
   "chat.grounding.connectSourceFailed":
     "Keiko konnte diese Quelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
+  "chat.grounding.sourceUpdatePending":
+    "Verbundene Quellen werden aktualisiert. Dein Entwurf bleibt erhalten.",
+  "chat.grounding.sourceUpdateFailed":
+    "Die Quellen konnten nicht aktualisiert werden. Verbinde die Quelle vor dem Senden erneut; dein Entwurf bleibt erhalten.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.grounding.gitChangeSavedRefreshUnavailable":
