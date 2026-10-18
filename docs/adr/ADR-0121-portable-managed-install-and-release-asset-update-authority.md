@@ -161,6 +161,16 @@ a matching target/version alone is insufficient. The canonical macOS exception n
 explicit organization/machine-managed policy. Preflight and session status record their actual
 classification and elapsed time on the existing Activity Log without paths or package bodies.
 
+Startup and post-handoff recovery revalidate those same registration/setup/launcher bindings on
+every portable target. The existing bounded, no-follow, single-link readers and stable-file
+identity checks apply to POSIX files as well as Windows files, using the canonical activation
+layout and the unchanged attestation deadline. A matching registration snapshot and root digest
+alone cannot settle an update whose setup or launcher binding is invalid. Normal-startup refusal
+retains the WAL and emits the existing correlated recovery-required Activity Log event; this
+binding check does not replace native supervisor, release-signature or process-lifetime proof.
+Registration, setup and launcher readers open nonblocking before checking the descriptor type,
+so a FIFO cannot stall startup before the existing regular-file and deadline checks run.
+
 ### D4 — Source-of-truth split
 
 GitHub Release Assets are the authoritative source of portable installability.

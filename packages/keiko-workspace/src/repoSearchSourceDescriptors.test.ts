@@ -52,6 +52,32 @@ function sources(result: SearchResult): readonly string[] {
 }
 
 describe("observed source descriptions", () => {
+  it.each([false, true])(
+    "normalizes an eligible line once with caseSensitive=%s",
+    (caseSensitive) => {
+      const line = "approved project testing conventions";
+      const descriptors = [
+        ["approved", "release", "policy"],
+        ["approved", "security", "policy"],
+        ["approved", "testing", "conventions"],
+      ];
+      let normalizedCharacters = 0;
+      // The ASCII fixture's NFC result is identical; count actual normalization work only.
+      const observed = vi.spyOn(String.prototype, "normalize").mockImplementation(function (
+        this: string,
+      ): string {
+        normalizedCharacters += this.length;
+        return this;
+      });
+      try {
+        expect(matchesQuerySourceDescriptor(line, descriptors, caseSensitive)).toBe(true);
+        expect(normalizedCharacters).toBeLessThanOrEqual(line.length);
+      } finally {
+        observed.mockRestore();
+      }
+    },
+  );
+
   it("distinguishes source attribution from a named file's ordinary domain policy", () => {
     expect(hasSourceAdviceAttribution("according to the source files")).toBe(true);
     expect(hasSourceAdviceAttribution(QUESTION)).toBe(true);

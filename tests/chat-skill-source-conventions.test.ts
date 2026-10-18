@@ -95,12 +95,15 @@ function expectSourceObservation(
   count: number,
 ): void {
   const details = log.events.find(
-    (event) => event.op === "search.connected-context.source-details",
+    (event) => event.op === "search.connected-context.evidence-details",
   );
   expect(details?.correlationId).toBe("source-conventions-observation");
-  expect(details?.extra).toMatchObject({ sourceDescriptorPathCount: count });
+  expect(details?.extra).toMatchObject({
+    activityDetailStatus: "complete",
+    sourceDescriptorPathCount: count,
+  });
   expectActivityLogProof(
-    "search.connected-context.source-details.line",
+    "search.connected-context.evidence-details.line",
     formatActivityLogProofLine(details ?? {}),
   );
   const serialized = JSON.stringify(log.events);

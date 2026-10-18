@@ -28381,6 +28381,55 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "search.connected-context.evidence-details",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "grounded-orchestrator.logSourceEvidenceDetails",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      scopeIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      queryIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      activityDetailStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["complete", "unavailable"],
+      },
+      sourceDescriptorPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["connected-context-retrieval"],
+    proofIds: ["search.connected-context.evidence-details.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "search.connected-context.failed",
     category: "search",
     owner: "keiko-server",
@@ -29182,11 +29231,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       primaryContentPathCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      sourceDescriptorPathCount: {
         type: "integer",
         dataClass: "count",
         required: false,

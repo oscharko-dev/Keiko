@@ -243,3 +243,53 @@ native-service readiness run exceeds its unchanged ten-second bound while a sepa
 same head passes. A WebKit smoke run also fails the Files root-navigation case. These observations
 are retained as unresolved platform/journey evidence, not erased by healthy runs on other engines
 or platforms. Native package replacement and both customer skill qualifications remain open.
+
+## POSIX recovery registration bindings
+
+The next updater increment reproduces 21 invalid POSIX registration acceptances with three healthy
+controls across Linux x64 and both macOS targets. Current setup/launcher byte drift, hard links,
+symlinks and a newly recorded wrong-target setup were not revalidated. Recovery now reuses the
+existing bounded active-install binding owner for all targets. Healthy production/normal-startup
+fixtures use the actual registration producer and synthetic, non-executed native bytes; no healthy
+assertion is relaxed. The five owning suites pass 92 cases. A separate failure-first normal-startup
+case previously settled an invalid launcher binding as normal; it now retains the WAL, avoids
+native execution and emits the existing correlated registered recovery-required proof. This is
+binding qualification, not installed native update or supervisor acceptance.
+
+The auditor additionally reproduces FIFO hangs before descriptor validation. Nine causal
+subprocess controls fail before repair across all three POSIX targets and registration/setup/launcher
+positions, each with a reachable healthy child control and externally bounded cleanup. The owning
+reader now opens nonblocking before its existing regular-file validation. The control on Windows
+is explicitly skipped because it exercises POSIX FIFOs; no product or existing test timeout changes.
+
+The complete immutable `6e8fcb191bf7d2c801134e756e231deede3593dc` Linux/arm64 WebKit smoke passes
+all 110 unchanged cases in 9.9 minutes with exit zero. The earlier 6 GiB container attempt ends
+with exit 137 and a Docker OOM event; that failed receipt remains retained. The successful run
+uses 12 GiB, pinned Node 24.18.0/Playwright, an explicit container user identity and the exact Git
+metadata. No test source, timeout or numerical product gate changes. This does not identify the
+cause of the retained earlier CI tree-intake timeout or establish Safari OS integration.
+
+One further private generic evidence-checklist skill diagnostic on the same published runtime
+preserves the original task and fixture, both actual API-name witnesses and returned output bytes.
+It removes the invented mock-factory call in that observation but still uses the obsolete MVC
+import and fails baseline compilation. It earns no execution or mutation credit, and the
+unsuccessful paragraph is not promoted into the customer skill. A separate local Gemma review
+of the generic instruction failure is advisory only.
+
+The original published-head package coverage shard then finds three unchanged ring-decision
+Activity Log failures. They reproduce locally as three failures with nine healthy controls: the
+descriptor count raised source-details to 49 contextual fields against the unchanged 48-field cap.
+The counter moves to a small typed, correlated evidence-details sibling on the existing Activity
+Log. The original source row, formatter, cap and canonical-line assertions stay intact; no event
+is silently truncated and no existing observation is discarded. The source-conventions controls
+now prove the counter on that registered sibling with the same positive/negated expectations.
+The complete prior-head `6e8fcb191bf7d2c801134e756e231deede3593dc` package-coverage run retains
+55,701 passing tests, eleven failures and 63 declared skips. Failures belong to ring decisions,
+metadata failure evidence and native HTTP log validation. Its UI/script/floor stages do not run
+after that failed package stage; it is not a completed full-quality success. The new sibling is
+also included in exact lifecycle ordering/count checks and real persisted-line validation;
+all original completion/source/selection rows retain their previous relative order and fields.
+Two further failure-first work controls reproduce repeated normalization of the same eligible
+source line for several descriptors, in both case modes. Matching now normalizes each eligible
+line once and declines an empty descriptor set immediately; Unicode, negation, coherent-line and
+case semantics retain their original controls. This measures primitive work, not broad latency.

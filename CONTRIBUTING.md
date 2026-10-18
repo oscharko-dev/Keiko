@@ -101,7 +101,10 @@ field cap. Source details describe actual path/reference admission and eligibili
 details describe calibrated floors, high/low confidence, addressed-file demotion, reranker
 disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
 final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.
-Only counts, closed dispositions and digests enter the log, never paths, declarations or answers.
+The correlated `search.connected-context.evidence-details` sibling carries certified descriptor
+counts within the same unchanged contextual-field cap. Existing source-detail rows retain all
+their fields. Only counts, closed dispositions and digests enter the log, never paths, declarations
+or answers.
 The six-reference intake preserves the primary local trace frame and explicitly named question
 paths before secondary frames or conversation referents. Prompt fitting preserves a complete
 matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable

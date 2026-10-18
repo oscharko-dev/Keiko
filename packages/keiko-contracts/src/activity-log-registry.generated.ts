@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4371b7c461e3e67b1bc986686c93000885a85e03b1d3f36d4e7f1961c20d77e8" as const;
+  "c6ac72013e299b10d0fa227683f6335e02d191cd4b88cd8ad8f57698f226cb43" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -12274,6 +12274,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         start: ["search.connected-context.started"],
         state: [
           "search.connected-context.completion-details",
+          "search.connected-context.evidence-details",
           "search.connected-context.metadata-unavailable",
           "search.connected-context.selection-details",
           "search.connected-context.source-details",
@@ -12302,6 +12303,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "search.connected-context.completion-details",
+          mode: "correlation",
+        },
+        {
+          op: "search.connected-context.evidence-details",
           mode: "correlation",
         },
         {
@@ -12335,6 +12340,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
+        "search.connected-context.evidence-details",
         "search.connected-context.metadata-unavailable",
         "search.connected-context.selection-details",
         "search.connected-context.source-details",
@@ -13141,6 +13147,48 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["search.connected-context.completion-details.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "search.connected-context.evidence-details",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "activityDetailStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "queryIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "scopeIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "sourceDescriptorPathCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["search.connected-context.evidence-details.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -14058,12 +14106,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "semanticRejectedAtomCount",
-              type: "integer",
-              dataClass: "count",
-              required: false,
-            },
-            {
-              name: "sourceDescriptorPathCount",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -42229,6 +42271,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.connected-context.clarification-needed": "memory-knowledge",
     "search.connected-context.completed": "memory-knowledge",
     "search.connected-context.completion-details": "memory-knowledge",
+    "search.connected-context.evidence-details": "memory-knowledge",
     "search.connected-context.failed": "memory-knowledge",
     "search.connected-context.metadata-unavailable": "memory-knowledge",
     "search.connected-context.selection-details": "memory-knowledge",

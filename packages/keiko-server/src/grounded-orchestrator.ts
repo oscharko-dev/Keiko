@@ -782,6 +782,34 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.evidence-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.logSourceEvidenceDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.evidence-details.line"],
+  releaseImpact: "patch",
+});
+
 const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -850,7 +878,6 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     },
     semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
     primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
-    sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
     metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
     metadataObservedCount: { type: "integer", dataClass: "count", required: false },
     metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
@@ -10737,6 +10764,13 @@ function sourceReferenceActivityExtra(
   return fields;
 }
 
+function sourceDecisionActivityExtra(
+  observation: SourceDecisionObservation,
+): Omit<SourceDecisionObservation, "sourceDescriptorPathCount"> {
+  const { sourceDescriptorPathCount: _sourceDescriptorPathCount, ...source } = observation;
+  return source;
+}
+
 function sourceDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -10759,7 +10793,9 @@ function sourceDetailsActivityExtra(
       reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
       unrepresentablePathCount:
         execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
-      ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
+      ...sourceDecisionActivityExtra(
+        execution.status.sourceDecision ?? emptySourceDecision("not-evaluated"),
+      ),
       ...metadataRetentionActivityExtra(execution.status),
       ...omissionTotalsActivityExtra(execution.output.pack),
     };
@@ -11028,6 +11064,35 @@ function excerptSchedulingActivityExtra(
   };
 }
 
+function logSourceEvidenceDetails(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  status: ConnectedContextCompletionStatus,
+  correlationId: string,
+): void {
+  const observed = status.sourceDecision;
+  const observation =
+    observed === undefined
+      ? { activityDetailStatus: "unavailable" as const }
+      : {
+          activityDetailStatus: "complete" as const,
+          sourceDescriptorPathCount: observed.sourceDescriptorPathCount,
+        };
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION,
+      { correlationId },
+      {
+        scopeIdentitySha256: identity.scopeIdentitySha256,
+        queryIdentitySha256: identity.queryIdentitySha256,
+        ...observation,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 function logConnectedContextCompletion(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
@@ -11060,6 +11125,7 @@ function logConnectedContextCompletion(
       selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
+  logSourceEvidenceDetails(logger, identity, execution.status, correlationId);
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,

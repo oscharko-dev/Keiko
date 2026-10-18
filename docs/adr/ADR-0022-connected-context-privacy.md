@@ -898,8 +898,11 @@ conservatively declines this optional witness and its score boost; ordinary HTML
 remains available. The body-free
 `sourceDescriptorMatch` observation is bound to the actual lexical atom and query identity; it
 never verifies organizational approval or gives repository text instruction or permission authority.
-The existing source-details Activity Log event records the certified descriptor-path count
-separately from aggregate primary content, without recording descriptor words or paths.
+The typed `search.connected-context.evidence-details` sibling records the certified descriptor-path
+count on the existing Activity Log and correlation, separately from aggregate primary content.
+The source-details event already occupies its 48 contextual fields; its existing fields and
+single-row semantics remain unchanged. The small evidence sibling preserves the same field cap
+without recording descriptor words or paths.
 The existing source admission, freshness, excerpt reads, selection floors and cumulative grants
 still apply. Same-query validated match records may preserve the observation; token-hash inventories
 alone cannot manufacture it. The existing runner prepares that pure query derivation once per scan.

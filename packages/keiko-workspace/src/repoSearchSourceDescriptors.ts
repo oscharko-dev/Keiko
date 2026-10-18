@@ -135,17 +135,11 @@ export function matchesQuerySourceDescriptor(
   descriptors: readonly (readonly string[])[],
   caseSensitive = false,
 ): boolean {
-  return content
-    .split("\n")
-    .some(
-      (line) =>
-        line.length <= MAX_DESCRIPTOR_CHARACTERS &&
-        !NEGATED_SOURCE_RE.test(line) &&
-        descriptors.some((descriptor) =>
-          orderedDescriptorMatch(
-            caseSensitive ? line.normalize("NFC") : line.normalize("NFC").toLowerCase(),
-            descriptor,
-          ),
-        ),
-    );
+  if (descriptors.length === 0) return false;
+  return content.split("\n").some((line) => {
+    if (line.length > MAX_DESCRIPTOR_CHARACTERS || NEGATED_SOURCE_RE.test(line)) return false;
+    const normalized = line.normalize("NFC");
+    const compared = caseSensitive ? normalized : normalized.toLowerCase();
+    return descriptors.some((descriptor) => orderedDescriptorMatch(compared, descriptor));
+  });
 }
