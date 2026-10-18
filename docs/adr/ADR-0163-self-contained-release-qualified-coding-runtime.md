@@ -222,6 +222,19 @@ inventory. Unknown and non-owner handles receive the same observation refusal, w
 live owner retains its distinct already-active response. Only the existing observed zero-live
 path may emit an empty-tree proof; monitor restart or missing state does not establish it.
 
+The monitor establishes a per-client sequence baseline before accepting ARM. It reads Apple's
+`global_seq_num` only when the message version exposes it (version four or later), and subsequent
+events must advance by exactly one. Missing, repeated, reversed or exhausted sequence values,
+or unavailable sequence fields, irreversibly invalidate that monitor instance's observation
+authority. The existing count-only diagnostic records the closed failure reason and counters;
+active clients receive the existing observation-error response. Every zero-live reply site is
+guarded, including stop and disconnect, and new ARM requests refuse after loss. A subsequent
+apparently contiguous event cannot restore the missing inventory. Startup cannot overwrite an
+observed failed state with active. Routine event tracking and unrelated exec policy retain their
+existing behavior; this refusal does not prove that an unobserved descendant was terminated.
+Native recovery, generation transfer and real Endpoint Security qualification remain separate
+requirements, including after monitor restart.
+
 The activation manager submits exactly Keiko's bundled extension through Apple's SystemExtensions
 framework and keeps the request alive while local-user approval is pending. After system-extension
 activation, the monitor reports a closed `needs-full-disk-access` state when `es_new_client`

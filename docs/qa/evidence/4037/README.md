@@ -439,3 +439,23 @@ returns no longer count as successful FIFO refusals. Two injected unrelated-open
 before this tightening while thirteen healthy/FIFO controls pass; all fifteen pass after it.
 Native execution remains forbidden. The directory-race control additionally reaches the actual
 open boundary; the copy cleanup aggregate is verified rather than mistaken for a direct error.
+
+## Checkpoint 20: monitor event continuity owns empty-tree proof authority
+
+An independent audit and a whole-source owning control reproduce a false empty-tree proof after
+a missed descendant event. The new fixture compiles the actual monitor against the installed
+macOS SDK using compiler arguments obtained from the existing release builder. Its transport,
+signal, logging and Endpoint Security initialization ports are inert; no real client, kernel event
+loss or process teardown is exercised. The original owner has seven failing policy cases and two
+healthy controls, including message-version-four/counter-zero and version-five/arbitrary-origin
+streams. The counterexample includes exit, stop and disconnect, so fixing one reply site is
+insufficient.
+
+The existing monitor now establishes a baseline before ARM, checks version-gated global sequence
+continuity, and irrevocably refuses empty-tree proofs after loss. A central reply guard covers all
+zero-live sites; startup preserves an already observed failure. Existing count-only diagnostics
+record the failure once, and unrelated exec requests remain allowed by the existing policy.
+The owning fixture checks skipped, duplicate, backward and overflowing counters, unavailable fields,
+missing initial baseline and startup failure. Healthy controls retain their zero-live proof and
+all fixture signal counts remain zero. This repairs observation integrity only; signed native
+execution, durable recovery, authenticated generation transfer and consecutive updates remain open.

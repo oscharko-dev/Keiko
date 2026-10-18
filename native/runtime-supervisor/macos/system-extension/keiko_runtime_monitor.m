@@ -43,6 +43,10 @@ static pthread_mutex_t endpoint_state_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t connection_lock = PTHREAD_MUTEX_INITIALIZER;
 static es_client_t *endpoint_client;
 static size_t connection_count;
+// Protected by sessions_lock; sequence failure is irreversible for this monitor instance.
+static uint64_t last_event_sequence;
+static int event_sequence_initialized;
+static int event_stream_failed;
 
 enum endpoint_state {
   ENDPOINT_STATE_STARTING = 1,
@@ -62,6 +66,9 @@ static int reply_to(struct monitor_session *session, uint16_t kind) {
   struct keiko_monitor_reply reply;
   ssize_t sent;
   if (session->descriptor < 0) return 0;
+  if (kind == KEIKO_MONITOR_ZERO_LIVE &&
+      (!event_sequence_initialized || event_stream_failed))
+    kind = KEIKO_MONITOR_ERROR;
   memset(&reply, 0, sizeof(reply));
   memcpy(reply.magic, "KES1", 4);
   reply.version = KEIKO_MONITOR_VERSION;
@@ -82,9 +89,8 @@ static int reply_to(struct monitor_session *session, uint16_t kind) {
 // "com.oscharko.keiko.runtime-monitor"'` is the read side.
 //
 // Redaction (AGENTS.md §7, evidence is body-free): pids, counts, states and error codes only.
-// Never a process command line, argv, environment or file content. Deliberately NOT wired into
-// endpoint_event(), which runs per fork/exec/exit machine-wide — logging there would recreate the
-// hot-path cost the O(n)-scan finding warns about. Decision points only.
+// Never a process command line, argv, environment or file content. Event callbacks log only the
+// first irreversible observation failure, never routine fork/exec/exit traffic. Decision points only.
 static os_log_t keiko_monitor_log_handle;
 
 static void keiko_monitor_log_init(void) {
@@ -117,6 +123,44 @@ static void set_endpoint_state(enum endpoint_state state) {
   endpoint_state = state;
   pthread_mutex_unlock(&endpoint_state_lock);
   os_log(keiko_monitor_log(), "endpoint state -> %{public}s", endpoint_state_name(state));
+}
+
+enum endpoint_sequence_failure {
+  ENDPOINT_SEQUENCE_UNAVAILABLE = 1,
+  ENDPOINT_SEQUENCE_DISCONTINUOUS = 2
+};
+
+static void invalidate_event_stream(enum endpoint_sequence_failure reason, uint32_t version,
+                                    uint64_t observed) {
+  size_t index;
+  if (event_stream_failed) return;
+  event_stream_failed = 1;
+  os_log_error(keiko_monitor_log(),
+               "endpoint sequence integrity lost: reason=%{public}u, version=%{public}u, "
+               "last=%{public}llu, observed=%{public}llu",
+               (unsigned)reason, version, (unsigned long long)last_event_sequence,
+               (unsigned long long)observed);
+  set_endpoint_state(ENDPOINT_STATE_FAILED);
+  for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
+    if (sessions[index].active) (void)reply_to(&sessions[index], KEIKO_MONITOR_ERROR);
+  }
+}
+
+static void record_endpoint_sequence(const es_message_t *message) {
+  if (event_stream_failed) return;
+  // The SDK makes global_seq_num available only from message version four.
+  if (message->version < 4) {
+    invalidate_event_stream(ENDPOINT_SEQUENCE_UNAVAILABLE, message->version, 0);
+    return;
+  }
+  if (event_sequence_initialized &&
+      (last_event_sequence == UINT64_MAX || message->global_seq_num != last_event_sequence + 1)) {
+    invalidate_event_stream(ENDPOINT_SEQUENCE_DISCONTINUOUS, message->version,
+                            message->global_seq_num);
+    return;
+  }
+  last_event_sequence = message->global_seq_num;
+  event_sequence_initialized = 1;
 }
 
 static enum endpoint_state current_endpoint_state(void) {
@@ -264,6 +308,7 @@ static void stop_session(struct monitor_session *session) {
 static void endpoint_event(es_client_t *client, const es_message_t *message) {
   pid_t process_pid = audit_token_to_pid(message->process->audit_token);
   pthread_mutex_lock(&sessions_lock);
+  record_endpoint_sequence(message);
   if (message->event_type == ES_EVENT_TYPE_NOTIFY_FORK) {
     pid_t child_pid = audit_token_to_pid(message->event.fork.child->audit_token);
     struct monitor_session *session = session_for_pid(process_pid);
@@ -336,6 +381,7 @@ static pid_t peer_pid(int descriptor) {
 static struct monitor_session *allocate_session(int descriptor, uid_t uid,
                                                 const struct keiko_monitor_request *request) {
   size_t index;
+  if (!event_sequence_initialized || event_stream_failed) return NULL;
   if (session_for_handle(request->recovery_handle) != NULL) return NULL;
   // KEIKO-0771: also refuse the ARM when another active session already owns the same
   // supervisor_pid. session_for_pid used to answer against the FIRST match it found and could
@@ -472,11 +518,10 @@ static void *serve_client(void *opaque) {
              (int)peer);
       (void)reply_to(&transient, reconcile_refusal_reply(reconcile_outcome));
     } else {
-      // KEIKO-1005: an ARM that returned NULL either lost the recovery-handle race or clashed
-      // with an existing session's supervisor_pid (KEIKO-0771). Both are refused with the same
-      // wire response; the log line separates them from a downstream diagnostic view.
+      // Unavailable observation and ownership collisions share the same wire refusal.
+      // Sequence integrity loss has its own preceding count-only diagnostic.
       os_log(keiko_monitor_log(),
-             "ARM refused (handle or supervisor_pid collision) for peer_pid=%{public}d",
+             "ARM refused (observation unavailable or ownership collision) for peer_pid=%{public}d",
              (int)peer);
       (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
     }
@@ -549,12 +594,13 @@ static void *start_endpoint_security(void *opaque) {
     }
     pthread_mutex_lock(&endpoint_state_lock);
     endpoint_client = candidate;
-    endpoint_state = ENDPOINT_STATE_ACTIVE;
+    if (endpoint_state != ENDPOINT_STATE_FAILED) endpoint_state = ENDPOINT_STATE_ACTIVE;
+    enum endpoint_state observed_state = endpoint_state;
     pthread_mutex_unlock(&endpoint_state_lock);
     // This assignment bypasses set_endpoint_state (it is already under the lock), so it needs its
     // own log line or the one transition that matters most would be the only silent one.
     os_log(keiko_monitor_log(), "endpoint state -> %{public}s",
-           endpoint_state_name(ENDPOINT_STATE_ACTIVE));
+           endpoint_state_name(observed_state));
     return NULL;
   }
 }
