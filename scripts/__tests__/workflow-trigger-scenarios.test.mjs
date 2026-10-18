@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { conditionAllowsEvent } from "../check-e2e-suite-wiring.mjs";
 
 import {
   cancellationImmuneJobIds,
@@ -19,6 +20,57 @@ const workflowsDir = fileURLToPath(new URL(".github/workflows/", repoRoot));
 function loadWorkflow(name) {
   return parse(readFileSync(join(workflowsDir, name), "utf8"));
 }
+
+describe("CI pull-request lifecycle admission", () => {
+  const workflow = loadWorkflow("ci.yml");
+  it.each(Object.entries(workflow.jobs))(
+    "%s excludes closed metadata events before executing candidate work",
+    (_id, job) => {
+      expect(conditionAllowsEvent(job.if, "pull_request", "closed")).toBe(false);
+      expect(conditionAllowsEvent(job.if, "pull_request", "")).toBe(false);
+    },
+  );
+
+  it.each([
+    "protected-branch-gate",
+    "change-scope",
+    "verified-tree",
+    "secret-scan",
+    "semantic-duplication",
+    "core-quality",
+    "ui",
+    "ci",
+  ])("%s still admits an open pull request", (id) => {
+    expect(conditionAllowsEvent(workflow.jobs[id].if, "pull_request", "open")).toBe(true);
+  });
+
+  it.each(["push", "merge_group", "workflow_dispatch"])(
+    "keeps the lifecycle entry gates available for %s",
+    (event) => {
+      for (const id of [
+        "protected-branch-gate",
+        "change-scope",
+        "verified-tree",
+        "secret-scan",
+        "ci",
+      ])
+        expect(conditionAllowsEvent(workflow.jobs[id].if, event)).toBe(true);
+    },
+  );
+
+  it("retains every live metadata and candidate trigger", () => {
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "edited",
+    ]);
+    expect(workflow.on.merge_group.branches).toContain("dev");
+    expect(workflow.on.push.branches).toContain("dev");
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+  });
+});
 
 describe("carriesExplicitStatusFunction", () => {
   it.each([

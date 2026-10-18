@@ -488,7 +488,7 @@ describe("dev quality workflows", () => {
     // tree, so SonarCloud's branch history keeps moving. The clause is pinned exactly together with
     // `!cancelled()` and the guard, so none of the three can be altered without failing here.
     expect(coverageJob).toContain(
-      "if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+      "if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
     );
     expect(coverageJob).toContain('if [ "${entry#*:}" != "success" ]');
     expect(coverageJob).toContain("needs.coverage-packages.result");
@@ -549,7 +549,9 @@ describe("dev quality workflows", () => {
     // no longer be silently re-scoped by removing or reordering whatever job happens to follow.
     const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}\S|$)/u)?.[0];
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
-    expect(aggregateJob).toContain("if: ${{ always() }}");
+    expect(aggregateJob).toContain(
+      "if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}",
+    );
     expect(aggregateJob).toContain("- core-quality");
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");

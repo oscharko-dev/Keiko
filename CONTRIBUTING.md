@@ -627,6 +627,12 @@ and the SonarCloud analysis are never reused on `dev`: they run on every push to
 SonarCloud's branch history stays current (ADR-0178 D1, amended 2026-09-25). Editing a workflow
 changes the tree, so CI changes always measure themselves.
 
+The candidate matrix admits PR events only while their payload state is `open`. Open metadata
+edits and base retargets retain fresh strict verdicts. Closed/merged metadata edits are rejected
+before candidate checkout, including by the aggregate; they do not judge the signed squash commit
+using the obsolete PR base/head. Merge groups, protected pushes and manual dispatch retain their
+existing paths (ADR-0139 D4).
+
 Only the repository owner account `oscharko` may authorize and execute a merge into `dev`, including
 enabling GitHub native auto-merge. Agents acting under that account operate within the owner's
 explicit authorization. Contributors may prepare PRs and repair findings, but accepting their task
