@@ -280,13 +280,16 @@ proving the owned new process tree has stopped. Once N is verified, restart and 
 
 A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
 identity. It must attest the original tree and registration, then prove its own PID, version and
-loopback binding before readiness opens. POSIX resume admission uses the plan's `startAt` deadline
+loopback binding before readiness opens. POSIX and Windows resume admission use the plan's `startAt` deadline
 for N and its already-authorized `cleanupAt` deadline for restored N−1, matching the coordinator
 engine's phase grant. Verification can expire after `startAt`; that expiry must not prevent a
 still-authorized restoration. At or after the applicable deadline, resume refuses. Selecting the
 existing restoration phase does not extend either deadline or bypass the image, capsule or start
 gate checks. Existing `restored-start` and `restored-verify` receipts retain their meaning; admission
 alone proves neither runtime readiness nor settled recovery.
+Windows selects that plan deadline immediately after loading the capsule, before image, parent,
+volume, phase and gate work. It cannot replace an expired phase with a fresh control interval;
+unavailable wall time and monotonic overflow refuse through the existing conversion owner.
 Successful restoration settles a **failed update with
 recovery settled**, not a successful update, cancellation, or automatic retry. The server commits
 that result through revision-checked state; uncertain termination, incomplete restore evidence, or

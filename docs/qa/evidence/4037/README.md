@@ -698,3 +698,30 @@ and transaction-policy proofs, with a file-backed FD5 gate; they do not run a re
 prove signed Endpoint Security integration, qualify Windows, or satisfy two successive packaged
 updates. Existing native receipts remain the production evidence path. The broader updater and
 model-skill acceptance holds remain open.
+
+## Checkpoint 28: preserve Windows resume phase expiry
+
+The separate Windows resume path used a fresh fifteen-minute interval after process scheduling,
+without selecting the loaded plan's phase deadline. A buffered valid gate could admit a forward
+start after `startAt` or a restored start after `cleanupAt`. A withheld gate also received the full
+fresh interval. Windows now selects the existing start/cleanup grant immediately after plan load,
+before image, parent, volume, phase and gate checks. The existing deadline conversion additionally
+refuses equality at expiry, matching the positive remaining authority required by POSIX. No phase
+timestamp is extended, and all existing identity, hash and classification checks remain.
+
+The permanent policy fixture compiles the unchanged actual Windows resume, deadline-conversion and
+pipe-read functions and actual context declarations. Its Win32/CRT, filesystem, identity and
+validated-plan-loader ports are inert. The same final fixture has eight failures and twelve healthy
+controls against the parent, then twenty passes with the repair. A separately retained intermediate
+phase-only change leaves two exact-expiry failures; the final conversion repair closes those. The
+withheld-gate control changes from 900,010 to 30 virtual milliseconds with twenty milliseconds of
+remaining cleanup authority. Unavailable wall time, monotonic overflow, wrong image/parent/gate,
+wrong phase, different volume and failed plan loading retain refusals. An initial fixture clock
+parser error was corrected before the final causal comparison; its failed attempt remains separate.
+
+`windows-resume-deadlines.json` binds the owning sources and causal records. These controls execute
+on macOS and Linux with inert Windows ports. They are not real Win32, signed-parent, Job Object,
+assembled updater or restart evidence. The actual Windows native quality command requires a Windows
+host and is not locally executable on this macOS host; its exact-head CI result remains required.
+The POSIX controls remain intact. Native ownership transfer, genuine packaged update/rollback,
+consecutive updates and SSD/state qualification remain open.
