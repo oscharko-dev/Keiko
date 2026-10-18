@@ -1014,6 +1014,10 @@ The repair dispatcher and validator share the same 131,072 UTF-16-code-unit text
 original answer above that supported size skips the extra model call as `skipped-capability`;
 it retains its original content, usage and uncited uncertainty. File and numeric citation paths
 use the same eligibility check, and the bound is not an additional token grant.
+Both literal repair and locally constructed annotations preserve complete substantive tokens:
+markers cannot split contractions, contiguous symbolic operators or existing guarded graphemes,
+identifiers, decimal values and paths. Refusal preserves the original answer and uncited warning,
+while charging the actual completed repair attempt within the unchanged shared grants.
 The existing Activity Log records the actual repair disposition and final citation behaviour;
 clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a

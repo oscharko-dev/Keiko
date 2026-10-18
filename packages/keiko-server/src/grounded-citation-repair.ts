@@ -160,10 +160,11 @@ function splitsGrapheme(text: string, offset: number): boolean {
 function splitsSubstantiveToken(text: string, offset: number): boolean {
   if (splitsGrapheme(text, offset)) return true;
   const word = /[\p{L}\p{M}\p{N}_$]/u;
-  const separator = /[.,/:\\-]/u;
+  const separator = /[.,/:\\’'-]/u;
   const before = previousCodePoint(text, offset);
   const after = nextCodePoint(text, offset);
   if (word.test(before) && word.test(after)) return true;
+  if (/^[=<>!~&|+*/%^?:.-]{2}$/u.test(before + after)) return true;
   if (
     word.test(before) &&
     separator.test(after) &&

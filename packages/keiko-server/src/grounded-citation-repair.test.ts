@@ -29,6 +29,42 @@ function annotationResponse(
   return JSON.stringify({ insertions: [{ after, marker }] });
 }
 
+describe.each(["literal", "annotation"] as const)("%s citation token boundaries", (protocol) => {
+  it.each([
+    ["Don't persist secrets.", "Don"],
+    ["Don't persist secrets.", "Don'"],
+    ["Don’t persist secrets.", "Don"],
+    ["Don’t persist secrets.", "Don’"],
+    ["The threshold is >=10.", "The threshold is >"],
+    ["The threshold is <=10.", "The threshold is <"],
+    ["The condition is value!=null.", "The condition is value!"],
+    ["The condition is value===null.", "The condition is value=="],
+    ["The condition is ready&&valid.", "The condition is ready&"],
+    ["The fallback is value??defaultValue.", "The fallback is value?"],
+    ["The expression is value?.name.", "The expression is value?"],
+    ["The callback is value=>value.", "The callback is value="],
+  ])("refuses splitting a contraction or operator in %s", (original, after) => {
+    const offset = original.indexOf(after) + after.length;
+    const response =
+      protocol === "annotation"
+        ? annotationResponse(after)
+        : original.slice(0, offset) + " [src/Feature.ts:3]" + original.slice(offset);
+    expect(citationRepairContent(original, response, index)).toBeUndefined();
+  });
+
+  it.each([
+    "Don't persist secrets.",
+    "Don’t persist secrets.",
+    "The threshold is >=10.",
+    "The condition is value!=null.",
+    "The customers' data stays local.",
+  ])("retains citation placement after the complete claim %s", (original) => {
+    const expected = original + " [src/Feature.ts:3]";
+    const response = protocol === "annotation" ? annotationResponse(original) : expected;
+    expect(citationRepairContent(original, response, index)).toBe(expected);
+  });
+});
+
 describe("locally constructed citation annotations", () => {
   it.each([false, true])("accepts a supported unique prose annotation (fenced=%s)", (fenced) => {
     const response = annotationResponse();

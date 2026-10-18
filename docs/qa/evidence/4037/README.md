@@ -293,3 +293,19 @@ Two further failure-first work controls reproduce repeated normalization of the 
 source line for several descriptors, in both case modes. Matching now normalizes each eligible
 line once and declines an empty descriptor set immediately; Unicode, negation, coherent-line and
 case semantics retain their original controls. This measures primitive work, not broad latency.
+
+## Citation repair token boundaries
+
+The auditor independently identifies literal and JSON citation insertions that split contractions
+or compound operators despite reconstructing the original bytes after marker removal. Twenty-four
+owning before-fix failures preserve ten healthy complete-claim controls. The existing boundary owner
+now protects internal apostrophes and contiguous symbolic operators in both protocols; original
+Unicode, code, evidence-range, assessment and budget guards remain binding. The real loopback HTTP
+path also retains the original answer, uncited warning, exact persisted representation and existing
+correlated repair-refusal evidence. These are controlled provider responses, not native Gemma
+semantic acceptance.
+
+Two additional private original-task Java diagnostics, using a generic literal-import example and
+direct fully-qualified annotation instruction respectively, still produce the obsolete annotation
+import and fail the unchanged offline baseline. Their exact outputs remain retained and earn no
+execution or mutant credit. Neither unsuccessful instruction is promoted into the customer skill.
