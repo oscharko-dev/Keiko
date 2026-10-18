@@ -102,7 +102,7 @@ function readNamedSafeFile(path: string, rules: StableFileReadRules): Stats {
 
 function openSafeReadDescriptor(path: string, rules: StableFileReadRules): number {
   try {
-    return openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    return openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return fail(rules.unsafeMessage);
   }

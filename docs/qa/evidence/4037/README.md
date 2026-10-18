@@ -4,6 +4,12 @@ These are bounded body-free observations for #4037/#4040 and #4017–#4021. They
 those issues or replace exact-head CI, native browser qualification, semantic review or the
 inherited 96-criterion ledger.
 
+`acceptance-current.json` maps the 34 explicit criteria in the current ten issue bodies to their
+remaining proof obligations. Every source-body digest is checked against GitHub. This dated
+addendum preserves the original 96 IDs and exact original ledger bytes; historical supported
+records are not reclassified as current acceptance. Bounded implementation proofs below do not
+replace the native/browser, generated-test, final-head or integration obligations in that mapping.
+
 - `native-skill-observations-2026-10-18.json` contains 36 case-level records from four declared
   native Gemma batches, including the failed six-case generation batch. Runtime/fixture/skill
   digests, physical-attempt counts, accounting/persistence checks, unchanged generated-test
@@ -309,3 +315,37 @@ Two additional private original-task Java diagnostics, using a generic literal-i
 direct fully-qualified annotation instruction respectively, still produce the obsolete annotation
 import and fail the unchanged offline baseline. Their exact outputs remain retained and earn no
 execution or mutant credit. Neither unsuccessful instruction is promoted into the customer skill.
+
+## Handoff reader and directory blocking
+
+The existing digest reader separately reproduces one FIFO hang with six healthy controls. Twelve
+further subprocess cases exercise native coordinator/supervisor copies for both POSIX layouts,
+plan/receipt/verified-acknowledgement replacement at the actual open boundary, existing direct-FIFO
+refusals and directory sync. After canonicalizing the fixture root, nine hang before correction
+and three existing refusals remain healthy; an earlier fixture alias mismatch is retained without
+product-failure credit. Every child first proves a reachable healthy producer/read path. Native
+copy controls stop at the existing persistence callback and cannot spawn native code.
+
+All six file-read opens now use nonblocking descriptors while retaining existing type/link/hash,
+identity and byte checks. Native copy durability reuses the existing shared directory-sync owner;
+its descriptor must be a real directory and cannot block on FIFO replacement. Exclusive writes
+and the Windows unsupported-sync controls retain their existing behavior. Synthetic registration,
+plan and copied-file controls are not a successful installed update or supervisor qualification.
+
+The original-skill prefix/suffix diagnostic pair retains both failed baseline compilations. Actual
+wire observations show the selected skill exactly once at user level and no request sampling
+overrides; both calls report reasoning usage. The suffix also changes latest-task emphasis, so it
+does not isolate evidence distance. A distinct temperature-zero diagnostic uses the original skill
+and task but exhausts the unchanged 8,192-token physical-output grant, returning no complete product
+answer. It is an output-exhaustion failure, not a compiler failure or an omitted case. No placement,
+sampling or unsuccessful skill variation is promoted into the customer implementation.
+
+The immutable `8f00034c9c7dfc13de17fa6a9cdf3503641dfe5c` full-quality attempt completes its package
+stage with 55,746 passing tests, four failures and 61 declared skips. Three failures expose stale
+five-event denial-owner expectations after the new evidence sibling. Their exact six-event
+contract now also checks the registered sibling, original identities and unavailable zero-read
+state; original root-admission and denial assertions remain intact. The fourth failure is a
+qualification invocation error: the wrapper omitted the pinned PATH and used Node 24.22.0/npm
+11.19.1. The exact toolchain gate rejects that pair and accepts pinned Node 24.18.0/npm 11.16.0.
+This does not establish a debug-launch product defect. The failed receipt remains retained;
+downstream UI/script/floor stages did not run, and a correctly pinned complete rerun is required.

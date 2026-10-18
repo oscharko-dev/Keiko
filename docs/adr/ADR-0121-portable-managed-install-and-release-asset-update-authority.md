@@ -251,6 +251,13 @@ the flat root launcher, setup manifest and runtime supervisor; macOS uses its ap
 Current and candidate setup lookup follow that same grammar before layout validation. This path
 resolution grants no release trust, platform verification waiver or native handoff acceptance.
 
+Handoff digest, native-copy, plan, receipt and verification-acknowledgement reads open descriptors
+nonblocking before validating regular-file type, link count, identity and byte bounds. A FIFO
+replacement cannot prevent those checks or make an elapsed deadline unreachable. Directory
+durability uses the existing shared handoff sync owner, which opens without following links,
+requires a directory descriptor and refuses a FIFO replacement. Copy durability retains its
+existing platform admission; Windows unsupported-directory-sync handling remains in that owner.
+
 The server persists semantic intent before spawning the coordinator. Native code accepts only the
 closed activation-id mode, validates the fixed plan and its authority, and acknowledges the exact
 plan digest over the inherited channel. A spawn event alone is not acceptance. Preparation remains

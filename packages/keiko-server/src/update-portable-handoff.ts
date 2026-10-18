@@ -20,6 +20,7 @@ import {
   portableHandoffPlanSha256,
   portableHandoffRoot,
   readPortableHandoffPlan,
+  syncPortableHandoffDirectory,
   type PortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
 
@@ -180,7 +181,10 @@ function digestOpenedFile(descriptor: number, expectedSize: number, maxBytes: nu
 }
 
 function digestCopiedFile(destination: string, expectedSize: number, maxBytes: number): string {
-  const copiedFd = openSync(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const copiedFd = openSync(
+    destination,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
     const copiedStat = fstatSync(copiedFd);
     if (!copiedStat.isFile() || copiedStat.nlink !== 1 || copiedStat.size !== expectedSize) {
@@ -193,7 +197,10 @@ function digestCopiedFile(destination: string, expectedSize: number, maxBytes: n
 }
 
 function digestExistingFile(path: string, maxBytes: number): string {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
     const before = assertSourceIdentity(path, descriptor, maxBytes);
     const digest = digestOpenedFile(descriptor, before.size, maxBytes);
@@ -213,7 +220,7 @@ function copyVerifiedFile(
 ): string {
   assertNoLinkPath(sourceRoot, source);
   const noFollow = constants.O_NOFOLLOW;
-  const sourceFd = openSync(source, constants.O_RDONLY | noFollow);
+  const sourceFd = openSync(source, constants.O_RDONLY | noFollow | constants.O_NONBLOCK);
   const temporary = `${destination}.${String(process.pid)}.tmp`;
   let destinationFd: number | undefined;
   try {
@@ -230,12 +237,7 @@ function copyVerifiedFile(
     assertUnchangedIdentity(sourceIdentity, assertSourceIdentity(source, sourceFd, maxBytes));
     renameSync(temporary, destination);
     if (process.platform !== "win32") {
-      const parentFd = openSync(dirname(destination), constants.O_RDONLY);
-      try {
-        fsyncSync(parentFd);
-      } finally {
-        closeSync(parentFd);
-      }
+      syncPortableHandoffDirectory(dirname(destination));
     }
     const actual = digestCopiedFile(destination, copied.size, maxBytes);
     if (actual !== copied.sha256) fail("portable handoff copy digest mismatch");

@@ -2311,6 +2311,7 @@
     "search.connected-context.evidence-details.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts",
       "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts"
     ],
     "search.connected-context.failed.line": [

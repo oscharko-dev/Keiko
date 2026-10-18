@@ -15,8 +15,9 @@ import {
 import {
   createPortableHandoffPlan,
   writePortableHandoffPlan,
-  type PortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
+
+import { prepare, type HandoffFixture } from "./__tests__/portable-handoff-fixture.js";
 
 const roots: string[] = [];
 
@@ -24,96 +25,6 @@ afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
-
-interface HandoffFixture {
-  readonly coordinator: string;
-  readonly plan: PortableHandoffPlan;
-  readonly stateDir: string;
-  readonly supervisor: string;
-}
-
-function prepare(
-  root: string,
-  target: "macos-arm64" | "linux-x64" = "macos-arm64",
-): HandoffFixture {
-  const stateDir = join(root, "state");
-  const parent = join(root, "install-parent");
-  const managedRoot = join(parent, target === "linux-x64" ? "Keiko" : "Keiko.app");
-  const stageRoot = join(parent, ".keiko-portable-updates", "stage-1");
-  mkdirSync(managedRoot, { recursive: true });
-  mkdirSync(stageRoot, { recursive: true });
-  const coordinator =
-    target === "linux-x64"
-      ? join(managedRoot, "Keiko")
-      : join(managedRoot, "Contents", "MacOS", "Keiko");
-  const resourceRoot =
-    target === "linux-x64" ? managedRoot : join(managedRoot, "Contents", "Resources");
-  const supervisor = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor");
-  mkdirSync(join(coordinator, ".."), { recursive: true });
-  mkdirSync(join(resourceRoot, "runtime", "native"), { recursive: true });
-  writeFileSync(coordinator, "coordinator");
-  writeFileSync(supervisor, "supervisor");
-  const plan = createPortableHandoffPlan({
-    activationId: "a".repeat(32),
-    sessionId: "session-1",
-    stageId: "stage-1",
-    target,
-    targetVersion: "1.2.3",
-    newLaunchId: "2".repeat(32),
-    restoreLaunchId: "3".repeat(32),
-    aggregateRevision: 7,
-    previousRegistrationState: "present",
-    oldProcess: {
-      pid: 123,
-      launchId: "b".repeat(32),
-      host: "127.0.0.1",
-      port: 1983,
-      version: "1.2.2",
-    },
-    paths: {
-      managedRoot,
-      stageRoot,
-      candidateRoot:
-        target === "linux-x64" ? join(stageRoot, "Keiko") : join(stageRoot, "Keiko", "Keiko.app"),
-      backupRoot: join(parent, `.keiko-previous-${"a".repeat(32)}`),
-      candidateLauncher:
-        target === "linux-x64"
-          ? join(stageRoot, "Keiko", "Keiko")
-          : join(stageRoot, "Keiko", "Keiko.app", "Contents", "MacOS", "Keiko"),
-      candidateSupervisor:
-        target === "linux-x64"
-          ? join(stageRoot, "Keiko", "runtime", "native", "keiko-runtime-supervisor")
-          : join(
-              stageRoot,
-              "Keiko",
-              "Keiko.app",
-              "Contents",
-              "Resources",
-              "runtime",
-              "native",
-              "keiko-runtime-supervisor",
-            ),
-    },
-    digests: {
-      currentTreeSha256: "c".repeat(64),
-      candidateTreeSha256: "d".repeat(64),
-      currentLauncherSha256: createHash("sha256").update("coordinator").digest("hex"),
-      currentSupervisorSha256: createHash("sha256").update("supervisor").digest("hex"),
-      candidateLauncherSha256: "e".repeat(64),
-      candidateSupervisorSha256: "f".repeat(64),
-      previousRegistrationSha256: "0".repeat(64),
-      preparedRegistrationSha256: "1".repeat(64),
-    },
-    deadlines: {
-      oldExitAt: 1_800_000_000_000,
-      startAt: 1_800_000_030_000,
-      verifyAt: 1_800_000_060_000,
-      cleanupAt: 1_800_000_090_000,
-    },
-  });
-  writePortableHandoffPlan({ stateDir, plan });
-  return { coordinator, plan, stateDir, supervisor };
-}
 
 function prepareWindows(root: string): HandoffFixture {
   const stateDir = join(root, "state");

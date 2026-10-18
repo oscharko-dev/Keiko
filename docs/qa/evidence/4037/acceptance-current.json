@@ -1,0 +1,371 @@
+{
+  "schemaVersion": 1,
+  "classification": "Current acceptance addendum; not a replacement of the original ledger, issue checkmarks or completed qualification",
+  "sourceRequirementsVerifiedAt": "2026-10-18T16:40:43.796499+00:00",
+  "deliveryHeadAtReview": "de8b5b2a35b9f144202407be4ad55b69d649d7b6",
+  "originalLedger": {
+    "path": "docs/qa/evidence/3881/acceptance-ledger.json",
+    "sha256": "6d5fb101f28d17b00b7136dd9b5a4e74c59e82a4dd7d38b412e058eb761dd87a",
+    "criterionCount": 96,
+    "historicalRecordsUnchanged": true,
+    "originalUnverifiedIds": ["3881.2", "3881.10", "3882.1", "3885.6", "3887.7"]
+  },
+  "sourceIssues": [
+    {
+      "number": 4017,
+      "title": "Epic: Qualify native connected-folder answers and citations after 1.2.1",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4017",
+      "state": "OPEN",
+      "bodySha256": "ddcf785838f1e87ca1b3321dbd2e3d75d578f747a33c1c66adde0a8f636c14ec",
+      "updatedAt": "2026-10-18T05:40:11Z"
+    },
+    {
+      "number": 4018,
+      "title": "Correct native source-budget explanations from supplied evidence",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4018",
+      "state": "OPEN",
+      "bodySha256": "04d0d890810c83a78dac732612f91987ad044573fdc29218bb1394751a6f6474",
+      "updatedAt": "2026-10-14T03:26:56Z"
+    },
+    {
+      "number": 4019,
+      "title": "Make native implementation citations pass faithful bounded repair",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4019",
+      "state": "OPEN",
+      "bodySha256": "d7e60278ab2b47d28dbc427924d8b3ea91d07390d5d79b1ad19e9ce31c4e14e1",
+      "updatedAt": "2026-10-14T03:28:17Z"
+    },
+    {
+      "number": 4020,
+      "title": "Repeat original-history Gemma quality under unchanged grants",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4020",
+      "state": "OPEN",
+      "bodySha256": "92919b3bf7d848f8cf856815bd444aa4bb1da9a17e778c694170e69c7d357de1",
+      "updatedAt": "2026-10-14T03:28:19Z"
+    },
+    {
+      "number": 4021,
+      "title": "Complete exact-head acceptance ledger and connected-chat closeout",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4021",
+      "state": "OPEN",
+      "bodySha256": "38c8d5f13892b424010092aedb9f0ad27ede76d88cd108e1a5c846af1ef67846",
+      "updatedAt": "2026-10-14T03:28:21Z"
+    },
+    {
+      "number": 4037,
+      "title": "Epic: Qualify Chat and Files search with local-model test-generation skills",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4037",
+      "state": "OPEN",
+      "bodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "updatedAt": "2026-10-18T15:16:16Z"
+    },
+    {
+      "number": 4040,
+      "title": "Follow-up: qualify immediate Chat source transitions, N+1 compaction and test-generation skills",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4040",
+      "state": "OPEN",
+      "bodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "updatedAt": "2026-10-18T05:40:09Z"
+    },
+    {
+      "number": 4042,
+      "title": "CI: ignore metadata edits on closed PRs while preserving live merge gates",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4042",
+      "state": "OPEN",
+      "bodySha256": "782da260251a91c2c84253265fed065764e516bcbc4b14622d7e73285d3a55cc",
+      "updatedAt": "2026-10-18T09:38:35Z"
+    },
+    {
+      "number": 4043,
+      "title": "Remember trusted browsers for local Keiko access",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4043",
+      "state": "OPEN",
+      "bodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "updatedAt": "2026-10-18T13:35:33Z"
+    },
+    {
+      "number": 4047,
+      "title": "Correct false update notices and qualify portable self-update recovery",
+      "url": "https://github.com/oscharko-dev/Keiko/issues/4047",
+      "state": "OPEN",
+      "bodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "updatedAt": "2026-10-18T16:34:09Z"
+    }
+  ],
+  "criteria": [
+    {
+      "sourceIssue": 4037,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "Declared browser and native-model cases pass repeatedly, with failed attempts retained.",
+      "sourceBodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Repeated actual browser/model matrix with retained failures; all child criteria below."
+    },
+    {
+      "sourceIssue": 4037,
+      "sourceOrdinal": 2,
+      "sourceRequirement": "Generated tests compile, pass correct applications and detect independent seeded defects.",
+      "sourceBodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Unchanged generated code must compile/pass actual correct app and detect independently seeded defects; both profiles and untouched held-outs."
+    },
+    {
+      "sourceIssue": 4037,
+      "sourceOrdinal": 3,
+      "sourceRequirement": "Known material defects are repaired with failing-before/passing-after regressions.",
+      "sourceBodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Every actual defect has an owning causal pair and published repair verification."
+    },
+    {
+      "sourceIssue": 4037,
+      "sourceOrdinal": 4,
+      "sourceRequirement": "Applicable local gates and exact-head required GitHub checks pass; review findings are settled.",
+      "sourceBodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Current exact-head local/CI/full matrix and evidence-backed review settlement."
+    },
+    {
+      "sourceIssue": 4037,
+      "sourceOrdinal": 5,
+      "sourceRequirement": "Limits and unexecuted cases are explicit; no absolute error-free claim.",
+      "sourceBodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Explicit platform/history/quality limits; no perfection claim from test counts."
+    },
+    {
+      "sourceIssue": 4037,
+      "sourceOrdinal": 6,
+      "sourceRequirement": "Closure occurs only after a separately owner-authorized and verified merge.",
+      "sourceBodySha256": "582f65067312dbcbef491320f48d1ec10083e9484b5fe05ccc73e1214641f131",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Separate owner authorization, exact-head merge verification and post-integration evidence."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "Every explicitly connected Files window contributes only its currently displayed resolved file or directory; unconnected windows contribute nothing. Changes in one source preserve the others.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual N+1 Git/non-Git/root/folder/file and unconnected-window/source-preservation cases."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 2,
+      "sourceRequirement": "Navigation cancels the running bound response immediately; no stale or late response is published. Unacknowledged/failed scope changes cannot send with older authority.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Native immediate cancellation before ACK, stale-result refusal and pending/failed-scope send refusal; owning repairs independently verified."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 3,
+      "sourceRequirement": "Multiple-source comparisons identify each source unambiguously, deduplicate overlaps, and retain relevant evidence under documented budgets.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Native unambiguous source provenance, overlap/dedup and relevant evidence under unchanged budgets."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 4,
+      "sourceRequirement": "Completed messages and learned findings remain normal history and compact normally. Removed-source raw excerpts are not silently reattached as current evidence.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual manual/automatic long-chat compaction retains findings without restoring removed-source raw excerpts or authority."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 5,
+      "sourceRequirement": "Actual local-model compaction and comparisons pass the declared cases; infrastructure success alone is insufficient.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Repeated local Gemma/browser comparisons and actual compaction; API/fixture success does not substitute."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 6,
+      "sourceRequirement": "Skill output compiles, passes the correct application and detects independent defects. Three matched skill/no-skill repetitions per core task and untouched held-out tasks are reported honestly.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "3 matched skill/control reps for both AAA/GWT and untouched Spring/React held-outs; compile/execute unchanged outputs, semantic/profile review and independent mutants."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 7,
+      "sourceRequirement": "Delays, cancellations, retries, rapid navigation and reconnection preserve ownership and allow recovery without duplicate sends.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "60/120/180s shared-gateway delay/interruption/cancel/retry; rapid navigation/reconnect; retained drafts and no duplicate sends."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 8,
+      "sourceRequirement": "The held old-child response cannot repopulate a reset tree after the same alias resolves elsewhere.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Existing held-old-child actual owner regression verified; retain alongside native current-root/source checks."
+    },
+    {
+      "sourceIssue": 4040,
+      "sourceOrdinal": 9,
+      "sourceRequirement": "Applicable local gates, all exact-head required checks and review settlement pass before separately authorized integration.",
+      "sourceBodySha256": "ed79b5d19195f4a4e93cb84d5d0c1fcc89573a3b029c57055a7c2898f287b33d",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Exact final-head local/CI/settlement followed by separately owner-authorized integration."
+    },
+    {
+      "sourceIssue": 4018,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "**AC1.** The unchanged original source-budget question is answered correctly in fewer than 200 words by the real Gemma-through-LiteLLM product path. The answer distinguishes physical file/read and excerpt-byte charges from cumulative model input/output-token charges, explains the original remaining grants and absolute elapsed deadline, and grounds those explanations in implementation evidence actually sent in that turn. Pin each diagnosed product defect with a genuine failing-before/passing-after owning regression; fix generically through the existing grounded pipeline, without query-, file-, model- or machine-specific answer exceptions.",
+      "sourceBodySha256": "04d0d890810c83a78dac732612f91987ad044573fdc29218bb1394751a6f6474",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Unchanged <200-word original budget answer; original recorded provider1365000/transport2760000ms, grants118784/8192 and actual-sent positive source claims. Missing original history stays unavailable/fresh recreation."
+    },
+    {
+      "sourceIssue": 4019,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "**AC2.** The native answer supplies canonical, validated file-and-line citations for its source-specific implementation claims. Marker-free substantive answers can use the existing bounded repair without changing their prose meaning or inventing evidence; content-changing repairs remain rejected. Preserve clarification/insufficiency and general-versus-source authority behavior across single, plural and hybrid paths, the original shared physical-attempt ceiling, and honest warnings on unrecovered failure. Controlled transport tests and native model results are reported separately.",
+      "sourceBodySha256": "d7e60278ab2b47d28dbc427924d8b3ea91d07390d5d79b1ad19e9ce31c4e14e1",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Native canonical validated file/line citations, faithful bounded marker-only repair, no invented evidence; preserved single/plural/hybrid authority and shared physical attempts."
+    },
+    {
+      "sourceIssue": 4020,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "**AC3.** Multiple independent replays on the candidate and actual delivered commit preserve the original pre-44e chat history, question, corpus, scope, provider configuration and read/byte/input/output/time/spend grants. Each passes AC1 and AC2, joins cited ranges to positive evidence actually sent, and proves exact agreement of returned and persisted answer representations. Preserve the three-by-five deterministic retrieval controls, denied-scope/zero-grant closure, cumulative physical-attempt accounting and cancellation/cleanup controls. Record measured durations and token pressure honestly; retain existing latency thresholds and unresolved native-suite timing/case dispositions rather than converting a timeout, undispatched case or HTTP 200 into quality PASS.",
+      "sourceBodySha256": "92919b3bf7d848f8cf856815bd444aa4bb1da9a17e778c694170e69c7d357de1",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Repeated candidate+delivered exact-original replays if recovered; otherwise honest fresh recreation. Native quality, actual-sent ranges, returned/persisted equality,3x5 deterministic controls, zero-grant/denial/cancel and unchanged latency limits."
+    },
+    {
+      "sourceIssue": 4021,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "**AC4.** Complete the inherited #3894.1 local gate matrix on the exact candidate head measured by CI, with actual command outcomes and documented platform limitations. Reconcile the original 96-row acceptance ledger against criterion-specific causal evidence and subsequent qualifications, retaining producer identities, healthy controls and unavailable chronology; do not manufacture RED or count fixtures/controlled responses as native successes. After app-bound required checks are green, every review conversation is resolved with evidence, and the owner-authorized merge is verified, write the missing docs/qa/connected-chat-retrieval-closeout.md and a body-free epic closeout with native results, source/persistence joins and all remaining boundaries. Preserve the original #3894.4 and #3881 DoD obligations; historical checklist marks alone do not discharge them.",
+      "sourceBodySha256": "38c8d5f13892b424010092aedb9f0ad27ede76d88cd108e1a5c846af1ef67846",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Reconcile all96 original IDs without changing historical attribution; complete exact-head local+app-bound CI; settled reviews; separately authorized verified merge and post-merge closeout."
+    },
+    {
+      "sourceIssue": 4042,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "Closed/merged metadata edits do not run open-PR merge-candidate checks or create misleading product-test failures; live PR title/body edits and base retargets still produce fresh strict verdicts.",
+      "sourceBodySha256": "782da260251a91c2c84253265fed065764e516bcbc4b14622d7e73285d3a55cc",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual native open/retarget/live metadata candidate verdicts plus closed/merged edit and rerun semantics; retained standalone fixture only proves copied admission/name expressions."
+    },
+    {
+      "sourceIssue": 4042,
+      "sourceOrdinal": 2,
+      "sourceRequirement": "Open/synchronize/reopen, merge_group, protected dev pushes and workflow_dispatch retain their required checks. Candidate identity, signed delivery, app binding and fail-closed behavior are not weakened.",
+      "sourceBodySha256": "782da260251a91c2c84253265fed065764e516bcbc4b14622d7e73285d3a55cc",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Required synchronize/reopen/merge_group/protected-dev/dispatch checks retain exact-head/app-bound/signed/fail-closed enforcement; no gate waiver."
+    },
+    {
+      "sourceIssue": 4043,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "A user opening Keiko directly in Chrome, Safari or Firefox can complete a clear browser-independent local approval flow and save authenticated chat drafts.",
+      "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual direct Chrome/Safari/Firefox approval and authenticated draft saving."
+    },
+    {
+      "sourceIssue": 4043,
+      "sourceOrdinal": 2,
+      "sourceRequirement": "Remembering a browser is optional and requires an explicit human choice; an approved browser can reconnect after a Keiko restart within the remembered approval's bounded validity.",
+      "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Optional explicit remembered approval with bounded reconnect after real restart."
+    },
+    {
+      "sourceIssue": 4043,
+      "sourceOrdinal": 3,
+      "sourceRequirement": "Users can inspect and revoke remembered browser access; revocation prevents subsequent renewal and invalidates associated live access as specified by the existing session owner.",
+      "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual inspect/revoke flow preventing renewal and associated live access."
+    },
+    {
+      "sourceIssue": 4043,
+      "sourceOrdinal": 4,
+      "sourceRequirement": "Unapproved, malformed, expired, replayed or revoked presentations cannot mint authority or read private data; cookies, approvals and diagnostics preserve the established secret/redaction boundaries.",
+      "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Denied malformed/expired/replayed/revoked approval and secret/body-free protections. Existing rotation repairs are bounded evidence only."
+    },
+    {
+      "sourceIssue": 4043,
+      "sourceOrdinal": 5,
+      "sourceRequirement": "Restart, multiple browser profiles and SSD relocation/use are verified through real product flows, including failure and recovery states. No promise of trust across unrelated installations, OS users or missing protected state is inferred.",
+      "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual profiles/restart/SSD relocation/failure/recovery; no installation/OS identity promise."
+    },
+    {
+      "sourceIssue": 4043,
+      "sourceOrdinal": 6,
+      "sourceRequirement": "Changed authentication semantics, state migration and operational recovery are documented in the existing ADR and release-impact owners, with focused failure-first controls, independent security review and all required exact-head gates.",
+      "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Existing ADR/migration/recovery docs, causal security controls and exact-head checks."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 1,
+      "sourceRequirement": "Startup and Updates agree on actual availability. Equal/older installed/latest versions, missing setup, unavailable metadata and unrelated remediation never claim a newer update; real newer compatible releases remain visible.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Browser/native availability equal/older/newer/malformed/prerelease/unavailable; corrected setup wording verified as bounded presentation only."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 2,
+      "sourceRequirement": "Installed/running/current/target version facts and cache invalidation are coherent across update completion, reload and restart. Stale state cannot repeatedly advertise an already installed version.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual installed/running/target/cache invalidation across completed update/reload/restart."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 3,
+      "sourceRequirement": "Portable bootstrap, managed portable, externally managed and unsupported installs receive accurate simple actions through existing owners. Supported customers can complete the managed update path without repeated reinstallation or weakened ownership checks.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual supported managed update via existing ownership/trust gate; external/unsupported truthful. Linux producer/protocol and legacy bootstrap still open."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 4,
+      "sourceRequirement": "Real packaged update, verification/staging, replacement, health confirmation and restart are exercised in isolated installations, including SSD path/relocation and preserved user state; interrupted/failed updates retain safe recovery or rollback.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Real distinct-version signed/checksummed packaged replacement, health/restart/interruption/rollback and SSD/state continuity. Unit/path/FIFO controls not native acceptance."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 5,
+      "sourceRequirement": "Browser session requirements integrate with #4043: Chrome, Safari and Firefox have a supported explicit approval path; a missing session is not misreported as update availability or a need to reinstall.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Actual trusted browser approval via4043; absent session not update/reinstall diagnosis."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 6,
+      "sourceRequirement": "Newer/equal/older/malformed/prerelease/unavailable release cases, setup-only and policy/integrity failure cases have meaningful failure-first controls and actual browser/native evidence. Unsupported or unexecuted platform evidence is stated explicitly.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Meaningful before/after controls plus actual native/browser platform cases; unsupported/unexecuted explicitly retained."
+    },
+    {
+      "sourceIssue": 4047,
+      "sourceOrdinal": 7,
+      "sourceRequirement": "Changes retain signature/checksum/candidate/permission checks, bounded work and body-free activity evidence; affected ADRs, UI evidence, required local gates and exact-head CI are current.",
+      "sourceBodySha256": "b117e6efebdb9d252ca9a67911f54bb5cece37a61d38f7c4b5498985b2571e66",
+      "currentDisposition": "not fully qualified",
+      "remainingProof": "Retain release/candidate/permission/signature/checksum/work bounds and complete body-free evidence; final exact-head gates."
+    }
+  ],
+  "boundedEvidence": "docs/qa/evidence/4037/README.md",
+  "closureRule": "Check acceptance only against actual completed evidence; close issues only after separately authorized and verified integration."
+}

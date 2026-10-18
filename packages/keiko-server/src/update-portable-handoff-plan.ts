@@ -164,7 +164,7 @@ function readBoundedRegularFile(path: string, maximumBytes: number, label: strin
   const namedBefore = namedFileBeforeOpen(path, maximumBytes, label);
   let descriptor: number;
   try {
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     fail(`${label} is unsafe`);
   }
@@ -448,10 +448,24 @@ export interface PortableHandoffSyncOps {
   readonly platform: NodeJS.Platform;
 }
 
+function openHandoffDirectory(path: string): number {
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_DIRECTORY,
+  );
+  try {
+    if (!fstatSync(descriptor).isDirectory()) fail("portable handoff directory is unsafe");
+    return descriptor;
+  } catch (error) {
+    closeSync(descriptor);
+    throw error;
+  }
+}
+
 const HANDOFF_SYNC_OPS: PortableHandoffSyncOps = {
   close: closeSync,
   fsync: fsyncSync,
-  openDirectory: (path) => openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW),
+  openDirectory: openHandoffDirectory,
   platform: process.platform,
 };
 
