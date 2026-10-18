@@ -735,7 +735,10 @@ bounded and clears on task-bound root switches. Files titles reflect their resol
 root; an empty Editor names its project. Navigation and directory reads record
 body-free client stage lifecycle evidence on the existing Activity Log.
 
-Files directory responses identify the actual guarded canonical root. When an unchanged alias
+Files directory responses identify the actual guarded canonical root. Child responses can
+establish that identity before a root response; old root responses cannot reverse it. Per-path
+read ownership also rejects older same-root listings and replies after unmount, while ordinary
+identical reads remain shared. When an unchanged alias
 resolves elsewhere, outstanding child reads cannot restore its previous tree or selection.
 The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
 `request-superseded`, joined to directory-read correlations without paths or source bodies.

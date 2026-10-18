@@ -60,7 +60,7 @@ import {
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
 import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
-import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
+import { syncDeferredPdfPreviewWorkspace } from "./widgets/cards/pdf-citation-preview-workspace";
 import selectionStyles from "./WorkspaceSelection.module.css";
 import clipboardStatusStyles from "./WorkspaceClipboardStatus.module.css";
 
@@ -1437,7 +1437,7 @@ export function Workspace({
     [wins],
   );
   useEffect(() => {
-    syncPdfCitationPreviewWindowRegistry(wins);
+    return syncDeferredPdfPreviewWorkspace(wins);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- winMembershipSignature is the stable membership key; wins is read fresh
   }, [winMembershipSignature]);
 

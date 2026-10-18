@@ -141,6 +141,12 @@ lifecycle evidence through the existing Activity Log.
 Directory responses identify their guarded canonical root, including when the selected path is
 a symbolic alias. Re-resolving an unchanged alias to a different root invalidates outstanding
 child reads, cached entries, selection and directory navigation before publishing the new root.
+This also applies when a child response discovers the replacement before the next root response.
+The first canonical observation may come from a child; ordinary initial normalization preserves
+the selected directory. A new root read cannot reuse an in-flight read from the preceding identity.
+Per-directory ownership rejects older listings even when the canonical root is unchanged, and
+unmounting invalidates outstanding reads before they can publish a root or selection. Ownership
+entries are released after settlement; ordinary identical reads remain shared across windows.
 The existing Files scope-decision Activity Log records root normalization/replacement and
 superseded reads without paths or contents, under the producing directory read's correlation.
 Explicit Editor root changes

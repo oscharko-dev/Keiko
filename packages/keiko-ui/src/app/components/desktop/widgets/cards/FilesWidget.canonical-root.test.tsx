@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Suspense, startTransition, type ComponentProps, type ReactNode } from "react";
-import { symlinkSync, unlinkSync } from "node:fs";
+import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { fetchFilesTree } from "@/lib/api";
 import { reportFilesScopeDecision } from "@/lib/client-diagnostics";
 import { FilesWidget } from "./FilesWidget";
@@ -93,7 +93,104 @@ async function canonicalRoot(native: NativeFixture): Promise<string> {
   return root;
 }
 
+function retargetAliasWithChild(native: NativeFixture): string {
+  const replacement = `${native.root}/Beta`;
+  mkdirSync(`${replacement}/Alpha/nested`, { recursive: true });
+  writeFileSync(`${replacement}/Alpha/nested/replacement.ts`, "export const replacement = true;\n");
+  unlinkSync(native.alias);
+  symlinkSync(replacement, native.alias, "dir");
+  return replacement;
+}
+
 describe("Files canonical root while a child is loading", () => {
+  it("keeps the first canonical child observation when the initial root arrives late", async () => {
+    const native = await nativeFilesChatFixture(true);
+    const entered = deferred<void>();
+    const released = deferred<void>();
+    const retargeted = deferred<void>();
+    const childRead = deferred<void>();
+    let holdRoot = true;
+    try {
+      vi.mocked(fetchFilesTree).mockImplementation(async (root, path = "") => {
+        if (path === "" && holdRoot) {
+          holdRoot = false;
+          const response = await native.tree(root, path);
+          entered.resolve();
+          await released.promise;
+          return response;
+        }
+        await retargeted.promise;
+        const response = await native.tree(root, path);
+        if (path === "Alpha") childRead.resolve();
+        return response;
+      });
+      const active = vi.fn();
+      render(
+        <FilesWidget
+          root={native.alias}
+          initialDirectoryPath="Alpha"
+          onActiveFileChange={active}
+          watchActive={false}
+        />,
+      );
+      await act(async () => entered.promise);
+      const replacement = retargetAliasWithChild(native);
+      expect((await native.tree(native.alias, "Alpha")).root).toBe(replacement);
+      await act(async () => {
+        retargeted.resolve();
+        await childRead.promise;
+      });
+      await screen.findByRole("treeitem", { name: /^nested$/u });
+      expect(active).toHaveBeenLastCalledWith(null, replacement, "Alpha");
+      active.mockClear();
+      await act(async () => released.resolve());
+      expect(screen.getByRole("treeitem", { name: /^nested$/u })).toBeInTheDocument();
+      expect(active.mock.calls.some(([, root]) => root === native.root)).toBe(false);
+    } finally {
+      released.resolve();
+      retargeted.resolve();
+      cleanup();
+      await native.close();
+    }
+  });
+
+  it("adopts a child read's changed canonical root before publishing its entries", async () => {
+    const native = await nativeFilesChatFixture(true);
+    try {
+      vi.mocked(fetchFilesTree).mockImplementation((root, path = "") => native.tree(root, path));
+      const active = vi.fn();
+      render(
+        <FilesWidget
+          root={native.alias}
+          initialDirectoryPath="Alpha"
+          onActiveFileChange={active}
+          watchActive={false}
+        />,
+      );
+      const nested = await screen.findByRole("treeitem", { name: /^nested$/u });
+      const replacement = `${native.root}/Beta`;
+      mkdirSync(`${replacement}/Alpha/nested`, { recursive: true });
+      writeFileSync(
+        `${replacement}/Alpha/nested/replacement.ts`,
+        "export const replacement = true;\n",
+      );
+      unlinkSync(native.alias);
+      symlinkSync(replacement, native.alias, "dir");
+      expect((await native.tree(native.alias, "Alpha/nested")).root).toBe(replacement);
+      active.mockClear();
+      fireEvent.click(nested);
+      await screen.findByRole("treeitem", { name: /two\.ts/u });
+      expect(active).toHaveBeenLastCalledWith(null, replacement, null);
+      expect(screen.queryByRole("treeitem", { name: /replacement\.ts/u })).toBeNull();
+      expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+        decision: "root-replaced",
+      });
+    } finally {
+      cleanup();
+      await native.close();
+    }
+  });
+
   it("rejects a held child after the same alias resolves to another actual root", async () => {
     const native = await nativeFilesChatFixture(true);
     const pending = delayedChild(native);
@@ -268,7 +365,10 @@ describe("Files preview authority during background refresh", () => {
   );
 });
 
-function delayedRootRefresh(native: NativeFixture): {
+function delayedRootRefresh(
+  native: NativeFixture,
+  requestedRoot = native.root,
+): {
   readonly hold: () => void;
   readonly entered: Promise<void>;
   readonly release: () => void;
@@ -278,7 +378,8 @@ function delayedRootRefresh(native: NativeFixture): {
   let holding = false;
   vi.mocked(fetchFilesTree).mockImplementation(async (root, path = "") => {
     const response = await native.tree(root, path);
-    if (holding && root === native.root && path === "") {
+    if (holding && root === requestedRoot && path === "") {
+      holding = false;
       entered.resolve();
       await released.promise;
     }
@@ -292,6 +393,102 @@ function delayedRootRefresh(native: NativeFixture): {
     release: (): void => released.resolve(),
   };
 }
+
+it("does not reuse a held old-root read after a child discovers an alias replacement", async () => {
+  const native = await nativeFilesChatFixture(true);
+  const pending = delayedRootRefresh(native, native.alias);
+  try {
+    const active = vi.fn();
+    render(
+      <FilesWidget
+        root={native.alias}
+        presentation="project"
+        onActiveFileChange={active}
+        watchActive={false}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("treeitem", { name: /^Alpha$/u }));
+    const nested = await screen.findByRole("treeitem", { name: /^nested$/u });
+    pending.hold();
+    await act(async () => {
+      notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+      await pending.entered;
+    });
+    const replacement = `${native.root}/Beta`;
+    mkdirSync(`${replacement}/Alpha/nested`, { recursive: true });
+    writeFileSync(
+      `${replacement}/Alpha/nested/replacement.ts`,
+      "export const replacement = true;\n",
+    );
+    unlinkSync(native.alias);
+    symlinkSync(replacement, native.alias, "dir");
+    fireEvent.click(nested);
+    await screen.findByRole("treeitem", { name: /two\.ts/u });
+    expect(active).toHaveBeenLastCalledWith(null, replacement, null);
+    active.mockClear();
+    await act(async () => pending.release());
+    expect(screen.getByRole("treeitem", { name: /two\.ts/u })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /README\.md/u })).toBeNull();
+    expect(active).not.toHaveBeenCalled();
+  } finally {
+    pending.release();
+    cleanup();
+    await native.close();
+  }
+});
+
+it("rejects an older same-root listing after a newer navigation read completes", async () => {
+  const native = await nativeFilesChatFixture();
+  const pending = delayedRootRefresh(native);
+  try {
+    writeFileSync(`${native.root}/README.md`, "# Original listing\n");
+    render(<FilesWidget root={native.root} watchActive={false} />);
+    await screen.findByRole("treeitem", { name: /README\.md/u });
+    pending.hold();
+    await act(async () => {
+      notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+      await pending.entered;
+    });
+    unlinkSync(`${native.root}/README.md`);
+    writeFileSync(`${native.root}/fresh.md`, "# Current listing\n");
+    fireEvent.click(screen.getByRole("treeitem", { name: /^Alpha$/u }));
+    await screen.findByRole("treeitem", { name: /one\.ts/u });
+    fireEvent.click(screen.getByRole("button", { name: "Open parent folder" }));
+    await screen.findByRole("treeitem", { name: /fresh\.md/u });
+    await act(async () => pending.release());
+    expect(screen.getByRole("treeitem", { name: /fresh\.md/u })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /README\.md/u })).toBeNull();
+  } finally {
+    pending.release();
+    cleanup();
+    await native.close();
+  }
+});
+
+it("does not publish a held root observation after the Files window unmounts", async () => {
+  const native = await nativeFilesChatFixture();
+  const pending = delayedRootRefresh(native);
+  try {
+    const active = vi.fn();
+    const mounted = render(
+      <FilesWidget root={native.root} onActiveFileChange={active} watchActive={false} />,
+    );
+    await screen.findByRole("treeitem", { name: /^Alpha$/u });
+    pending.hold();
+    await act(async () => {
+      notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+      await pending.entered;
+    });
+    active.mockClear();
+    mounted.unmount();
+    await act(async () => pending.release());
+    expect(active).not.toHaveBeenCalled();
+  } finally {
+    pending.release();
+    cleanup();
+    await native.close();
+  }
+});
 
 it.each(["close-preview", "change-root"] as const)(
   "does not restore an old selection after %s during a root refresh",

@@ -613,15 +613,46 @@ function reportRootResolution(correlationId: string, replaced: boolean): void {
   });
 }
 
+function childRootChanged(
+  path: string,
+  resolved: string,
+  observed: { readonly resolved: string } | null,
+): boolean {
+  return path !== "" && observed?.resolved !== resolved;
+}
+
+function readRootSuperseded(
+  requested: string | undefined,
+  observed: string | undefined,
+  response: string,
+): boolean {
+  return requested !== observed && response !== observed;
+}
+
+function claimDirectoryRead(
+  owners: Map<string, symbol>,
+  path: string,
+): { readonly isCurrent: () => boolean; readonly release: () => void } {
+  const token = Symbol();
+  owners.set(path, token);
+  return {
+    isCurrent: (): boolean => owners.get(path) === token,
+    release: (): void => {
+      if (owners.get(path) === token) owners.delete(path);
+    },
+  };
+}
+
 function readSharedFilesTree(
   root: string,
   path: string,
   navigation?: FilesNavigationRead,
+  fresh = false,
 ): Promise<FilesTreeRead> {
-  const key = `${root}\u0000${path}\u0000${navigation?.correlationId ?? ""}`;
+  const correlationId = navigation?.correlationId ?? newClientCorrelationId();
+  const key = `${root}\u0000${path}\u0000${fresh ? correlationId : (navigation?.correlationId ?? "")}`;
   const existing = filesTreeRequests.get(key);
   if (existing !== undefined) return existing;
-  const correlationId = navigation?.correlationId ?? newClientCorrelationId();
   const request = observeFilesDirectoryRead(
     (readCorrelation) => fetchFilesTree(root, path, readCorrelation),
     navigation ?? { correlationId, settle: (): void => undefined },
@@ -838,6 +869,14 @@ export function FilesWidget({
   const treeTooltipTimerRef = useRef<number | null>(null);
   const treeTooltipPointerRef = useRef({ x: 0, y: 0 });
   const directoryLoadSeqRef = useRef(0);
+  const directoryReadOwnersRef = useRef(new Map<string, symbol>());
+  useEffect(() => {
+    const owners = directoryReadOwnersRef.current;
+    return (): void => {
+      directoryLoadSeqRef.current += 1;
+      owners.clear();
+    };
+  }, []);
   // GEN-PERF-MEMORY-005 — LRU access order (oldest-first) for the directories cache, and a
   // live mirror of `expanded` so the pruning step (run inside loadDirectory) can pin the
   // visible chain without adding `expanded` to loadDirectory's dependency list.
@@ -996,7 +1035,7 @@ export function FilesWidget({
   }, []);
 
   const observeRoot = useCallback(
-    (requestRoot: string, resolved: string, correlationId: string): void => {
+    (requestRoot: string, resolved: string, correlationId: string): boolean => {
       const observed = observedRootRef.current;
       const previousRoot = observed?.resolved ?? requestRoot;
       const sameRoot = previousRoot === resolved;
@@ -1018,16 +1057,36 @@ export function FilesWidget({
         resolved,
         changedRoot ? null : currentDirectoryRef.current,
       );
+      return changedRoot;
     },
     [resetVisibleFiles, visitDirectory],
   );
 
+  const observeDirectoryRoot = useCallback(
+    (
+      path: string,
+      requestRoot: string,
+      resolved: string,
+      correlationId: string,
+      refreshRoot: () => void,
+    ): boolean => {
+      if (path === "") {
+        observeRoot(requestRoot, resolved, correlationId);
+        return true;
+      }
+      if (!childRootChanged(path, resolved, observedRootRef.current)) return true;
+      const replaced = observeRoot(requestRoot, resolved, correlationId);
+      refreshRoot();
+      return !replaced;
+    },
+    [observeRoot],
+  );
+
   const loadDirectory = useCallback(
-    async (path: string): Promise<void> => {
+    async function readDirectory(path: string, fresh = false): Promise<void> {
       const requestSeq = directoryLoadSeqRef.current;
       const requestRoot = apiRoot;
-      const isStale = (): boolean =>
-        requestSeq !== directoryLoadSeqRef.current || requestRoot !== apiRootRef.current;
+      const requestResolvedRoot = observedRootRef.current?.resolved;
       if (apiRoot.length === 0) {
         setDirectories((current) => ({
           ...current,
@@ -1041,6 +1100,11 @@ export function FilesWidget({
         }));
         return;
       }
+      const owner = claimDirectoryRead(directoryReadOwnersRef.current, path);
+      const isStale = (): boolean =>
+        requestSeq !== directoryLoadSeqRef.current ||
+        requestRoot !== apiRootRef.current ||
+        !owner.isCurrent();
       setDirectories((current) => ({
         ...current,
         [path]: {
@@ -1056,15 +1120,24 @@ export function FilesWidget({
           apiRoot,
           path,
           takeNavigationRead(path),
+          fresh,
         );
-        if (isStale()) {
+        if (
+          isStale() ||
+          readRootSuperseded(requestResolvedRoot, observedRootRef.current?.resolved, response.root)
+        ) {
           reportFilesScopeDecision(correlationId, {
             decision: "request-superseded",
             mutationSurface: "files",
           });
           return;
         }
-        if (path === "") observeRoot(requestRoot, response.root, correlationId);
+        if (
+          !observeDirectoryRoot(path, requestRoot, response.root, correlationId, (): void => {
+            void readDirectory("", true);
+          })
+        )
+          return;
         touchDirectoryAccess(path);
         setDirectories((current) => {
           const next = {
@@ -1101,9 +1174,11 @@ export function FilesWidget({
             notice: null,
           },
         }));
+      } finally {
+        owner.release();
       }
     },
-    [apiRoot, observeRoot, takeNavigationRead, t, tGit, touchDirectoryAccess],
+    [apiRoot, observeDirectoryRoot, takeNavigationRead, t, tGit, touchDirectoryAccess],
   );
 
   useEffect(() => {

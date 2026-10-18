@@ -954,3 +954,83 @@ serialized skill occurrences, canonical protected-context accounting, Activity L
 returned/persisted agreement. This isolates model attempts from ongoing workflow repairs. Results
 will be recorded after unchanged-output execution and semantic inspection; no pending run counts
 as a pass.
+
+## Directory response ownership increment, 2026-10-18
+
+Further actual HTTP Files controls found five related response-ownership gaps: a child could
+discover a new real root without updating the displayed root; an initial child could establish
+canonical identity before a held old root arrived; a replacement could reuse a held old shared
+root read; an older same-root listing could replace a newer navigation result; and a root reply
+could publish a selection after unmount. These are controlled transport/fixture results, not
+Gemma or full browser qualification.
+
+Each control failed before its owning correction. The same-root control's first fixture lacked
+its assumed README and receives no causal credit. After creating that input explicitly, the
+unchanged committed widget from `0f168fb0355f6f94fce2da421be60b9cf77b1570` failed the actual
+post-refresh assertion; the working candidate was restored byte-for-byte. The other failures
+were retained at their actual preceding implementation states. The complete owning suite now
+passes 15 controls, including the previous normalization and held-child cases.
+
+The repair extends the existing Files reader: canonical observations admit responses by their
+request-time and current root identity; a child-discovered replacement resets and rereads the
+root independently of old in-flight work. Initial normalization preserves directory selection.
+Transient per-directory owners prevent older replies from replacing newer ones and release
+their entries after settlement. Unmount invalidates their generation. No new directory cache,
+authority store or persistent schema is introduced. Root decisions and superseded reads retain
+the existing body-free diagnostic and actual read correlation. Full UI and touched-area gates
+are being repeated before delivery.
+
+## Repeated native skill comparison, 2026-10-18
+
+All twelve predeclared fresh Chat generations completed: three independent skill/control pairs
+per language on the clean held runtime `7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8`.
+The selected revision occurred exactly once in each actual skill request and zero times in
+controls. Protected-context accounting, unchanged input/output grants, source-hold checks and
+returned/persisted equality passed for all twelve. These infrastructure observations do not
+establish semantic acceptance.
+
+Unchanged Java skill outputs passed 14, 15 and 14 tests on the correct subject; controls passed
+13, 10 and 11. All six suites detected all three predeclared independent mutations. This small
+shared fixture does not establish superiority or cover held-out Spring behaviors.
+
+React skill repetitions one and two passed nine tests each and detected four/five and five/five
+mutations respectively. The first still accepted an appended result digit through a substring
+assertion. The third failed three of eight tests on the correct subject because asynchronous
+query results reached matchers without being awaited. All three control suites failed their
+correct baselines (two/five, one/five and two/four failures); mutants receive no credit for an
+invalid baseline. The second skill answer also had zero validated citations: Activity Log first
+inspection showed two physical synthesis calls and `rejected-content-changed` marker repair.
+The faithful-content guard correctly refused that rewrite. Neither skill is declared finally
+qualified; failed output bytes and private execution logs remain intact.
+
+## Current-head CI diagnosis and initial-load repair, 2026-10-18
+
+Required CI on `0f168fb0355f6f94fce2da421be60b9cf77b1570` exposed an actual initial-load
+regression: 350,176 gzip bytes exceeded the unchanged 349,184-byte ceiling. The directory-response
+candidate reproduced it locally at 349,652 bytes. The existing PDF preview registry was eagerly
+imported solely for workspace membership bookkeeping. Workspace now loads that same registry
+asynchronously, retaining only a copied membership snapshot and canceling superseded effects.
+The registry and its authority/session ownership remain shared with actual preview consumers.
+Current load failures use existing body-free diagnostics. Five loader controls and all existing
+preview/session/performance controls passed (43 tests); the geometry-only negative assertion and
+exact membership-change call count remain enforced across asynchronous loading.
+
+A real Node 24.18.0 static export now measures 347,299 gzip bytes across 22 initial scripts,
+below the original 349,184-byte ceiling. Monaco isolation also passes. No performance threshold
+or suppression was increased. Editor evidence was regenerated through its original producer;
+the producer and freshness check pass on the pinned Node version. A check on Node 24.22.0
+reported a gzip fingerprint mismatch and is not counted as passing pinned evidence.
+
+The same CI run also reported a Linux OpenCode functional verification-event timeout and a
+macOS-x64 native-host cold-refusal timeout. The exact targeted functional coverage reproduction
+passed locally (four tests, two existing platform skips); the native-host control passed locally
+as well. An independent required macOS-x64 run of the identical head passed. These outcomes
+are retained with their platform attribution; no timeout, test, check or authority boundary was
+weakened, and the failed CI runs are not relabeled green. Exact-current-head CI remains required.
+
+The completed increment passed root typecheck, UI ESLint with zero warnings, formatting, positive
+and negative architecture checks, all seven Activity Log inventory checks and the mandatory
+real local Sonar analyzer. Full UI coverage passed 551 suites and 10,650 tests with one existing
+skip (91.51% statements, 84.79% branches, 92.94% functions, 94.19% lines). Updater evidence
+freshness passed without regenerating unchanged bindings. Assembled-package verification ran
+last and passed. These local outcomes do not substitute for current-head CI or native acceptance.
