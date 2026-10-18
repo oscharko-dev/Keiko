@@ -278,29 +278,77 @@ interface DiscoveryExcerptObservation {
   readonly sourceReference?: boolean | undefined;
 }
 
-async function discoveryExcerptObservation(
+function unavailableDiscoveryObservation(atom: EvidenceAtom): DiscoveryExcerptObservation {
+  return { content: "", scopePath: atom.scopePath, lineRange: undefined, truncated: false };
+}
+
+function discoveryRange(atom: EvidenceAtom): EvidenceAtom["lineRange"] {
+  const range = atom.lineRange;
+  return range === undefined
+    ? undefined
+    : {
+        ...range,
+        endLine:
+          atom.provenance.tool === "endpoint-contract-server-route"
+            ? range.startLine + 3
+            : range.endLine,
+      };
+}
+
+function discoveryAtomsByPath(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atoms: readonly EvidenceAtom[],
+): ReadonlyMap<string, readonly EvidenceAtom[]> {
+  const paths = new Map<string, EvidenceAtom[]>();
+  for (const atom of atoms) {
+    if (atom.lineRange === undefined || !discoveredDefinitionCurrent(input, atom)) continue;
+    const group = paths.get(atom.scopePath) ?? [];
+    group.push(atom);
+    paths.set(atom.scopePath, group);
+  }
+  return paths;
+}
+
+function retainDiscoveryObservation(
   input: DiscoveredSymbolTraceEvidenceInput,
   atom: EvidenceAtom,
-): Promise<DiscoveryExcerptObservation> {
-  const unavailable = {
-    content: "",
+  result: ReadExcerptResult,
+): DiscoveryExcerptObservation {
+  if (traceWorkStopped(input) || !discoveredDefinitionCurrent(input, atom))
+    return unavailableDiscoveryObservation(atom);
+  recordObservedDefinitionBytes(input, atom, result);
+  return {
+    content: result.content,
     scopePath: atom.scopePath,
-    lineRange: undefined,
-    truncated: false,
+    lineRange: result.atom.lineRange,
+    truncated: result.truncated,
+    anchoredWindowApplied: result.anchoredWindowApplied,
+    definition: input.definitionCertificates?.get(atom),
+    sourceReference: atom.edge?.kind === "reference",
   };
-  if (traceWorkStopped(input) || !discoveredDefinitionCurrent(input, atom)) return unavailable;
-  const range = atom.lineRange;
-  if (range === undefined) return unavailable;
+}
+
+async function discoveryPathObservations(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  path: string,
+  atoms: readonly EvidenceAtom[],
+): Promise<readonly ReadExcerptResult[]> {
+  const ranges = atoms.flatMap((atom) => {
+    const range = discoveryRange(atom);
+    return range === undefined ? [] : [range];
+  });
+  if (ranges.length !== atoms.length)
+    throw new TypeError("Discovery batch requires observed ranges");
   const result = await readExcerpt(
     input.searchScope,
     {
-      scopePath: atom.scopePath,
-      ...range,
-      endLine:
-        atom.provenance.tool === "endpoint-contract-server-route"
-          ? range.startLine + 3
-          : range.endLine,
+      scopePath: path,
+      startLine: Math.min(...ranges.map((range) => range.startLine)),
+      endLine: Math.max(...ranges.map((range) => range.endLine)),
+      ranges,
       maxBytes: MAX_DISCOVERY_EXCERPT_BYTES,
+      maxTotalBytes: atoms.length * MAX_DISCOVERY_EXCERPT_BYTES,
+      maxWindows: atoms.length,
     },
     {
       fs: input.fs,
@@ -309,18 +357,38 @@ async function discoveryExcerptObservation(
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
-  recordObservedDefinitionBytes(input, atom, result);
-  return discoveredDefinitionCurrent(input, atom)
-    ? {
-        content: result.content,
-        scopePath: atom.scopePath,
-        lineRange: result.atom.lineRange,
-        truncated: result.truncated,
-        anchoredWindowApplied: result.anchoredWindowApplied,
-        definition: input.definitionCertificates?.get(atom),
-        sourceReference: atom.edge?.kind === "reference",
-      }
-    : unavailable;
+  const windows = result.windows ?? [result];
+  if (windows.length !== atoms.length)
+    throw new RepoSearchUnsupportedFileError("Discovery ranges changed during read", "io-error");
+  return windows;
+}
+
+async function discoveryExcerptObservations(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atoms: readonly EvidenceAtom[],
+): Promise<ReadonlyMap<EvidenceAtom, DiscoveryExcerptObservation>> {
+  const observations = new Map(atoms.map((atom) => [atom, unavailableDiscoveryObservation(atom)]));
+  if (traceWorkStopped(input)) return observations;
+  for (const [path, group] of discoveryAtomsByPath(input, atoms)) {
+    if (traceWorkStopped(input)) break;
+    const windows = await discoveryPathObservations(input, path, group);
+    for (const [index, atom] of group.entries()) {
+      const window = windows[index];
+      if (window === undefined) throw new TypeError("Missing discovery batch observation");
+      observations.set(atom, retainDiscoveryObservation(input, atom, window));
+    }
+  }
+  return observations;
+}
+
+async function discoveryExcerptObservation(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atom: EvidenceAtom,
+): Promise<DiscoveryExcerptObservation> {
+  return (
+    (await discoveryExcerptObservations(input, [atom])).get(atom) ??
+    unavailableDiscoveryObservation(atom)
+  );
 }
 
 function recordObservedDefinitionBytes(
@@ -478,8 +546,9 @@ async function discoveredHandlerSymbols(
   const candidates = routeDiscoveryAtoms(input.atoms);
   const index = await admittedDefinitionIndex(input, candidates);
   if (index === undefined) return [];
-  const observations = await Promise.all(
-    candidates.map(async (atom) => discoveryExcerptObservation(input, atom)),
+  const batch = await discoveryExcerptObservations(input, candidates);
+  const observations = candidates.map(
+    (atom) => batch.get(atom) ?? unavailableDiscoveryObservation(atom),
   );
   const targets = observations.flatMap((observation) =>
     boundRouteHandlerTargets(input, observation, index),
@@ -784,13 +853,10 @@ async function discoveredContextualSymbols(
   const primary = candidates.some((atom) => addressed.has(atom.scopePath));
   const observations = primary
     ? await addressedContextualObservations(input, index, candidates)
-    : (
-        await Promise.all(
-          candidates
-            .filter((atom) => continuationPaths.has(atom.scopePath))
-            .map((atom) => contextualExcerptObservation(input, atom)),
-        )
-      ).flat();
+    : await contextualExcerptObservations(
+        input,
+        candidates.filter((atom) => continuationPaths.has(atom.scopePath)),
+      );
   const contexts = new Map<string, ContextualCallableContext>();
   const targets = observations.flatMap((observation) => {
     const context =
@@ -808,16 +874,27 @@ async function discoveredContextualSymbols(
       ].slice(0, MAX_DISCOVERED_SYMBOLS);
 }
 
-async function contextualExcerptObservation(
+async function contextualExcerptObservations(
   input: DiscoveredSymbolTraceEvidenceInput,
-  atom: EvidenceAtom,
+  atoms: readonly EvidenceAtom[],
 ): Promise<readonly DiscoveryExcerptObservation[]> {
-  try {
-    return [await discoveryExcerptObservation(input, atom)];
-  } catch (error) {
-    if (!contextualReadUnavailable(error)) throw error;
-    return contextualUnavailableObservation(input, [atom.stableId]);
+  const observations = new Map<EvidenceAtom, DiscoveryExcerptObservation>();
+  for (const group of discoveryAtomsByPath(input, atoms).values()) {
+    try {
+      for (const [atom, observation] of await discoveryExcerptObservations(input, group))
+        observations.set(atom, observation);
+    } catch (error) {
+      if (!contextualReadUnavailable(error)) throw error;
+      contextualUnavailableObservation(
+        input,
+        group.map((atom) => atom.stableId),
+      );
+    }
   }
+  return atoms.flatMap((atom) => {
+    const observation = observations.get(atom);
+    return observation === undefined ? [] : [observation];
+  });
 }
 
 function contextualReadUnavailable(error: unknown): boolean {
@@ -1297,28 +1374,39 @@ function observedReferenceEdge(call: CodeCallEdge): EvidenceEdge | undefined {
   };
 }
 
-async function certifiedTargetAtom(
+function targetDefinitionAtom(
   input: DiscoveredSymbolTraceEvidenceInput,
   call: CodeCallEdge,
   index: CodeIntelligenceIndex,
-  sourceReference: boolean,
-): Promise<EvidenceAtom | undefined> {
+): EvidenceAtom | undefined {
   const target = resolvedTargetAtom(input, call, index);
   if (target === undefined || traceWorkStopped(input)) return undefined;
   const definition = input.definitionCertificates?.get(target);
-  if (definition === undefined) return undefined;
-  const atom = certifyDefinitionAtom(
-    input,
-    { ...target, lineRange: call.targetLineRange },
-    definition,
-  );
-  const observation = await discoveryExcerptObservation(input, atom);
+  return definition === undefined
+    ? undefined
+    : certifyDefinitionAtom(input, { ...target, lineRange: call.targetLineRange }, definition);
+}
+
+function certifiedObservedTarget(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  target: ObservedBodyTarget,
+  atom: EvidenceAtom,
+  observation: DiscoveryExcerptObservation,
+): EvidenceAtom | undefined {
+  const definition = input.definitionCertificates?.get(atom);
   if (
+    definition === undefined ||
     observation.content.length === 0 ||
-    input.requestContext?.isCodeIntelligenceSourceCurrent(call.targetPath) !== true
+    input.requestContext?.isCodeIntelligenceSourceCurrent(target.call.targetPath) !== true
   )
     return undefined;
-  const emitted = observedTargetDefinitionAtom(input, atom, call, observation, sourceReference);
+  const emitted = observedTargetDefinitionAtom(
+    input,
+    atom,
+    target.call,
+    observation,
+    target.sourceReference,
+  );
   return emitted === undefined ? undefined : certifyDefinitionAtom(input, emitted, definition);
 }
 
@@ -1414,6 +1502,62 @@ function observedDefinitionCalls(
   );
 }
 
+function unseenObservedTargets(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  targets: readonly ObservedBodyTarget[],
+  seen: Set<string>,
+): readonly ObservedBodyTarget[] {
+  return targets.filter((target) => {
+    const identity = targetIdentity(target.call);
+    retainObservedOwnedCall(input, target, identity);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+async function observedTargetBatch(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  targets: readonly ObservedBodyTarget[],
+  index: CodeIntelligenceIndex,
+): Promise<readonly EvidenceAtom[]> {
+  const prepared = targets.flatMap((target) => {
+    const atom = targetDefinitionAtom(input, target.call, index);
+    return atom === undefined ? [] : [{ target, atom }];
+  });
+  const observations = await discoveryExcerptObservations(
+    input,
+    prepared.map(({ atom }) => atom),
+  );
+  const frontier: EvidenceAtom[] = [];
+  for (const { target, atom } of prepared) {
+    const observation = observations.get(atom) ?? unavailableDiscoveryObservation(atom);
+    retainDefinitionFrontierAtom(
+      input,
+      target,
+      certifiedObservedTarget(input, target, atom, observation),
+      frontier,
+    );
+  }
+  return frontier;
+}
+
+async function observedTargetFrontier(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  targets: readonly ObservedBodyTarget[],
+  index: CodeIntelligenceIndex,
+  capacity: number,
+): Promise<{ readonly atoms: EvidenceAtom[]; readonly omitted: number }> {
+  const atoms: EvidenceAtom[] = [];
+  let consumed = 0;
+  while (consumed < targets.length && atoms.length < capacity) {
+    const pending = targets.slice(consumed, consumed + capacity - atoms.length);
+    consumed += pending.length;
+    atoms.push(...(await observedTargetBatch(input, pending, index)));
+  }
+  return { atoms, omitted: targets.length - consumed };
+}
+
 async function nextDefinitionFrontier(
   input: DiscoveredSymbolTraceEvidenceInput,
   atoms: readonly EvidenceAtom[],
@@ -1431,27 +1575,17 @@ async function nextDefinitionFrontier(
     index.filesPartiallyIndexed > 0
   )
     clipping.reasons.add("source-graph-incomplete");
-  const observations = await Promise.all(
-    candidates.map((atom) => discoveryExcerptObservation(input, atom)),
+  const batch = await discoveryExcerptObservations(input, candidates);
+  const observations = candidates.map(
+    (atom) => batch.get(atom) ?? unavailableDiscoveryObservation(atom),
   );
   clipping.excerptsClipped += observations.filter((observation) => observation.truncated).length;
   if (clipping.excerptsClipped > 0) clipping.reasons.add("excerpt-clipped");
   const calls = observedDefinitionCalls(input, observations, index, clipping);
-  const frontier: EvidenceAtom[] = [];
-  for (const target of calls) {
-    const call = target.call;
-    const key = targetIdentity(call);
-    retainObservedOwnedCall(input, target, key);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (frontier.length >= maxContinuations) {
-      clipping.frontierOmitted += 1;
-      clipping.reasons.add("frontier-width");
-      continue;
-    }
-    const atom = await certifiedTargetAtom(input, call, index, target.sourceReference);
-    retainDefinitionFrontierAtom(input, target, atom, frontier);
-  }
+  const pending = unseenObservedTargets(input, calls, seen);
+  const frontier = await observedTargetFrontier(input, pending, index, maxContinuations);
+  clipping.frontierOmitted += frontier.omitted;
+  if (frontier.omitted > 0) clipping.reasons.add("frontier-width");
   return appendReferencedValueFrontier(
     input,
     observations,
@@ -1459,7 +1593,7 @@ async function nextDefinitionFrontier(
     seen,
     clipping,
     maxContinuations,
-    frontier,
+    frontier.atoms,
   );
 }
 
@@ -1824,36 +1958,49 @@ async function searchSymbolFrontier(
   clipping: DiscoveredTraceClipping,
   contextual: boolean,
 ): Promise<readonly DiscoveredSymbolSearchEvidence[]> {
+  if (contextual) return observedContextualSeeds(input, symbols, clipping);
   const pending: Promise<DiscoveredSymbolSearchEvidence>[] = [];
   for (const symbol of symbols) {
     if (traceWorkStopped(input)) {
       clipping.reasons.add("deadline");
       break;
     }
-    if (!contextual && input.tryReserveSearchCall?.() === false) {
+    if (input.tryReserveSearchCall?.() === false) {
       clipping.reasons.add("search-budget");
       break;
     }
-    pending.push(
-      contextual
-        ? observedContextualSeed(input, symbol, clipping)
-        : searchDiscoveredSymbol(input, symbol),
-    );
+    pending.push(searchDiscoveredSymbol(input, symbol));
   }
   clipping.frontierOmitted += symbols.length - pending.length;
   return await Promise.all(pending);
 }
 
-async function observedContextualSeed(
+async function observedContextualSeeds(
   input: DiscoveredSymbolTraceEvidenceInput,
-  target: RouteHandlerTarget,
+  targets: readonly RouteHandlerTarget[],
   clipping: DiscoveredTraceClipping,
-): Promise<DiscoveredSymbolSearchEvidence> {
-  const atom = await observedCurrentDefinitionAtom(input, target.definition);
-  if (atom !== undefined) return { atoms: [atom] };
-  clipping.frontierOmitted += 1;
-  clipping.reasons.add("source-graph-incomplete");
-  return { atoms: [] };
+): Promise<readonly DiscoveredSymbolSearchEvidence[]> {
+  const candidates = targets.map((target) =>
+    certifiedDefinitionTargetAtom(input, target.definition, definitionIdentity(target.definition)),
+  );
+  const observations = await discoveryExcerptObservations(input, candidates);
+  return candidates.map((atom, index) => {
+    const observation = observations.get(atom) ?? unavailableDiscoveryObservation(atom);
+    const target = targets[index];
+    if (observation.content.length > 0 && target !== undefined)
+      return {
+        atoms: [
+          certifyDefinitionAtom(
+            input,
+            { ...atom, score: observedDefinitionScore(input.query, observation) },
+            target.definition,
+          ),
+        ],
+      };
+    clipping.frontierOmitted += 1;
+    clipping.reasons.add(traceWorkStopped(input) ? "deadline" : "source-graph-incomplete");
+    return { atoms: [] };
+  });
 }
 
 function certifiedSeedIdentities(

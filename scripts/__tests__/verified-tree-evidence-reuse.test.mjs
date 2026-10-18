@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 import { acceptMergedPullCandidate } from "../resolve-verified-tree-evidence.mjs";
+import { pullRequestJobNames } from "../lib/workflow-trigger-scenarios.mjs";
 import { describe, expect, it } from "vitest";
 
 // ADR-0178. `dev` is protected with linear history and signed squash merges, so the commit that
@@ -280,7 +281,7 @@ describe("the resolver refuses every event that may not reuse", () => {
 // resolver would let an unmeasured gate pass itself off as proven.
 function gatedDisplayNames(job) {
   const definition = jobs[job];
-  const name = String(definition.name);
+  const name = pullRequestJobNames(definition.name)?.admitted ?? String(definition.name);
   if (name.includes("${{ matrix.shard }}")) {
     return definition.strategy.matrix.shard.map((shard) =>
       name.replace("${{ matrix.shard }}", String(shard)),

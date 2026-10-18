@@ -1131,7 +1131,7 @@ jobs:
         run: node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}
 
   ci:
-    name: ci
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'inactive PR - ci' }}
     # `always()`, not `!cancelled()`: admitted runs report even when a need is cancelled and fail
     # closed. Closed PR events are excluded below; admitted runs wait briefly on their needs.
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
@@ -1276,7 +1276,7 @@ jobs:
           echo "All required CI dependencies succeeded."
 
   build-scan-sbom-smoke:
-    name: Build, scan, SBOM, smoke
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'Build, scan, SBOM, smoke' || 'inactive PR - Build, scan, SBOM, smoke' }}
     # Keep early feature-branch PRs fast. These release/package gates still run on merges to
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
@@ -1555,7 +1555,7 @@ jobs:
         run: npm run smoke:install:optional
 
   ui:
-    name: ui
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui' }}
     needs: verified-tree
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 60

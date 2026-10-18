@@ -22,6 +22,14 @@ If a requested convention conflicts with the available interfaces, dependencies 
 accepted requirement, identify the precise conflict rather than silently inventing support.
 Check the resulting file against the chosen naming, structure, mock policy and mandatory cases.
 
+## Mandatory contract checks
+
+For each contract-defined bound, test its required acceptance or rejection and meaningful values
+on both sides. Include accepted inputs at both endpoints of a closed range; an invalid-input table
+alone does not prove those valid boundaries. Preserve open bounds such as strictly future expiry.
+Keep expected values independent of the subject's algorithm. Before returning, check that every
+required endpoint and failure path is present in the completed test inputs.
+
 ## Establish the actual contract
 
 Read the supplied implementation, its callers/interfaces, nearby tests, and Maven/Gradle test

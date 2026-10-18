@@ -32,6 +32,7 @@ interface ScopeIntent {
   readonly token: symbol;
   readonly status: "pending" | "failed";
   readonly correlationId: string;
+  readonly isCurrent: () => boolean;
 }
 // Admission state only: canonical source lists and identities remain server-owned.
 const scopeIntents = new Map<string, Map<string, ScopeIntent>>();
@@ -40,6 +41,10 @@ export function chatScopeTransition(chatId: string | undefined): ChatScopeTransi
   const intents = chatId === undefined ? undefined : scopeIntents.get(chatId);
   if (intents === undefined || intents.size === 0) return undefined;
   return [...intents.values()].some((intent) => intent.status === "failed") ? "failed" : "pending";
+}
+
+export function chatScopeSourceTransition(chatId: string, sourceId: string): ChatScopeTransition {
+  return scopeIntents.get(chatId)?.get(sourceId)?.status;
 }
 
 export function clearChatScopeTransitions(chatId: string): void {
@@ -60,6 +65,15 @@ export function releaseFailedChatScopeTransition(chatId: string, sourceId: strin
   return true;
 }
 
+export function releaseObsoleteFailedChatScopeTransitions(): void {
+  for (const [chatId, intents] of scopeIntents) {
+    for (const [sourceId, intent] of intents) {
+      if (intent.status === "failed" && !intent.isCurrent())
+        releaseFailedChatScopeTransition(chatId, sourceId);
+    }
+  }
+}
+
 export function refuseChatScopeSend(chatId: string): ChatScopeTransition {
   const transition = chatScopeTransition(chatId);
   const intent = scopeIntents.get(chatId)?.values().next().value;
@@ -68,15 +82,36 @@ export function refuseChatScopeSend(chatId: string): ChatScopeTransition {
   return transition;
 }
 
+function settleScopeIntent(
+  chatId: string,
+  sourceId: string,
+  intent: ScopeIntent,
+  accepted: boolean,
+): void {
+  const intents = scopeIntents.get(chatId);
+  if (intents === undefined || intents.get(sourceId)?.token !== intent.token) return;
+  const obsolete = !intent.isCurrent();
+  if (accepted || obsolete) intents.delete(sourceId);
+  else intents.set(sourceId, { ...intent, status: "failed" });
+  if (intents.size === 0) scopeIntents.delete(chatId);
+  const decision = accepted ? "intent-applied" : "intent-failed";
+  reportFilesScopeDecision(intent.correlationId, {
+    decision: obsolete ? "released" : decision,
+  });
+  for (const listener of listeners) listener();
+}
+
 export function beginChatScopeTransition(
   chatId: string,
   sourceId: string,
+  isCurrent: () => boolean = (): boolean => true,
 ): { readonly correlationId: string; readonly settle: (accepted: boolean) => void } {
   const shouldCancel = chatScopeTransition(chatId) === undefined;
   const intent: ScopeIntent = {
     token: Symbol("chat-scope-intent"),
     status: "pending",
     correlationId: newClientCorrelationId(),
+    isCurrent,
   };
   const intents = scopeIntents.get(chatId) ?? new Map<string, ScopeIntent>();
   intents.set(sourceId, intent);
@@ -92,14 +127,7 @@ export function beginChatScopeTransition(
     settle(accepted): void {
       if (settled) return;
       settled = true;
-      if (scopeIntents.get(chatId)?.get(sourceId)?.token !== intent.token) return;
-      if (accepted) intents.delete(sourceId);
-      else intents.set(sourceId, { ...intent, status: "failed" });
-      if (intents.size === 0) scopeIntents.delete(chatId);
-      reportFilesScopeDecision(intent.correlationId, {
-        decision: accepted ? "intent-applied" : "intent-failed",
-      });
-      for (const listener of listeners) listener();
+      settleScopeIntent(chatId, sourceId, intent, accepted);
     },
   };
 }

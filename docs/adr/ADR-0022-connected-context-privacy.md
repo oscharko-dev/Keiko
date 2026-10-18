@@ -1425,3 +1425,15 @@ preflight rejects cyclic schemas before acquisition. Log-sink exceptions remain 
 existing observability port and do not interrupt healthy dispatch. Durable spend-settlement failure
 remains fatal, while a `finally` settles caller usage and output exposure exactly once and releases
 transport timers. A dispatched attempt never restores its grants merely because accounting failed.
+
+
+### Symbol discovery read waves
+
+Current callable discovery, seed observation and target certification reuse the workspace's
+existing multi-range excerpt read. A wave groups ranges by source, retains each original
+4,096-byte window grant and the same aggregate sum, then revalidates every definition's current
+snapshot and existing call/parent certificates before promotion. Range order and evidence bytes
+remain unchanged for stable sources. Mutation/cancellation and unavailable sources fail closed.
+There is no cross-wave or persistent content cache and no added synthesis attempt or authority.
+Physical read-port diagnostics remain separate from unique-file, excerpt-byte and model-token
+accounting. Discovery completeness does not establish necessary implementation-window recall.

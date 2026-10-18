@@ -1194,13 +1194,17 @@ function chatBindingTarget(
   chatWindowId: string | null,
   conversationId: string | undefined,
   winById: (id: string) => AppWindow | undefined,
+  sourceWindowId: string,
 ): ChatBindingTarget | undefined {
   if (chatWindowId === null) return undefined;
   const chatWindow = winById(chatWindowId);
   return {
     conversationId,
+    sourceWindowId,
     projectPath: chatProjectPath(chatWindow),
-    isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
+    isCurrent: (): boolean =>
+      winById(sourceWindowId) !== undefined &&
+      chatConversationId(winById(chatWindowId)) === conversationId,
   };
 }
 
@@ -1835,7 +1839,12 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       chatConversationIdAtBind,
       connectorScope,
       gitChangeSelection,
-      bindingTarget: chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById),
+      bindingTarget: chatBindingTarget(
+        chatWindowId,
+        chatConversationIdAtBind,
+        winById,
+        fromId === chatWindowId ? toId : fromId,
+      ),
       // With the duplicate-guard above, a Git↔Chat attempt that reaches this point never had a
       // prior connection between the pair. `hadGitConnectionBeforeBind` therefore stays false
       // for the Git case and always reflects a first-time bind.

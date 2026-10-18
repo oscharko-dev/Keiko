@@ -95,6 +95,15 @@ Cloud, and Socket Security. Integration additionally requires owner authority un
 GitHub native auto-merge may integrate only after those checks succeed and every review conversation
 is resolved.
 
+Closed or unknown-state pull-request events do not emit the required `ci`, `ui` or
+`Build, scan, SBOM, smoke` display names, even as skipped jobs. Those events use the distinct
+`inactive PR - ...` namespace and remain excluded before candidate checkout. Admitted open-PR
+and non-PR events retain their original names and strict checks. This matters because native
+GitHub accepts skipped required checks and can attach closed-event checks to the feature head;
+a later reopen or rerun must not turn that skip into positive candidate evidence. The static
+name inventory recognizes only this exact reviewed lifecycle expression, not arbitrary dynamic
+expressions. Product merge-readiness classification continues to block skipped checks separately.
+
 No required check may depend on another required check to repair or publish itself. Missing or
 pending required evidence remains blocking through GitHub's native semantics; it is never converted
 to a terminal failure by a second aggregate.

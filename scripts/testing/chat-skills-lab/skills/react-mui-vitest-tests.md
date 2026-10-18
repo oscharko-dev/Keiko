@@ -40,6 +40,11 @@ Check the resulting file against the chosen naming, structure, mock policy and m
    An HTML tag name is not automatically an ARIA role: use actual accessible semantics. For a
    labelled output element, query its accessible label instead of inventing an `"output"` role.
 
+5. When only the newest request may update state, test stale success and stale rejection
+   independently while the newer request remains pending. Assert the result, error and pending
+   indicator in both cases, then complete the newer request. Checking an aborted signal alone
+   does not prove protection against stale success, stale errors or an obsolete `finally` block.
+
 Use this blank-safe interaction when replacing text, adapting the names to the actual test:
 
 ```ts

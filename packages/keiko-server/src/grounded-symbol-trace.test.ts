@@ -2691,3 +2691,125 @@ async function scopedComparisonTrace(
     requestContext,
   });
 }
+
+function quotaFanoutFiles(): Record<string, string> {
+  const names = Array.from({ length: 24 }, (_, index) => `checkQuota${String(index)}`);
+  const content = [
+    "export function enforceQuota(quota: number): boolean {",
+    `  return [${names.map((name) => `${name}(quota)`).join(", ")}].every(Boolean);`,
+    "}",
+    ...names.map(
+      (name, index) =>
+        `function ${name}(quota: number): boolean { return quota <= ${String(20 + index)}; }`,
+    ),
+  ].join("\n");
+  return { "src/gates.ts": content };
+}
+
+function observedFanoutFs(
+  files: Record<string, string>,
+  invalidate: boolean,
+): {
+  readonly fs: WorkspaceFs;
+  readonly start: () => void;
+  readonly reads: () => number;
+  readonly mutated: () => boolean;
+} {
+  const fs = memFs(WORKSPACE_ROOT, files);
+  const read = fs.readFileBytes;
+  if (read === undefined) throw new TypeError("Fixture requires a physical byte-read port");
+  let reads = 0;
+  let observing = false;
+  let mutated = false;
+  const counted: WorkspaceFs = {
+    ...fs,
+    readFileBytes: async (...args): Promise<Uint8Array> => {
+      const bytes = await read(...args);
+      if (observing) reads += 1;
+      if (observing && invalidate && !mutated) {
+        const previous = files["src/gates.ts"];
+        if (previous === undefined) throw new TypeError("Missing fanout source");
+        files["src/gates.ts"] = `${previous}\nexport const changedSource = true;`;
+        mutated = true;
+      }
+      return bytes;
+    },
+  };
+  return {
+    fs: counted,
+    start: (): void => {
+      observing = true;
+    },
+    reads: () => reads,
+    mutated: () => mutated,
+  };
+}
+
+async function physicalFanoutFixture(invalidate = false): Promise<{
+  readonly trace: () => ReturnType<typeof collectDiscoveredSymbolTraceEvidence>;
+  readonly reads: () => number;
+  readonly mutated: () => boolean;
+}> {
+  const files = quotaFanoutFiles();
+  const observation = observedFanoutFs(files, invalidate);
+  const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
+  const query: RetrievalQuery = {
+    ...routeQuery(),
+    maxResults: 100,
+    text: "Explain src/gates.ts and how it enforces the request quota. Follow its calls.",
+  };
+  const requestContext = createStructuralAdapterRequestContext(
+    searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    observation.fs,
+    { nowMs: () => NOW },
+  );
+  await requestContext.codeIntelligenceIndex();
+  const observed = await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS);
+  observation.start();
+  return {
+    reads: observation.reads,
+    mutated: observation.mutated,
+    trace: () =>
+      collectDiscoveredSymbolTraceEvidence({
+        scope: selectedScope(),
+        query,
+        anchors: extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors,
+        retrievalIntent: "targeted-code-search",
+        searchScope,
+        fs: observation.fs,
+        nowMs: () => NOW,
+        atoms: observed.atoms,
+        requestContext,
+      }),
+  };
+}
+
+it("bounds physical source reads for a same-file callable fanout", async () => {
+  const fixture = await physicalFanoutFixture();
+  const result = await fixture.trace();
+  const definitions = result.atoms.filter(
+    (atom) => atom.provenance.tool === "discovered-symbol-definition",
+  );
+  expect(
+    new Set(
+      definitions.flatMap((atom) =>
+        atom.lineRange === undefined ? [] : [atom.lineRange.startLine],
+      ),
+    ).size,
+  ).toBeGreaterThanOrEqual(24);
+  expect(fixture.reads()).toBeGreaterThan(0);
+  expect(fixture.reads()).toBeLessThanOrEqual(12);
+});
+
+it("never certifies a callable cohort whose source changes during its physical read", async () => {
+  const fixture = await physicalFanoutFixture(true);
+  const result = await fixture.trace().catch((error: unknown) => {
+    expect(error).toMatchObject({ reason: "io-error" });
+    return undefined;
+  });
+  expect(fixture.mutated()).toBe(true);
+  expect(
+    result?.atoms.filter((atom) => atom.provenance.tool === "discovered-symbol-definition") ?? [],
+  ).toEqual([]);
+});

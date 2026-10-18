@@ -1180,3 +1180,73 @@ and customer-profile bytes before requests. Its first Java skill answer passes 1
 correct subject and detects four of five independent mutants; the upper-quantity boundary mutant
 survives. This is an explicit defect-detection gap, not full skill qualification. Further paired
 runs and semantic/citation inspection remain pending.
+
+### Lifecycle, native context names and bounded read waves
+
+The three independent scope findings now have an owning candidate correction. The initial Files
+bind acquires its admission hold before edge creation with stable Files/Chat window ownership;
+failed retry reuses that owner. Equal-root recovery performs fresh canonical reconciliation.
+A retired owner releases only a settled failed intent, preserving independent sources. Additional
+controls retain a timeout hold through the underlying compensation and retain a hold on compensation
+failure. Both safety controls failed against the intermediate prototype without those guards.
+Current owning UI controls pass 368 tests, including runtime-only initial Chat identity. Old mutation
+error/queue assertions remain separate from the newly observed admission lifecycle.
+
+The auditor identified that GitHub attaches closed-event checks to the feature head and accepts
+skipped required checks. Product skipped-check classification was healthy but did not refute native
+owner-delivery semantics. The candidate therefore uses distinct inactive names for `ci`, `ui` and
+`Build, scan, SBOM, smoke` on closed/unknown PR states. Four owning configuration/name controls failed
+first. Open and non-PR names and strict candidate verification remain unchanged; the existing static
+inventory recognizes only the exact reviewed lifecycle conditional. Initial coupled inventory tests
+needed the same narrow normalization while retaining existing matrix expansion; their failures are
+retained. Final focused lifecycle/name/reuse controls pass 225 tests; the UI workflow consumer passes 98. The complete inventoried consumers and fresh built E2E wiring remain final checks.
+
+A real same-file 24-callable fanout initially performed 124 physical byte-read operations. Grouping
+the existing per-window excerpt grants by source within discovery, seed and target observation waves
+restores the non-vacuous bound of at most 12 reads with at least 24 distinct observed callable ranges.
+All 118 owning symbol controls pass, including source mutation during the actual read. This is not a
+persistent cache: source/call/parent certificates and original window/aggregate grants remain binding.
+
+A production-cap A/B uses the identical 467,450-byte one-file corpus, unchanged original question,
+118,784/8,192 model grants and 131,072 excerpt bytes. Read-port calls fall from 2,159 to 59 and returned
+read bytes from 509,265,584 to 14,142,284. All 287 ordered excerpt ranges, lengths and content hashes
+agree exactly. The auditor independently reproduced both counts and byte/hash equality. Mixed-load
+wall times (36,716/26,755 ms in the repeated developer observation) are not latency acceptance. The
+absent deadline constructor/caller and physical excerpt-charge windows remain absent; source census
+completeness does not certify necessary-window recall. Body-free records are in `evidence/4037/`.
+
+Exact-head CI found three task-order controls still anchored to the retired full-answer repair phrase.
+Those exact single/plural/hybrid failures reproduced locally. The controls now derive the actual JSON
+repair task, return actual insertion JSON and retain full prose/citation/source/system/hybrid checks.
+All three pass. Moving the actual hybrid repair task before evidence fails the positional assertion;
+production is restored byte-for-byte and all three pass again. This is fixture/protocol convergence,
+not an additional native answer success.
+
+The full quality run under Node 24.22.0 failed an unchanged exact-toolchain control. The targeted
+reproduction fails there; Node 24.18.0 with the pinned npm passes. The broad run was interrupted once
+that configuration error was established and carries no full-quality PASS. The next full run uses
+the verified pinned runtime. The fresh original-question native baseline now uses the documented
+1,365,000 ms provider and 2,760,000 ms transport budgets with one retry; it remains a fresh recreation,
+not the unavailable historical conversation.
+
+The completed fulfillment held-out batch retains all three Java skill/control pairs at 4/5 detected
+mutants and the React execution/stale-state gaps. After analysis it is regression material, not an
+untouched acceptance fixture. New generic skill checks cover valid interval endpoints and independent
+stale success, rejection and pending-state behavior. A separate Spring MVC fixture is prepared before
+model exposure; its hand-authored oracle passes 10 tests on correct code and detects six independent
+mutants offline. These are fixture checks only. The current Spring test APIs follow the pinned build
+and [Spring Boot's focused testing documentation](https://docs.spring.io/spring-boot/reference/testing/spring-boot-applications.html).
+
+The current-source local Sonar scan found one nested-conditional maintainability issue in the
+scope settlement helper. Its existing decision is now computed separately; behavior and all
+admission dispositions remain unchanged. The scan is retained as a failure and must pass again
+before delivery. UI build/coverage starts were stopped before applying that correction and will
+be rerun on frozen source. An earlier UI build overlapped package emission and observed a partial
+compiled module; the completed build exports the expected function. Build-producing steps are
+now sequenced, with no product export or gate change.
+
+The fresh original-question run with the documented provider/transport values returned after
+1,131,641 ms: 128 words, two physical attempts, zero validated citations and exact returned/stored
+agreement. Its answer uses detached numeric ranges and does not establish the required cumulative
+physical-attempt accounting explanation. This remains a failed native quality baseline, despite
+successful transport and persistence; the recreated corpus/history boundary is unchanged.

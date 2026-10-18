@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "classification": "controlled production retrieval; no model, browser, historical replay or latency acceptance",
+  "corpusFiles": 1,
+  "corpusBytes": 467450,
+  "corpusSha256": "1b018b3a21423554b08da1d92a57b20af45d9e160929439553036b7d3f26948d",
+  "baselineSourceHead": "41fb4e4e1e31d9692c0a58a20d97b55cff166380",
+  "candidateSymbolTraceSha256": "347b97e41c9ed0d4173bbe8614d1c337316ed73494ef6977ef7550474df512a8",
+  "modelInputGrant": 118784,
+  "modelOutputGrant": 8192,
+  "orderedExcerptRangesAndContentHashesAgree": true,
+  "selectedExcerpts": 287,
+  "excerptByteGrant": 131072,
+  "necessaryJoins": [
+    {
+      "name": "explorationDeadlineAtMs",
+      "line": 11828,
+      "present": false,
+      "rangeCount": 0
+    },
+    {
+      "name": "groundedAnswerForPack",
+      "line": 12511,
+      "present": true,
+      "rangeCount": 1
+    },
+    {
+      "name": "exhaustedAnswerBudgetDimensions",
+      "line": 12492,
+      "present": true,
+      "rangeCount": 1
+    },
+    {
+      "name": "clampUsageToBudget",
+      "line": 1848,
+      "present": true,
+      "rangeCount": 1
+    },
+    {
+      "name": "consumeExcerptTaskBytes",
+      "line": 8616,
+      "present": false,
+      "rangeCount": 0
+    }
+  ],
+  "sourceDiscoveryCompletenessIsNotNecessaryEvidenceRecall": true,
+  "before": {
+    "physicalReadPortCalls": 2159,
+    "returnedReadBytes": 509265584,
+    "wallDurationMs": 36716,
+    "usage": {
+      "searchCalls": 9,
+      "filesRead": 1,
+      "excerptBytes": 131072,
+      "modelInputTokens": 0,
+      "modelOutputTokens": 0,
+      "elapsedMs": 11767,
+      "rerankCalls": 0
+    }
+  },
+  "after": {
+    "physicalReadPortCalls": 59,
+    "returnedReadBytes": 14142284,
+    "wallDurationMs": 26755,
+    "usage": {
+      "searchCalls": 9,
+      "filesRead": 1,
+      "excerptBytes": 131072,
+      "modelInputTokens": 0,
+      "modelOutputTokens": 0,
+      "elapsedMs": 1693,
+      "rerankCalls": 0
+    }
+  }
+}

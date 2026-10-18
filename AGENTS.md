@@ -472,6 +472,9 @@ system that exists, never beside it:
   the answer. The existing repair owner constructs the candidate locally, then applies the
   unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
   Literal marker-only responses remain subject to those same guards.
+  Symbol discovery batches the existing bounded excerpt ranges per source and observation wave.
+  Each definition retains current-source, call/parent and range certificates; no persistent source
+  cache, read grant, synthesis attempt or source authority is added by batching.
   Endpoint definition traversal binds a registration's observed handler reference to its current
   lexical AST target. Further calls retain their exact callable owner and complete observed spans;
   same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -834,6 +837,10 @@ system that exists, never beside it:
   pending work and independent source holds remain protected.
   A mounted Chat may establish its conversation through the existing runtime before its id is
   persisted in window cfg; refresh admission and failed-edge recovery use that same live identity.
+  Initial Files bindings hold admission before an edge exists, using stable window ownership.
+  Returning to an acknowledged root after failure requires fresh canonical reconciliation.
+  Retired owners release settled failed holds only; timeout-blocked work and failed compensation
+  retain their holds until the existing recovery path proves settlement.
   Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
   retains per-source pending/failed admission holds and releases only the current accepted token;
   drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision

@@ -8,6 +8,8 @@ import {
   chatScopeTransition,
   clearChatScopeTransitions,
   releaseFailedChatScopeTransition,
+  releaseObsoleteFailedChatScopeTransitions,
+  chatScopeSourceTransition,
 } from "./chatWindowActivity";
 
 const TARGET = { conversationId: "chat-a", projectPath: "/repo" };
@@ -70,6 +72,32 @@ describe("chat source-intent admission", () => {
     expect(releaseFailedChatScopeTransition(TARGET.conversationId, "files-b")).toBe(true);
     expect(chatScopeTransition(TARGET.conversationId)).toBeUndefined();
     expect(releaseFailedChatScopeTransition(TARGET.conversationId, "files-b")).toBe(true);
+  });
+
+  it("retires only settled obsolete owners while independent and pending holds remain", () => {
+    let current = true;
+    const failed = beginChatScopeTransition(TARGET.conversationId, "files-a", () => current);
+    const pending = beginChatScopeTransition(TARGET.conversationId, "files-b", () => current);
+    const independent = beginChatScopeTransition(TARGET.conversationId, "files-c");
+    failed.settle(false);
+    independent.settle(false);
+    current = false;
+    releaseObsoleteFailedChatScopeTransitions();
+    expect(chatScopeSourceTransition(TARGET.conversationId, "files-a")).toBeUndefined();
+    expect(chatScopeSourceTransition(TARGET.conversationId, "files-b")).toBe("pending");
+    expect(chatScopeSourceTransition(TARGET.conversationId, "files-c")).toBe("failed");
+    pending.settle(false);
+    expect(chatScopeSourceTransition(TARGET.conversationId, "files-b")).toBeUndefined();
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
+  });
+
+  it("does not let an obsolete owner's settlement release its newer replacement", () => {
+    const obsolete = beginChatScopeTransition(TARGET.conversationId, "files-a", () => false);
+    const current = beginChatScopeTransition(TARGET.conversationId, "files-a");
+    current.settle(false);
+    obsolete.settle(true);
+    releaseObsoleteFailedChatScopeTransitions();
+    expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
   });
 });
 

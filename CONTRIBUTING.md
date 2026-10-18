@@ -119,6 +119,9 @@ Marker repair requests bounded insertion annotations anchored by unique original
 models need not copy generated code. The existing owner constructs the candidate and reuses
 all unchanged marker-only, code/assessment, fitted-evidence and cumulative-budget validation.
 Literal marker-only responses remain compatible under the same checks.
+Symbol discovery groups the existing bounded excerpt reads by source within each observation
+wave. Current source snapshots, definition/call/parent certificates and original per-window grants
+remain binding; this introduces no persistent source cache or additional synthesis attempt.
 Endpoint definition traversal binds a registration's observed handler reference to its current
 lexical AST target. Further calls retain their exact callable owner and complete observed spans;
 same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -749,6 +752,9 @@ releases that edge's failed admission hold only. Pending source work cannot be f
 this recovery action; unrelated source holds remain in force.
 A mounted Chat's runtime conversation identity remains valid before its window cfg id persists;
 refresh admission and failed-edge recovery resolve that same identity.
+Initial binds hold admission before edge creation. Failed equal-root navigation reconciles with
+fresh canonical state. Retired owners release settled failed holds only; timeout-blocked work
+and failed compensation retain their existing settlement/recovery boundary.
 
 The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
 `request-superseded`, joined to directory-read correlations without paths or source bodies.

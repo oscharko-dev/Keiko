@@ -752,3 +752,12 @@ implementation team rather than silently resolved:
 ## Date
 
 2026-06-26
+
+
+Initial Files binding uses the same Chat admission registry before an acknowledged edge exists,
+with stable Files/Chat window identity so a failed gesture can be retried. A failed equal-root
+return performs fresh canonical reconciliation rather than trusting the old edge snapshot.
+Settled obsolete owners release only their own failed intent; pending requests, timeout-blocked
+queues, failed compensation and independent source holds remain protected. Late successful
+compensation uses the existing queue recovery to retire an obsolete hold. Unmount cleanup is
+scoped to the original owner and does not discard another mounted owner's intent.
