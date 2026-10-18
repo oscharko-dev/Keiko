@@ -65,8 +65,9 @@ enum keiko_monitor_response {
   //
   // KEIKO-0433: RECONCILE against a handle that IS known but already owned by a live connection
   // used to answer KEIKO_MONITOR_ZERO_LIVE — the same code as "no such session". Those demand
-  // opposite responses: one means the tree is already supervised and the caller should back off,
-  // the other means nothing is left to adopt. Appended, never renumbered: the wire protocol is
+  // distinct refusals: one means the tree is already supervised and the caller should back off;
+  // an unknown handle supplies no empty-tree proof and receives KEIKO_MONITOR_ERROR. Appended,
+  // never renumbered: the wire protocol is
   // shared with already-built binaries, so reassigning an existing value would be breaking.
   KEIKO_MONITOR_ALREADY_ACTIVE = 9
 };

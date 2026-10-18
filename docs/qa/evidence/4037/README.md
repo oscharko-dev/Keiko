@@ -374,3 +374,17 @@ captures ownership at request entry and explicitly awaits initial root-read read
 selection-change case. All sixteen owning controls pass; the original stale-selection and exact
 active-directory assertions remain intact. This is a fixture-ordering correction, not a new claim
 of native browser or current-head CI completion.
+
+## Unknown macOS monitor state is not an empty-tree proof
+
+An independently compiled projection of the actual monitor refusal branch returns ZERO_LIVE for an
+unknown handle, including state unavailable after monitor restart. The extracted production reply
+owner preserves that behavior before the correction; its new compiled control fails while all
+twenty-three existing manager/monitor contract controls remain healthy. Unknown and non-owner
+handles now retain the same closed refusal, and an already live owner retains its separate reply.
+No wire value changes and no new native trust or execution exception are introduced.
+
+These are actual C reply-policy and source-join controls with inert ports. They do not establish
+Endpoint Security service availability, durable process absence after daemon failure, safe live
+generation transfer or a successful sequence of two installed updates. Those native proof and
+implementation obligations remain open.

@@ -385,6 +385,12 @@ enum reconcile_outcome {
   RECONCILE_ADOPTED = 2
 };
 
+static uint16_t reconcile_refusal_reply(enum reconcile_outcome outcome) {
+  // Lost or unknown session state cannot establish that its process tree is empty.
+  return outcome == RECONCILE_ALREADY_LIVE ? KEIKO_MONITOR_ALREADY_ACTIVE
+                                          : KEIKO_MONITOR_ERROR;
+}
+
 static void *serve_client(void *opaque) {
   int descriptor = *(int *)opaque;
   struct keiko_monitor_request request;
@@ -458,15 +464,13 @@ static void *serve_client(void *opaque) {
   if (session == NULL) {
     if (request.command == KEIKO_MONITOR_RECONCILE) {
       // KEIKO-1005: name the reconcile outcome so an operator can distinguish "already
-      // owned by a live connection" from "no such session" — both take this branch but with
-      // opposite meaning.
+      // owned by a live connection" from "no such session". Both refuse reconciliation;
+      // absence from this in-memory inventory never establishes an empty process tree.
       os_log(keiko_monitor_log(),
              "RECONCILE outcome=%{public}s for supervisor_pid=%{public}d",
              reconcile_outcome == RECONCILE_ALREADY_LIVE ? "ALREADY_LIVE" : "UNKNOWN_HANDLE",
              (int)peer);
-      (void)reply_to(&transient, reconcile_outcome == RECONCILE_ALREADY_LIVE
-                                     ? KEIKO_MONITOR_ALREADY_ACTIVE
-                                     : KEIKO_MONITOR_ZERO_LIVE);
+      (void)reply_to(&transient, reconcile_refusal_reply(reconcile_outcome));
     } else {
       // KEIKO-1005: an ARM that returned NULL either lost the recovery-handle race or clashed
       // with an existing session's supervisor_pid (KEIKO-0771). Both are refused with the same

@@ -217,6 +217,11 @@ The macOS supervisor never substitutes a shell, inherited session, or process gr
 The qualification fixture creates descendants across fork and exec, exercises stop and abrupt
 control-channel loss, and requires the system extension to prove zero live descendants.
 
+Reconciliation cannot infer an empty tree from an unknown handle or a lost in-memory session
+inventory. Unknown and non-owner handles receive the same observation refusal, while an existing
+live owner retains its distinct already-active response. Only the existing observed zero-live
+path may emit an empty-tree proof; monitor restart or missing state does not establish it.
+
 The activation manager submits exactly Keiko's bundled extension through Apple's SystemExtensions
 framework and keeps the request alive while local-user approval is pending. After system-extension
 activation, the monitor reports a closed `needs-full-disk-access` state when `es_new_client`
