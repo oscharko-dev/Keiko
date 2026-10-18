@@ -75,6 +75,8 @@ import {
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
   CLIENT_FILES_SCOPE_DECISIONS,
+  CLIENT_UPDATE_NOTICE_KINDS,
+  CLIENT_UPDATE_NOTICE_PRESENTATIONS,
   CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
@@ -1370,6 +1372,39 @@ const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperat
   releaseImpact: "patch",
 });
 
+const CLIENT_UPDATE_NOTICE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.update-notice.presented",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientUpdateNotice",
+  fields: {
+    noticeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_UPDATE_NOTICE_KINDS,
+    },
+    presentation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+    },
+    blockerCount: { type: "integer", dataClass: "count", required: true },
+    updateAvailable: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-update-notice"],
+  proofIds: ["client.update-notice.presented.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -2126,6 +2161,29 @@ function logClientSupportReportPrepared(
   return true;
 }
 
+function logClientUpdateNotice(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const notice = request.updateNotice;
+  if (notice === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_UPDATE_NOTICE_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        blockerCount: notice.blockerCount,
+        noticeKind: notice.noticeKind,
+        presentation: notice.presentation,
+        updateAvailable: notice.updateAvailable,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 function logClientFilesScopeDecision(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2260,6 +2318,7 @@ function logClosedClientReport(
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
+    logClientUpdateNotice(request, correlationId) ||
     logRetrievalClientReport(request, correlationId) ||
     logClientCodingRunRestore(request, correlationId)
   );
@@ -2843,6 +2902,7 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.supportReportDelivery !== undefined ||
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
+    report.updateNotice !== undefined ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
     report.citationActivation !== undefined

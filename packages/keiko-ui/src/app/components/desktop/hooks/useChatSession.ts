@@ -23,6 +23,7 @@ import {
 import { useTranslate } from "@/lib/i18n";
 import {
   clearChatScopeTransitions,
+  useChatScopeCancellation,
   refuseChatScopeSend,
   useChatScopeTransition,
   type ChatScopeTransition,
@@ -80,7 +81,11 @@ import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { reportClientDiagnostic, reportModelCatalogStage } from "@/lib/client-diagnostics";
+import {
+  reportClientDiagnostic,
+  reportModelCatalogStage,
+  reportFilesScopeDecision,
+} from "@/lib/client-diagnostics";
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { bffRequestErrorKind } from "@/lib/http";
@@ -3053,7 +3058,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // cancellation paths (grounded uses the controller as signal; ungrounded
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
-  const sendControllerOwnerRef = useRef<"composer" | "canonical-voice" | null>(null);
+  const sendControllerOwnerRef = useRef<{
+    readonly kind: "composer" | "canonical-voice";
+    readonly conversationId: string;
+  } | null>(null);
   // Set only by the deliberate Voice interrupt, and read once by the attempt that owns this exact
   // signal. It is the proof of intent that makes the resulting cancellation terminal for the queue;
   // any other abort (chat switch, unmount, replacement) leaves it untouched and stays retryable.
@@ -3918,7 +3926,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
       // a late response from the prior chat never lands here.
-      if (sendControllerOwnerRef.current !== "canonical-voice") {
+      if (sendControllerOwnerRef.current?.kind !== "canonical-voice") {
         sendControllerRef.current?.abort();
         sendControllerRef.current = null;
         sendControllerOwnerRef.current = null;
@@ -4526,7 +4534,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // of re-sending an answer whose dialog generation has already been retired (#2842).
   const interruptCanonicalVoiceDelivery = useCallback((): void => {
     if (!isInFlight(sendStatusRef.current)) return;
-    if (sendControllerOwnerRef.current !== "canonical-voice") return;
+    if (sendControllerOwnerRef.current?.kind !== "canonical-voice") return;
     const controller = sendControllerRef.current;
     if (controller !== null) {
       interruptedSendSignalRef.current = controller.signal;
@@ -4534,6 +4542,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     }
     releaseCancelledSendController();
   }, [releaseCancelledSendController]);
+
+  const cancelSendForConversation = useCallback(
+    (conversationId: string, correlationId: string): void => {
+      if (!isInFlight(sendStatusRef.current)) return;
+      if (sendControllerOwnerRef.current?.conversationId !== conversationId) return;
+      reportFilesScopeDecision(correlationId, { decision: "intent-send-cancelled" });
+      cancelSend();
+    },
+    [cancelSend],
+  );
+
+  useChatScopeCancellation(cancelSendForConversation);
 
   // Issue #185 → #152: cancelGrounded is preserved as a thin alias so existing
   // call sites (ChatWindow.tsx grounded TypingBubble) keep working. New code
@@ -4650,8 +4670,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // any) was either already settled or already aborted via cancelSend.
       const controller = new AbortController();
       sendControllerRef.current = controller;
-      sendControllerOwnerRef.current =
-        canonicalTarget === undefined ? "composer" : "canonical-voice";
+      sendControllerOwnerRef.current = {
+        kind: canonicalTarget === undefined ? "composer" : "canonical-voice",
+        conversationId: chat.id,
+      };
       latestSendSignalRef.current = controller.signal;
       setLatestMemory(undefined);
       try {
@@ -5154,7 +5176,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       const controller = new AbortController();
       sendControllerRef.current = controller;
-      sendControllerOwnerRef.current = "composer";
+      sendControllerOwnerRef.current = { kind: "composer", conversationId: chat.id };
       latestSendSignalRef.current = controller.signal;
       try {
         updateOwnedSendStatus(controller.signal, "contacting");

@@ -807,6 +807,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-update-notice",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["client.update-notice.presented"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.update-notice.presented"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.update-notice.presented"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.update-notice.presented"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-binding",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

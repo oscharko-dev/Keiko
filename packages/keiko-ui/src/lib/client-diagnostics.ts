@@ -50,6 +50,7 @@ import {
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
+  type ClientUpdateNotice,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -189,6 +190,7 @@ export interface ClientDiagnosticMeta {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  readonly updateNotice?: ClientUpdateNotice | undefined;
   // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.

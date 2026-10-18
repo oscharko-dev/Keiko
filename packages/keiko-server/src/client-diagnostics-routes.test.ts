@@ -1606,6 +1606,42 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("persists a setup-only update notice as routine closed presentation evidence", async () => {
+    const sink = captureServerLog();
+    const updateNotice = {
+      blockerCount: 0,
+      noticeKind: "portable-setup-required",
+      presentation: "shown",
+      updateAvailable: false,
+    };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_notice-0001",
+      updateNotice,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.update-notice.presented",
+    );
+    if (event === undefined) throw new TypeError("Missing update notice presentation evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.update-notice.presented.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_notice-0001",
+      ...updateNotice,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
   it.each([
     "restored",
     "owned-elsewhere",
@@ -1627,6 +1663,7 @@ describe("POST /api/diagnostics/client", () => {
     "intent-applied",
     "intent-failed",
     "intent-send-refused",
+    "intent-send-cancelled",
   ])(
     "persists the closed Files ownership decision %s as routine causal evidence",
     async (decision) => {

@@ -83,7 +83,12 @@ The Realtime owner keeps only the short continuation buffer, then transfers a fi
 through a synchronous handoff. The canonical Chat session captures the immutable chat/model/memory
 target and optimistic user projection during that handoff and owns the bounded FIFO from then on. Its
 queue survives Voice mode leave, media replacement, and active-chat changes; Realtime never polls or
-retries a turn after transfer. The per-item completion promise is used only to bind canonical TTS to
+retries a turn after transfer. Navigation alone does not revoke the captured target. A subsequent
+source-change intent for that target cancels its actual in-flight request immediately, even when
+the owning window now displays another chat. Cancellation is matched to the controller's captured
+conversation identity, never the displayed chat: an unrelated request and its draft remain intact.
+Pending and failed source intents retain the existing send-admission hold; the server still
+validates the captured source identity before admission and persistence. The per-item completion promise is used only to bind canonical TTS to
 the matching assistant message.
 
 The browser-side Voice handoff FIFO is not the only concurrency boundary. At the BFF, every canonical

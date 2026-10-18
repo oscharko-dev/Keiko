@@ -1,7 +1,9 @@
+import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   chatWindowRuntimeTarget,
+  useChatScopeCancellation,
   registerChatWindowRuntime,
   groundingIntensity,
   beginChatScopeTransition,
@@ -22,17 +24,19 @@ describe("chat source-intent admission", () => {
   it("cancels every runtime of the affected chat synchronously and preserves other chats", () => {
     const cancel = vi.fn();
     const other = vi.fn();
-    const release = registerChatWindowRuntime("chat-window", TARGET, undefined, undefined, cancel);
-    const releaseOther = registerChatWindowRuntime(
-      "other-window",
-      { conversationId: "other", projectPath: "/repo" },
-      undefined,
-      undefined,
-      other,
+    const session = renderHook(() =>
+      useChatScopeCancellation((conversationId, correlationId): void => {
+        if (conversationId === TARGET.conversationId) cancel(conversationId, correlationId);
+      }),
+    );
+    const otherSession = renderHook(() =>
+      useChatScopeCancellation((conversationId): void => {
+        if (conversationId === "other") other();
+      }),
     );
     try {
       const intent = beginChatScopeTransition(TARGET.conversationId, "files-a");
-      expect(cancel).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledWith(TARGET.conversationId, intent.correlationId);
       expect(other).not.toHaveBeenCalled();
       expect(chatScopeTransition(TARGET.conversationId)).toBe("pending");
       intent.settle(false);
@@ -40,8 +44,8 @@ describe("chat source-intent admission", () => {
       intent.settle(true);
       expect(chatScopeTransition(TARGET.conversationId)).toBe("failed");
     } finally {
-      release();
-      releaseOther();
+      session.unmount();
+      otherSession.unmount();
     }
   });
 

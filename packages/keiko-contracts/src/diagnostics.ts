@@ -547,6 +547,56 @@ export const CLIENT_MODULE_LOAD_FAILURES = [
 export type ClientModuleLoadFailure = (typeof CLIENT_MODULE_LOAD_FAILURES)[number];
 const CLIENT_MODULE_LOAD_FAILURE_SET: ReadonlySet<unknown> = new Set(CLIENT_MODULE_LOAD_FAILURES);
 
+export const CLIENT_UPDATE_NOTICE_KINDS = [
+  "update-available",
+  "critical-update-available",
+  "portable-setup-required",
+  "externally-managed",
+  "check-unavailable",
+  "action-required",
+  "no-update-signal",
+] as const;
+export type ClientUpdateNoticeKind = (typeof CLIENT_UPDATE_NOTICE_KINDS)[number];
+export const CLIENT_UPDATE_NOTICE_PRESENTATIONS = ["shown", "dismissed", "suppressed"] as const;
+export interface ClientUpdateNotice {
+  readonly blockerCount: number;
+  readonly noticeKind: ClientUpdateNoticeKind;
+  readonly presentation: (typeof CLIENT_UPDATE_NOTICE_PRESENTATIONS)[number];
+  readonly updateAvailable: boolean;
+}
+const UPDATE_NOTICE_KINDS: ReadonlySet<unknown> = new Set(CLIENT_UPDATE_NOTICE_KINDS);
+const UPDATE_NOTICE_PRESENTATIONS: ReadonlySet<unknown> = new Set(
+  CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+);
+const UPDATE_NOTICE_KEYS = new Set([
+  "noticeKind",
+  "presentation",
+  "updateAvailable",
+  "blockerCount",
+]);
+function coherentUpdateNotice(notice: Record<string, unknown>): boolean {
+  const available =
+    notice.noticeKind === "update-available" || notice.noticeKind === "critical-update-available";
+  return (
+    notice.updateAvailable === available &&
+    (notice.noticeKind !== "no-update-signal" || notice.presentation === "suppressed")
+  );
+}
+
+function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
+  const notice = value.updateNotice;
+  if (notice === undefined) return true;
+  if (!isRecord(notice) || !isActivityLogCorrelationId(value.correlationId)) return false;
+  return (
+    Object.keys(notice).length === UPDATE_NOTICE_KEYS.size &&
+    Object.keys(notice).every((key) => UPDATE_NOTICE_KEYS.has(key)) &&
+    UPDATE_NOTICE_KINDS.has(notice.noticeKind) &&
+    UPDATE_NOTICE_PRESENTATIONS.has(notice.presentation) &&
+    isBoundedNonNegativeInteger(notice.blockerCount, 1_000_000) &&
+    coherentUpdateNotice(notice)
+  );
+}
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -578,6 +628,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  readonly updateNotice?: ClientUpdateNotice | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
@@ -780,6 +831,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "supportReportDelivery",
   "supportReportPreparation",
   "filesScopeDecision",
+  "updateNotice",
   "codingRunRestore",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
@@ -853,7 +905,8 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
   return (
     hasValidVoiceCaptureContext(value) &&
     hasValidGitContext(value) &&
-    hasValidHealthDiagnostic(value)
+    hasValidHealthDiagnostic(value) &&
+    hasValidUpdateNoticeContext(value)
   );
 }
 
@@ -2214,6 +2267,7 @@ export const CLIENT_FILES_SCOPE_DECISIONS = [
   "intent-applied",
   "intent-failed",
   "intent-send-refused",
+  "intent-send-cancelled",
 ] as const;
 export interface ClientFilesScopeDecision {
   readonly decision: (typeof CLIENT_FILES_SCOPE_DECISIONS)[number];

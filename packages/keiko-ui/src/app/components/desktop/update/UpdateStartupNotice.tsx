@@ -1,13 +1,19 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import type { ClientUpdateNoticeKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { fetchStartupUpdatePreflight } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
 import {
   hasStartupUpdateSignal,
+  startupUpdateNoticeKind,
   isPortableBootstrapSetupRequired,
   isPortableExternallyManaged,
   isPortableReleaseMetadataUnavailable,
@@ -82,6 +88,7 @@ function noticeBody(
   if (isPortableBootstrapSetupRequired(report)) {
     return t("updates.notice.portableSetupBody");
   }
+  if (!report.updateAvailable) return t("updates.notice.actionBody");
   if (
     report.installabilitySource === "github-release-asset" &&
     report.portableAsset?.status === "eligible"
@@ -91,11 +98,29 @@ function noticeBody(
   return t("updates.notice.body", { version: targetVersion });
 }
 
-function noticeTitle(report: UpdatePreflightReport, critical: boolean, t: I18nTranslate): string {
-  if (critical) return t("updates.notice.criticalTitle");
-  if (isPortableReleaseMetadataUnavailable(report))
-    return t("updates.notice.releaseUnavailableTitle");
-  return t("updates.notice.title");
+const NOTICE_TITLE_KEYS: Readonly<Record<ClientUpdateNoticeKind, Parameters<I18nTranslate>[0]>> = {
+  "update-available": "updates.notice.title",
+  "critical-update-available": "updates.notice.criticalTitle",
+  "portable-setup-required": "updates.status.portableSetupRequired",
+  "externally-managed": "updates.status.portableExternallyManaged",
+  "check-unavailable": "updates.notice.releaseUnavailableTitle",
+  "action-required": "updates.notice.actionTitle",
+  "no-update-signal": "updates.notice.actionTitle",
+};
+
+function reportNoticePresentation(
+  report: UpdatePreflightReport,
+  presentation: "shown" | "dismissed" | "suppressed",
+): void {
+  reportClientDiagnostic("Keiko startup update notice classified.", {
+    correlationId: newClientCorrelationId(),
+    updateNotice: {
+      blockerCount: report.blockers.length,
+      noticeKind: startupUpdateNoticeKind(report),
+      presentation,
+      updateAvailable: report.updateAvailable,
+    },
+  });
 }
 
 export function UpdateStartupNotice({
@@ -111,11 +136,17 @@ export function UpdateStartupNotice({
     let cancelled = false;
     fetchReport()
       .then((report) => {
-        if (cancelled || !hasStartupUpdateSignal(report)) return;
+        if (cancelled) return;
+        if (!hasStartupUpdateSignal(report)) {
+          reportNoticePresentation(report, "suppressed");
+          return;
+        }
         if (isDismissed(report)) {
+          reportNoticePresentation(report, "dismissed");
           setState({ status: "dismissed" });
           return;
         }
+        reportNoticePresentation(report, "shown");
         setState({ status: "ready", report });
       })
       .catch(() => {
@@ -147,7 +178,7 @@ export function UpdateStartupNotice({
         {critical ? <InfoIcon size={17} /> : <ActivityIcon size={17} />}
       </span>
       <div className="update-notice-body">
-        <strong>{noticeTitle(state.report, critical, t)}</strong>
+        <strong>{t(NOTICE_TITLE_KEYS[startupUpdateNoticeKind(state.report)])}</strong>
         <span>{noticeBody(state.report, targetVersion, t)}</span>
       </div>
       <div className="update-notice-actions">
@@ -160,7 +191,9 @@ export function UpdateStartupNotice({
             setState({ status: "dismissed" });
           }}
         >
-          {t("updates.notice.review")}
+          {t(
+            state.report.updateAvailable ? "updates.notice.review" : "updates.notice.reviewDetails",
+          )}
         </button>
         <button
           type="button"

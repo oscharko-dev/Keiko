@@ -24,7 +24,6 @@ interface ChatWindowRuntimeState {
   readonly registration: symbol;
   readonly prepareClose: (() => Promise<boolean>) | undefined;
   readonly isCloseReady: (() => boolean) | undefined;
-  readonly cancelSend: (() => void) | undefined;
 }
 
 export type ChatScopeTransition = "pending" | "failed" | undefined;
@@ -134,10 +133,8 @@ export function beginChatScopeTransition(
   intents.set(sourceId, intent);
   scopeIntents.set(chatId, intents);
   reportFilesScopeDecision(intent.correlationId, { decision: "intent-pending" });
-  if (shouldCancel)
-    for (const state of runtimes.values())
-      if (state.runtime.conversationId === chatId) state.cancelSend?.();
-  for (const listener of listeners) listener();
+  for (const listener of listeners)
+    listener(shouldCancel ? chatId : undefined, shouldCancel ? intent.correlationId : undefined);
   let settled = false;
   return {
     correlationId: intent.correlationId,
@@ -147,6 +144,20 @@ export function beginChatScopeTransition(
       settleScopeIntent(chatId, sourceId, intent, accepted);
     },
   };
+}
+
+/** Observe source admission in every owning session, including the root Voice fallback owner. */
+export function useChatScopeCancellation(
+  cancelSend: (conversationId: string, correlationId: string) => void,
+): void {
+  useLayoutEffect(
+    () =>
+      subscribe((conversationId, correlationId): void => {
+        if (conversationId !== undefined && correlationId !== undefined)
+          cancelSend(conversationId, correlationId);
+      }),
+    [cancelSend],
+  );
 }
 
 export function useChatScopeTransition(
@@ -186,10 +197,11 @@ const HEAVY_REFERENCES = 4;
 const FLOW_AFTERGLOW_MS = 2_500;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
-const listeners = new Set<() => void>();
+type ChatActivityListener = (conversationId?: string, correlationId?: string) => void;
+const listeners = new Set<ChatActivityListener>();
 let runtimes: ReadonlyMap<string, ChatWindowRuntimeState> = new Map();
 
-function subscribe(listener: () => void): () => void {
+function subscribe(listener: ChatActivityListener): () => void {
   listeners.add(listener);
   return (): void => {
     listeners.delete(listener);
@@ -280,7 +292,6 @@ export function registerChatWindowRuntime(
   runtime: ChatWindowRuntimeTarget,
   prepareClose?: () => Promise<boolean>,
   isCloseReady?: () => boolean,
-  cancelSend?: () => void,
 ): () => void {
   const registration = Symbol("chat-window-runtime");
   runtimes = new Map(runtimes).set(windowId, {
@@ -288,7 +299,6 @@ export function registerChatWindowRuntime(
     registration,
     prepareClose,
     isCloseReady,
-    cancelSend,
   });
   for (const listener of listeners) listener();
   return (): void => {
@@ -322,12 +332,11 @@ export function usePublishChatWindowRuntime(
   target: ChatWindowRuntimeTarget | undefined,
   prepareClose?: () => Promise<boolean>,
   isCloseReady?: () => boolean,
-  cancelSend?: () => void,
 ): void {
   useLayoutEffect((): (() => void) | undefined => {
     if (target === undefined) return;
-    return registerChatWindowRuntime(windowId, target, prepareClose, isCloseReady, cancelSend);
-  }, [target, windowId, prepareClose, isCloseReady, cancelSend]);
+    return registerChatWindowRuntime(windowId, target, prepareClose, isCloseReady);
+  }, [target, windowId, prepareClose, isCloseReady]);
 }
 
 export function useChatWindowFlows(): ReadonlyMap<string, ChatWindowFlow> {

@@ -1,5 +1,13 @@
 import { useCallback, useMemo, useState, type ReactNode, type RefObject } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
@@ -23,6 +31,7 @@ import {
   registerChatWindowRuntime,
   chatScopeTransition,
   clearChatScopeTransitions,
+  useChatScopeCancellation,
   beginChatScopeTransition,
   chatScopeSourceTransition,
   refuseChatScopeSend,
@@ -407,12 +416,14 @@ describe("AppShell canonical workspace scope synchronization", () => {
     persist(initial.wins, initial.conns);
     const pending = deferred<{ readonly chat: Chat }>();
     const cancel = vi.fn();
-    const release = registerChatWindowRuntime(
-      "chat-window",
-      { conversationId: "chat-1", projectPath: "/repo" },
-      undefined,
-      undefined,
-      cancel,
+    const release = registerChatWindowRuntime("chat-window", {
+      conversationId: "chat-1",
+      projectPath: "/repo",
+    });
+    const cancellation = renderHook(() =>
+      useChatScopeCancellation((conversationId): void => {
+        if (conversationId === "chat-1") cancel();
+      }),
     );
     try {
       render(<AppShell />);
@@ -439,6 +450,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
     } finally {
       pending.resolve({ chat: chat([scope("/manuals/New")], 2) });
       release();
+      cancellation.unmount();
     }
   });
 
@@ -1240,12 +1252,14 @@ it.each([false, true])(
     persist(initial.wins, initial.conns);
     const pending = deferred<{ readonly chat: Chat }>();
     const cancel = vi.fn();
-    const release = registerChatWindowRuntime(
-      "chat-window",
-      { conversationId: "chat-1", projectPath: "/repo" },
-      undefined,
-      undefined,
-      cancel,
+    const release = registerChatWindowRuntime("chat-window", {
+      conversationId: "chat-1",
+      projectPath: "/repo",
+    });
+    const cancellation = renderHook(() =>
+      useChatScopeCancellation((conversationId): void => {
+        if (conversationId === "chat-1") cancel();
+      }),
     );
     try {
       render(<AppShell />);
@@ -1277,6 +1291,7 @@ it.each([false, true])(
         pending.resolve({ chat: mocks.serverChat });
       });
       release();
+      cancellation.unmount();
     }
   },
 );

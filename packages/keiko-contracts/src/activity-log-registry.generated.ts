@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6d0a9c20e9627dc897cae553f42df04c54e80052e1ab8ba9210d6842e5c78d87" as const;
+  "877083d99ae73a9ba93c1d4202aab9b5ee48deb9c5eb5de1f62afdeafa75af56" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 347,
-  completeClassCount: 347,
+  supportedClassCount: 348,
+  completeClassCount: 348,
   completeness: "complete",
   classes: [
     {
@@ -5191,6 +5191,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.stage.started.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-update-notice",
+      requirementContract: "client-update-notice",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["client.update-notice.presented"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.update-notice.presented",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.update-notice.presented"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.update-notice.presented",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "blockerCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "noticeKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "presentation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "updateAvailable",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.update-notice.presented.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -41724,6 +41792,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.support-report.download-started": "client-diagnostics",
     "client.support-report.preparation-failed": "client-diagnostics",
     "client.support-report.prepared": "client-diagnostics",
+    "client.update-notice.presented": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.confirmed": "tools-workflows",

@@ -648,22 +648,6 @@ export const DE_MESSAGES = {
   "footer.windowAction": "{action} {title}-Fenster{suffix}",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",
-  "updates.notice.aria": "Keiko-Update-Hinweis",
-  "updates.notice.title": "Update verfügbar",
-  "updates.notice.criticalTitle": "Kritisches Update verfügbar",
-  "updates.notice.releaseUnavailableTitle": "Update-Prüfung nicht verfügbar",
-  "updates.notice.body":
-    "Version {version} kann geprüft werden. Keiko installiert sie nicht automatisch.",
-  "updates.notice.releaseUnavailableBody":
-    "Keiko konnte die Update-Download-Informationen gerade nicht prüfen. Es wird nichts installiert.",
-  "updates.notice.portableBody":
-    "Version {version} ist bereit. Öffne Updates und klicke auf Update, wenn du bereit bist.",
-  "updates.notice.portableSetupBody":
-    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
-  "updates.notice.portableExternallyManagedBody":
-    "Diese Keiko-Installation wird außerhalb der App verwaltet. Öffne Updates für Details.",
-  "updates.notice.review": "Update prüfen",
-  "updates.notice.notNow": "Nicht jetzt",
   "updates.versionUnknown": "unbekannt",
 
   "updates.status.current": "Keiko ist aktuell",

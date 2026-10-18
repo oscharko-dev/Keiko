@@ -248,7 +248,9 @@ describe("UpdateStartupNotice", () => {
       />,
     );
 
-    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(await screen.findByText("Portable setup required")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
     expect(
       screen.getByText("Portable setup is required before Keiko can use in-app updates."),
     ).toBeInTheDocument();
@@ -287,7 +289,9 @@ describe("UpdateStartupNotice", () => {
       />,
     );
 
-    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(await screen.findByText("Updates managed by your organization")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
     expect(
       screen.getByText("This Keiko install is managed outside the app. Open updates for details."),
     ).toBeInTheDocument();
@@ -353,4 +357,42 @@ describe("UpdateStartupNotice", () => {
       await screen.findByRole("alert", { name: "Keiko update notification" }),
     ).toHaveTextContent("Critical update available");
   });
+  it.each(["normal", "critical"] as const)(
+    "does not claim an available update for an action-only %s result",
+    async (severity) => {
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      render(
+        <UpdateStartupNotice
+          ready
+          openUpdates={vi.fn()}
+          fetchReport={vi.fn(async () =>
+            report({
+              currentVersion: "1.2.4",
+              targetVersion: "1.2.4",
+              updateAvailable: false,
+              userActionRequired: true,
+              severity,
+              status: "current",
+              availabilityState: "current",
+              warnings: ["private customer content must never enter presentation evidence"],
+            }),
+          )}
+        />,
+      );
+      expect(await screen.findByText("Update settings need attention")).toBeInTheDocument();
+      expect(screen.queryByText(/(?:Critical update available|Update available)/u)).toBeNull();
+      expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
+      expect(diagnostics).toHaveBeenCalledWith("Keiko startup update notice classified.", {
+        correlationId: expect.any(String),
+        updateNotice: {
+          blockerCount: 0,
+          noticeKind: "action-required",
+          presentation: "shown",
+          updateAvailable: false,
+        },
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private customer content");
+    },
+  );
 });

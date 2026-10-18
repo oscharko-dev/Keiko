@@ -59,6 +59,16 @@ describe("updater UI evidence freshness", () => {
     );
   });
 
+  it.each([
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
+    "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
+  ])("rejects drift in the lazy updater translation owner %s", (path) => {
+    const root = fixtureRoot();
+    write(root, path, "changed lazy update presentation\n");
+    expect(() => checkUpdateUiEvidence(root)).toThrow(`stale sourceSha256 digest for ${path}`);
+  });
+
   it("rejects a narrowed or expanded digest path set", () => {
     const root = fixtureRoot();
     const measured = measureUpdateUiEvidenceInputs(root);

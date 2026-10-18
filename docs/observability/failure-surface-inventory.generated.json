@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6d0a9c20e9627dc897cae553f42df04c54e80052e1ab8ba9210d6842e5c78d87"
+    "catalogDigest": "877083d99ae73a9ba93c1d4202aab9b5ee48deb9c5eb5de1f62afdeafa75af56"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 540,
-    "proofCount": 552,
-    "resolvedProofCount": 552,
-    "failureClassCount": 347,
+    "operationCount": 541,
+    "proofCount": 553,
+    "resolvedProofCount": 553,
+    "failureClassCount": 348,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -161,6 +161,7 @@
         "client.support-report.download-started",
         "client.support-report.preparation-failed",
         "client.support-report.prepared",
+        "client.update-notice.presented",
         "voice.dialogue.stage"
       ],
       "scenarios": [
@@ -742,6 +743,7 @@
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
+    "client-update-notice": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
@@ -1259,6 +1261,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.support-report.prepared.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.update-notice.presented.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "coding-app-session.channel.closed.duration": [

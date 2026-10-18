@@ -1364,3 +1364,59 @@ displaying A. Real server handler controls reject changed source identities and 
 persistence; terminal captured-Voice controls do not retry into new authority. These safe outcomes
 do not establish the immediate client cancellation required by #4040. That request-ownership
 boundary remains open and will be repaired separately with a navigation-survival countercontrol.
+
+### Request ownership and truthful updater notices
+
+The current request-ownership increment moves source-intent cancellation from published window
+runtimes into each existing session's controller owner, using the existing Activity Log/store
+listener set. A controller records its actual conversation for both sends and regeneration.
+Navigation still preserves captured Voice work; a later intent reaches that actual conversation
+including the unpublished root fallback, and cannot cancel another conversation's request.
+Existing controller equality guards retain ownership across late settlements and replacements.
+The new closed `intent-send-cancelled` decision shares the admitted intent correlation.
+
+The original pair of captured-Voice controls reproduces both the missed-A and wrong-B cancellation
+on the delivered runtime. An initial window-only candidate passed those controls but independently
+missed the root fallback. The root fixture must prove its first missing-user unmount and subsequent
+root election, then provide the actual durable user row for the second cancellation's settlement.
+A cleanup timeout with no such row is retained as a fixture failure, not a product outcome or
+permission to alter persistence/retry policy. No timeout ceiling was increased.
+
+The updater's existing setup-only assertion reproduced the misleading available-update heading.
+Presentation now derives availability only from the server's version decision. Setup, external
+management, unavailable checks and other required actions have distinct headings and a details
+action; critical styling alone cannot claim a newer release. The new routine closed presentation
+operation records the classification, visibility, availability and actual blocker count. Hostile
+text, contradictory availability, extra fields and missing correlations are refused by contracts.
+Notice-only translations move with the already-lazy owning widget into the existing optional
+catalog; no catalog subsystem, bundle allowance or update authority is added. Native package
+replacement/restart/SSD, final browser evidence and broader campaign acceptance remain open.
+
+The auditor also reproduced critical severity falsely labelling a current/degraded non-update
+in the actual Update window while the startup notice was already correct. Both negative cases
+fail before the shared status owner requires `updateAvailable`; the genuine newer critical
+positive remains valid. All 75 Startup/Update-window controls pass. The final nine-case Chromium
+producer passes after this correction and retains the original fourteen captures/three records.
+
+The frozen f020 full quality chain completed successfully: 55,519 package tests, 10,675 UI tests
+and 7,349 script tests pass, with 91 declared skips in total. All package, release and 73 governed
+file coverage floors pass. These are ancestor results; the final source head still requires its
+own complete chain. A required macOS-x64 fixed-entry cold-refusal CI attempt on delivered 02f187
+fails at the unchanged five-second bound. The exact local pinned ARM64 target passes, as do all
+21 entry controls. A local x64 execution probe reports unsupported CPU type. The failed native
+CI receipt remains open; no timeout/gate is widened and ARM64 does not substitute for x64.
+
+An isolated real released Linux-x64 1.2.3 package passes archive checksum verification, managed
+setup and startup, and its health endpoint reports 1.2.3. Its update session reports a local
+package-manager installation and its preflight takes the npm path. Current server inspection
+finds Linux missing from portable detection's target inventory, with non-Windows layouts routed
+to macOS geometry. This is a new bounded native observation under #4047, not the customer's
+confirmed incident cause or a successful replacement proof. Detection and complete native
+update/restart/SSD qualification remain open.
+
+A supplemental bundle probe accidentally used gzip's default compression instead of the
+repository producer's level-nine calculation. Its earlier numbers are retained privately as
+noncanonical probes and are not budget results. Calling the unchanged production
+`evaluateInitialPageChunkBudget` on the final static exports yields 348,537/349,184 bytes
+across 22 initial scripts on both pinned macOS-arm64 and isolated Linux-arm64 builds. The
+actual original budget gate passed throughout; no ceiling or calculation changed.

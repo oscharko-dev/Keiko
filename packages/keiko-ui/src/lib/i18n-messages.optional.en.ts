@@ -1,4 +1,26 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "updates.notice.aria": "Keiko update notification",
+  "updates.status.portableSetupRequired": "Portable setup required",
+  "updates.status.portableExternallyManaged": "Updates managed by your organization",
+  "updates.notice.title": "Update available",
+  "updates.notice.criticalTitle": "Critical update available",
+  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
+  "updates.notice.body":
+    "Version {version} is ready to review. Keiko will not install it automatically.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko could not verify update download information right now. It will not install anything.",
+  "updates.notice.portableBody":
+    "Version {version} is ready. Open updates, then click Update when you are ready.",
+  "updates.notice.portableSetupBody":
+    "Portable setup is required before Keiko can use in-app updates.",
+  "updates.notice.portableExternallyManagedBody":
+    "This Keiko install is managed outside the app. Open updates for details.",
+  "updates.notice.review": "Review update",
+  "updates.notice.actionTitle": "Update settings need attention",
+  "updates.notice.actionBody":
+    "Open updates to review the required action. No newer version has been confirmed.",
+  "updates.notice.reviewDetails": "Review details",
+  "updates.notice.notNow": "Not now",
   "chat.draft.attachmentsUnsaved":
     "Send or remove the staged attachments before closing this chat. They have not been saved.",
   "chat.draft.loading": "Loading saved draft…",
@@ -2089,8 +2111,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "updates.error.title": "Update status unavailable",
   "updates.error.load": "Could not load update status from the local Keiko backend.",
   "updates.window.kicker": "Governed update",
-  "updates.status.portableSetupRequired": "Portable setup required",
-  "updates.status.portableExternallyManaged": "Updates managed by your organization",
   "updates.primary.title": "Recommended action",
   "updates.primary.available": "Review the state impact, then install when you are ready.",
   "updates.primary.portableAvailable":

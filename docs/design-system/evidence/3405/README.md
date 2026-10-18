@@ -78,3 +78,19 @@ Production-signed release qualification is tracked separately in the
 [repair ledger](../../../qa/built-in-updater-repair-3405.md).
 
 Historical #1696 screenshots and JSON remain in [their original directory](../1696/README.md).
+
+## Customer updater presentation — #4047
+
+The startup notice uses availability-specific headings and distinguishes a required portable setup
+from a confirmed newer version. Its notice-only translations follow the already-lazy widget into
+the existing optional catalog. The original freshness producer now binds eleven UI sources,
+including both optional catalogs and their translation owner; four harness inputs remain separate.
+Three failure-first controls demonstrate that changing any newly bound translation source was
+previously missed. The original eight-case browser producer plus the new setup-only reload/details regression
+regenerated all 17 original artifacts on macOS arm64 with pinned Node 24.18.0. The nine
+Chromium cases passed in 54.6 seconds, including real-BFF outage and the normal/critical
+setup-only reload/details checks. All three records bind 11 UI sources and 4 harness inputs;
+`10-responsive-manual-path.png`, `11-progress-state.png`, and
+`13-reconnecting-state-mocked.png` changed PNG bytes. The unchanged numerical freshness and
+Editor isolation gates pass. This remains UI/fixture evidence; actual signed package replacement,
+restart and SSD qualification are separate #4047 obligations.

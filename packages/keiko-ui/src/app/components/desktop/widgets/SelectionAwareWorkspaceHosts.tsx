@@ -1465,7 +1465,6 @@ function useBoundChatWindowRuntime(
     runtimeTarget,
     session.draftPersistence?.prepareClose,
     session.draftPersistence?.isCloseReady,
-    session.cancelSend,
   );
 }
 

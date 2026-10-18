@@ -629,22 +629,6 @@ export const EN_MESSAGES = {
   "footer.windowAction": "{action} {title} window{suffix}",
   "settings.title": "Settings",
   "settings.language.compactLabel": "Language",
-  "updates.notice.aria": "Keiko update notification",
-  "updates.notice.title": "Update available",
-  "updates.notice.criticalTitle": "Critical update available",
-  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
-  "updates.notice.body":
-    "Version {version} is ready to review. Keiko will not install it automatically.",
-  "updates.notice.releaseUnavailableBody":
-    "Keiko could not verify update download information right now. It will not install anything.",
-  "updates.notice.portableBody":
-    "Version {version} is ready. Open updates, then click Update when you are ready.",
-  "updates.notice.portableSetupBody":
-    "Portable setup is required before Keiko can use in-app updates.",
-  "updates.notice.portableExternallyManagedBody":
-    "This Keiko install is managed outside the app. Open updates for details.",
-  "updates.notice.review": "Review update",
-  "updates.notice.notNow": "Not now",
   "updates.versionUnknown": "unknown",
 
   "updates.status.current": "Keiko is up to date",

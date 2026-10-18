@@ -1,6 +1,27 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
-
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "updates.notice.aria": "Keiko-Update-Hinweis",
+  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
+  "updates.notice.title": "Update verfügbar",
+  "updates.notice.criticalTitle": "Kritisches Update verfügbar",
+  "updates.notice.releaseUnavailableTitle": "Update-Prüfung nicht verfügbar",
+  "updates.notice.body":
+    "Version {version} kann geprüft werden. Keiko installiert sie nicht automatisch.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko konnte die Update-Download-Informationen gerade nicht prüfen. Es wird nichts installiert.",
+  "updates.notice.portableBody":
+    "Version {version} ist bereit. Öffne Updates und klicke auf Update, wenn du bereit bist.",
+  "updates.notice.portableSetupBody":
+    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
+  "updates.notice.portableExternallyManagedBody":
+    "Diese Keiko-Installation wird außerhalb der App verwaltet. Öffne Updates für Details.",
+  "updates.notice.review": "Update prüfen",
+  "updates.notice.actionTitle": "Update-Einstellungen prüfen",
+  "updates.notice.actionBody":
+    "Öffne Updates, um die erforderliche Aktion zu prüfen. Eine neuere Version wurde nicht bestätigt.",
+  "updates.notice.reviewDetails": "Details prüfen",
+  "updates.notice.notNow": "Nicht jetzt",
   "chat.draft.attachmentsUnsaved":
     "Sende oder entferne die vorgemerkten Anhänge, bevor du diesen Chat schließt. Sie sind noch nicht gespeichert.",
   "chat.draft.loading": "Gespeicherter Entwurf wird geladen…",
@@ -2161,8 +2182,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "updates.error.title": "Update-Status nicht verfügbar",
   "updates.error.load": "Update-Status konnte nicht vom lokalen Keiko-Backend geladen werden.",
   "updates.window.kicker": "Gesteuertes Update",
-  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
-  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.primary.title": "Empfohlene Aktion",
   "updates.primary.available": "Prüfe die Statusauswirkungen und installiere, wenn du bereit bist.",
   "updates.primary.portableAvailable":
