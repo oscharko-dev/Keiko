@@ -673,3 +673,28 @@ compiled outputs. This supports a focused method experiment; it does not prove a
 blanket reset or repaired application. The candidate React clarification remains private and Java
 is unchanged. New model calls require a separately frozen paired plan and actual necessary-source
 observations; original scores and untouched-task requirements remain unchanged.
+
+## Checkpoint 27: admit restoration under its existing phase grant
+
+The POSIX launcher checked `startAt` for both the new version and a restored previous version.
+The transaction engine already passes `cleanupAt` to restoration. A verification failure after
+the start deadline therefore prevented a still-authorized restored start. Resume now selects the
+same existing phase deadline as the engine. Forward start expiry, cleanup expiry, capsule and image
+verification, and the plan-bound start gate retain their original checks and values.
+
+The permanent fixture compiles the whole production launcher and executes its actual resume path,
+KHP parser, deadline conversion, path/image verification and FD5 gate read against real private
+files. Whole-engine controls additionally execute the actual transaction engine with controlled
+process, receipt and verification ports. Both Linux and macOS plan layouts are exercised with their
+own compile-time target. With identical final fixtures, the published parent has six failures and
+20 healthy controls; the repair passes all 26. Tampered images/gates and restoration at or after
+cleanup expiry still refuse. The first expanded fixture run used one target for both layouts and
+failed seven macOS-layout controls; that setup error and its correction remain recorded.
+
+The 26 controls also pass on Linux ARM64 with the checkout mounted read-only and networking and
+capabilities disabled. The macOS native compiler/analyzer/boundary gate passes on the measured
+ARM64 host. `portable-resume-deadlines.json` binds sources and causal records. These are admission
+and transaction-policy proofs, with a file-backed FD5 gate; they do not run a real BFF rollback,
+prove signed Endpoint Security integration, qualify Windows, or satisfy two successive packaged
+updates. Existing native receipts remain the production evidence path. The broader updater and
+model-skill acceptance holds remain open.

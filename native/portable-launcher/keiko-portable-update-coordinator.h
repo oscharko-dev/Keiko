@@ -1892,7 +1892,8 @@ static int keiko_coordinator_prepare_resume_posix(keiko_coordinator_context *con
       !S_ISDIR(capsule_status.st_mode) || capsule_status.st_uid != geteuid() ||
       (capsule_status.st_mode & (S_IWGRP | S_IWOTH)) != 0 ||
       !keiko_coordinator_load_plan(context, capsule_fd, activation_id, deadline) ||
-      !keiko_coordinator_deadline(context, KEIKO_KHP_START_AT, &deadline) ||
+      !keiko_coordinator_deadline(
+          context, restoring ? KEIKO_KHP_CLEANUP_AT : KEIKO_KHP_START_AT, &deadline) ||
       !keiko_coordinator_active_path(context,
                                      context->plan.field[KEIKO_KHP_CANDIDATE_LAUNCHER],
                                      expected_executable, sizeof(expected_executable)) ||
