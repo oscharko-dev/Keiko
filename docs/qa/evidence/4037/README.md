@@ -1,5 +1,44 @@
 # Chat/Files qualification observations
 
+## Checkpoint 37: positive owned-child retirement and a precise scanner disposition
+
+The macOS supervisor previously ignored the result of waiting for its owned root after a monitor
+zero-live reply. It could publish a reaped proof after ECHILD, an interruption or a nonterminal
+status. The same cleanup path could wait without a bound. It now requires the exact child and a
+terminal status before the original monotonic wait deadline, with no renewal on interruption.
+Failure retains the existing protocol observation error; a monitor reply alone earns no proof.
+The wait consumes the stored child identity before later deadline or response validation. Main
+cleanup therefore never signals a reaped or unknown PID. Still-owned children retain cleanup.
+
+Twelve initial actual-source controls reproduce eight failures/four healthy cases before repair
+and twelve passes afterwards. Three additional real-kernel controls cover exit, signal termination
+and an already-reaped child. The expanded retained-source replay has nine failures/six healthy
+controls. Nine actual-main cleanup controls additionally reproduce five failures/four healthy
+cases on the retained intermediate source and nine passes after the ownership repair. The POSIX
+coordinator applies the same invariant at its stop, failed-start, reconciliation and monitor-probe
+callers. Its probe reuses the shared bounded wait and cleanup rather than an unbounded second loop.
+Twenty-one actual reconciliation/probe controls have eleven failures/ten healthy cases on the
+original complete coordinator header and twenty-one passes after repair; eleven additional wait
+controls pass. The full affected matrix passes all fifty-six cases on macOS ARM64 and Linux ARM64.
+The Linux run
+compiles the actual portable POSIX code and uses inert monitor responses; it does not qualify the
+macOS Endpoint Security extension or Linux product-generation ownership. Three controls use real
+kernel-owned children; the remaining external monitor/spawn/time/signal ports are inert. The native
+macOS ARM64 compiler, analyzer and boundary checks also pass. The first Linux harness
+attempt could not execute its binary on the default non-executable tmpfs; that attempt is retained.
+
+The pinned secret scanner also reproduces one finding in published checkpoint 36. It mistakes the
+verified public key-store source digest for an API key. The disposition requires the exact known
+digest, complete field line, anchored evidence path and original rule together. No arbitrary hash,
+credential, file or commit is exempt. The unchanged historical range then passes; nine actual-scanner
+controls continue detecting other digests, fields, paths, additional credential-shaped content and
+another rule. A first candidate missed the scanner's leading newline and remained red; the final
+line grammar and its sensitivity control retain that failure. Detailed source and scope bindings
+are in `native-owned-child-reap.json`.
+
+These are bounded repairs. The native generation/real update, skill, full browser/search, source,
+exact-head and integration requirements remain open.
+
 ## Checkpoint 36: explicit browser connection and honest persistent trust
 
 The desktop now offers an explicit browser connection request. A connected browser compares its

@@ -278,6 +278,19 @@ routes become ready; exact process, launch identity, loopback port, target versi
 must agree before success. A failed replacement may restore the previous verified tree only after
 proving the owned new process tree has stopped. Once N is verified, restart and cleanup must retain N.
 
+On macOS, a monitor's zero-live reply is necessary but does not replace successful reaping of the
+supervisor's exact owned root. The supervisor checks the returned child identity and terminal
+status under one monotonic five-second wait deadline, including interruptions and the final
+system-call completion. Missing ownership, a stopped child, unavailable clock or an elapsed wait
+refuses the reaped proof through the existing observation error path. The wait clears the stored
+child identity as soon as a terminal wait consumes it or ownership becomes unknown, before any
+later proof or response failure. Error cleanup may signal only a still-owned child and uses the
+same bounded wait. The POSIX coordinator retains this ownership state across stop, failed-start,
+reconciliation and monitor-probe calls. The probe shares the same wait/cleanup owner, refuses an
+expired or unavailable monotonic clock before spawning and checks expiry after wait completion.
+These checks do not establish immutable generation membership or replace Endpoint Security
+qualification.
+
 A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
 identity. It must attest the original tree and registration, then prove its own PID, version and
 loopback binding before readiness opens. POSIX and Windows resume admission use the plan's `startAt` deadline

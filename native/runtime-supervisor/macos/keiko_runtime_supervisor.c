@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define KRP_VERSION 1u
@@ -21,6 +22,7 @@
 #define KRP_MAX_PACKET (128u * 1024u)
 #define KRP_MAX_ARGUMENTS 64u
 #define KRP_MAX_ENVIRONMENT 64u
+#define KRP_CHILD_REAP_TIMEOUT_MS 5000u
 
 enum response_kind { RESPONSE_LAUNCHED = 1, RESPONSE_REAPED = 2, RESPONSE_ERROR = 3 };
 enum error_code {
@@ -273,7 +275,39 @@ static void consume_control(void) {
   (void)read_exact(3, header, sizeof(header));
 }
 
-static int supervise(int monitor, const char *handle, pid_t root) {
+static int child_reap_time(uint64_t *value) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0 ||
+      now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
+      (uint64_t)now.tv_sec > (UINT64_MAX - 999u) / 1000u) return 0;
+  *value = (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+  return 1;
+}
+
+static int wait_owned_root(pid_t *root, int *status) {
+  uint64_t started, now, deadline;
+  pid_t expected = *root;
+  if (expected <= 0 || !child_reap_time(&started) ||
+      started > UINT64_MAX - KRP_CHILD_REAP_TIMEOUT_MS) return 0;
+  deadline = started + KRP_CHILD_REAP_TIMEOUT_MS;
+  for (;;) {
+    pid_t observed;
+    int wait_error;
+    if (!child_reap_time(&now) || now < started || now >= deadline) return 0;
+    observed = waitpid(expected, status, WNOHANG);
+    wait_error = errno;
+    /* A consumed child must never be signalled by the caller's error cleanup. */
+    if ((observed == expected && (WIFEXITED(*status) || WIFSIGNALED(*status))) ||
+        (observed < 0 && wait_error != EINTR) ||
+        (observed > 0 && observed != expected)) *root = -1;
+    if (!child_reap_time(&now) || now < started || now >= deadline) return 0;
+    if (observed == expected) return WIFEXITED(*status) || WIFSIGNALED(*status);
+    if (observed != 0 && !(observed == -1 && wait_error == EINTR)) return 0;
+    if (poll(NULL, 0, 1) < 0 && errno != EINTR) return 0;
+  }
+}
+
+static int supervise(int monitor, const char *handle, pid_t *root) {
   struct pollfd descriptors[2] = {{3, POLLIN | POLLHUP, 0}, {monitor, POLLIN | POLLHUP, 0}};
   struct keiko_monitor_reply reply;
   int stopping = 0;
@@ -296,7 +330,7 @@ static int supervise(int monitor, const char *handle, pid_t root) {
       } else if (reply.kind == KEIKO_MONITOR_ZERO_LIVE && reply.live_processes == 0) {
         int status = 0;
         unsigned char proof[8] = {0};
-        (void)waitpid(root, &status, 0);
+        if (!wait_owned_root(root, &status)) return 0;
         write_u32(proof, WIFEXITED(status) ? (uint32_t)WEXITSTATUS(status) : 137u);
         // KEIKO-0270: proof+4 is the containment count the harness asserts is zero. It was never
         // written here, so those four bytes stayed at their initialiser and the assertion could
@@ -383,11 +417,14 @@ int main(int argc, char **argv) {
     (void)send_error(ERROR_PROCESS_CREATE);
     goto cleanup;
   }
-  result = supervise(monitor, request.recovery_handle, root) ? 0 : 1;
+  result = supervise(monitor, request.recovery_handle, &root) ? 0 : 1;
   if (result != 0) {
+    int status;
     (void)monitor_request(monitor, KEIKO_MONITOR_STOP, request.recovery_handle);
-    (void)kill(root, SIGKILL);
-    (void)waitpid(root, NULL, 0);
+    if (root > 0) {
+      (void)kill(root, SIGKILL);
+      (void)wait_owned_root(&root, &status);
+    }
     (void)send_error(ERROR_TREE_OBSERVE);
   }
 cleanup:

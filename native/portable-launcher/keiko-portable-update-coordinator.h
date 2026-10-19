@@ -1072,16 +1072,39 @@ static int keiko_coordinator_start_runtime(keiko_coordinator_context *context,
   return 1;
 }
 
-static int keiko_coordinator_waitpid_deadline(pid_t child, int *status,
+static int keiko_coordinator_waitpid_deadline(pid_t *child, int *status,
                                               uint64_t deadline_ms) {
-  while (keiko_tree_before_deadline(deadline_ms)) {
-    pid_t waited = waitpid(child, status, WNOHANG);
-    if (waited == child) return 1;
-    if (waited < 0 && errno != EINTR) return 0;
+  pid_t expected = *child;
+  if (expected <= 0) { errno = ECHILD; return 0; }
+  while (keiko_tree_now_ms() < deadline_ms) {
+    pid_t waited = waitpid(expected, status, WNOHANG);
+    int wait_error = errno;
+    /* Ownership ends when wait consumes the child, even if proof validation then fails. */
+    if ((waited == expected && (WIFEXITED(*status) || WIFSIGNALED(*status))) ||
+        (waited < 0 && wait_error != EINTR) ||
+        (waited > 0 && waited != expected)) *child = -1;
+    if (keiko_tree_now_ms() >= deadline_ms) break;
+    if (waited == expected) return WIFEXITED(*status) || WIFSIGNALED(*status);
+    if (waited > 0) { errno = ECHILD; return 0; }
+    if (waited < 0 && wait_error != EINTR) {
+      errno = wait_error;
+      return 0;
+    }
     usleep(10000);
   }
   errno = ETIMEDOUT;
   return 0;
+}
+
+static void keiko_coordinator_dispose_child(pid_t *child) {
+  uint64_t deadline;
+  int status;
+  if (*child <= 0) return;
+  (void)KEIKO_COORDINATOR_KILL(*child, SIGKILL);
+  deadline = keiko_tree_now_ms();
+  if (deadline <= UINT64_MAX - KEIKO_COORDINATOR_PROBE_MS)
+    (void)keiko_coordinator_waitpid_deadline(
+        child, &status, deadline + KEIKO_COORDINATOR_PROBE_MS);
 }
 
 static int keiko_coordinator_stop_runtime(keiko_coordinator_context *context,
@@ -1102,7 +1125,7 @@ static int keiko_coordinator_stop_runtime(keiko_coordinator_context *context,
       !keiko_coordinator_read_exact_deadline(context->supervisor_response, response + 12u, 8u,
                                              deadline_ms) ||
       keiko_khp_read_u32(response + 16u) != 0u ||
-      !keiko_coordinator_waitpid_deadline(context->supervisor_pid, &status, deadline_ms) ||
+      !keiko_coordinator_waitpid_deadline(&context->supervisor_pid, &status, deadline_ms) ||
       !WIFEXITED(status) || WEXITSTATUS(status) != 0)
     return 0;
   close(context->supervisor_response);
@@ -1121,8 +1144,7 @@ static int keiko_coordinator_reconcile_stopped_runtime(
   int actions_initialized = 0, status = 0, result = 0;
   pid_t child = -1;
   posix_spawn_file_actions_t actions;
-  uint64_t cleanup_deadline;
-  if (!keiko_tree_before_deadline(deadline_ms) ||
+  if (keiko_tree_now_ms() >= deadline_ms ||
       !keiko_coordinator_join(supervisor, sizeof(supervisor), context->capsule,
                               "/runtime-supervisor") ||
       !keiko_coordinator_file_digest_matches(
@@ -1140,7 +1162,8 @@ static int keiko_coordinator_reconcile_stopped_runtime(
   arguments[1] = (char *)"--reconcile";
   arguments[2] = context->plan.field[KEIKO_KHP_ACTIVATION_ID];
   arguments[3] = NULL;
-  if (posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) {
+  if (keiko_tree_now_ms() >= deadline_ms ||
+      posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) {
     child = -1;
     goto cleanup;
   }
@@ -1152,28 +1175,14 @@ static int keiko_coordinator_reconcile_stopped_runtime(
       keiko_khp_read_u16(response + 6u) != 2u || keiko_khp_read_u32(response + 8u) != 8u ||
       keiko_khp_read_u32(response + 12u) != 0u || keiko_khp_read_u32(response + 16u) != 0u)
     goto cleanup;
-  if (!keiko_coordinator_waitpid_deadline(child, &status, deadline_ms)) {
-    if (errno == ECHILD) child = -1;
-    goto cleanup;
-  }
-  /* waitpid transferred the process out of the kernel table. Drop numeric-PID authority before
-   * inspecting its status: a later kill could otherwise target an unrelated process after reuse. */
-  child = -1;
+  if (!keiko_coordinator_waitpid_deadline(&child, &status, deadline_ms)) goto cleanup;
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) goto cleanup;
   result = 1;
 cleanup:
   if (actions_initialized) posix_spawn_file_actions_destroy(&actions);
   if (output[0] != -1) close(output[0]);
   if (output[1] != -1) close(output[1]);
-  if (child > 0) {
-    (void)KEIKO_COORDINATOR_KILL(child, SIGKILL);
-    cleanup_deadline = keiko_tree_now_ms();
-    if (cleanup_deadline != UINT64_MAX &&
-        cleanup_deadline <= UINT64_MAX - KEIKO_COORDINATOR_PROBE_MS) {
-      cleanup_deadline += KEIKO_COORDINATOR_PROBE_MS;
-      (void)keiko_coordinator_waitpid_deadline(child, &status, cleanup_deadline);
-    }
-  }
+  keiko_coordinator_dispose_child(&child);
   memset(response, 0, sizeof(response));
   return result;
 }
@@ -1192,7 +1201,7 @@ static int keiko_coordinator_stop_failed_start(keiko_coordinator_context *contex
     context->supervisor_control = -1;
   }
   if (context->supervisor_pid > 0) {
-    if (!keiko_coordinator_waitpid_deadline(context->supervisor_pid, &status, deadline_ms)) return 0;
+    if (!keiko_coordinator_waitpid_deadline(&context->supervisor_pid, &status, deadline_ms)) return 0;
     context->supervisor_pid = -1;
   }
   if (context->supervisor_response >= 0) {
@@ -1733,31 +1742,25 @@ static int keiko_coordinator_probe_monitor(const char *supervisor, uint64_t dead
   posix_spawn_file_actions_t actions;
   char *const arguments[] = {(char *)supervisor, (char *)"--probe-monitor", NULL};
   char *const environment[] = {NULL};
-  int status = 0, initialized = 0;
-  uint64_t probe_deadline = keiko_tree_now_ms() + KEIKO_COORDINATOR_PROBE_MS;
+  int status = 0, result = 0;
+  uint64_t now = keiko_tree_now_ms(), probe_deadline;
+  if (now >= deadline_ms || now > UINT64_MAX - KEIKO_COORDINATOR_PROBE_MS) return 0;
+  probe_deadline = now + KEIKO_COORDINATOR_PROBE_MS;
   if (probe_deadline > deadline_ms) probe_deadline = deadline_ms;
   if (posix_spawn_file_actions_init(&actions) != 0) return 0;
-  initialized = 1;
-  (void)posix_spawn_file_actions_addclose(&actions, STDIN_FILENO);
-  (void)posix_spawn_file_actions_addclose(&actions, 3);
-  if (posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) goto cleanup;
-  while (keiko_tree_before_deadline(probe_deadline)) {
-    pid_t waited = waitpid(child, &status, WNOHANG);
-    if (waited == child) {
-      child = -1;
-      if (initialized) posix_spawn_file_actions_destroy(&actions);
-      return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    }
-    if (waited < 0 && errno != EINTR) break;
-    usleep(10000);
+  if (posix_spawn_file_actions_addclose(&actions, STDIN_FILENO) != 0 ||
+      posix_spawn_file_actions_addclose(&actions, 3) != 0 ||
+      keiko_tree_now_ms() >= probe_deadline) goto cleanup;
+  if (posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) {
+    child = -1;
+    goto cleanup;
   }
+  result = keiko_coordinator_waitpid_deadline(&child, &status, probe_deadline) &&
+           WIFEXITED(status) && WEXITSTATUS(status) == 0;
 cleanup:
-  if (child > 0) {
-    (void)kill(child, SIGKILL);
-    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-  }
-  if (initialized) posix_spawn_file_actions_destroy(&actions);
-  return 0;
+  keiko_coordinator_dispose_child(&child);
+  posix_spawn_file_actions_destroy(&actions);
+  return result;
 }
 
 static int keiko_coordinator_artifacts_match(const keiko_coordinator_context *context,

@@ -7,6 +7,7 @@
 // every finding in the listed commits, and every finding in the listed files in every later commit.
 // The scan stayed green throughout, which is why the scan cannot be trusted to notice.
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -176,6 +177,15 @@ function ledgerOwnerCommitException() {
   return table;
 }
 
+function browserSourceDigestException() {
+  const table = allowlistTables(repositoryConfig).find((entry) =>
+    entry.get("description")?.includes("verified browser key-store source digest"),
+  );
+  expect(table).toBeDefined();
+  if (table === undefined) throw new TypeError("Missing browser source digest exception");
+  return table;
+}
+
 function literalArrayPattern(table, key) {
   const pattern = table.get(key)?.match(/'''(.*)'''/u)?.[1];
   expect(pattern).toBeDefined();
@@ -241,6 +251,43 @@ describe(".gitleaks.toml allowlists", () => {
       expect(linePattern.test(line.replace(commit, changedCommit))).toBe(false);
       expect(linePattern.test(line.replace(field, "authenticNewOwnerCommit"))).toBe(false);
     }
+  });
+
+  it("limits the verified browser source digest to its exact line, path and rule", () => {
+    const table = browserSourceDigestException();
+    expect(table.get("condition")).toBe('"AND"');
+    expect(table.get("targetrules")).toBe('["generic-api-key"]');
+    expect(table.get("regextarget")).toBe('"line"');
+    expect(table.has("commits")).toBe(false);
+    const path = "docs/qa/evidence/4037/browser-approval-client.json";
+    const pathPattern = literalArrayPattern(table, "paths");
+    expect(pathPattern.test(path)).toBe(true);
+    expect(pathPattern.test(`other/${path}`)).toBe(false);
+    expect(pathPattern.test(`${path}.bak`)).toBe(false);
+    const digest = createHash("sha256")
+      .update(
+        readFileSync(
+          new URL("../../packages/keiko-ui/src/lib/browser-approval-key-store.ts", import.meta.url),
+        ),
+      )
+      .digest("hex");
+    const record = JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
+    expect(record.realStorageCommissioning.sourceHashes["browser-approval-key-store.ts"]).toBe(
+      digest,
+    );
+    const line = `    "browser-approval-key-store.ts": "${digest}",`;
+    const linePattern = literalArrayPattern(table, "regexes");
+    expect(linePattern.test(line)).toBe(true);
+    expect(linePattern.test(`\n${line}`)).toBe(true);
+    expect(linePattern.test(`other\n${line}`)).toBe(false);
+    expect(linePattern.test(`${line}\nother`)).toBe(false);
+    expect(
+      linePattern.test(line.replace(digest, `${digest[0] === "a" ? "b" : "a"}${digest.slice(1)}`)),
+    ).toBe(false);
+    expect(linePattern.test(line.replace("browser-approval-key-store.ts", "privateKey"))).toBe(
+      false,
+    );
+    expect(linePattern.test(`${line} "privateKey": "unrelated"`)).toBe(false);
   });
 });
 
