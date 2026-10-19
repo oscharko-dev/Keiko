@@ -8,6 +8,7 @@ import { homedir as defaultHomedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import {
   resolveWindowsPowerShellExecutable,
   securityErrorKind,
@@ -388,12 +389,7 @@ async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<Health
 // the O_NOFOLLOW / regular-single-link exclusive-create guards.
 
 function defaultIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
+  return isProcessAlive(pid);
 }
 
 // ESRCH-safe kill. `process.kill` throws ESRCH when the target has already exited; for a stop/cleanup

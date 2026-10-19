@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "40137d62b51516bff7c71efb76454f1787f1ccf9662be2c5682c8c612b2855de" as const;
+  "3a3c567e20d7be6690f75ad66f7a4468b7c643b6d60adf95a077de0a1dfbc33d" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -29583,6 +29583,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "processScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "processScopeState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "stateDirSource",
               type: "string",
               dataClass: "closed-enum",
@@ -31116,13 +31128,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "processScopeState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "rssBytes",
               type: "integer",
               dataClass: "count",
               required: true,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "duration", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -33255,13 +33273,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "processScopeState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "rssBytes",
               type: "integer",
               dataClass: "count",
               required: true,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "duration", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -33357,6 +33381,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "processScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "processScopeState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "stateDirSource",

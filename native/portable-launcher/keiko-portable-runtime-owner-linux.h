@@ -16,6 +16,7 @@ typedef struct {
   int response;
   int identity;
   int root_handle;
+  int scope;
 } keiko_runtime_owner;
 
 static void keiko_owner_close(int *descriptor) {
@@ -53,16 +54,23 @@ static int keiko_owner_write(int descriptor, const void *content, size_t size,
   return keiko_tree_now_ms() < deadline;
 }
 
+#include "keiko-portable-process-scope-linux.h"
+
 static int keiko_owner_child(const char *helper, int executable, const int control[2],
-                              const int response[2], int identity, int start_gate, int owner_handle) {
-  char *const arguments[] = {(char *)helper, (char *)"--owner-report", NULL};
+                              const int response[2], int identity, int start_gate, int owner_handle,
+                              int scope) {
+  char *const arguments[] = {(char *)helper,
+    scope < 0 ? (char *)"--owner-report" : (char *)"--app-owner-report", NULL};
   char *const environment[] = {NULL};
   if (!keiko_bind_parent_death(owner_handle)) return 0;
   close(owner_handle);
   if (start_gate < 0) close(5);
   else if (fcntl(5, F_SETFD, 0) != 0) return 0;
+  unsigned int first_closed = scope < 0 ? 7u : 8u;
   if (dup2(control[0], 3) < 0 || dup2(response[1], 4) < 0 || dup2(identity, 6) < 0 ||
-      (executable > 7 && syscall(SYS_close_range, 7u, (unsigned int)executable - 1u, 0u) != 0) ||
+      (scope >= 0 && dup2(scope, 7) < 0) ||
+      ((unsigned int)executable > first_closed &&
+       syscall(SYS_close_range, first_closed, (unsigned int)executable - 1u, 0u) != 0) ||
       syscall(SYS_close_range, (unsigned int)executable + 1u, UINT_MAX, 0u) != 0)
     return 0;
   fexecve(executable, arguments, environment);
@@ -70,8 +78,9 @@ static int keiko_owner_child(const char *helper, int executable, const int contr
 }
 
 static int keiko_owner_spawn(keiko_runtime_owner *owner, const char *helper,
-                              const char *expected, uint64_t deadline) {
+                              const char *expected, uint64_t deadline, int app) {
   int control[2] = {-1, -1}, response[2] = {-1, -1}, identity[2] = {-1, -1};
+  int scope[2] = {-1, -1};
   char canonical[PATH_MAX], digest[65];
   int executable = -1, result = 0, enabled = 1, owner_handle = -1;
   int start_gate = fcntl(5, F_GETFD) < 0 ? -1 : 5;
@@ -81,7 +90,8 @@ static int keiko_owner_spawn(keiko_runtime_owner *owner, const char *helper,
       strcmp(digest, expected) != 0 || !keiko_owner_private_pipe(control) ||
       !keiko_owner_private_pipe(response) ||
       socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, identity) != 0 ||
-      setsockopt(identity[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) != 0)
+      setsockopt(identity[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) != 0 ||
+      (app && !keiko_scope_socket(scope)))
     goto cleanup;
   for (size_t i = 0; i < 2; ++i) {
     int moved_identity = fcntl(identity[i], F_DUPFD_CLOEXEC, 16);
@@ -99,16 +109,19 @@ static int keiko_owner_spawn(keiko_runtime_owner *owner, const char *helper,
   owner->supervisor = fork();
   if (owner->supervisor < 0) goto cleanup;
   if (owner->supervisor == 0)
-    _exit(keiko_owner_child(helper, executable, control, response, identity[1], start_gate, owner_handle) ? 0 : 126);
+    _exit(keiko_owner_child(helper, executable, control, response, identity[1], start_gate,
+                            owner_handle, scope[1]) ? 0 : 126);
   owner->control = control[1]; control[1] = -1;
   owner->response = response[0]; response[0] = -1;
   owner->identity = identity[0]; identity[0] = -1;
+  owner->scope = scope[0]; scope[0] = -1;
   result = keiko_tree_before_deadline(deadline);
 cleanup:
   keiko_owner_close(&owner_handle);
   if (executable >= 0) close(executable);
   for (size_t i = 0; i < 2; ++i) {
     keiko_owner_close(&control[i]); keiko_owner_close(&response[i]); keiko_owner_close(&identity[i]);
+    keiko_owner_close(&scope[i]);
   }
   return result;
 }
@@ -242,12 +255,13 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
   int stopping = 0;
   uint64_t stop_deadline = 0;
   for (;;) {
-    struct pollfd items[2] = {{stopping ? -1 : 3, POLLIN | POLLHUP, 0},
-                              {owner->response, POLLIN | POLLHUP, 0}};
+    struct pollfd items[3] = {{stopping ? -1 : 3, POLLIN | POLLHUP, 0},
+                              {owner->response, POLLIN | POLLHUP, 0},
+                              {owner->scope, POLLIN | POLLHUP, 0}};
     uint64_t now = keiko_tree_now_ms();
     if (stopping && (now >= stop_deadline || stop_deadline - now > INT_MAX)) return 0;
     int timeout = stopping ? (int)(stop_deadline - now) : -1;
-    int ready = poll(items, 2, timeout);
+    int ready = poll(items, 3, timeout);
     if (ready < 0 && errno == EINTR) continue;
     if (ready <= 0 || (stopping && !keiko_tree_before_deadline(stop_deadline))) return 0;
     uint64_t deadline = stopping ? stop_deadline : keiko_tree_now_ms() + KEIKO_OWNER_BOUND_MS;
@@ -262,7 +276,10 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
                read_u32(header + 8) != 0 ||
                !keiko_owner_write(owner->control, header, sizeof(header), deadline)) return 0;
       stopping = 1;
+      keiko_owner_close(&owner->scope);
     }
+    if (owner->scope >= 0 && items[2].revents != 0 && !keiko_scope_serve(owner, deadline))
+      keiko_owner_close(&owner->scope);
     if (items[1].revents == 0) continue;
     if (!keiko_owner_response(owner, header, payload, deadline) ||
         read_u16(header + 6) != RESPONSE_REAPED || read_u32(header + 8) != 8 ||
@@ -276,9 +293,9 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
   }
 }
 
-static int keiko_runtime_owner_linux(const char *helper, const char *expected) {
+static int keiko_runtime_owner_linux(const char *helper, const char *expected, int app) {
   keiko_runtime_owner owner = {.supervisor = -1, .root = -1, .control = -1,
-                                .response = -1, .identity = -1, .root_handle = -1};
+                                .response = -1, .identity = -1, .root_handle = -1, .scope = -1};
   struct launch_request request = {0};
   unsigned char header[12] = {'K','R','P','1',1,0,1,0,0,0,0,0}, payload[64];
   uint64_t deadline = keiko_tree_now_ms() + KEIKO_OWNER_BOUND_MS;
@@ -287,7 +304,7 @@ static int keiko_runtime_owner_linux(const char *helper, const char *expected) {
   (void)signal(SIGPIPE, SIG_IGN);
   if (!read_launch_request(&request)) goto cleanup;
   error = 3;
-  if (!keiko_owner_spawn(&owner, helper, expected, deadline)) goto cleanup;
+  if (!keiko_owner_spawn(&owner, helper, expected, deadline, app)) goto cleanup;
   error = 5;
   write_u32(header + 8, (uint32_t)(request.storage_length - 1u));
   if (!keiko_owner_write(owner.control, header, sizeof(header), deadline) ||
@@ -299,6 +316,7 @@ static int keiko_runtime_owner_linux(const char *helper, const char *expected) {
   }
   if (!keiko_owner_response(&owner, header, payload, deadline) ||
       read_u16(header + 6) != RESPONSE_LAUNCHED || read_u32(header + 8) != 0 ||
+      (app && !keiko_scope_send(owner.scope, 1, (uint32_t)owner.root, (uint32_t)getpid(), deadline)) ||
       !send_response(RESPONSE_LAUNCHED, NULL, 0)) goto cleanup;
   keiko_owner_close(&owner.identity);
   if (had_start_gate) close(5);
@@ -306,6 +324,7 @@ static int keiko_runtime_owner_linux(const char *helper, const char *expected) {
 cleanup:
   keiko_owner_close(&owner.control); keiko_owner_close(&owner.response);
   keiko_owner_close(&owner.identity); keiko_owner_close(&owner.root_handle);
+  keiko_owner_close(&owner.scope);
   keiko_coordinator_dispose_child(&owner.supervisor);
   clear_request(&request);
   if (result != 0) (void)send_error((uint16_t)error);

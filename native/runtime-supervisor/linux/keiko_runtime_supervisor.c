@@ -105,11 +105,11 @@ static int drop_capabilities(void) {
 }
 
 static void execute_root(const struct launch_request *request, int notices, int failure,
-                         int start_gate) {
-  int keep[] = {notices, failure, start_gate};
+                         int start_gate, int scope) {
+  int keep[] = {notices, failure, start_gate, scope};
   char acknowledgement;
   char **arguments = spawn_arguments(request), **environment = spawn_environment(request);
-  if (arguments != NULL && environment != NULL && retain_descriptors(keep, 3) &&
+  if (arguments != NULL && environment != NULL && retain_descriptors(keep, 4) &&
       chdir(request->cwd) == 0 && send(notices, "R", 1, 0) == 1 &&
       recv(notices, &acknowledgement, 1, 0) == 1 && acknowledgement == 'A') {
     close(notices);
@@ -125,11 +125,11 @@ static int root_exit_code(int status) {
 }
 
 static void run_init(const struct launch_request *request, int gate, int notices, int lease,
-                     int start_gate, uid_t uid, gid_t gid, int owner_handle) {
-  int keep[] = {gate, notices, lease, start_gate, owner_handle};
+                     int start_gate, uid_t uid, gid_t gid, int owner_handle, int scope) {
+  int keep[] = {gate, notices, lease, start_gate, owner_handle, scope};
   int execution[2];
   char accepted;
-  if (!retain_descriptors(keep, 5) || !keiko_bind_parent_death(owner_handle) ||
+  if (!retain_descriptors(keep, 6) || !keiko_bind_parent_death(owner_handle) ||
       read(gate, &accepted, 1) != 1 || accepted != 'A')
     _exit(126);
   close(gate);
@@ -141,7 +141,8 @@ static void run_init(const struct launch_request *request, int gate, int notices
   close(owner_handle);
   pid_t root = fork();
   if (root < 0) _exit(126);
-  if (root == 0) execute_root(request, notices, execution[1], start_gate);
+  if (root == 0) execute_root(request, notices, execution[1], start_gate, scope);
+  if (scope >= 0) close(scope);
   close(execution[1]);
   if (start_gate >= 0) close(start_gate);
   int launched = 0;
@@ -220,7 +221,8 @@ static int receive_notice(int descriptor, char expected, struct generation *gene
          send(descriptor, "A", 1, 0) == 1 && within_deadline(started, deadline);
 }
 
-static int start_generation(struct generation *generation, const struct launch_request *request) {
+static int start_generation(struct generation *generation, const struct launch_request *request,
+                              int scope) {
   int gate[2] = {-1, -1}, notices[2] = {-1, -1}, lease[2] = {-1, -1};
   int enabled = 1, result = 0, owner_handle = -1;
   int start_gate = fcntl(5, F_GETFD) == -1 ? -1 : 5;
@@ -245,7 +247,8 @@ static int start_generation(struct generation *generation, const struct launch_r
       generation->startup_error = ERROR_NATIVE_UNAVAILABLE;
     goto cleanup;
   }
-  if (child == 0) run_init(request, gate[0], notices[1], lease[0], start_gate, uid, gid, owner_handle);
+  if (child == 0) run_init(request, gate[0], notices[1], lease[0], start_gate, uid, gid,
+                           owner_handle, scope);
   generation->init = child;
   generation->lease = lease[1]; lease[1] = -1;
   close_descriptor(&gate[0]); close_descriptor(&lease[0]); close_descriptor(&notices[1]);
@@ -333,16 +336,18 @@ static int supervise(struct generation *generation) {
   }
 }
 
-static int valid_owner_channel(void) {
+static int valid_owner_socket(int descriptor) {
   int type = 0;
   struct ucred peer;
   socklen_t type_size = sizeof(type), peer_size = sizeof(peer);
-  return getsockopt(6, SOL_SOCKET, SO_TYPE, &type, &type_size) == 0 &&
+  return getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &type, &type_size) == 0 &&
          type_size == sizeof(type) && type == SOCK_SEQPACKET &&
-         getsockopt(6, SOL_SOCKET, SO_PEERCRED, &peer, &peer_size) == 0 &&
+         getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &peer, &peer_size) == 0 &&
          peer_size == sizeof(peer) && peer.pid > 0 && peer.pid == getppid() &&
          peer.uid == geteuid() && peer.gid == getegid() && keiko_parent_death_is_armed();
 }
+
+static int valid_owner_channel(void) { return valid_owner_socket(6); }
 
 static int report_held_root(const struct generation *generation) {
   uint64_t started = monotonic_ms(), deadline = started + GENERATION_TIMEOUT_MS;
@@ -375,19 +380,23 @@ int main(int argc, char **argv) {
                                    .lease = -1, .status = 0, .reaped = 0,
                                    .startup_error = ERROR_PROCESS_CREATE};
   int error = ERROR_PROCESS_CREATE, result = 1;
-  int owner_report = argc == 2 && strcmp(argv[1], "--owner-report") == 0;
+  int app = argc == 2 && strcmp(argv[1], "--app-owner-report") == 0;
+  int owner_report = app || (argc == 2 && strcmp(argv[1], "--owner-report") == 0);
   int owner_descriptor = owner_report ? 6 : -1;
+  int scope = app ? 7 : -1;
   (void)signal(SIGPIPE, SIG_IGN);
   if ((argc != 1 && !owner_report) || (owner_report && !valid_owner_channel()) ||
+      (app && !valid_owner_socket(7)) ||
       !read_launch_request(&request)) {
     error = ERROR_PROTOCOL;
     goto cleanup;
   }
-  if (!start_generation(&generation, &request)) {
+  if (!start_generation(&generation, &request, scope)) {
     error = generation.startup_error;
     goto cleanup;
   }
   error = ERROR_TREE_OBSERVE;
+  close_descriptor(&scope);
   if (owner_report) {
     int reported = report_held_root(&generation);
     close_descriptor(&owner_descriptor);
@@ -397,6 +406,7 @@ int main(int argc, char **argv) {
   result = supervise(&generation) ? 0 : 1;
 cleanup:
   close_descriptor(&owner_descriptor);
+  close_descriptor(&scope);
   clear_generation(&generation);
   clear_request(&request);
   if (result != 0) (void)send_error((uint16_t)error);

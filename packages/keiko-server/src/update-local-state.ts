@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import {
   closeSync,
   chmodSync,
@@ -451,12 +452,7 @@ function readRemediationLease(path: string): RemediationLeaseRecord | undefined 
 }
 
 function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 function remediationLeaseStaleMs(value: number | undefined): number {
@@ -486,13 +482,11 @@ function remediationLeaseReclaimable(
   const ageMs = remediationLeaseAgeMs(path, record, context.now);
   if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
   if (record === undefined) return true;
-  if (record.pid === process.pid) {
+  if (record.pid === currentProcessId()) {
     return record.processIdentity !== context.processIdentity;
   }
-  if (!context.pidAlive(record.pid)) return true;
-  // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
-  // then bound the orphan instead of blocking remediation forever.
-  return ageMs >= context.remediationLeaseStaleMs * 2;
+  // Age alone proves neither process reuse nor death. A live or unobserved foreign owner stays held.
+  return !context.pidAlive(record.pid);
 }
 
 function restoreClaimedRemediationLease(claimedPath: string, path: string): void {
@@ -608,7 +602,7 @@ function acquireRemediationLease(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       publishRemediationLease(path, {
-        pid: process.pid,
+        pid: currentProcessId(),
         token,
         acquiredAt: nowIso(context.now),
         processIdentity: context.processIdentity,

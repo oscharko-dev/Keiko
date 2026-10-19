@@ -1492,3 +1492,14 @@ match, and credential-excluding terminal retention verifies all1,055 archive mem
 `basic-skill-v5-remaining-terminal.json` binds this evidence. Original case8 stays failed. The
 original full-comparison advancement threshold remains unmet; generated naming, sections,
 fault classes, semantic benefit and untouched held-outs still require separate review.
+
+## Required final visible UI acceptance
+
+The owner requires a final visible run of the built application in addition to automated checks.
+Exercise real local-model Chat, both selected skills and execution of their generated tests,
+recursive folder/repository retrieval, citations and source navigation, independent windows and
+reconnection, browser approval and draft recovery, and updater journeys. Record the actual source,
+configuration, observed outcomes and remaining failures without publishing private content.
+Do not replace frozen failed calibration or untouched held-out evaluation with these journeys.
+A failed visible journey remains open, receives the smallest causal fix and is exercised again.
+This acceptance has not yet been executed.

@@ -16,7 +16,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/keiko-linux-native-quality.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 common=(-std=c17 -Wall -Wextra -Wpedantic -Werror -O2 '-DKEIKO_PORTABLE_TARGET="linux-x64"')
-for source in keiko_runtime_supervisor qualification_fixture qualification_observer coordinator_encoder_fixture deadline_fixture owner_channel_fixture owner_receiver_fixture; do
+for source in keiko_runtime_supervisor qualification_fixture qualification_observer coordinator_encoder_fixture deadline_fixture owner_channel_fixture owner_receiver_fixture process_scope_root_fixture process_scope_receiver_fixture; do
   input="$root/native/runtime-supervisor/linux/${source}.c"
   cc "${common[@]}" "$input" -o "$scratch/$source"
   cc "${common[@]}" -fanalyzer -c "$input" -o "$scratch/${source}.analysis.o"
@@ -28,6 +28,7 @@ if [[ "$mode" == "--kernel" ]]; then
   node "$root/native/runtime-supervisor/linux/protocol.test.mjs" --helper "$scratch/keiko_runtime_supervisor"
   node "$root/native/runtime-supervisor/linux/owner-channel.test.mjs"
   node "$root/native/runtime-supervisor/linux/outer-owner.test.mjs"
+  node "$root/native/runtime-supervisor/linux/process-scope.test.mjs"
   helper_digest="$(sha256sum "$scratch/keiko_runtime_supervisor")"
   helper_digest="${helper_digest%% *}"
   node "$root/native/runtime-supervisor/linux/protocol.test.mjs" --outer-owner \

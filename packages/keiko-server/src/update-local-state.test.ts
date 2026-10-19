@@ -416,7 +416,7 @@ describe("update runtime state and audit events", () => {
     expect(existsSync(leasePath)).toBe(true);
   });
 
-  it("reclaims an aged remediation lease even when its pid was reused", () => {
+  it("keeps an aged remediation lease without proof that its foreign owner has exited", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";
     const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
@@ -438,9 +438,8 @@ describe("update runtime state and audit events", () => {
 
     const release = localState.acquireRemediationLease(actionId);
 
-    expect(release).toBeTypeOf("function");
-    release?.();
-    expect(existsSync(leasePath)).toBe(false);
+    expect(release).toBeUndefined();
+    expect(existsSync(leasePath)).toBe(true);
   });
 
   it("keeps a fresh malformed remediation lease during its publication grace window", () => {

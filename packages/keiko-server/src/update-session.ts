@@ -1,3 +1,4 @@
+import { currentProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import {
   type CommandResult,
   type RunCommandDeps,
@@ -686,7 +687,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       sessionId: session.sessionId,
       targetVersion: session.targetVersion,
       startedAt: session.startedAt,
-      pid: process.pid,
+      pid: currentProcessId(),
     });
     if (!acquired) {
       throw new UpdateSessionError(
@@ -1177,7 +1178,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       await this.onPortableHandoffAccepted({
         sessionId,
         activationId,
-        pid: process.pid,
+        pid: currentProcessId(),
         launchId: launchId ?? "",
       });
     } catch (error) {

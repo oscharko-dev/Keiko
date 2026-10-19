@@ -328,6 +328,36 @@
       ]
     },
     {
+      "path": "native/portable-launcher/keiko-portable-process-scope-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_root_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_receiver_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
       "path": "native/runtime-supervisor/linux/owner_receiver_fixture.c",
       "language": "c",
       "platforms": ["linux"],

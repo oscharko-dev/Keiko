@@ -1,3 +1,4 @@
+import { currentProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import type {
   UpdateActivationWalCheckpoint,
   UpdateActivationWalState,
@@ -365,7 +366,7 @@ function restoredIdentityMatches(
   current: UpdateStartupRecoveryCurrent,
 ): boolean {
   return (
-    current.pid === process.pid &&
+    current.pid === currentProcessId() &&
     current.launchId === context.plan.restoreLaunchId &&
     loopbackHost(current.host) &&
     current.port === context.plan.oldProcess.port &&
@@ -445,7 +446,7 @@ function currentIdentityMatches(
   current: UpdateStartupRecoveryCurrent,
 ): boolean {
   return (
-    current.pid === process.pid &&
+    current.pid === currentProcessId() &&
     current.launchId === context.plan.newLaunchId &&
     current.port === context.plan.oldProcess.port &&
     current.version === context.plan.targetVersion

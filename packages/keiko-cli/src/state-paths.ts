@@ -11,6 +11,7 @@
 // `--state-dir`/KEIKO_STATE_DIR can never escalate into data loss outside Keiko's
 // own files.
 
+import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import {
   closeSync,
   constants as fsConstants,
@@ -522,17 +523,9 @@ export function readPidFile(path: string): number | undefined {
   return readPidRecord(path)?.pid;
 }
 
-// Liveness probe identical in semantics to the lifecycle handler: a successful
-// signal-0 means alive; an EPERM error means the process exists but is owned by
-// another user (still alive); any other error means it is gone. Kept local to this
-// leaf module so uninstall/repair do not pull in lifecycle's heavy spawn/net imports.
+// Persistent records and their liveness probes use the same coordinate. Unknown owners stay held.
 export function defaultIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
+  return isProcessAlive(pid);
 }
 
 export type PidState = "absent" | "stale" | "running";

@@ -342,10 +342,24 @@ that grant or leave the outer owner waiting indefinitely. Expiry produces refusa
 the existing bounded failure cleanup; forced cleanup supplies no successful zero-live protocol
 proof.
 
-These independently exercised Linux mechanisms do not admit app startup or an updater transition.
-The BFF still needs authenticated host process identity/liveness before its first durable state,
-and each update still needs the direct BFF-created coordinator channel, separate installed-current
-and running-owner identities, successor ownership and installed-version evidence described above.
+An explicit app-owner role additionally supplies a root-only sequenced-packet port. The BFF binds
+its outer process coordinate before constructing any durable writer or lock. Liveness requests
+use the outer owner's kernel process references; only a positively missing or terminal reference
+establishes death. Unknown observations retain ownership. File-owner requests duplicate an
+already-open root descriptor through the held root pidfd and return metadata only. The consumer
+joins device, inode and mode before applying the existing root/self ownership policy. All
+nonlocal ownership requires this observation, including when an unmapped UID looks identical to
+the caller's UID. No UID mapping, ptrace capability or filesystem permission is widened. Failed
+or expired requests permanently retire that lookup port; they never revive from a delayed reply
+and do not terminate the healthy app. Existing containment and stop proofs remain independent.
+The existing process start and heartbeat events record the selected coordinate and closed
+observation state without paths, file contents or numeric process references in their extra fields.
+Native SQLite unavailability refuses before durable state instead of replacing the root by re-exec.
+
+These independently exercised Linux mechanisms do not admit an installed app or updater transition.
+The initial CLI still needs the complete detached outer-owner lifetime; each update still needs
+the direct BFF-created coordinator channel, separate installed-current and running-owner identities,
+successor ownership and installed-version evidence described above.
 The macOS outer-owner path also remains unqualified. No third helper artifact or Linux sandbox
 egress exception is introduced.
 

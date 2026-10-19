@@ -1,3 +1,4 @@
+import { currentProcessId } from "@oscharko-dev/keiko-security/process-scope";
 // Shared UI-process teardown for `keiko stop`/`restart`, unhealthy `keiko start`, and
 // `keiko uninstall --force`. POSIX still delivers SIGTERM cross-process. Windows does not:
 // libuv maps any non-zero signal onto TerminateProcess, so the in-process drain in
@@ -325,7 +326,7 @@ async function resolveWindowsTreeKill(
 }
 
 function isForbiddenTarget(input: TerminateUiProcessInput): boolean {
-  const currentPid = input.currentPid ?? process.pid;
+  const currentPid = input.currentPid ?? currentProcessId();
   const parentPid = input.parentPid ?? process.ppid;
   return input.pid === currentPid || input.pid === parentPid;
 }

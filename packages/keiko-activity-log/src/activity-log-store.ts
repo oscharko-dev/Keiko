@@ -28,6 +28,7 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import {
   SafeArtifactFileError,
   assertSafeArtifactAncestors,
@@ -1048,14 +1049,9 @@ export function activityLogOrphanOwner(
   return stale ? "stale" : undefined;
 }
 
-/** `process.kill(pid, 0)` probes existence; only ESRCH proves the owner is gone. */
+/** The shared coordinate probe keeps unavailable observations live for ownership purposes. */
 export function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errorCode(error) !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 export interface ActivityLogSegmentTail {

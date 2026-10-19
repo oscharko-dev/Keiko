@@ -51,6 +51,14 @@
       "types": "./dist/runid.d.ts",
       "import": "./dist/runid.js"
     },
+    "./process-scope": {
+      "types": "./dist/process-scope.d.ts",
+      "import": "./dist/process-scope.js"
+    },
+    "./native-process-scope": {
+      "types": "./dist/native-process-scope.d.ts",
+      "import": "./dist/native-process-scope.js"
+    },
     "./secrets": {
       "types": "./dist/secrets.d.ts",
       "import": "./dist/secrets.js"

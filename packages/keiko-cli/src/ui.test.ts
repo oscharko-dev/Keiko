@@ -1304,6 +1304,8 @@ describe("runUiCli", () => {
       expect(extra.port).toBe(DEFAULT_UI_PORT);
       expect(extra.stateDirSource).toBe("default");
       expect(extra.logLevel).toBe("debug");
+      expect(extra.processScope).toBe("local");
+      expect(extra.processScopeState).toBe("local");
       // Neither is computable without loading the real server module graph (`installMode`) or a
       // resolved gateway config (`gatewayProviderCount`, and no `--config` was given here) — both
       // are correctly absent on the injected-server path, never a fabricated placeholder value.
@@ -2446,6 +2448,7 @@ describe("startProcessHeartbeat", () => {
       expect(heartbeat).toBeDefined();
       expect(heartbeat?.category).toBe("process");
       const extra = extraOf(heartbeat);
+      expect(extra.processScopeState).toBe("local");
       expect(typeof extra.rssBytes).toBe("number");
       expect(typeof extra.heapUsedBytes).toBe("number");
       expect(typeof extra.heapTotalBytes).toBe("number");
