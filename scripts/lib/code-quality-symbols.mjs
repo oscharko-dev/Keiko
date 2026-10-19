@@ -2637,7 +2637,7 @@ function rawTypeofOperand(context, expression, origin) {
   const top = context.checker.getNonNullableType(context.checker.getUnknownType());
   const members = type.isUnion() ? type.types : [type];
   return (
-    members.some((member) => member === top) &&
+    members.includes(top) &&
     members.every(
       (member) =>
         member === top || (member.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0,
