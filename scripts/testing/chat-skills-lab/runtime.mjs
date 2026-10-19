@@ -284,22 +284,73 @@ async function runtimeEnvironment(dir, port, provider, contextWindow) {
 
 function waitForReady(child) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("bff-start-timeout")), 45000);
-    child.once("exit", () => {
+    const finish = (error, message) => {
       clearTimeout(timer);
-      reject(new Error("bff-start-failed"));
-    });
-    child.once("message", (message) => {
-      clearTimeout(timer);
-      resolve(message);
-    });
+      child.off("error", onError);
+      child.off("exit", onExit);
+      child.off("message", onMessage);
+      if (error) reject(error);
+      else resolve(message);
+    };
+    const onError = (error) => finish(error);
+    const onExit = () => finish(new Error("bff-start-failed"));
+    const onMessage = (message) => finish(undefined, message);
+    const timer = setTimeout(() => finish(new Error("bff-start-timeout")), 45000);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    child.once("message", onMessage);
   });
 }
 
+function observeBffChild(child) {
+  const state = { child, error: undefined };
+  child.on("error", (error) => {
+    state.error ??= error;
+  });
+  return state;
+}
+
+function stopBffChild(child) {
+  if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+    return;
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      child.off("error", onError);
+      child.off("exit", onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onError = (error) => finish(error);
+    const onExit = () => finish();
+    child.once("error", onError);
+    child.once("exit", onExit);
+    try {
+      child.kill("SIGTERM");
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+async function stopObservedBffChild(state) {
+  const [completion] = await Promise.allSettled([stopBffChild(state?.child)]);
+  const lifetimeError = state?.error;
+  if (state) state.error = undefined;
+  if (completion.status === "rejected") {
+    if (lifetimeError && lifetimeError !== completion.reason)
+      throw new AggregateError([lifetimeError, completion.reason], "bff-lifetime-and-stop-failed", {
+        cause: lifetimeError,
+      });
+    throw completion.reason;
+  }
+  if (lifetimeError) throw lifetimeError;
+}
+
 function bffProcess(dir, env) {
-  let child, session, baseUrl;
+  let state, session, baseUrl;
   async function start() {
     const fd = openSync(join(dir, "server.private.log"), "a", 0o600);
+    let child;
     try {
       child = fork(fileURLToPath(new URL("./serve.mjs", import.meta.url)), [], {
         cwd: root,
@@ -310,20 +361,22 @@ function bffProcess(dir, env) {
     } finally {
       closeSync(fd);
     }
-    const ready = await waitForReady(child);
-    baseUrl = `http://127.0.0.1:${ready.port}`;
-    session = await openApiSession(baseUrl, env);
-  }
-  async function stop() {
-    if (child?.exitCode === null)
-      await new Promise((resolve) => {
-        child.once("exit", resolve);
-        child.kill("SIGTERM");
-      });
+    const observed = observeBffChild(child);
+    state = observed;
+    try {
+      const ready = await waitForReady(child);
+      baseUrl = `http://127.0.0.1:${ready.port}`;
+      session = await openApiSession(baseUrl, env);
+      if (observed.error) throw observed.error;
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error("bff-start-failed");
+    } catch (error) {
+      if (observed.error === error) observed.error = undefined;
+      throw error;
+    }
   }
   return {
     start,
-    stop,
+    stop: () => stopObservedBffChild(state),
     get baseUrl() {
       return baseUrl;
     },
@@ -331,17 +384,30 @@ function bffProcess(dir, env) {
   };
 }
 
-async function startObservedBff(dir, proxy, provider, contextWindow) {
+export async function startObservedBff(
+  dir,
+  proxy,
+  provider,
+  contextWindow,
+  prepareEnvironment = runtimeEnvironment,
+) {
   let bff;
   const close = async () => {
-    await bff?.stop();
-    await new Promise((resolve) => {
-      proxy.close(resolve);
-      proxy.closeAllConnections();
-    });
+    const stopped = await Promise.allSettled([bff?.stop()]);
+    const closed = await Promise.allSettled([
+      new Promise((resolve, reject) => {
+        proxy.close((error) => (error ? reject(error) : resolve()));
+      }),
+      Promise.resolve().then(() => proxy.closeAllConnections()),
+    ]);
+    const failures = [...stopped, ...closed]
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "runtime-cleanup-failed");
   };
   try {
-    const { project, env } = await runtimeEnvironment(
+    const { project, env } = await prepareEnvironment(
       dir,
       proxy.address().port,
       provider,
@@ -351,7 +417,12 @@ async function startObservedBff(dir, proxy, provider, contextWindow) {
     await bff.start();
     return { bff, project, env, close };
   } catch (error) {
-    await close();
+    const [cleanup] = await Promise.allSettled([close()]);
+    if (cleanup.status === "rejected") {
+      throw new AggregateError([error, cleanup.reason], "runtime-start-and-cleanup-failed", {
+        cause: error,
+      });
+    }
     throw error;
   }
 }

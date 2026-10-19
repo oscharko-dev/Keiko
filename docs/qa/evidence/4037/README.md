@@ -1354,3 +1354,22 @@ and remains unqualified. No stage, CLI/BFF handoff or native update admission is
 `linux-generation-kernel-backend.json` binds these scoped controls and their limits. Initial and
 successor ownership, host PID consumers, real installed updates and broader platform acceptance
 remain open. No skill or epic acceptance changes.
+
+## Checkpoint 48 — shared lab process and failure ownership
+
+The existing lab runtime now owns readiness and stop error events, releases the original readiness
+deadline/listeners, recognizes a child already terminated by a signal and preserves startup plus
+cleanup failures. Proxy close and connection cleanup are attempted even when child stop refuses.
+The same 15 direct-owner controls retain 11 failures/four healthy before and all pass after; the
+expanded 20 controls and four affected suites pass 68 tests. Independent same-seven owner controls
+retain two healthy/five failures before and seven passes after. Two further late-error cases fail
+before their repair; the final independent nine error and four signal-state controls all pass.
+Unreported lifetime errors survive normal stop without duplicating already delivered errors. Two actual isolated BFF child/proxy
+controls pass, counting their contained synthetic startup probes without a real provider dispatch.
+
+The prepared future observer removes its copied lifecycle owners and imports this shared owner
+from the actual measurement checkout, supplying its unchanged configuration producer. It remains
+unexecuted until the fresh BFF/source baseline is assembled and frozen. Original model campaigns,
+skills, scoring, provider/transport and token grants are unchanged. Initial clock/probe fixture
+commissioning failures remain retained. `lab-runtime-lifecycle.json` binds the scoped evidence;
+no skill, native shipping or epic acceptance is granted.

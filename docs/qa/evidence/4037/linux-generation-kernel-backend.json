@@ -144,6 +144,10 @@
     "finalRegisteredNativeQualification": {
       "artifact": "checkpoint47-v6-native-validation.json",
       "sha256": "2f287b9c7d7f5fa224318489728bef905ebc6c57178ba80e8d24c71579b9f420"
+    },
+    "supplementaryShellcheck": {
+      "artifact": "checkpoint47-shellcheck-receipt.json",
+      "sha256": "4643050e540b8a30eccb1d7e784e3732304d2642d315ece7013abe5dbe0df6bf"
     }
   },
   "limits": [
