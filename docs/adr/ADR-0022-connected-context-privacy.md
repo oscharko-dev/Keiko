@@ -1335,10 +1335,14 @@ files. A shared directory name is not explicit lockfile intent. Named or selecte
 dependency/version questions, and a relevant lockfile-only fallback remain eligible within their
 existing policy and budgets. When concrete sources are addressed, incidental lockfiles must belong
 to an ancestor module; explicitly selected lockfiles remain eligible. Dependency/version intent
-reuses canonical planner terms, including German. Validated query-origin source selections can seed
-ancestor metadata roots through the existing discovery path, but each added root must pass the
+reuses canonical planner terms, including German. Validated query-origin source selections and
+canonical metadata already observed by the current lexical text search can seed ancestor metadata
+roots through the existing discovery path, but each added root must pass the
 selected-scope and denial predicate before directory IO. All roots share the existing traversal,
 deadline and retention controls. Assistant or diagnostic references do not seed those roots.
+Filename-discovery atoms, arbitrary JSON bodies and unrelated structural references do not establish
+a metadata root. Already observed canonical metadata therefore works in arbitrary nested modules
+without a directory-name convention or a missing output test file becoming a source authority.
 Classification reuses the workspace ecosystem registry. This selection
 rule applies to Git repositories and ordinary folders without applying Git-specific directory
 exclusions to ordinary documents. The existing connected-context completion records actual selected
@@ -1351,6 +1355,13 @@ predicate and reuses its existing request-command grammar. Explicit canonical do
 lockfile basenames are references through the ecosystem registry, not a general JSON-file rule;
 existing extensionless selectors retain their meaning. Basename discovery still obeys selected
 scope, exclusions, its finite match grant and the shared search/read budgets before source IO.
+
+An affirmative dependency request also remains eligible when the same question primarily routes
+as diagnostic search. The existing planner predicate independently signals metadata demand after
+question-channel extraction; diagnostic routing keeps its priority. Preservation constraints and
+quoted/source data still cannot establish that demand. This reuses the same metadata discovery,
+scope, currentness and byte/read grants, with the existing source-details event reporting the
+closed metadata-injection reason. It adds no prompt instruction, source hint or model-specific rule.
 
 Canonical omission order and cache identity are independent of caller ordering. A successful
 selected-file read replaces an earlier omission for that exact file; invalid parent/child overlaps

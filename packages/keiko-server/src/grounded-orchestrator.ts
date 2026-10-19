@@ -3746,7 +3746,10 @@ function wantsProjectMetadata(input: OrchestratorInput, intent: RetrievalIntent)
     return true;
   }
   const question = extractRetrievalChannels(input.query.text, 8).questionText;
-  return classifyRetrievalIntent(question).intent === "project-metadata";
+  return (
+    classifyRetrievalIntent(question).intent === "project-metadata" ||
+    requestsDependencyMetadata(question)
+  );
 }
 
 function wantsRepositoryOverview(intent: RetrievalIntent): boolean {
@@ -5470,7 +5473,7 @@ async function rootGlobManifestPaths(
 // the guarded fs, the traversal control and the shared existence cache stay in lockstep across
 // them instead of being re-threaded positionally into each pass.
 interface MetadataDiscoveryInputs {
-  readonly explicitSourcePaths?: readonly string[];
+  readonly metadataSourcePaths?: readonly string[];
   readonly readableScopeManifest?: boolean;
   readonly input: OrchestratorInput;
   readonly intent: RetrievalIntent;
@@ -5565,12 +5568,20 @@ async function workspacePackageMetadataAtoms(
   return atoms;
 }
 
+function isAdmittedMetadataSource(path: string, inputs: MetadataDiscoveryInputs): boolean {
+  return (
+    (isEcosystemSourceFile(path) || isCanonicalMetadataFile(path)) &&
+    isAdmittedMetadataPath(path, inputs.searchScope, inputs.existsCache) &&
+    fileExistsByContainedStat(inputs.searchScope, inputs.fs, path)
+  );
+}
+
 function projectMetadataRoots(inputs: MetadataDiscoveryInputs): readonly string[] {
   const roots = new Set(metadataRootsForScope(inputs.input.scope));
   const query = extractRetrievalChannels(inputs.input.query.text, 8).questionText;
   if (!requestsDependencyMetadata(query)) return [...roots];
-  for (const path of inputs.explicitSourcePaths ?? []) {
-    if (!isEcosystemSourceFile(path) && !isCanonicalMetadataFile(path)) continue;
+  for (const path of inputs.metadataSourcePaths ?? []) {
+    if (!isAdmittedMetadataSource(path, inputs)) continue;
     let root = dirname(path);
     while (
       root.length > 0 &&
@@ -5715,9 +5726,9 @@ async function deterministicMetadataEvidence(
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
   const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
-    ...(inputs.explicitSourcePaths === undefined
+    ...(inputs.metadataSourcePaths === undefined
       ? {}
-      : { explicitSourcePaths: inputs.explicitSourcePaths }),
+      : { metadataSourcePaths: inputs.metadataSourcePaths }),
     ...(inputs.readableScopeManifest === true ? { readableScopeManifest: true } : {}),
     input,
     intent: plan.retrievalIntent,
@@ -5782,7 +5793,7 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
-  readonly explicitSourcePaths?: readonly string[];
+  readonly metadataSourcePaths?: readonly string[];
   readonly readableScopeManifest?: boolean;
   readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
@@ -5861,16 +5872,31 @@ async function deterministicContextEvidence(
   return mergeDeterministicEvidence([filenameDiscovery, traceEvidence, metadata]);
 }
 
+function metadataSourcePathsFor(rings: RingRunSummary): readonly string[] {
+  const explicit =
+    rings.explicitAdmission?.selections
+      .filter((selection) => selection.origin === "query")
+      .map((selection) => selection.path) ?? [];
+  const observed = rings.atoms
+    .filter(
+      (atom) =>
+        atom.provenance.kind === "lexical-search" &&
+        atom.provenance.tool === "repo.searchText" &&
+        isCanonicalMetadataFile(atom.scopePath),
+    )
+    .map((atom) => atom.scopePath);
+  return [...new Set([...explicit, ...observed])];
+}
+
 async function withDeterministicContextAtoms(
   rings: RingRunSummary,
   inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
   markAugmentationUsed(rings);
-  const explicitSourcePaths =
-    rings.explicitAdmission?.selections
-      .filter((selection) => selection.origin === "query")
-      .map((selection) => selection.path) ?? [];
-  const deterministic = await deterministicContextEvidence({ ...inputs, explicitSourcePaths });
+  const deterministic = await deterministicContextEvidence({
+    ...inputs,
+    metadataSourcePaths: metadataSourcePathsFor(rings),
+  });
   if (
     deterministic.atoms.length === 0 &&
     deterministic.uncertainty.length === 0 &&

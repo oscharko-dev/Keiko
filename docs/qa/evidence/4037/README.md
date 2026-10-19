@@ -1231,3 +1231,28 @@ relaxation is used; deterministic selection controls precede any further model d
 
 `alias-replay-and-basic-workflow.json` binds the scoped observations. Both skills and all broader
 acceptance, installed updater and final integration obligations remain open.
+
+## Checkpoint 43: retain dependency evidence during diagnostic search
+
+A diagnostic question can also require installed dependencies. The existing planner predicate
+now establishes that independent demand without changing diagnostic routing. Metadata root intake
+also reuses canonical metadata already observed by current lexical text search. Current contained
+regular-file, scope, ancestor, ignore, retention and byte/read guards remain binding. Arbitrary JSON,
+unselected filename-discovery atoms and structural/diagnostic/assistant references do not establish those roots. No folder
+name convention, score exemption, prompt rule, model setting or additional grant is introduced.
+
+Two generic root-demand controls fail before the first repair, with five healthy controls; all seven
+pass after. That small repair still fails the actual nested source contract. Two added arbitrary
+nested-root controls then fail, with eight healthy controls; final intake passes all ten. All 161
+tests in six affected suites pass. The identical final ten controls produce four failures and six
+healthy results on exact published parent42logic, then ten passes on the candidate. ADR-0022 is
+amended in place and catalogs are regenerated.
+
+The actual noninstrumented retriever uses the retained initial/feedback query hashes and original
+exploration grants against an exact private-source mirror. Both phases now retain five files without
+omissions, including all 26 material build-manifest lines. Before, feedback retained three files and
+omitted two for low relevance. No model or network call occurs. The incomplete intermediate repair
+and private probe commissioning errors remain retained; no original generation is regraded.
+
+`diagnostic-metadata-intake.json` binds the scoped observations. Native follow-up, skill benefit,
+full search/browser/updater acceptance and final integration remain open.
