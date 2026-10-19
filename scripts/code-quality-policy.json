@@ -2463,7 +2463,8 @@
       "rules": [
         "anti-slop/no-unknown-parameters",
         "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type"
+        "anti-slop/no-unsafe-dictionary-type",
+        "anti-slop/no-object-parameters"
       ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
@@ -2516,6 +2517,14 @@
         {
           "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts",
           "testName": "CodingRuntimeOperationCoordinator answers a question with the requestId/expectedRevision/questionId binding folded into the contract parse (KEIKO-0411)"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question aggregate object measurement (#3918) refuses the public answer aggregate after preserving legal UTF-8 input"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question aggregate object measurement (#3918) defers serialization after an already rejected field across all three lanes"
         }
       ]
     },
@@ -2526,7 +2535,8 @@
       "rules": [
         "anti-slop/no-unknown-parameters",
         "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type"
+        "anti-slop/no-unsafe-dictionary-type",
+        "anti-slop/no-object-parameters"
       ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
@@ -2575,6 +2585,14 @@
         {
           "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.test.ts",
           "testName": "public runtime question response admission (#3918) returns the real healthy projected list and original nested questions"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question aggregate object measurement (#3918) refuses the public response aggregate after preserving legal UTF-8 input"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question aggregate object measurement (#3918) defers serialization after an already rejected field across all three lanes"
         }
       ]
     },
@@ -2585,7 +2603,8 @@
       "rules": [
         "anti-slop/no-unknown-parameters",
         "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type"
+        "anti-slop/no-unsafe-dictionary-type",
+        "anti-slop/no-object-parameters"
       ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
@@ -2638,6 +2657,14 @@
         {
           "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
           "testName": "coding runtime routes #2478: a rotated-away or revoked cookie loses the question read authority"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question aggregate object measurement (#3918) refuses the public channel aggregate after preserving legal UTF-8 input"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question aggregate object measurement (#3918) defers serialization after an already rejected field across all three lanes"
         }
       ]
     },

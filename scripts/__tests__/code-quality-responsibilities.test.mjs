@@ -3467,3 +3467,206 @@ it.skipIf(process.platform === "win32")(
   },
   195_000,
 );
+
+// Constructed reports exercise refusal/dispatch only, never actual semantic qualification.
+function numericObjectComponentReport() {
+  const ids = ["first", "second", "third"];
+  const componentRoots = ids.map((recordId, index) => ({
+    recordId,
+    origin: index < 2 ? "container" : "answers",
+    index: 0,
+    identity: {
+      owner: "alpha",
+      producer: {
+        path: "owner.ts",
+        start: 100 + index,
+        end: 200 + index,
+        kind: "FunctionDeclaration",
+      },
+    },
+    proofAssertions: [{ path: "proof.test.ts", testName: "reached " + recordId }],
+  }));
+  const slot = {
+    path: "owner.ts",
+    rule: "anti-slop/no-object-parameters",
+    line: 2,
+    column: 1,
+    index: 1,
+    objectForm: "json-utf8-byte-measurement",
+    contributingResponsibilityIds: ["first", "second"],
+    componentRoots,
+    producerIdentity: {
+      owner: "alpha",
+      producer: { path: "owner.ts", start: 10, end: 20, kind: "FunctionDeclaration" },
+    },
+  };
+  const assessments = componentRoots.map((root, index) => ({
+    id: root.recordId,
+    owner: "alpha",
+    kind: "public-parser",
+    rules: [slot.rule],
+    structural: "ready",
+    semantic: "qualified",
+    roles: { input: { identities: [root.identity] } },
+    consumerBinding: { bound: true, status: "ready" },
+    proofs: [{ path: "proof.test.ts", executed: true }],
+    proofAssertions: root.proofAssertions.map((entry) => ({ ...entry, status: "passed" })),
+    slots: index === 0 ? [slot] : [],
+  }));
+  return { slot, assessments };
+}
+
+function incompleteNumericObjectComponent(variant, slot, assessments) {
+  if (variant === "missing-root") assessments.pop();
+  if (variant === "duplicate-root") assessments.push(structuredClone(assessments[2]));
+  if (variant === "foreign-identity") slot.componentRoots[2].identity.owner = "foreign";
+  if (variant === "same-canonical-root")
+    slot.componentRoots[2].identity = assessments[2].roles.input.identities[0] =
+      slot.componentRoots[0].identity;
+  if (variant === "empty-component") slot.componentRoots = [];
+  if (variant === "empty-contributors") slot.contributingResponsibilityIds = [];
+  if (variant === "duplicate-contributors") slot.contributingResponsibilityIds = ["first", "first"];
+  if (variant === "foreign-contributor") slot.contributingResponsibilityIds = ["first", "foreign"];
+}
+
+function incompleteNumericObjectProof(variant, slot, assessments) {
+  if (variant === "empty-proof-path") {
+    slot.componentRoots[2].proofAssertions[0].path = "";
+    assessments[2].proofAssertions[0].path = "";
+    assessments[2].proofs[0].path = "";
+  }
+  if (variant === "pending" || variant === "rejected") assessments[2].semantic = variant;
+  if (variant === "missing-proof") assessments[2].proofAssertions = [];
+  if (variant === "failed-proof") assessments[2].proofAssertions[0].status = "failed";
+  if (variant === "unexecuted-path") assessments[2].proofs[0].executed = false;
+  if (variant === "untagged") delete slot.objectForm;
+  if (variant === "foreign-kind") assessments[0].kind = "validator";
+  if (variant === "noncontributor-attribution") {
+    assessments[0].slots = [];
+    assessments[2].slots = [slot];
+  }
+}
+
+describe("numeric object component semantic seam (#3918)", () => {
+  it.each([
+    "missing-root",
+    "pending",
+    "rejected",
+    "duplicate-root",
+    "foreign-identity",
+    "same-canonical-root",
+    "empty-component",
+    "empty-contributors",
+    "duplicate-contributors",
+    "foreign-contributor",
+    "missing-proof",
+    "empty-proof-path",
+    "failed-proof",
+    "unexecuted-path",
+    "untagged",
+    "foreign-kind",
+    "noncontributor-attribution",
+  ])("refuses %s in collective dispatch and its generic fallback", async (variant) => {
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const { slot, assessments } = numericObjectComponentReport();
+    incompleteNumericObjectComponent(variant, slot, assessments);
+    incompleteNumericObjectProof(variant, slot, assessments);
+    const finding = { path: slot.path, rule: slot.rule, line: slot.line, column: slot.column };
+    expect(
+      adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments }).violations,
+    ).toEqual([finding]);
+  });
+
+  it("adapts exactly the complete qualified component and preserves old observation semantics", async () => {
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const { slot, assessments } = numericObjectComponentReport();
+    const finding = { path: slot.path, rule: slot.rule, line: slot.line, column: slot.column };
+    expect(
+      adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments }).adaptations,
+    ).toHaveLength(1);
+    const observation = {
+      id: "observation",
+      kind: "raw-property-observation",
+      structural: "ready",
+      semantic: "qualified",
+      slots: [finding],
+    };
+    expect(
+      adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [observation] })
+        .adaptations,
+    ).toHaveLength(1);
+    observation.semantic = "pending";
+    expect(
+      adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [observation] })
+        .violations,
+    ).toEqual([finding]);
+  });
+});
+
+describe("numeric object unsupported form reporting (#3918)", () => {
+  it("retains old slots and reports deterministic closed omissions separately from capacity", async () => {
+    const own = createCollectiveParserFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const before = assessPolicyResponsibilities(subject, own.policy);
+    for (const record of own.records) record.rules.push("anti-slop/no-object-parameters");
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.assessments.map((record) => record.slots)).toEqual(
+      before.assessments.map((record) => record.slots),
+    );
+    for (const record of report.assessments) {
+      expect(record.objectForms).toEqual([
+        {
+          form: "json-utf8-byte-measurement",
+          status: "withheld",
+          reason: "unsupported-json-byte-form",
+          owner: "alpha",
+          sourcePath: "packages/alpha/src/owner.ts",
+          rule: "anti-slop/no-object-parameters",
+          requestedResponsibilityIds: ["fixture-first", "fixture-second"],
+        },
+      ]);
+      expect(record.reasons).toEqual([]);
+      expect(record.obligations).toEqual(before.assessments[0].obligations);
+      expect(Object.hasOwn(record, "helperClosures")).toBe(false);
+    }
+    own.policy.responsibilities.reverse();
+    const reversed = assessPolicyResponsibilities(subject, own.policy);
+    expect(reversed.assessments.map((record) => record.objectForms)).toEqual(
+      report.assessments.map((record) => record.objectForms),
+    );
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+    expect(before.assessments.every((record) => !Object.hasOwn(record, "objectForms"))).toBe(true);
+  }, 30_000);
+
+  it("withholds a single opted-in root and propagates currentness and unexpected failures", async () => {
+    const own = createCollectiveParserFixture();
+    roots.push(own.root);
+    own.policy.responsibilities = [own.records[0]];
+    own.records[0].rules.push("anti-slop/no-object-parameters");
+    const subject = await collectPolicySubject(own.root);
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.assessments[0].objectForms[0].requestedResponsibilityIds).toEqual([
+      "fixture-first",
+    ]);
+    await interceptCollectiveAttempt((_collect, [, rule]) => {
+      expect(rule).toBe("anti-slop/no-object-parameters");
+      throw new TypeError("unexpected-numeric-form-failure");
+    });
+    expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(
+      "unexpected-numeric-form-failure",
+    );
+    vi.restoreAllMocks();
+    await interceptCollectiveAttempt((collect, args) => {
+      const result = collect(...args);
+      const path = join(own.root, "packages/alpha/src/owner.ts");
+      writeFileSync(path, readFileSync(path, "utf8") + "\n");
+      return result;
+    });
+    expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 30_000);
+});

@@ -134,6 +134,7 @@ function validPublicParserRules(record) {
     "anti-slop/no-unknown-parameters",
     "anti-slop/no-runtime-typeof",
     "anti-slop/no-unsafe-dictionary-type",
+    "anti-slop/no-object-parameters",
   ]);
   return (
     record.kind !== "public-parser" ||

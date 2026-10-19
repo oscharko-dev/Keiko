@@ -807,6 +807,9 @@ describe("Workbench question and research responsibility wiring (#3918)", () => 
         "anti-slop/no-unknown-parameters",
         "anti-slop/no-runtime-typeof",
         "anti-slop/no-unsafe-dictionary-type",
+        ...(record.id === "coding-runtime-research-channel-public-parser"
+          ? []
+          : ["anti-slop/no-object-parameters"]),
       ]);
       expect(record.input.parameterIndex).toBe(0);
       expect(record.transform).toEqual(record.output);

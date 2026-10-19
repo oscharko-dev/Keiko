@@ -12,6 +12,9 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import {
+  CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
   parseCodingWorkbenchRuntimeQuestionAnswerRequest,
   unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeQuestionsChannelPayload,
@@ -620,5 +623,153 @@ describe("runtime questions channel public parser (#3918)", () => {
     expectTypeOf<Success["value"]>().toEqualTypeOf<CodingWorkbenchRuntimeQuestionsChannelPayload>();
     type Failure = Extract<ReturnType<typeof publicQuestionsChannel>, { readonly ok: false }>;
     expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+// The SOURCE entry points locate the aggregate boundary; no JSON/UTF-8 formula is copied here.
+function aggregateQuestionBudgetFixture(): CodingWorkbenchRuntimeQuestionsResponse {
+  const question = response.questions[0]?.questions[0];
+  if (!question) throw new Error("Missing question fixture");
+  const questions: CodingWorkbenchRuntimeQuestionsResponse["questions"][number][] = [];
+  for (let index = 0; index < CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT; index += 1) {
+    questions.push({
+      id: `que_${String(index)}`,
+      questions: [
+        { ...question, question: "é".repeat(CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS) },
+      ],
+    });
+    const input = { questions };
+    if (!validateCodingWorkbenchRuntimeQuestionsResponse(input).ok) return input;
+  }
+  throw new Error("No aggregate response refusal within the producer-owned request bound");
+}
+
+function aggregateAnswerBudgetFixture(): CodingWorkbenchRuntimeQuestionAnswerRequest {
+  const answers: string[][] = [];
+  for (let index = 0; index < CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT; index += 1) {
+    answers.push(["é".repeat(CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS)]);
+    const input = { ...VALID_ANSWER_BASE, answers };
+    if (!parseCodingWorkbenchRuntimeQuestionAnswerRequest(input).ok) return input;
+  }
+  throw new Error("No aggregate answer refusal within the producer-owned answer bound");
+}
+
+function questionReadPhaseFixture(channel: boolean): { input: unknown; reads: () => number } {
+  let count = 0;
+  const request = {
+    id: "que_1",
+    get questions(): (typeof response.questions)[0]["questions"] {
+      count += 1;
+      if (count > 1) throw new Error("Serialization reached an already refused fixture");
+      return response.questions[0]?.questions ?? [];
+    },
+  };
+  return {
+    input: channel
+      ? { session: "active", questions: [request], extra: true }
+      : { questions: [request], extra: true },
+    reads: () => count,
+  };
+}
+
+describe("runtime question aggregate object measurement (#3918)", () => {
+  it("refuses the public response aggregate after preserving legal UTF-8 input", () => {
+    const healthy = {
+      questions: [
+        { id: "que_utf8", questions: [{ question: "é", header: "Action", options: [] }] },
+      ],
+    };
+    expect(validateCodingWorkbenchRuntimeQuestionsResponse(healthy)).toEqual({
+      ok: true,
+      value: healthy,
+    });
+    expect(parsePublicRuntimeQuestionsResponse(healthy)).toEqual({ ok: true, value: healthy });
+    const input = aggregateQuestionBudgetFixture();
+    const refusal = {
+      ok: false,
+      errors: ["questions response exceeds the aggregate UTF-8 byte budget"],
+    };
+    expect(validateCodingWorkbenchRuntimeQuestionsResponse(input)).toEqual(refusal);
+    expect(parsePublicRuntimeQuestionsResponse(input)).toEqual(refusal);
+  });
+  it("refuses the public answer aggregate after preserving legal UTF-8 input", () => {
+    const healthy = { ...VALID_ANSWER_BASE, answers: [["é"]] };
+    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest(healthy)).toEqual({
+      ok: true,
+      value: healthy,
+    });
+    expect(parsePublicRuntimeQuestionAnswer(healthy)).toEqual({ ok: true, value: healthy });
+    const input = aggregateAnswerBudgetFixture();
+    const refusal = { ok: false, errors: ["answers exceed the aggregate UTF-8 byte budget"] };
+    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest(input)).toEqual(refusal);
+    expect(parsePublicRuntimeQuestionAnswer(input)).toEqual(refusal);
+  });
+  it("refuses the public channel aggregate after preserving legal UTF-8 input", () => {
+    const healthy = { session: "active", questions: response.questions };
+    expect(validateCodingWorkbenchRuntimeQuestionsChannelPayload(healthy)).toEqual({
+      ok: true,
+      value: healthy,
+    });
+    expect(parsePublicRuntimeQuestionsChannel(healthy)).toEqual({ ok: true, value: healthy });
+    const input = { session: "active", questions: aggregateQuestionBudgetFixture().questions };
+    const refusal = {
+      ok: false,
+      errors: ["questions response exceeds the aggregate UTF-8 byte budget"],
+    };
+    expect(validateCodingWorkbenchRuntimeQuestionsChannelPayload(input)).toEqual(refusal);
+    expect(parsePublicRuntimeQuestionsChannel(input)).toEqual(refusal);
+  });
+  it("retains the independent source channel aggregate refusal", () => {
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({
+        session: "active",
+        questions: aggregateQuestionBudgetFixture().questions,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: ["questions response exceeds the aggregate UTF-8 byte budget"],
+    });
+  });
+  it("defers serialization after an already rejected field across all three lanes", () => {
+    for (const validate of [
+      validateCodingWorkbenchRuntimeQuestionsResponse,
+      parsePublicRuntimeQuestionsResponse,
+    ]) {
+      const fixture = questionReadPhaseFixture(false);
+      expect(validate(fixture.input)).toEqual({
+        ok: false,
+        errors: ["questionsResponse.extra is not allowed"],
+      });
+      expect(fixture.reads()).toBe(1);
+    }
+    for (const validate of [
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload,
+      parsePublicRuntimeQuestionsChannel,
+    ]) {
+      const fixture = questionReadPhaseFixture(true);
+      expect(validate(fixture.input)).toEqual({
+        ok: false,
+        errors: ["questionsChannelPayload.extra is not allowed"],
+      });
+      expect(fixture.reads()).toBe(1);
+    }
+    for (const validate of [
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+      parsePublicRuntimeQuestionAnswer,
+    ]) {
+      let serializations = 0;
+      const answers = [["é"]];
+      Object.defineProperty(answers, "toJSON", {
+        value: (): never => {
+          serializations += 1;
+          throw new Error("Serialization reached an already refused answer");
+        },
+      });
+      expect(validate({ ...VALID_ANSWER_BASE, expectedRevision: -1, answers })).toEqual({
+        ok: false,
+        errors: ["expectedRevision must be a non-negative safe integer"],
+      });
+      expect(serializations).toBe(0);
+    }
   });
 });

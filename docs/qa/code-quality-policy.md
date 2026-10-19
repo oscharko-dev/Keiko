@@ -1205,3 +1205,56 @@ four-versus-five reason counts; it caused no negative replay or test relaxation.
 and the structural pending family assessment do not replace fresh integrated semantic qualification
 or activate a rule scope. The remaining `Readonly<Record<...>>` and dynamic-array provenance limits
 are not bypassed by this metadata change.
+
+### Exact numeric JSON byte-measurement object form
+
+Only an explicit public-parser `anti-slop/no-object-parameters` opt-in can expose this form. The
+existing question answer, response and channel records retain every previous rule and proof, adding
+aggregate-budget and pre-serialization phase assertions. No scope, responsibility kind, product
+export, validator body, cap, logging port, upstream plugin or resource limit changes.
+
+The collective resolver recognizes the closed private JSON.stringify → TextEncoder.encode → length
+number-returning leaf, its bare Infinity fallback, original-container forwarder and deliberate
+single-property answers envelope. It proves actual builtin declarations/signatures, unchanged
+zero-error/read phase, numeric comparison/cap/refusal, complete incoming canonical roots and every
+helper/parameter value reference. The answer envelope remains a distinct origin descriptor;
+`rawOrigin` still refuses arbitrary object construction. The independent questions validation call
+receives no new raw-helper grant after Array.isArray narrows that other parameter to any[].
+
+The Node encoding bridge is exceptional only inside this exact recognizer: canonical installed Node
+type resolution, lock/package identity, the reviewed declaration form and node:util binding establish
+the sanctioned augmentation alongside actual DOM constructor/encode identities. Project, local or
+foreign augmentation remains unsupported. Existing shared builtin identity checks are unchanged;
+compiler source snapshots/currentness and proof tool identities still bind the result.
+
+A recognized component exposes exactly two object annotation slots, with separate per-slot
+contributors and complete three-root component identities. The forwarder depends on response and
+channel; the leaf also depends on answer. An unsupported form atomically exposes neither object
+slot and carries deterministic optional `objectForms` metadata: fixed form/status/reason/rule,
+canonical owner/sourcePath and sorted requested responsibility ids. This is not the capacity-only
+`helperClosures` contract and changes no root reasons, obligations or independently assessed legacy
+slots. Currentness, unexpected exceptions, cycles and real capacity errors retain their original
+throw/refusal behavior. Metadata survives semantic completion and serialization and is absent on
+unaffected records.
+
+Both collective dispatch and generic fallback require the complete nonempty, unique canonical
+component, all relevant records ready and semantically qualified, and every exact declared proof
+selector/path completed before adapting either numeric object finding. Pending, missing, rejected,
+duplicate, foreign or incompletely proven components adapt zero such findings. Existing
+raw-property-observation object slots retain their separate existing semantic-only behavior. No
+metadata entry proves runtime coverage or authorizes activation; unmatched object observations stay
+visible and other object-use forms remain unsupported. These selected source/read-phase proofs do
+not assert a new contract for arbitrary JavaScript getters, proxies or toJSON behavior.
+
+The private b8f3 cohort completed the actual default three-record semantic assessment, preserving
+all prior slots and qualifying exactly the two additional object coordinates. The four complete
+tooling owners passed 926 tests with five existing platform skips; the existing new-code ruler
+passed at 86.8% across 963 new line and condition units. This is scoped coverage evidence, not the
+full release coverage ratchet. Bypassing only the emitted byte counter failed all three public
+aggregate refusals while the independent source anchor passed. Exact emitted-output restoration
+preceded the same four positive controls; the four complete TypeScript owners then passed 166 tests.
+An external result reader initially counted unselected skipped tests; its correction validated the
+original negative result without replaying it. Source, native type, lint and formatting checks passed
+on the restored candidate. Integrated repository qualification and current-head CI remain separate.
+The earlier synthetic timeout and intermediate withheld results remain separate adverse history;
+a later positive does not identify their cause or replace current-head CI.

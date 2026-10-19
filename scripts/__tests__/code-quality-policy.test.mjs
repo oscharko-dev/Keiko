@@ -22,6 +22,7 @@ const ASSERTION_RULES = [
 describe("public parser optional raw admission rules (#3918)", () => {
   it.each([
     { rules: ["anti-slop/no-runtime-typeof"] },
+    { rules: ["anti-slop/no-object-parameters"] },
     { rules: ["anti-slop/no-unsafe-dictionary-type"] },
     { rules: ["anti-slop/no-runtime-typeof", "anti-slop/no-unsafe-dictionary-type"] },
   ])("admits only explicit additional raw rules $rules with exact proof selectors", ({ rules }) => {

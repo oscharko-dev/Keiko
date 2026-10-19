@@ -4,6 +4,7 @@ import { policyDigest } from "./code-quality-inventory.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 import { join, relative } from "node:path";
 import ts from "typescript";
+import { recognizeJsonByteMeasurement } from "./code-quality-json-byte-form.mjs";
 import {
   createCompilerContext,
   qualifiedAlias,
@@ -2855,6 +2856,8 @@ function collectiveRawCheckingSlots(compiler, requests, rule) {
   if (roots.size === 0) return [];
   const first = states.get(roots.keys().next().value);
   const qualified = qualifiedRawStates(first, states, new Set(roots.keys()));
+  if (rule === "anti-slop/no-object-parameters")
+    return numericObjectSlots(compiler, requests, { states, roots, qualified });
   const slots = [];
   const dependencies = new Map();
   for (const state of states.values()) {
@@ -2874,6 +2877,40 @@ function collectiveRawCheckingSlots(compiler, requests, rule) {
   }
   compiler.assertCurrent();
   return slots;
+}
+
+function numericObjectSlots(compiler, requests, graph) {
+  const form = "json-utf8-byte-measurement";
+  const facts = recognizeJsonByteMeasurement(
+    compiler,
+    {
+      ...graph,
+      referenceFacts: { valueSymbol: referenceValueSymbol, declaration: declarationReference },
+    },
+    requests,
+    defaultLibrarySymbol,
+  );
+  compiler.assertCurrent();
+  if (!facts) return { form, status: "withheld", reason: "unsupported-json-byte-form", slots: [] };
+  const slots = [
+    [facts.forwarded.state, facts.forwarded.ids],
+    [facts.leaf, facts.ids],
+  ].map(([state, contributingResponsibilityIds]) => ({
+    ...annotationSlot(
+      state.context,
+      state.source,
+      state.callable.parameters[state.index].type,
+      state.identity,
+      "parameter",
+      state.index,
+    ),
+    rule: "anti-slop/no-object-parameters",
+    producerIdentity: state.identity,
+    contributingResponsibilityIds,
+    objectForm: form,
+    componentRoots: facts.componentRoots,
+  }));
+  return { form, status: "recognized", slots };
 }
 
 function callableSlots(compiler, identity) {

@@ -320,9 +320,116 @@ function adaptedFinding(finding, assessments) {
         candidate.line === finding.line &&
         candidate.column === finding.column,
     );
-    if (slot) return { finding, responsibilityId: assessment.id, slot };
+    if (slot && objectFormQualified(assessment, slot, assessments))
+      return { finding, responsibilityId: assessment.id, slot };
   }
   return null;
+}
+
+function canonicalObjectIdentity(identity) {
+  return identity && { owner: identity.owner, producer: identity.producer };
+}
+
+function objectRootIdentity(root, record, slot) {
+  return (
+    root.index === 0 &&
+    root.identity?.producer?.path === slot.path &&
+    root.identity.owner === record.owner &&
+    record.roles?.input?.identities?.length === 1 &&
+    JSON.stringify(canonicalObjectIdentity(root.identity)) ===
+      JSON.stringify(canonicalObjectIdentity(record.roles.input.identities[0]))
+  );
+}
+
+function objectRootReadiness(record, slot) {
+  return (
+    record.kind === "public-parser" &&
+    record.structural === "ready" &&
+    record.semantic === "qualified" &&
+    record.owner === slot.producerIdentity?.owner &&
+    Array.isArray(record.rules) &&
+    record.rules.includes("anti-slop/no-object-parameters") &&
+    record.consumerBinding?.bound === true &&
+    record.consumerBinding.status === "ready"
+  );
+}
+
+function objectProofSelector(entry) {
+  return (
+    entry &&
+    Object.keys(entry).sort(compareStrings).join(",") === "path,testName" &&
+    typeof entry.path === "string" &&
+    entry.path.length > 0 &&
+    typeof entry.testName === "string" &&
+    entry.testName.length > 0
+  );
+}
+
+function objectProofsCompleted(required, record) {
+  if (
+    !Array.isArray(required) ||
+    required.length === 0 ||
+    new Set(required.map((entry) => JSON.stringify(entry))).size !== required.length
+  )
+    return false;
+  if (
+    !required.every(
+      (entry) =>
+        objectProofSelector(entry) &&
+        Array.isArray(record.proofs) &&
+        record.proofs.some((proof) => proof.path === entry.path && proof.executed === true),
+    )
+  )
+    return false;
+  return (
+    JSON.stringify(record.proofAssertions) ===
+    JSON.stringify(required.map((entry) => ({ ...entry, status: "passed" })))
+  );
+}
+
+function completedObjectRoot(root, assessments, slot) {
+  const matches = assessments.filter((entry) => entry.id === root.recordId);
+  if (matches.length !== 1) return false;
+  const record = matches[0];
+  return (
+    objectRootReadiness(record, slot) &&
+    objectRootIdentity(root, record, slot) &&
+    objectProofsCompleted(root.proofAssertions, record)
+  );
+}
+
+function objectComponentRoots(roots) {
+  if (
+    !Array.isArray(roots) ||
+    roots.length !== 3 ||
+    roots.some((root) => !root || typeof root.recordId !== "string" || root.recordId.length === 0)
+  )
+    return false;
+  return (
+    new Set(roots.map((root) => root.recordId)).size === 3 &&
+    new Set(roots.map((root) => JSON.stringify(canonicalObjectIdentity(root.identity)))).size ===
+      3 &&
+    roots.filter((root) => root.origin === "container").length === 2 &&
+    roots.filter((root) => root.origin === "answers").length === 1
+  );
+}
+
+function objectFormQualified(assessment, slot, assessments) {
+  if (slot.rule !== "anti-slop/no-object-parameters") return true;
+  if (assessment.kind !== "public-parser") return slot.objectForm === undefined;
+  if (slot.objectForm !== "json-utf8-byte-measurement") return false;
+  const roots = slot.componentRoots;
+  if (!objectComponentRoots(roots)) return false;
+  const expected = roots
+    .filter((root) => slot.index === 0 || (slot.index === 1 && root.origin === "container"))
+    .map((root) => root.recordId)
+    .sort(compareStrings);
+  return (
+    expected.length > 0 &&
+    assessment.id === expected[0] &&
+    JSON.stringify(expected) === JSON.stringify(slot.contributingResponsibilityIds) &&
+    roots.every((root) => completedObjectRoot(root, assessments, slot))
+  );
 }
 
 function collectiveAdaptation(finding, assessments) {
@@ -336,7 +443,8 @@ function collectiveAdaptation(finding, assessments) {
         candidate.line === finding.line &&
         candidate.column === finding.column,
     );
-    if (slot) return { finding, responsibilityId: assessment.id, slot };
+    if (slot && objectFormQualified(assessment, slot, assessments))
+      return { finding, responsibilityId: assessment.id, slot };
   }
   return null;
 }
@@ -429,22 +537,46 @@ function collectiveParserGroups(policy, assessments) {
   return groups;
 }
 
+function joinedObjectSlots(result, policy, assessments, roots, rule, resolver) {
+  resolver.assertCurrent();
+  if (
+    result.status === "withheld" &&
+    result.reason === "unsupported-json-byte-form" &&
+    result.slots.length === 0
+  ) {
+    withholdObjectForm(assessments, roots, rule);
+    return [];
+  }
+  if (
+    result.status !== "recognized" ||
+    result.form !== "json-utf8-byte-measurement" ||
+    result.slots.length !== 2
+  )
+    throw new TypeError("unresolved-json-byte-form");
+  return result.slots.map((slot) => objectFormProofs(slot, policy));
+}
+
+function joinedSlots(policy, assessments, resolver, roots, rule) {
+  try {
+    const result = resolver.collectiveRawCheckingSlots(roots, rule);
+    return rule === "anti-slop/no-object-parameters"
+      ? joinedObjectSlots(result, policy, assessments, roots, rule, resolver)
+      : result;
+  } catch (error) {
+    const capacity = collectiveHelperBudgetDetails(error);
+    if (!capacity) throw error;
+    resolver.assertCurrent();
+    withholdCollectiveGroup(assessments, roots, rule, capacity);
+    return [];
+  }
+}
+
 function joinPublicParserSlots(policy, assessments, resolver) {
   const groups = collectiveParserGroups(policy, assessments);
   for (const { roots, rule } of groups.values()) {
     // A single root already has the unchanged legacy closure; only a join needs another graph.
-    if (roots.length < 2) continue;
-    let slots;
-    try {
-      slots = resolver.collectiveRawCheckingSlots(roots, rule);
-    } catch (error) {
-      const capacity = collectiveHelperBudgetDetails(error);
-      if (!capacity) throw error;
-      resolver.assertCurrent();
-      withholdCollectiveGroup(assessments, roots, rule, capacity);
-      continue;
-    }
-    for (const slot of slots) {
+    if (roots.length < 2 && rule !== "anti-slop/no-object-parameters") continue;
+    for (const slot of joinedSlots(policy, assessments, resolver, roots, rule)) {
       const assessment = assessments.find(
         (entry) => entry.id === slot.contributingResponsibilityIds[0],
       );
@@ -455,6 +587,40 @@ function joinPublicParserSlots(policy, assessments, resolver) {
       if (existing === -1) assessment.slots.push(slot);
       else assessment.slots[existing] = slot;
     }
+  }
+}
+
+function objectFormProofs(slot, policy) {
+  return {
+    ...slot,
+    componentRoots: slot.componentRoots.map((root) => {
+      const records = policy.responsibilities.filter((record) => record.id === root.recordId);
+      if (records.length !== 1 || !records[0].proofAssertions?.length)
+        throw new TypeError("unresolved-json-byte-component");
+      return {
+        ...root,
+        proofAssertions: records[0].proofAssertions.map((selector) => ({ ...selector })),
+      };
+    }),
+  };
+}
+
+function withholdObjectForm(assessments, roots, rule) {
+  const identity = roots[0].identity;
+  const form = {
+    form: "json-utf8-byte-measurement",
+    status: "withheld",
+    reason: "unsupported-json-byte-form",
+    owner: identity.owner,
+    sourcePath: identity.producer.path,
+    rule,
+    requestedResponsibilityIds: roots.map((root) => root.recordId).sort(compareStrings),
+  };
+  for (const root of roots) {
+    const record = assessments.find((entry) => entry.id === root.recordId);
+    record.objectForms = [...(record.objectForms ?? []), { ...form }].sort((a, b) =>
+      compareStrings(JSON.stringify(a), JSON.stringify(b)),
+    );
   }
 }
 

@@ -3052,3 +3052,181 @@ describe("closed context diagnostic envelope binding (#3918)", () => {
     );
   }, 30_000);
 });
+
+const JSON_BYTE_MEASUREMENT_OWNER =
+  'type CodingWorkbenchRuntimeQuestionRequest = { readonly id: string; readonly questions: readonly unknown[] };\nexport const CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES = 64 * 1_024;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT = 256;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT = 32;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT = 32;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS = 4_096;\nfunction isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }\nexport function first(value: unknown): boolean { if (!isRecord(value)) return false; const errors: string[] = []; return checkQuestionsResponse(value, errors) && errors.length === 0; }\nexport function second(value: unknown): boolean { if (!isRecord(value)) return false; const errors: string[] = []; return checkQuestionsChannel(value, errors) && errors.length === 0; }\nexport function third(value: unknown): boolean { if (!isRecord(value)) return false; const errors: string[] = []; return validateAnswers(value.answers, errors) && errors.length === 0; }\nfunction checkQuestionsResponse(value: Record<string, unknown>, errors: string[]): boolean { return checkBoundedQuestionRequests(value.questions, value, errors); }\nfunction checkQuestionsChannel(value: Record<string, unknown>, errors: string[]): boolean { const session = value.session === "active"; const admitted = checkBoundedQuestionRequests(value.questions, value, errors); return session && admitted; }\nfunction validateQuestionRequests(value: readonly unknown[], _errors: string[]): value is readonly CodingWorkbenchRuntimeQuestionRequest[] { return value.every(item => typeof item === "object" && item !== null); }\nfunction validText(value: unknown, max: number): value is string { return typeof value === "string" && value.length > 0 && value.length <= max; }\nfunction checkBoundedQuestionRequests(\n  questions: unknown,\n  container: object,\n  errors: string[],\n): questions is readonly CodingWorkbenchRuntimeQuestionRequest[] {\n  if (\n    !Array.isArray(questions) ||\n    questions.length > CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT\n  ) {\n    errors.push("questions must be a bounded array");\n    return false;\n  }\n  const admitted = validateQuestionRequests(questions, errors);\n  if (\n    errors.length === 0 &&\n    serializedBytes(container) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES\n  )\n    errors.push("questions response exceeds the aggregate UTF-8 byte budget");\n  return admitted;\n}\nfunction validateAnswers(\n  value: unknown,\n  errors: string[],\n): value is readonly (readonly string[])[] {\n  if (\n    !Array.isArray(value) ||\n    value.length < 1 ||\n    value.length > CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT\n  ) {\n    errors.push("answers must be a bounded non-empty array");\n    return false;\n  }\n  const count = value.length;\n  let admitted = true;\n  for (let index = 0; index < count; index += 1) {\n    const answer: unknown = value[index];\n    if (!validAnswerMembers(answer)) {\n      errors.push(`answers[${String(index)}] must contain bounded strings`);\n      admitted = false;\n      if (!(index in value)) return false;\n    } else if (new Set(answer).size !== answer.length) {\n      errors.push(`answers[${String(index)}] must not contain duplicate selections`);\n    }\n  }\n  // Per-array caps above bound each answer individually (32 arrays x 32 selections x 4096 chars),\n  // but not their sum: matches the aggregate budget checkBoundedQuestionRequests already enforces\n  // on the outbound side, gated on no per-item error the same way that function gates its own check.\n  if (\n    errors.length === 0 &&\n    serializedBytes({ answers: value }) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES\n  )\n    errors.push("answers exceed the aggregate UTF-8 byte budget");\n  return admitted;\n}\nfunction validAnswerMembers(value: unknown): value is readonly string[] {\n  if (\n    !Array.isArray(value) ||\n    value.length > CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT\n  )\n    return false;\n  const count = value.length;\n  for (let index = 0; index < count; index += 1) {\n    const selection: unknown = value[index];\n    if (!validText(selection, CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS)) return false;\n  }\n  return true;\n}\nfunction serializedBytes(value: object): number {\n  try {\n    return new TextEncoder().encode(JSON.stringify(value)).length;\n  } catch {\n    return Number.POSITIVE_INFINITY;\n  }\n}';
+
+async function jsonByteMeasurementFixture(variant = "direct") {
+  const own = createSymbolFixture(false, (fixture) => {
+    const config = JSON.parse(readFileSync(join(fixture.root, "packages/alpha/tsconfig.json")));
+    config.compilerOptions.lib = ["ES2022", "DOM"];
+    fixture.put("packages/alpha/tsconfig.json", config);
+    fixture.put("packages/alpha/src/owner.ts", numericOwnerVariant(variant));
+    fixture.put("packages/alpha/src/index.ts", 'export { first as parse } from "./owner.js";\n');
+    fixture.put(
+      "src/consumer.ts",
+      'import { first, second, third } from "alpha/runtime"; export const value = [first(1), second(1), third(1)];\n',
+    );
+  });
+  fixtures.push(own);
+  own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+  own.rawRoots = ["first", "second", "third"]
+    .filter((name) => variant !== "missing-answer" || name !== "third")
+    .filter((name) => variant !== "missing-channel" || name !== "second")
+    .map((exportName) => ({
+      identity: own.resolver.resolveExport({
+        consumerPath: "src/consumer.ts",
+        specifier: "alpha/runtime",
+        exportName,
+      }).identities[0],
+      index: 0,
+      recordId: "fixture-" + exportName,
+    }));
+  return own;
+}
+
+describe("exact numeric JSON byte object form (#3918)", () => {
+  it("recognizes only the two closed measurement annotations across all three real incoming roots", async () => {
+    const own = await jsonByteMeasurementFixture();
+    const result = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-object-parameters",
+    );
+    expect(result.status).toBe("recognized");
+    expect(result.form).toBe("json-utf8-byte-measurement");
+    expect(result.slots).toHaveLength(2);
+    expect(
+      result.slots
+        .map((slot) => ({ index: slot.index, contributors: slot.contributingResponsibilityIds }))
+        .sort((a, b) => a.index - b.index),
+    ).toEqual([
+      { index: 0, contributors: ["fixture-first", "fixture-second", "fixture-third"] },
+      { index: 1, contributors: ["fixture-first", "fixture-second"] },
+    ]);
+  });
+});
+
+function numericOwnerVariant(variant) {
+  const source = JSON_BYTE_MEASUREMENT_OWNER;
+  if (variant === "one-parameter-caller")
+    return source
+      .replace("checkQuestionsResponse(value, errors)", "checkQuestionsResponse(value)")
+      .replace(
+        "function checkQuestionsResponse(value: Record<string, unknown>, errors: string[]): boolean { return checkBoundedQuestionRequests(value.questions, value, errors); }",
+        "function checkQuestionsResponse(value: Record<string, unknown>): boolean { const errors: string[] = []; return checkBoundedQuestionRequests(value.questions, value, errors); }",
+      );
+  const replacements = {
+    "byte-length": [
+      ".encode(JSON.stringify(value)).length",
+      ".encode(JSON.stringify(value)).byteLength",
+    ],
+    "stringify-args": ["JSON.stringify(value)", "JSON.stringify(value, null)"],
+    fallback: ["return Number.POSITIVE_INFINITY;", "return 0;"],
+    "catch-binding": ["} catch {", "} catch (_error) {"],
+    finally: [
+      "return Number.POSITIVE_INFINITY;\n  }",
+      "return Number.POSITIVE_INFINITY;\n  } finally { void 0; }",
+    ],
+    "projected-container": [
+      "serializedBytes(container)",
+      "serializedBytes({ questions: container })",
+    ],
+    "answers-key": ["serializedBytes({ answers: value })", "serializedBytes({ other: value })"],
+    "answers-origin": [
+      "validateAnswers(value.answers, errors)",
+      "validateAnswers(value.other, errors)",
+    ],
+    "parameter-mutation": [
+      "const admitted = validateQuestionRequests(questions, errors);",
+      "container = {}; const admitted = validateQuestionRequests(questions, errors);",
+    ],
+    "zero-gate": [
+      "errors.length === 0 &&\n    serializedBytes(container)",
+      "serializedBytes(container)",
+    ],
+    comparison: ["serializedBytes(container) >", "serializedBytes(container) >="],
+    cap: ["MAX_UTF8_BYTES = 64 * 1_024", "MAX_UTF8_BYTES = 32 * 1_024"],
+    early: [
+      "const admitted = validateQuestionRequests(questions, errors);",
+      "const measured = serializedBytes(container); const admitted = validateQuestionRequests(questions, errors);",
+    ],
+    duplicate: ["new Set(answer).size !== answer.length", "false"],
+  };
+  if (replacements[variant]) {
+    const [before, after] = replacements[variant];
+    if (!source.includes(before)) throw new TypeError("numeric-fixture-mutation-missing");
+    return source.replace(before, after);
+  }
+  const additions = {
+    "JSON-shadow": "const JSON = globalThis.JSON;\n",
+    "encoder-shadow": "const TextEncoder = globalThis.TextEncoder;\n",
+    "encoder-foreign": "declare global { interface TextEncoder { foreignMarker(): void; } }\n",
+    "Number-shadow": "const Number = globalThis.Number;\n",
+    "leaf-export": "export { serializedBytes };\n",
+    "leaf-escape": "const escape = { serializedBytes };\n",
+    "extra-incoming":
+      "function outside(value: object): number { return serializedBytes(value); }\n",
+    "forwarder-export": "export { checkBoundedQuestionRequests };\n",
+    "unrelated-object": "function unrelated(value: object): object { return value; }\n",
+  };
+  return additions[variant] ? source + additions[variant] : source;
+}
+
+describe("numeric object closed-form refusals (#3918)", () => {
+  it.each([
+    "JSON-shadow",
+    "encoder-shadow",
+    "encoder-foreign",
+    "Number-shadow",
+    "byte-length",
+    "stringify-args",
+    "fallback",
+    "catch-binding",
+    "finally",
+    "leaf-export",
+    "leaf-escape",
+    "extra-incoming",
+    "one-parameter-caller",
+    "missing-answer",
+    "missing-channel",
+    "projected-container",
+    "answers-key",
+    "answers-origin",
+    "forwarder-export",
+    "parameter-mutation",
+    "zero-gate",
+    "comparison",
+    "cap",
+    "early",
+    "duplicate",
+  ])("refuses unsupported numeric form: %s", async (variant) => {
+    const own = await jsonByteMeasurementFixture(variant);
+    const result = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-object-parameters",
+    );
+    expect(result).toEqual({
+      form: "json-utf8-byte-measurement",
+      status: "withheld",
+      reason: "unsupported-json-byte-form",
+      slots: [],
+    });
+  });
+  it("does not grant an unrelated object annotation beside the closed two-slot form", async () => {
+    const own = await jsonByteMeasurementFixture("unrelated-object");
+    const result = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-object-parameters",
+    );
+    expect(result.status).toBe("recognized");
+    expect(result.slots).toHaveLength(2);
+    expect(
+      result.slots.every((slot) =>
+        JSON_BYTE_MEASUREMENT_OWNER.slice(
+          slot.producerIdentity.producer.start,
+          slot.producerIdentity.producer.end,
+        ).includes("serializedBytes"),
+      ),
+    ).toBe(true);
+  });
+});
