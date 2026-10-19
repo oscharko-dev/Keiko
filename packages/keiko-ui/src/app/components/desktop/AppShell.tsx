@@ -640,10 +640,12 @@ function captureCanonicalFilesAcknowledgement(
   chat: Chat,
   scopes: readonly ChatConnectedScope[],
   nextScope: ChatConnectedScope,
-): void {
+  correlationId: string,
+): ConfirmedGroundingChat {
   acknowledgement.chat = chat;
   const acceptedScope = scopes.find((scope) => isScopeConnected([scope], nextScope));
   if (acceptedScope !== undefined) acknowledgement.scope = acceptedScope;
+  return { chat, correlationId: acceptedScope === undefined ? undefined : correlationId };
 }
 
 function sameScopeSnapshot(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
@@ -2064,11 +2066,14 @@ function AppShellInner(): ReactNode {
       reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
-        captureCanonicalFilesAcknowledgement(acknowledgement, chat, canonicalScopes, nextScope);
-        rememberGroundingChat(
+        const confirmed = captureCanonicalFilesAcknowledgement(
+          acknowledgement,
           chat,
-          acknowledgement.scope === undefined ? undefined : attempt.correlationId,
+          canonicalScopes,
+          nextScope,
+          attempt.correlationId,
         );
+        rememberGroundingChat(confirmed.chat, confirmed.correlationId);
         publishRefreshedGroundingChat(chat);
         return true;
       }

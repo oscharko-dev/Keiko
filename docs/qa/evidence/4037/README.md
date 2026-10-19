@@ -1523,7 +1523,7 @@ reconnection, browser approval and draft recovery, and updater journeys. Record 
 configuration, observed outcomes and remaining failures without publishing private content.
 Do not replace frozen failed calibration or untouched held-out evaluation with these journeys.
 A failed visible journey remains open, receives the smallest causal fix and is exercised again.
-This acceptance has not yet been executed.
+This full acceptance remains incomplete; bounded visible journeys are recorded below.
 
 ## Current-source visible diagnostics and unchanged Files replay
 
@@ -1551,3 +1551,34 @@ fingerprints and actual navigation retain the normal guards; unrelated pending/f
 survive. All 65 scope controls pass. The first candidate's failure to restore the local edge was
 caught by an existing regression and corrected without weakening that assertion. The corrected
 built application still requires the visible replay and remaining acceptance journeys.
+
+## Shared Chat model choice and first full Files acknowledgement
+
+Pending Chat windows now preserve the originating automatic or explicit model choice. Incomplete
+or unsafe choices refuse through the existing creation path. A fresh full Files connection now
+retains its validated canonical receipt before another browser restores the privacy-elided edge.
+The existing confirmed Chat cache and edge ledger carry that proof; missing or conflicting proof,
+actual navigation and failed transitions retain their guards.
+
+The mounted fresh-edge regression fails before the fix and passes afterwards. Independent controls
+cover both initial PATCH and already-canonical binding for root, directory and file scopes, plus
+proof rejection, pending/failed holds and original model-selection semantics. The final canonical
+acknowledgement returns its validated receipt directly; the unsuccessful observation-callback
+extraction and both original Sonar findings remain retained. Final-source UI coverage passes
+10,857 tests with one existing skip across 563 suites; the actual Sonar analyzer passes.
+
+The real signed source57 application completed two grounded questions while an independent browser
+changed only Settings. Exactly one Chat and creation intent, two user questions and two final
+answers were retained. No fresh source intent, cancellation or PATCH occurred; source configurations
+and edge fingerprints stayed identical. All two Java and three React unique final cited ranges
+exist in the selected implementations. Copied answers match rendered citation labels; canonical
+stored Markdown retains its citation brackets. Final drain records two task and four automatic
+readiness requests, all complete, and successful runtime cleanup. Private credentials are excluded
+from the 33-artifact terminal retention manifest.
+
+`chat-source-replay-live.json` binds these narrow observations and the final local checks. The live
+run precedes the small canonical receipt return refactor; final visible acceptance remains open.
+The diagnostic provider deadline is 300,000 ms, separate from native-quality evaluation. Assembly
+uncertainty, optional semantic/whole-folder dispositions, complete browser/retrieval/skill journeys
+and installed updater transitions still require their own qualification. Historical failed journeys,
+frozen skill outcomes and acceptance ledgers are unchanged.
