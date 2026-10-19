@@ -1256,3 +1256,27 @@ and private probe commissioning errors remain retained; no original generation i
 
 `diagnostic-metadata-intake.json` binds the scoped observations. Native follow-up, skill benefit,
 full search/browser/updater acceptance and final integration remain open.
+
+## Checkpoint 44: reconnect an explicitly selected stored alias
+
+Explicit single-root reconnect now resolves a stored alias once to the canonical anchor used
+by both identity inspection and descriptor refresh. A healthy root preserves manifest revision
+and trust. A different available root retains the lexical project and conversation history,
+revokes only former-root trust and remains restricted. A target already held by another workspace
+returns `PROJECT_EXISTS` before identity writes; the existing transaction also rolls back project
+metadata and timestamps. Global strict alias denial, multi-root semantics and legacy explicit
+backfill remain unchanged. ADR-0147 describes the corrected existing behavior in place.
+
+The identical five actual store/trust/HTTP controls fail on exact published parent 43 and pass
+on the candidate. All 387 tests in eight affected suites pass, alongside strict typecheck and
+zero-warning scoped lint. The complete Activity Log gate passes seven of seven checks. Mounted
+HTTP controls exercise the existing registered reconnect lifecycle producer and verify body-free
+outcomes. The auditor independently observes two failures and seven healthy controls before,
+then nine passes after, including collision/broken/file rollback and unrelated trust preservation.
+Its source and actual built-owner hashes join the immutable candidate snapshot.
+
+`explicit-alias-reconnect.json` binds this scoped repair. Two classification strings in the older
+checkpoint42 receipt receive spacing corrections only; measured counts, hashes, scores and
+classifications remain unchanged. Native skill measurements continue independently; this repair
+changes none of their frozen inputs. Broader search, browser, skill and installed updater acceptance,
+required final checks and successful integration remain open.

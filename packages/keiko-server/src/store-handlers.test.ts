@@ -1063,6 +1063,48 @@ describe("PATCH /api/projects", () => {
     }
   });
 
+  it.each([false, true])(
+    "reconnects a stored alias through HTTP with registered body-free evidence (retargeted=%s)",
+    async (retargeted) => {
+      const alias = join(tmp, "reconnect-alias");
+      symlinkSync(projDir, alias, process.platform === "win32" ? "junction" : "dir");
+      store.createProject(alias, "Aliased project");
+      const target = join(tmp, "reconnect-target");
+      if (retargeted) {
+        mkdirSync(target);
+        rmSync(alias);
+        symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+      }
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const res = await fetch(url(`/api/projects?path=${encodeURIComponent(alias)}`), {
+          method: "PATCH",
+          headers: PATCH_HEADERS,
+          body: "{}",
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({
+          project: { path: alias, name: "Aliased project", workspaceAvailable: true },
+        });
+        const event = sink.events.find((entry) => entry.op === "project.workspace.reconnect");
+        if (event === undefined) throw new Error("expected an alias reconnect event");
+        const line = formatActivityLogProofLine(event);
+        expect(expectActivityLogProof("project.workspace.reconnect.outcome", line)).toMatchObject({
+          status: 200,
+          outcome: "available",
+          completeness: "complete",
+          loss: "none",
+        });
+        expect(line).not.toContain(alias);
+        expect(line).not.toContain(target);
+        expect(line).not.toContain("Aliased project");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
   // Registry-linked executable proof (#3532): the same reconnect event above, read back through the
   // real formatter/registry path so `project.workspace.reconnect.outcome` resolves against a
   // production-computed event (this task's rule 1: no hand-built event or registration object).

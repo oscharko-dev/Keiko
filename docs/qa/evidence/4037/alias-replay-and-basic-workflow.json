@@ -51,7 +51,7 @@
         "artifact": "checkpoint42-v4-causal-intermediate-v3.log",
         "sha256": "507a0b4b9892cc0a4dbe2ad91b43db2056426e4a3879f62f2860c92cd92cb652"
       },
-      "classification": "Six new failures on legitimate legacy states in intermediatev3; nine added controls were healthy in parent41 and remain healthy in finalv4."
+      "classification": "Six new failures on legitimate legacy states in intermediate v3; nine added controls were healthy in parent 41 and remain healthy in final v4."
     },
     "functional": {
       "suitesPassed": 8,
@@ -92,7 +92,7 @@
   "basicWorkflow": {
     "sourceHead": "b9a82dfcfce8e08856958def77db8c86df5bb64b",
     "terminalReceipt": {
-      "classification": "Terminal known bounded workflow retained; four measured clean Java baselines with frozen strict3of4assertion credit; React initialfailure and feedbacksource refusal; no regrading or feedbackexecution credit",
+      "classification": "Terminal known bounded workflow retained; four measured clean Java baselines with frozen strict assertion credit for three of four mutants; React initial failure and feedback source refusal; no regrading or feedback execution credit.",
       "sourceHead": "b9a82dfcfce8e08856958def77db8c86df5bb64b",
       "sourceStableAtTerminal": true,
       "frozenInputs": 12099,

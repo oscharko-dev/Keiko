@@ -245,6 +245,14 @@ not backfill membership, redirect existing conversation history, or enable gover
 Explicit project registration retains its existing canonical mapping and single-project backfill;
 explicit reconnect retains its existing conflict and membership rules. Neither path widens V15's
 single-most-recent migration.
+An explicit reconnect resolves an existing registered alias to one canonical anchor for both live
+identity inspection and the refreshed descriptor, while retaining its lexical project and history.
+A healthy identity is a metadata/trust no-op. Adopting a different available root revokes only the
+former root's trust; the new root remains restricted. A target already held by another workspace
+returns `PROJECT_EXISTS` before any identity write, with the enclosing transaction rolling back
+project timestamps as well. Multi-root reconnect semantics and the strict identity inspector's
+global alias denial remain unchanged. The existing registered reconnect event records the actual
+availability outcome without paths, names or source bodies.
 A project
 selection explicitly attested by a trusted launcher remains a local-human selection path through
 the same trust service. An ambient process working directory may
