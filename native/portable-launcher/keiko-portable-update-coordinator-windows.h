@@ -490,14 +490,14 @@ static int keiko_coordinator_windows_ui_identity(
                    &content,
                    &length
                ) &&
-               length == (size_t)expected_length &&
-               memcmp(content, expected, length) == 0;
+               keiko_coordinator_pid_record_matches(
+                   content, length, expected, (size_t)expected_length);
   if (content != NULL) {
     SecureZeroMemory(content, length);
     free(content);
   }
   free(path);
-  return result;
+  return result && GetTickCount64() < deadline_ms;
 }
 
 static int keiko_coordinator_windows_roots_same_volume(

@@ -24,6 +24,9 @@ done
 launcher="$root/native/portable-launcher/keiko-portable-launcher.c"
 cc "${common[@]}" -D_GNU_SOURCE "$launcher" -o "$scratch/launcher"
 cc "${common[@]}" -D_GNU_SOURCE -fanalyzer -c "$launcher" -o "$scratch/launcher.analysis.o"
+cc "${common[@]}" -D_GNU_SOURCE \
+  "$root/native/portable-launcher/keiko-portable-launcher.test.c" -o "$scratch/launcher-test"
+"$scratch/launcher-test"
 if [[ "$mode" == "--kernel" ]]; then
   node "$root/native/runtime-supervisor/linux/protocol.test.mjs" --helper "$scratch/keiko_runtime_supervisor"
   node "$root/native/runtime-supervisor/linux/owner-channel.test.mjs"

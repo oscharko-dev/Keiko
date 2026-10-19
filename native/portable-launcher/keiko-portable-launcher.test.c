@@ -14,6 +14,25 @@ static int coordinator_test_kill(pid_t pid, int signal_number) {
   return kill(pid, signal_number);
 }
 
+static int coordinator_delay_ui_read;
+static int coordinator_delay_ui_compare;
+static ssize_t coordinator_test_read(int descriptor, void *buffer, size_t length) {
+  if (coordinator_delay_ui_read) {
+    coordinator_delay_ui_read = 0;
+    assert(raise(SIGSTOP) == 0);
+  }
+  return read(descriptor, buffer, length);
+}
+
+static int coordinator_test_memcmp(const void *left, const void *right, size_t length) {
+  int result = memcmp(left, right, length);
+  if (coordinator_delay_ui_compare) {
+    coordinator_delay_ui_compare = 0;
+    assert(raise(SIGSTOP) == 0);
+  }
+  return result;
+}
+
 static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
   return coordinator_cutover_failure == NULL ||
          strcmp(coordinator_cutover_failure, checkpoint) != 0;
@@ -21,9 +40,13 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 
 #define KEIKO_COORDINATOR_KILL coordinator_test_kill
 #define KEIKO_COORDINATOR_CUTOVER_CHECKPOINT coordinator_test_cutover_checkpoint
+#define memcmp coordinator_test_memcmp
+#define read coordinator_test_read
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
+#undef read
+#undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
 #undef KEIKO_COORDINATOR_KILL
 
@@ -593,8 +616,83 @@ static void test_reconcile_requires_zero_live_proof(const char *self) {
   assert(rmdir(root) == 0);
 }
 
+static void test_ui_identity_delayed_step(const keiko_coordinator_context *context, int compare) {
+  int status = 0;
+  pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    coordinator_delay_ui_read = !compare;
+    coordinator_delay_ui_compare = compare;
+    _exit(keiko_coordinator_ui_identity(context, keiko_tree_now_ms() + 500u) ? 1 : 0);
+  }
+  assert(waitpid(child, &status, WUNTRACED) == child);
+  assert(WIFSTOPPED(status));
+  struct timespec delay = {0, 600000000};
+  while (nanosleep(&delay, &delay) == -1 && errno == EINTR) {}
+  assert(kill(child, SIGCONT) == 0);
+  assert(waitpid(child, &status, 0) == child);
+  assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+static void test_ui_identity_deadline(void) {
+  char root[] = "/tmp/keiko-ui-deadline.XXXXXX", path[PATH_MAX];
+  keiko_coordinator_context context = {0};
+  assert(mkdtemp(root) != NULL);
+  assert(join_path(path, sizeof(path), root, "/ui.pid"));
+  memcpy(context.state_dir, root, strlen(root) + 1u);
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  write_fixture_file(path, "12345\n0123456789abcdef0123456789abcdef\n");
+  test_ui_identity_delayed_step(&context, 0);
+  test_ui_identity_delayed_step(&context, 1);
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
+static void test_ui_identity_records(void) {
+  static const struct { const char *content; int expected; } cases[] = {
+    {"12345\n0123456789abcdef0123456789abcdef\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nother-capability\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nextra\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1", 0},
+    {"12346\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 0},
+    {"12345\nffffffffffffffffffffffffffffffff\nbrowser-open-v1\n", 0},
+  };
+  char root[] = "/tmp/keiko-ui-identity.XXXXXX", path[PATH_MAX], other[PATH_MAX];
+  keiko_coordinator_context context = {0};
+  assert(mkdtemp(root) != NULL);
+  assert(join_path(path, sizeof(path), root, "/ui.pid"));
+  assert(join_path(other, sizeof(other), root, "/ui.actual"));
+  memcpy(context.state_dir, root, strlen(root) + 1u);
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    write_fixture_file(path, cases[i].content);
+    assert(keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u) == cases[i].expected);
+    assert(unlink(path) == 0);
+  }
+  write_fixture_file(path, cases[1].content);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() - 1u));
+  assert(link(path, other) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(symlink("ui.actual", path) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(unlink(other) == 0);
+  assert(mkfifo(path, 0600) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
 int main(int argc, char **argv) {
   char path[64];
+  if (argc == 2 && strcmp(argv[1], "--ui-identity-deadline") == 0) {
+    test_ui_identity_deadline();
+    return 0;
+  }
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile_fixture(argv[2]);
   if (argc == 1 && strstr(argv[0], "/runtime-supervisor") != NULL) return supervisor_fixture();
   assert(argc == 1);
@@ -608,6 +706,8 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
   assert(current_executable_path(path, 2) == 0);
 #endif
+  test_ui_identity_deadline();
+  test_ui_identity_records();
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);
   test_atomic_promote_survives_each_cutover_boundary();

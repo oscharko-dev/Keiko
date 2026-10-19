@@ -278,6 +278,15 @@ routes become ready; exact process, launch identity, loopback port, target versi
 must agree before success. A failed replacement may restore the previous verified tree only after
 proving the owned new process tree has stopped. Once N is verified, restart and cleanup must retain N.
 
+Both native coordinators accept the canonical CLI PID record: exact PID and launch-id lines with
+an optional exact `browser-open-v1` line. The shared byte matcher consumes the complete record;
+unknown suffixes, extra bytes, missing final newlines or a different identity refuse. The marker
+expresses launcher browser-reopening support; update authority still comes from the validated plan,
+parent and generation. Existing single-link regular-file, symlink/reparse, bounded-read and identity
+guards remain. The original monotonic deadline includes read completion and cleanup, so a process
+that resumes after expiry cannot accept a late valid record. Linux qualification executes the
+existing portable coordinator component suite as well as its compiler and requested kernel scope.
+
 On macOS, a monitor's zero-live reply is necessary but does not replace successful reaping of the
 supervisor's exact owned root. The supervisor checks the returned child identity and terminal
 status under one monotonic five-second wait deadline, including interruptions and the final

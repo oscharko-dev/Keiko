@@ -1649,3 +1649,12 @@ checks, 33 independent controlled loader cases, 15 independent controlled owner 
 failures and local command receipts retain their separate scopes. Final test parameterization
 changes no product runtime or frozen native input. Complete updater, visible UI, skill, 96-criterion
 and delivery acceptance remain open.
+
+## Canonical native coordinator PID records
+
+`native-coordinator-pid-records.json` binds the actual canonical CLI producer and native C
+consumer before/after, the physically delayed legacy-record read, the shared POSIX/Windows
+matcher, full Linux/macOS native gates and 231 independent byte controls. The unchanged seven-case
+matrix passes under both Linux UIDs. Existing regular-file/link/symlink/identity/size/deadline
+guards remain. Windows runtime, installed update, old-release migration and whole app-owner
+acceptance remain explicitly open.

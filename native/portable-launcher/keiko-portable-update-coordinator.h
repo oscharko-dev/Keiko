@@ -5,6 +5,18 @@
 #include "keiko-portable-update-engine.h"
 #include "keiko-portable-update-protocol.h"
 
+static int keiko_coordinator_pid_record_matches(
+    const void *actual_data, size_t actual_length,
+    const char *expected, size_t expected_length) {
+  static const char capability[] = "browser-open-v1\n";
+  const unsigned char *actual = (const unsigned char *)actual_data;
+  if (actual_length < expected_length || memcmp(actual, expected, expected_length) != 0)
+    return 0;
+  if (actual_length == expected_length) return 1;
+  return actual_length - expected_length == sizeof(capability) - 1u &&
+         memcmp(actual + expected_length, capability, sizeof(capability) - 1u) == 0;
+}
+
 #if !defined(_WIN32)
 
 #if !defined(__APPLE__)
@@ -1705,13 +1717,16 @@ static int keiko_coordinator_ui_identity(const keiko_coordinator_context *contex
       !keiko_tree_before_deadline(deadline_ms)) return 0;
   descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
   if (descriptor == -1 || fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
-      status.st_nlink != 1 || status.st_size != written) {
+      status.st_nlink != 1 || status.st_size < written ||
+      status.st_size > (off_t)sizeof(actual)) {
     if (descriptor != -1) close(descriptor);
     return 0;
   }
   count = read(descriptor, actual, sizeof(actual));
   close(descriptor);
-  return count == written && memcmp(actual, expected, (size_t)written) == 0;
+  return count == status.st_size &&
+         keiko_coordinator_pid_record_matches(actual, (size_t)count, expected, (size_t)written) &&
+         keiko_tree_before_deadline(deadline_ms);
 }
 
 static int keiko_coordinator_registration_matches(const keiko_coordinator_context *context,
