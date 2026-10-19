@@ -492,6 +492,10 @@ int wmain(int argc, wchar_t **argv) {
 
 #include "keiko-portable-update-coordinator.h"
 #include "keiko-portable-recovery-control.h"
+#if defined(__linux__)
+#include "keiko-portable-runtime-owner-linux.h"
+#endif
+
 
 static int dirname_copy(char *out, size_t cap, const char *path) {
   if (strlen(path) >= cap) {
@@ -567,6 +571,10 @@ static int resume_update(keiko_coordinator_context *coordinator, const char *exe
 }
 
 int main(int argc, char **argv) {
+#if defined(__linux__)
+  if (argc == 4 && strcmp(argv[1], "--own-runtime") == 0)
+    return keiko_runtime_owner_linux(argv[2], argv[3]);
+#endif
   char executable[PATH_MAX];
   if (!current_executable_path(executable, sizeof(executable))) return 1;
 

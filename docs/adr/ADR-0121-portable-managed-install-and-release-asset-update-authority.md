@@ -295,7 +295,13 @@ The Linux native generation implementation uses an atomically held `clone3` PID 
 new user/PID namespace init; the outer owner remains outside that generation. The init verifies
 unchanged non-root ids, drops capabilities, sets no-new-privileges, and verifies non-dumpability
 before creating the runtime root. Its private lease and nonblocking reap loop remain responsive
-while descendants detach or create nested namespaces. The zero-live derivation requires the exact
+while descendants detach or create nested namespaces. Linux also binds each init to a parent pidfd
+captured before clone: SIGKILL parent-death arming is checked against that held reference before
+and after init credential/capability setup. The outer launcher applies the same pre-fork binding
+to its supervisor, whose report role verifies that binding survived exec. This protects stopped
+owners without depending on their userspace lease polling. The private parent references close
+before untrusted root execution. The normal lease and owned waits remain authoritative; neither
+a parent-death setting nor a signal request is a terminal proof. The zero-live derivation requires the exact
 owned init's terminal wait under the original monotonic bound; pidfd readiness alone is insufficient.
 Readiness, credential intake, start acknowledgement and terminal waits recheck their bounds after
 system-call completion. Consumed children remain consumed even when a late result is refused.
@@ -314,6 +320,34 @@ admission still requires the initial outer owner, authenticated per-attempt coor
 ownership, consistent host process identities, complete shipped source/receipt bindings and actual
 installed-version qualification. Existing sandbox namespace/egress requirements remain binding;
 there is no host-policy or unconfined production fallback.
+
+The existing launcher also has a Linux outer-owner role. It opens and hashes the selected
+supervisor through the existing bounded file owner, retains that exact descriptor for execution,
+and owns the supervisor as its direct child outside the runtime generation. A private, parent-bound
+sequenced-packet channel transfers the supervisor's already-held root pidfd with kernel sender
+credentials. Admission validates that exact received reference through its kernel pidfd type,
+positive authenticated procfs descriptor/PID binding and live state in a coherent single-coordinate
+outer-owner view. An empty pipe, a different live pidfd, a nested/ambiguous procfs coordinate view
+or a missing positive binding supplies no authority; procfs absence never proves process death.
+Its original report deadline begins before the first OS probe; a delayed probe or send
+cannot renew that grant. The one-shot descriptor closes after the report attempt and is never
+inherited by the runtime root. Root identity is not a zero-live proof: forwarding the existing
+reaped response additionally requires the supervisor's zero-live result, the exact root's terminal
+handle and the owned supervisor's successful terminal wait. Missing, malformed, truncated, late or
+foreign reports fail closed and all received descriptors are released. Native unavailability keeps
+its original protocol error. The original optional start gate remains a separate descriptor. Idle lifetime waits for its owned
+process/control events. STOP, TERM or control EOF starts one original five-second stop deadline,
+carried through later polls, reads, responses and owned waits. A stopped supervisor cannot renew
+that grant or leave the outer owner waiting indefinitely. Expiry produces refusal followed by
+the existing bounded failure cleanup; forced cleanup supplies no successful zero-live protocol
+proof.
+
+These independently exercised Linux mechanisms do not admit app startup or an updater transition.
+The BFF still needs authenticated host process identity/liveness before its first durable state,
+and each update still needs the direct BFF-created coordinator channel, separate installed-current
+and running-owner identities, successor ownership and installed-version evidence described above.
+The macOS outer-owner path also remains unqualified. No third helper artifact or Linux sandbox
+egress exception is introduced.
 
 A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
 identity. It must attest the original tree and registration, then prove its own PID, version and

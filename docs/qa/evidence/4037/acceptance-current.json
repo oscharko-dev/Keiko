@@ -389,5 +389,6 @@
   "checkpoint49BoundedEvidence": "lab-finalization-and-native-prerequisite.json; public qualification evidence/finalization retention and native gate build prerequisite only; no skill-benefit, complete acceptance disposition or issue checkbox change",
   "checkpoint50BoundedEvidence": "linux-native-package-binding.json; native Linux build/package/receipt identity closure and preserved gateway confinement only; no updater admission, full acceptance disposition or issue checkbox change",
   "basicSkillV5TerminalEvidence": "basic-skill-v5-terminal.json; seven completed/one failed/sixteen undispatched under unchanged original grants, failed attempt and terminal inputs retained; no complete comparison, skill benefit or acceptance",
-  "checkpoint51BoundedEvidence": "lab-proxy-startup.json; shared startup error rejection and body-free lifetime error retention only; frozen v5 unchanged and no full acceptance disposition or issue checkbox change"
+  "checkpoint51BoundedEvidence": "lab-proxy-startup.json; shared startup error rejection and body-free lifetime error retention only; frozen v5 unchanged and no full acceptance disposition or issue checkbox change",
+  "checkpoint52BoundedEvidence": "linux-outer-owner-mechanics.json; existing Linux launcher and one-shot held-root kernel mechanics only; app identity/coordinator/successor/version acceptance remains open, no full disposition or issue checkbox change"
 }

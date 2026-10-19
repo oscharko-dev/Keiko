@@ -125,17 +125,20 @@ static int root_exit_code(int status) {
 }
 
 static void run_init(const struct launch_request *request, int gate, int notices, int lease,
-                     int start_gate, uid_t uid, gid_t gid) {
-  int keep[] = {gate, notices, lease, start_gate};
+                     int start_gate, uid_t uid, gid_t gid, int owner_handle) {
+  int keep[] = {gate, notices, lease, start_gate, owner_handle};
   int execution[2];
   char accepted;
-  if (!retain_descriptors(keep, 4) || read(gate, &accepted, 1) != 1 || accepted != 'A')
+  if (!retain_descriptors(keep, 5) || !keiko_bind_parent_death(owner_handle) ||
+      read(gate, &accepted, 1) != 1 || accepted != 'A')
     _exit(126);
   close(gate);
   if (getpid() != 1 || getuid() != uid || geteuid() != uid || getgid() != gid ||
       getegid() != gid || !drop_capabilities() || prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
-      prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 || send(notices, "I", 1, 0) != 1 ||
+      prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 || !keiko_bind_parent_death(owner_handle) ||
+      send(notices, "I", 1, 0) != 1 ||
       pipe2(execution, O_CLOEXEC | O_NONBLOCK) != 0) _exit(126);
+  close(owner_handle);
   pid_t root = fork();
   if (root < 0) _exit(126);
   if (root == 0) execute_root(request, notices, execution[1], start_gate);
@@ -219,7 +222,7 @@ static int receive_notice(int descriptor, char expected, struct generation *gene
 
 static int start_generation(struct generation *generation, const struct launch_request *request) {
   int gate[2] = {-1, -1}, notices[2] = {-1, -1}, lease[2] = {-1, -1};
-  int enabled = 1, result = 0;
+  int enabled = 1, result = 0, owner_handle = -1;
   int start_gate = fcntl(5, F_GETFD) == -1 ? -1 : 5;
   uid_t uid = getuid(); gid_t gid = getgid();
   uint64_t now = monotonic_ms(), deadline = now + GENERATION_TIMEOUT_MS;
@@ -231,6 +234,8 @@ static int start_generation(struct generation *generation, const struct launch_r
       pipe2(gate, O_CLOEXEC) != 0 || pipe2(lease, O_CLOEXEC) != 0 ||
       socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, notices) != 0 ||
       setsockopt(notices[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) != 0) goto cleanup;
+  owner_handle = (int)syscall(SYS_pidfd_open, getpid(), 0u);
+  if (owner_handle < 0 || !within_deadline(now, deadline)) goto cleanup;
   struct clone_args arguments = {.flags = CLONE_NEWUSER | CLONE_NEWPID | CLONE_PIDFD,
                                  .pidfd = (uintptr_t)&generation->init_fd,
                                  .exit_signal = SIGCHLD};
@@ -240,7 +245,7 @@ static int start_generation(struct generation *generation, const struct launch_r
       generation->startup_error = ERROR_NATIVE_UNAVAILABLE;
     goto cleanup;
   }
-  if (child == 0) run_init(request, gate[0], notices[1], lease[0], start_gate, uid, gid);
+  if (child == 0) run_init(request, gate[0], notices[1], lease[0], start_gate, uid, gid, owner_handle);
   generation->init = child;
   generation->lease = lease[1]; lease[1] = -1;
   close_descriptor(&gate[0]); close_descriptor(&lease[0]); close_descriptor(&notices[1]);
@@ -251,6 +256,7 @@ static int start_generation(struct generation *generation, const struct launch_r
            receive_notice(notices[0], 'R', generation, deadline) &&
            receive_notice(notices[0], 'L', generation, deadline);
 cleanup:
+  close_descriptor(&owner_handle);
   for (size_t i = 0; i < 2; ++i) {
     close_descriptor(&gate[i]); close_descriptor(&lease[i]); close_descriptor(&notices[i]);
   }
@@ -327,15 +333,53 @@ static int supervise(struct generation *generation) {
   }
 }
 
+static int valid_owner_channel(void) {
+  int type = 0;
+  struct ucred peer;
+  socklen_t type_size = sizeof(type), peer_size = sizeof(peer);
+  return getsockopt(6, SOL_SOCKET, SO_TYPE, &type, &type_size) == 0 &&
+         type_size == sizeof(type) && type == SOCK_SEQPACKET &&
+         getsockopt(6, SOL_SOCKET, SO_PEERCRED, &peer, &peer_size) == 0 &&
+         peer_size == sizeof(peer) && peer.pid > 0 && peer.pid == getppid() &&
+         peer.uid == geteuid() && peer.gid == getegid() && keiko_parent_death_is_armed();
+}
+
+static int report_held_root(const struct generation *generation) {
+  uint64_t started = monotonic_ms(), deadline = started + GENERATION_TIMEOUT_MS;
+  unsigned char bytes[16] = {'K', 'R', 'I', '1', 1, 0, 1, 0, 4, 0, 0, 0, 0, 0, 0, 0};
+  union { struct cmsghdr alignment; char bytes[CMSG_SPACE(sizeof(int))]; } ancillary = {0};
+  struct iovec payload = {bytes, sizeof(bytes)};
+  struct msghdr message = {.msg_iov = &payload, .msg_iovlen = 1,
+                           .msg_control = ancillary.bytes, .msg_controllen = sizeof(ancillary.bytes)};
+  struct pollfd held = {generation->root_fd, POLLIN, 0};
+  if (started == 0 || deadline <= started || generation->root <= 0 || generation->root_fd < 0 ||
+      !within_deadline(started, deadline) || poll(&held, 1, 0) != 0 ||
+      !within_deadline(started, deadline)) return 0;
+  write_u32(bytes + 12, (uint32_t)generation->root);
+  struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_RIGHTS;
+  header->cmsg_len = CMSG_LEN(sizeof(int));
+  memcpy(CMSG_DATA(header), &generation->root_fd, sizeof(int));
+  for (;;) {
+    if (started == 0 || deadline <= started || !within_deadline(started, deadline)) return 0;
+    ssize_t sent = sendmsg(6, &message, MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (sent == (ssize_t)sizeof(bytes)) return within_deadline(started, deadline);
+    if (sent >= 0 || errno != EINTR) return 0;
+  }
+}
+
 int main(int argc, char **argv) {
   struct launch_request request = {0};
   struct generation generation = {.init = -1, .root = -1, .init_fd = -1, .root_fd = -1,
                                    .lease = -1, .status = 0, .reaped = 0,
                                    .startup_error = ERROR_PROCESS_CREATE};
   int error = ERROR_PROCESS_CREATE, result = 1;
-  (void)argv;
+  int owner_report = argc == 2 && strcmp(argv[1], "--owner-report") == 0;
+  int owner_descriptor = owner_report ? 6 : -1;
   (void)signal(SIGPIPE, SIG_IGN);
-  if (argc != 1 || !read_launch_request(&request)) {
+  if ((argc != 1 && !owner_report) || (owner_report && !valid_owner_channel()) ||
+      !read_launch_request(&request)) {
     error = ERROR_PROTOCOL;
     goto cleanup;
   }
@@ -343,10 +387,16 @@ int main(int argc, char **argv) {
     error = generation.startup_error;
     goto cleanup;
   }
-  if (!send_response(RESPONSE_LAUNCHED, NULL, 0)) goto cleanup;
   error = ERROR_TREE_OBSERVE;
+  if (owner_report) {
+    int reported = report_held_root(&generation);
+    close_descriptor(&owner_descriptor);
+    if (!reported) goto cleanup;
+  }
+  if (!send_response(RESPONSE_LAUNCHED, NULL, 0)) goto cleanup;
   result = supervise(&generation) ? 0 : 1;
 cleanup:
+  close_descriptor(&owner_descriptor);
   clear_generation(&generation);
   clear_request(&request);
   if (result != 0) (void)send_error((uint16_t)error);

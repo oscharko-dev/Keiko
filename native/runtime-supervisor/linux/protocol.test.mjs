@@ -90,8 +90,13 @@ async function rolesOf(reader) {
   return pids;
 }
 
+function spawnHelper(helper) {
+  const { command, args } = typeof helper === "string" ? { command: helper, args: [] } : helper;
+  return spawn(command, args, { env: {}, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] });
+}
+
 async function startOwned(helper, observer, packet) {
-  const child = spawn(helper, [], { env: {}, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] });
+  const child = spawnHelper(helper);
   const exited = processExit(child);
   const controlError = installControlPipeErrorGuard(child);
   const responses = streamReader(child.stdio[4]);
@@ -103,7 +108,20 @@ async function startOwned(helper, observer, packet) {
     child.stdio[3].write(packet);
     assert.deepEqual(await response(responses), { kind: 1, payload: Buffer.alloc(0) });
     const pids = await rolesOf(output);
-    witness = spawn(observer, pids.map(String), { env: {}, stdio: ["pipe", "pipe", "pipe"] });
+    const observedPids = [...pids];
+    if (typeof helper !== "string") {
+      const children = (
+        await readFile(`/proc/${child.pid}/task/${child.pid}/children`, "utf8")
+      ).trim();
+      assert.match(children, /^[1-9][0-9]*$/u);
+      const supervisor = Number(children);
+      assert.ok(supervisor <= 2147483647 && !observedPids.includes(supervisor));
+      observedPids.push(supervisor);
+    }
+    witness = spawn(observer, observedPids.map(String), {
+      env: {},
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     witnessExit = processExit(witness);
     const observed = streamReader(witness.stdout);
     assert.equal((await readBytes(observed, 1)).toString(), "H");
@@ -209,6 +227,64 @@ async function independentGenerations(helper, observer, task) {
   console.log("linux-generation: PASS independent sibling generations");
 }
 
+async function stoppedOwnerDeathQualification(helper, observer, task, commands) {
+  const runtime = await startOwned(helper, observer, task);
+  let released = false;
+  try {
+    for (const command of commands) {
+      runtime.witness.stdin.write(command);
+      assert.equal((await readBytes(runtime.observed, 1)).toString(), "H");
+    }
+    runtime.child.kill("SIGKILL");
+    runtime.witness.stdin.write("C");
+    released = true;
+    assert.equal(
+      await runtime.witnessExit,
+      0,
+      "every held identity must retire without resuming stopped owners",
+    );
+    assert.equal((await readBytes(runtime.observed, 1)).toString(), "R");
+    assert.equal(await runtime.exited, null);
+  } finally {
+    clearTimeout(runtime.timeout);
+    if (!released) runtime.witness.stdin.end("X");
+    await runtime.witnessExit;
+    runtime.child.kill("SIGKILL");
+    await runtime.exited;
+  }
+}
+
+async function stoppedSupervisorStopQualification(helper, observer, task, eof) {
+  const runtime = await startOwned(helper, observer, task);
+  let released = false;
+  try {
+    runtime.witness.stdin.write("A");
+    assert.equal((await readBytes(runtime.observed, 1)).toString(), "H");
+    runtime.child.stdio[3].end(eof ? undefined : encodeControlPacket(3));
+    const settled = await Promise.race([
+      response(runtime.responses).then((proof) => ({ proof })),
+      waitForAbsence(8000).then(() => ({ expired: true })),
+    ]);
+    assert.equal(
+      settled.expired,
+      undefined,
+      "original five-second control plus existing three-second failure cleanup must settle",
+    );
+    assert.equal(settled.proof.kind, 3, "forced stop never supplies a zero-live protocol proof");
+    assert.equal(await runtime.exited, 1);
+    runtime.witness.stdin.write("C");
+    released = true;
+    assert.equal(await runtime.witnessExit, 0);
+    assert.equal((await readBytes(runtime.observed, 1)).toString(), "R");
+  } finally {
+    clearTimeout(runtime.timeout);
+    if (!released) runtime.witness.stdin.end("X");
+    await runtime.witnessExit;
+    runtime.child.kill("SIGKILL");
+    await runtime.exited;
+  }
+}
+
 async function actualKernelQualification(directory, helper, heldOnly) {
   const fixture = await compile("qualification_fixture", directory);
   const observer = await compile("qualification_observer", directory);
@@ -242,10 +318,22 @@ async function actualKernelQualification(directory, helper, heldOnly) {
   await finishOwned(await startOwned(helper, observer, encoded.stdout), "split-stop");
   console.log("linux-generation: PASS actual POSIX coordinator encoder");
   await independentGenerations(helper, observer, task);
+  await stoppedOwnerDeathQualification(helper, observer, task, ["S"]);
+  console.log("linux-generation: PASS owner death retires a stopped init without resuming it");
+  if (typeof helper !== "string") {
+    for (const commands of [["A"], ["S", "A"]])
+      await stoppedOwnerDeathQualification(helper, observer, task, commands);
+    console.log(
+      "linux-generation: PASS outer owner death retires stopped supervisor/init compositions",
+    );
+    for (const eof of [false, true])
+      await stoppedSupervisorStopQualification(helper, observer, task, eof);
+    console.log("linux-generation: PASS stopped supervisor STOP/EOF settle as bounded refusals");
+  }
 }
 
 async function refusesPacket(helper, packet) {
-  const child = spawn(helper, [], { env: {}, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] });
+  const child = spawnHelper(helper);
   const exited = processExit(child);
   const controlError = installControlPipeErrorGuard(child);
   const reader = streamReader(child.stdio[4]);
@@ -303,12 +391,25 @@ async function deadlineQualification(directory) {
     "normal-ack",
     "late-ack",
     "late-before-ack",
+    "normal-report",
+    "late-report-probe",
+    "late-report-send",
+    "report-probe-refusal",
   ])
     await execute(fixture, [name], { timeout: 5000, maxBuffer: 4096, shell: false });
-  console.log("linux-generation: PASS nine causal scheduling and consumed-identity controls");
+  console.log(
+    "linux-generation: PASS thirteen causal scheduling, report and consumed-identity controls",
+  );
 }
 
 function qualificationOptions(arguments_) {
+  if (arguments_[0] === "--outer-owner") {
+    assert.equal(arguments_.length, 4);
+    return {
+      scope: "kernel",
+      helper: { command: arguments_[1], args: ["--own-runtime", arguments_[2], arguments_[3]] },
+    };
+  }
   if (arguments_.length === 0) return { scope: "source" };
   if (arguments_.length === 1) {
     const modes = new Map([

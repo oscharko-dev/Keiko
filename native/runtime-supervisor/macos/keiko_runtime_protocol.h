@@ -36,6 +36,23 @@ static inline int keiko_write_exact(int descriptor, const void *buffer, size_t l
   return 1;
 }
 
+#if defined(__linux__)
+#include <poll.h>
+#include <signal.h>
+#include <sys/prctl.h>
+
+static inline int keiko_parent_death_is_armed(void) {
+  int signal_number = 0;
+  return prctl(PR_GET_PDEATHSIG, &signal_number, 0, 0, 0) == 0 && signal_number == SIGKILL;
+}
+
+static inline int keiko_bind_parent_death(int owner_handle) {
+  struct pollfd held = {owner_handle, POLLIN, 0};
+  return owner_handle >= 0 && prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) == 0 &&
+         keiko_parent_death_is_armed() && poll(&held, 1, 0) == 0;
+}
+#endif
+
 // Legacy aliases: the two files historically named the helpers `read_exact` / `write_exact`.
 // Keep the names available so unrelated call sites do not have to move in the same change.
 #define read_exact keiko_read_exact

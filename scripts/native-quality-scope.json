@@ -4,7 +4,7 @@
     {
       "path": "native/portable-launcher/keiko-portable-launcher.c",
       "language": "c",
-      "platforms": ["macos", "windows"],
+      "platforms": ["macos", "windows", "linux"],
       "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
     },
     {
@@ -299,6 +299,36 @@
     },
     {
       "path": "native/runtime-supervisor/linux/deadline_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner_channel_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-runtime-owner-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner_receiver_fixture.c",
       "language": "c",
       "platforms": ["linux"],
       "gates": [

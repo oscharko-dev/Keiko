@@ -1446,3 +1446,49 @@ callback in the first candidate; the same baseline-relative actual HTTP controls
 failure/one healthy before and two passes after correction. All seven lab suites pass 88 tests.
 `lab-proxy-startup.json` binds the scope. Frozen v5 inputs and failed outcomes remain unchanged;
 no new live-generation, skill-benefit or updater acceptance is claimed.
+
+## Checkpoint 52 — Linux outer-owner mechanics
+
+The existing launcher has a Linux outer-owner role which executes its verified open supervisor
+descriptor and owns it outside the runtime generation. A credential-bound one-shot channel
+transfers the already-held root pidfd. Its original deadline covers the first probe and send;
+its private socket closes after the attempt and never reaches the root. Forwarded reaping still
+requires the separate zero-live proof, terminal root reference and owned supervisor terminal wait.
+Native unavailability and the original optional start gate remain intact. The received reference
+must positively bind its numeric root and kernel pidfd type in a coherent authenticated procfs
+view. Kernel parent-death bindings use references captured before fork/clone and retain the normal
+lease and terminal waits.
+
+The original kernel controls plus stopped-parent compositions pass in the declared ARM fixture:
+nine direct-supervisor and thirteen outer-launcher cases (including two bounded refusals), each with six decoder refusals and thirteen
+scheduling controls. Seventeen receiver controls, an actual pre-arming parent-death race,
+coordinate/spoof controls, four actual channel controls and five source/gate controls pass.
+STOP/EOF against a stopped supervisor retain their failing pre-fix controls; later polls now
+reuse the one original stop deadline while healthy idle lifetime remains event-driven. Forced
+cleanup never receives successful zero-live protocol credit. The retained first
+outer-owner candidate exposed a received-FD5 ownership mistake; the auditor additionally found
+the report-entry deadline, one-shot channel, received-reference validation and stopped-parent
+composition issues. Their actual failing controls remain retained. A private mutant that ignores
+the held parent's terminal state fails the exact pre-arming race control.
+The gate fixture's separate Node socket/FIFO assumption is documented as a fixture correction.
+Existing macOS compiler/analyzer/boundary checks pass without qualifying installed Endpoint Security.
+
+`linux-outer-owner-mechanics.json` binds this narrow scope. App host PID/liveness, direct coordinator
+authentication, successor ownership and real installed updates remain open.
+`checkpoint50-lint-recapture.json` adds an actual command/exit/source-bound ESLint execution on
+all twenty unchanged source50 objects at published51; the original empty log remains unchanged
+and is not treated as historical execution proof. No full acceptance disposition changes.
+
+## Separate remaining-v5 characterization
+
+The16 cases left undispatched by the stopped original v5 have completed separately on the same
+source48 product, tasks, candidates, profiles and grants. All16 final bounded workflows pass the
+strict correct subject; all68 physical requests (24 task/44 readiness) have valid terminal
+observations. A separate audit validates every requested cap against progressive original output
+remaining and every observed completion against its cap. This addresses a measurement guard
+limitation without editing that frozen guard or any outcome. All12,219 declared inputs still
+match, and credential-excluding terminal retention verifies all1,055 archive members.
+
+`basic-skill-v5-remaining-terminal.json` binds this evidence. Original case8 stays failed. The
+original full-comparison advancement threshold remains unmet; generated naming, sections,
+fault classes, semantic benefit and untouched held-outs still require separate review.

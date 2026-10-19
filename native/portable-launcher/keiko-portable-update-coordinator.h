@@ -1590,14 +1590,14 @@ static int keiko_coordinator_execute_posix(keiko_coordinator_context *context) {
   );
 }
 
-static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
-                                       char output[65]) {
+static int keiko_coordinator_open_hashed_file(const char *path, uint64_t deadline_ms,
+                                              char output[65]) {
   int descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
   struct stat before, after, named;
   unsigned char buffer[64u * 1024u], digest[32];
   uint64_t total = 0;
   keiko_sha256 hash;
-  int result = 0;
+  int result = -1;
   if (descriptor == -1 || fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) ||
       before.st_nlink != 1 || before.st_size < 0 ||
       (uint64_t)before.st_size > KEIKO_COORDINATOR_MAX_FILE_BYTES ||
@@ -1616,16 +1616,25 @@ static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
   if (fstat(descriptor, &after) != 0 || lstat(path, &named) != 0 ||
       !keiko_coordinator_same_file(&before, &after) ||
       !keiko_coordinator_same_file(&before, &named) || total != (uint64_t)before.st_size ||
-      !keiko_sha256_final(&hash, digest)) goto cleanup;
+      !keiko_sha256_final(&hash, digest)) goto cleanup_hash;
   keiko_sha256_hex(digest, output);
   memset(digest, 0, sizeof(digest));
-  result = 1;
+  result = descriptor;
+  descriptor = -1;
   goto cleanup;
 cleanup_hash:
   keiko_sha256_clear(&hash);
 cleanup:
   if (descriptor != -1) close(descriptor);
   return result;
+}
+
+
+static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
+                                       char output[65]) {
+  int descriptor = keiko_coordinator_open_hashed_file(path, deadline_ms, output);
+  if (descriptor < 0) return 0;
+  return close(descriptor) == 0;
 }
 
 static int keiko_coordinator_join(char *output, size_t capacity, const char *base,
