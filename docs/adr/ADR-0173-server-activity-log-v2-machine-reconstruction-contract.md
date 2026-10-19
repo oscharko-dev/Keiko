@@ -1734,6 +1734,10 @@ segment is orphaned when:
 - it is older than two segment windows and unwritten for one (pid reuse);
 - it is this instance's own abandoned segment.
 
+The `same-process` recovery reason requires both the process id and instance id to match.
+A matching instance id alone does not establish ownership: an active segment held by another
+live process remains foreign and prevents replacement of the shared store policy.
+
 Recovery seals the file as it is: a partial final line is kept and reported (`tailState:
 "truncated"`, `truncatedBytes`), and valid lines are never rewritten. An interrupted seal whose seal
 line is already present is only completed. Every recovery is `activity-log.segment.recovered`

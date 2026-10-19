@@ -1320,3 +1320,16 @@ The complete Activity Log gate passes seven of seven checks.
 `window-allocation-and-provenance.json` binds this scoped change. It does not qualify native browser
 approval, installed updates, skill benefit, all search journeys or final integration. Both native
 updater findings and all broader acceptance obligations remain open.
+
+## Checkpoint 46 — shared log writer identity
+
+A different live PID is now foreign even when its short instance id collides with the local id.
+The `same-process` orphan reason requires both identifiers. Same-PID reuse, confirmed exits and
+ordinary stale/current-segment handling retain their existing rules. ADR-0173 D14 is clarified
+in place; the existing policy-conflict and segment-recovery Activity Log operations remain the
+body-free evidence owners. No log grammar or authority is widened.
+
+The same six actual producer/parser/store controls show three failures and three healthy controls
+before the correction, then six passes. All 1,323 tests in the 36 affected Activity Log suites pass.
+`activity-log-writer-identity.json` binds the exact source and scoped evidence. This correction
+does not qualify native updater ownership, model/skill benefit or broader customer journeys.

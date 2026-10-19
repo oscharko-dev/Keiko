@@ -382,5 +382,6 @@
   "checkpoint42BoundedEvidence": "alias-replay-and-basic-workflow.json; alias identity repair and terminal known workflow observations only; no full acceptance disposition or issue checkmark changed",
   "checkpoint43BoundedEvidence": "diagnostic-metadata-intake.json; deterministic demand/intake and original-query retrieval-only repair; no native model/skill/global acceptance or issue checkbox change",
   "checkpoint44BoundedEvidence": "explicit-alias-reconnect.json; explicit registered-alias reconnect, atomic collision refusal and existing trust/history semantics; no complete acceptance disposition or issue checkbox change",
-  "checkpoint45BoundedEvidence": "window-allocation-and-provenance.json; initial and late local frame fitting, explicit remote sizing-provenance retirement and visible saved-layout recovery; no complete acceptance disposition or issue checkbox change"
+  "checkpoint45BoundedEvidence": "window-allocation-and-provenance.json; initial and late local frame fitting, explicit remote sizing-provenance retirement and visible saved-layout recovery; no complete acceptance disposition or issue checkbox change",
+  "checkpoint46BoundedEvidence": "activity-log-writer-identity.json; PID-bound shared writer policy and same-process orphan identity; no complete acceptance disposition or issue checkbox change"
 }
