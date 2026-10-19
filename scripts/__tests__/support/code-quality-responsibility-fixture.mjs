@@ -468,6 +468,9 @@ function rawHelperSource(variant) {
   const source = directRawHelperSource();
   const variants = {
     wrapper: () => rawWrapperSource(),
+    captured: () => capturedRawSource(),
+    "typed-capture": () => capturedRawSource("typed"),
+    "unchecked-capture": () => capturedRawSource("unchecked"),
     "unicode-wrapper": () => rawWrapperSource().replaceAll("input", "είσοδος"),
     property: () => rawPropertySource(),
     "partially-narrowed": () =>
@@ -495,6 +498,34 @@ function rawHelperSource(variant) {
     unicode: () => "/* λ boundary */\n" + source.replaceAll("finite", "πεπερασμένο"),
   };
   return variants[variant]?.() ?? rawHelperVariant(source, variant);
+}
+
+function capturedRawSource(variant = "raw") {
+  const source = [
+    "interface CheckedCounts { first: number; second: number }",
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null; }',
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function fields(input: Record<string, unknown>): boolean { const { first, second } = input; return finite(first) && finite(second); }",
+    "export function validate(input: unknown): input is CheckedCounts { return record(input) && fields(input); }",
+    'export function consume(input: unknown): number { if (!validate(input)) throw new TypeError("invalid"); return input.first + input.second; }',
+    "",
+  ].join("\n");
+  if (variant === "typed")
+    return source.replace(
+      "const { first, second } = input;",
+      "const typed: { first: number; second: number } = { first: 1, second: 2 }; const { first, second }: Record<string, unknown> = typed;",
+    );
+  if (variant === "unchecked")
+    return source
+      .replace(
+        "export function validate(input: unknown): input is CheckedCounts { return record(input) && fields(input); }",
+        'export function validate(input: unknown): Record<string, unknown> { if (!record(input)) throw new TypeError("invalid"); fields(input); return input; }',
+      )
+      .replace(
+        'export function consume(input: unknown): number { if (!validate(input)) throw new TypeError("invalid"); return input.first + input.second; }',
+        "export function consume(input: unknown): Record<string, unknown> { return validate(input); }",
+      );
+  return source;
 }
 
 function rawPropertySource() {

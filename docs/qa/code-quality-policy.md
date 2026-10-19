@@ -1301,3 +1301,5 @@ The selected public consumer adds fresh-producer unknown-operation, category and
 phases without dropping registration via spread. Existing C2 four-read source/public proofs remain;
 a held cached-third-versus-fourth control is a later qualification obligation, not metadata evidence.
 Raw carrier/registration parameters, shared readers/writers and final DTO authority remain pending.
+
+A validator explicitly declaring `anti-slop/no-known-value-widening` may additionally account for a direct captured-unknown scalar predicate argument. The root must be the actual unknown-input Identifier predicate, and the direct const capture must originate from its already qualified raw helper's standard unknown-valued dictionary. Private same-source predicate reference closure is required; typed erasure, unchecked raw-return roots and unsupported references remain unadapted. These supplemental call slots require current semantic qualification and confer no new helper-parameter, return or writer authority. Legacy raw-helper facts and rule activation stay unchanged.

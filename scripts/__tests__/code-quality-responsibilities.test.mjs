@@ -2289,6 +2289,36 @@ describe("explicit semantic CLI build and admission", () => {
   );
 });
 
+describe("captured unknown argument semantic admission (#3918)", () => {
+  it("requires qualified semantics only for the supplemental captured argument", async () => {
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const legacy = {
+      path: "owner.ts",
+      rule: "anti-slop/no-known-value-widening",
+      line: 1,
+      column: 1,
+    };
+    const captured = { ...legacy, line: 2 };
+    const report = { census: [legacy, captured], violations: [legacy, captured] };
+    const assessment = {
+      id: "validator",
+      kind: "validator",
+      structural: "ready",
+      slots: [legacy, { ...captured, capturedUnknownPredicate: true }],
+    };
+    const pending = adaptResponsibilityDiagnostics(report, {
+      assessments: [{ ...assessment, semantic: "pending" }],
+    });
+    expect(pending.violations).toEqual([captured]);
+    const qualified = adaptResponsibilityDiagnostics(report, {
+      assessments: [{ ...assessment, semantic: "qualified" }],
+    });
+    expect(qualified.violations).toEqual([]);
+    expect(qualified.census).toEqual(report.census);
+  });
+});
+
 describe("raw own-property reader RETURN only (#3918)", () => {
   it.each(["pending", "rejected", undefined])("keeps %s semantics unadapted", async (semantic) => {
     const { adaptResponsibilityDiagnostics } =

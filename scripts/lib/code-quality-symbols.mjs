@@ -2731,7 +2731,133 @@ function rawDictionaryAnnotations(state) {
     }));
 }
 
-function rawCheckingSlots(compiler, identity, index) {
+function capturedNamedResultSymbol(state, annotation) {
+  if (!ts.isTypeReferenceNode(annotation.type) || !ts.isIdentifier(annotation.type.typeName))
+    return null;
+  return state.context.checker.getSymbolAtLocation(annotation.type.typeName);
+}
+
+function capturedOwnedResult(state, symbol) {
+  return (
+    symbol?.declarations?.length === 1 && symbol.declarations[0].getSourceFile() === state.source
+  );
+}
+
+function capturedPredicateRoot(state) {
+  const signature = state.context.checker.getSignatureFromDeclaration(state.callable);
+  const predicate = signature && typedIdentifierPredicate(state.context, state.callable, signature);
+  if (!predicate) return false;
+  const symbol = capturedNamedResultSymbol(state, state.callable.type);
+  return (
+    predicate.parameterIndex === state.index &&
+    state.callable.parameters[state.index].type?.kind === ts.SyntaxKind.UnknownKeyword &&
+    !state.callable.typeParameters?.length &&
+    capturedOwnedResult(state, symbol)
+  );
+}
+
+function capturedBindingInitializer(pattern) {
+  const declaration = pattern.parent;
+  if (
+    !ts.isObjectBindingPattern(pattern) ||
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.type ||
+    !declaration.initializer ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+    pattern.elements.some(
+      (entry) => !ts.isIdentifier(entry.name) || entry.initializer || entry.dotDotDotToken,
+    )
+  )
+    return null;
+  return declaration.initializer;
+}
+
+function capturedBinding(state, argument) {
+  if (!ts.isIdentifier(argument)) return null;
+  const symbol = state.context.checker.getSymbolAtLocation(argument);
+  const binding = symbol?.valueDeclaration;
+  if (
+    !binding ||
+    !ts.isBindingElement(binding) ||
+    writtenSymbol(state.context, state.nodes, symbol)
+  )
+    return null;
+  const initializer = capturedBindingInitializer(binding.parent);
+  return initializer ? { binding, initializer } : null;
+}
+
+function capturedUnknownOrigin(state, argument) {
+  if (typeFacts(state.context.checker.getTypeAtLocation(argument)).kind !== "unknown") return null;
+  const capture = capturedBinding(state, argument);
+  if (!capture || !rawDictionaryMember(state, state.callable.parameters[state.index].type))
+    return null;
+  const origin = rawOrigin(state, capture.initializer);
+  const property = capture.binding.propertyName ?? capture.binding.name;
+  if (!origin || (!ts.isIdentifier(property) && !ts.isStringLiteral(property))) return null;
+  return [...origin, property.text];
+}
+
+function capturedPredicateTarget(state, call) {
+  const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
+  if (!target || exportedDeclaration(target.declaration) || target.callable.typeParameters?.length)
+    return null;
+  const signature = state.context.checker.getResolvedSignature(call);
+  const predicate = signature && state.context.checker.getTypePredicateOfSignature(signature);
+  return predicate?.kind === ts.TypePredicateKind.Identifier
+    ? { target, index: predicate.parameterIndex }
+    : null;
+}
+
+function capturedPredicateCall(state, call) {
+  const target = capturedPredicateTarget(state, call);
+  if (!target) return null;
+  const argument = call.arguments[target.index];
+  const origin = argument && capturedUnknownOrigin(state, argument);
+  if (!origin) return null;
+  const candidate = rawState(
+    state.compiler,
+    state.context,
+    state.source,
+    state.nodes,
+    target.target,
+    target.index,
+  );
+  if (candidate?.callable.parameters[candidate.index].type?.kind !== ts.SyntaxKind.UnknownKeyword)
+    return null;
+  return { candidate, call, state, argument, origin };
+}
+
+function capturedUnknownPredicateSlots(root, states, qualified) {
+  if (!capturedPredicateRoot(root)) return [];
+  const candidates = new Map();
+  for (const state of states.values()) {
+    if (!qualified.has(state.key)) continue;
+    for (const call of stateCalls(state)) {
+      const fact = capturedPredicateCall(state, call);
+      if (!fact) continue;
+      const entry = candidates.get(fact.candidate.key) ?? { target: fact.candidate, facts: [] };
+      entry.target.incoming.push({ state: state.key, call, origin: fact.origin });
+      entry.facts.push(fact);
+      candidates.set(fact.candidate.key, entry);
+    }
+  }
+  return [...candidates.values()].flatMap(({ target, facts }) =>
+    rawStateHasUnsupportedUse(target)
+      ? []
+      : facts.map(({ state, argument, origin }) => ({
+          ...rawOperationSlot(
+            state,
+            argument,
+            "anti-slop/no-known-value-widening",
+            "argument",
+            origin,
+          ),
+          capturedUnknownPredicate: true,
+        })),
+  );
+}
+
+function rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates = false) {
   const owned = declarationCallable(compiler, identity);
   const nodes = sourceNodes(compiler, owned.source);
   const root = rawState(
@@ -2768,6 +2894,8 @@ function rawCheckingSlots(compiler, identity, index) {
       ...rawPredicateSlots(state, states, qualified),
     );
   }
+  if (capturedUnknownPredicates)
+    slots.push(...capturedUnknownPredicateSlots(root, states, qualified));
   compiler.assertCurrent();
   return slots;
 }
@@ -3743,6 +3871,10 @@ function typedRecheckOperations(compiler) {
   };
 }
 
+function assertCapturedPredicateOption(value) {
+  if (typeof value !== "boolean") throw new TypeError("unsupported-captured-predicate-option");
+}
+
 export function createSymbolResolver(subject, options = {}, proofRoots = []) {
   const compiler = createCompilerContext(subject, options, proofRoots);
   const rawSlots = new Map();
@@ -3762,10 +3894,12 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
       propertyObservationFacts(compiler, identity, options),
     observationBinding: (request, producer) => observationBinding(compiler, request, producer),
     callableSlots: (identity) => callableSlots(compiler, identity),
-    rawCheckingSlots: (identity, index) => {
+    rawCheckingSlots: (identity, index, capturedUnknownPredicates = false) => {
+      assertCapturedPredicateOption(capturedUnknownPredicates);
       compiler.assertCurrent();
-      const key = policyDigest(JSON.stringify({ identity, index }));
-      if (!rawSlots.has(key)) rawSlots.set(key, rawCheckingSlots(compiler, identity, index));
+      const key = policyDigest(JSON.stringify({ identity, index, capturedUnknownPredicates }));
+      if (!rawSlots.has(key))
+        rawSlots.set(key, rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates));
       return structuredClone(rawSlots.get(key));
     },
     collectiveRawCheckingSlots: (roots, rule) => collectiveRawCheckingSlots(compiler, roots, rule),

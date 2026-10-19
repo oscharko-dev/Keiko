@@ -1784,6 +1784,37 @@ describe("diagnostic proof guard challenges (#3918)", () => {
   });
 });
 
+describe("captured unknown predicate arguments (#3918)", () => {
+  it("adds only actual captured unknown call arguments without growing the raw helper graph", async () => {
+    const own = createRawHelperEnforcementFixture("captured");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const legacy = own.resolver.rawCheckingSlots(identity, 0);
+    const slots = own.resolver.rawCheckingSlots(identity, 0, true);
+    const captured = slots.filter((slot) => slot.capturedUnknownPredicate);
+    expect(captured.map(({ start, end, origin }) => [source.slice(start, end), origin])).toEqual([
+      ["first", ["first"]],
+      ["second", ["second"]],
+    ]);
+    expect(slots.filter((slot) => !slot.capturedUnknownPredicate)).toEqual(legacy);
+    expect(own.resolver.rawCheckingSlots(identity, 0)).toEqual(legacy);
+  });
+
+  it.each(["typed-capture", "unchecked-capture"])(
+    "withholds captured grants from %s",
+    async (variant) => {
+      const own = createRawHelperEnforcementFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const identity = own.resolver.resolveExport(own.record.input).identities[0];
+      const legacy = own.resolver.rawCheckingSlots(identity, 0);
+      expect(own.resolver.rawCheckingSlots(identity, 0, true)).toEqual(legacy);
+    },
+  );
+});
+
 describe("dictionary exact-member before controls (#3918)", () => {
   it.each(["direct", "unicode"])(
     "binds only exact %s dictionary members",

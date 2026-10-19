@@ -190,7 +190,11 @@ function rawResponsibilitySlots(resolver, record, roles) {
   const parameter = input.parameters[record.input.parameterIndex];
   if (parameter?.type.kind !== "unknown")
     throw new TypeError("unresolved-responsibility-raw-parameter");
-  const slots = resolver.rawCheckingSlots(roles.input.identities[0], record.input.parameterIndex);
+  const slots = resolver.rawCheckingSlots(
+    roles.input.identities[0],
+    record.input.parameterIndex,
+    record.kind === "validator" && record.rules.includes("anti-slop/no-known-value-widening"),
+  );
   if (record.kind === "structural-redactor") {
     const output = resolver.callableSlots(roles.output.identities[0]);
     if (output.result?.type.kind !== "unknown")
@@ -315,6 +319,11 @@ function assessRecord(subject, resolver, record, files) {
   }
 }
 
+function qualifiedAdaptationSlot(assessment, slot, assessments) {
+  if (slot.capturedUnknownPredicate && assessment.semantic !== "qualified") return false;
+  return objectFormQualified(assessment, slot, assessments);
+}
+
 function adaptedFinding(finding, assessments) {
   const collective = collectiveAdaptation(finding, assessments);
   if (collective) return collective;
@@ -337,7 +346,7 @@ function adaptedFinding(finding, assessments) {
         candidate.line === finding.line &&
         candidate.column === finding.column,
     );
-    if (slot && objectFormQualified(assessment, slot, assessments))
+    if (slot && qualifiedAdaptationSlot(assessment, slot, assessments))
       return { finding, responsibilityId: assessment.id, slot };
   }
   return null;
