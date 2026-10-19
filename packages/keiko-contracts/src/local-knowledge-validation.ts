@@ -985,10 +985,12 @@ function validateConversationCenterNode(node: Record<string, unknown>, errors: s
   return valid;
 }
 
-function collectNodeKinds(
-  nodes: readonly unknown[],
-  errors: string[],
-): { readonly nodeKinds: ReadonlyMap<string, unknown>; readonly valid: boolean } {
+interface GraphNodeKindObservations {
+  readonly nodeKinds: ReadonlyMap<string, unknown>;
+  readonly valid: boolean;
+}
+
+function collectNodeKinds(nodes: readonly unknown[], errors: string[]): GraphNodeKindObservations {
   let valid = true;
   const nodeKinds = new Map<string, unknown>();
   const members = nodes;
