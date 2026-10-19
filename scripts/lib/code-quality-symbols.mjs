@@ -3701,6 +3701,73 @@ function propertyObservationFacts(compiler, identity, options = {}) {
   };
 }
 
+function objectValidatorSignature(callable) {
+  return (
+    typedFunctionDeclaration(callable) &&
+    exportedDeclaration(callable) &&
+    !callable.typeParameters?.length &&
+    !callable.asteriskToken &&
+    !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+    callable.parameters.length === 1 &&
+    observationParameter(callable.parameters[0], ts.SyntaxKind.ObjectKeyword) &&
+    callable.type !== undefined
+  );
+}
+
+function namedObjectResult(type) {
+  const declarations = (type.aliasSymbol ?? type.symbol)?.declarations;
+  return (
+    (type.flags & ts.TypeFlags.Object) !== 0 &&
+    declarations?.length === 1 &&
+    (ts.isInterfaceDeclaration(declarations[0]) || ts.isTypeAliasDeclaration(declarations[0])) &&
+    !typeFacts(type).indexes?.some((entry) => ["unknown", "any"].includes(entry.kind))
+  );
+}
+
+function optionalOwnedObjectResult(compiler, state, signature) {
+  const type = state.context.checker.getReturnTypeOfSignature(signature);
+  if (
+    !type.isUnion() ||
+    type.types.length !== 2 ||
+    state.context.checker.getTypeAtLocation(state.callable.type) !== type
+  )
+    return false;
+  const defined = type.types.find((arm) => (arm.flags & ts.TypeFlags.Undefined) === 0);
+  return (
+    type.types.some((arm) => arm.flags === ts.TypeFlags.Undefined) &&
+    defined !== undefined &&
+    namedObjectResult(defined) &&
+    observationOwnedResult(compiler, defined, state.identity)
+  );
+}
+
+function objectValidatorFacts(compiler, identity) {
+  const state = { ...declarationCallable(compiler, identity), identity };
+  const signatures = state.context.checker.getTypeAtLocation(state.callable).getCallSignatures();
+  const signature = signatures.length === 1 ? signatures[0] : undefined;
+  if (
+    !objectValidatorSignature(state.callable) ||
+    !signature ||
+    signature.typeParameters?.length ||
+    signature.thisParameter ||
+    !optionalOwnedObjectResult(compiler, state, signature)
+  )
+    throw new TypeError("unsupported-object-validator-boundary");
+  const slot = annotationSlot(
+    state.context,
+    state.source,
+    state.callable.parameters[0].type,
+    identity,
+    "parameter",
+    0,
+  );
+  compiler.assertCurrent();
+  return {
+    identity,
+    slots: [{ ...slot, rule: "anti-slop/no-object-parameters", rawObjectValidatorInput: true }],
+  };
+}
+
 function observationConsumer(context, source, name) {
   const module = context.checker.getSymbolAtLocation(source);
   const declarations = context.checker
@@ -3875,6 +3942,14 @@ function assertCapturedPredicateOption(value) {
   if (typeof value !== "boolean") throw new TypeError("unsupported-captured-predicate-option");
 }
 
+function validationBoundaryOperations(compiler) {
+  return {
+    diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
+    parserBinding: (request, producer) => parserBinding(compiler, request, producer),
+    objectValidatorFacts: (identity) => objectValidatorFacts(compiler, identity),
+  };
+}
+
 export function createSymbolResolver(subject, options = {}, proofRoots = []) {
   const compiler = createCompilerContext(subject, options, proofRoots);
   const rawSlots = new Map();
@@ -3883,8 +3958,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     resolveExport: (request) => exportFacts.resolve(request),
     resolveProofExport: (request) => exportFacts.resolve(request, true),
     resolveProofConsumer: (request) => resolveProofConsumer(compiler, request),
-    diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
-    parserBinding: (request, producer) => parserBinding(compiler, request, producer),
+    ...validationBoundaryOperations(compiler),
     ...typedRecheckOperations(compiler),
     ...canonicalDecoderOperations(compiler),
     describeAt: (request) => describeAt(compiler, request),

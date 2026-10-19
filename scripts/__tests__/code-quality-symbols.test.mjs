@@ -23,6 +23,7 @@ import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
   createObservationOptionsFixture,
+  createObjectValidatorFixture,
   createDirectObservationCheckerFixture,
   createResponsibilityFixture,
   createEnforcementFixture,
@@ -3377,5 +3378,41 @@ describe("direct whole-receiver observation checker facts", () => {
             slot.observationRoots[0].identity.producer.start === identity.producer.start,
         ),
     ).toBe(true);
+  });
+});
+
+describe("owned optional object validator facts (#3918)", () => {
+  it("binds only the exact public input without granting private raw call-result helpers", async () => {
+    const own = createObjectValidatorFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const facts = own.resolver.objectValidatorFacts(identity);
+    expect(facts.slots).toHaveLength(1);
+    expect(facts.slots[0]).toMatchObject({ index: 0, rawObjectValidatorInput: true });
+    const slot = facts.slots[0];
+    expect(source.slice(slot.start, slot.end)).toBe("object");
+    expect(slot.start).toBeGreaterThan(source.indexOf("export function validate"));
+    expect(facts.identity).toEqual(identity);
+  });
+
+  it.each([
+    "wrong-input",
+    "aliased-input",
+    "optional-input",
+    "unknown-result",
+    "foreign-result",
+    "anonymous-result",
+    "extra-arm",
+    "generic",
+  ])("withholds unsupported %s boundary facts", async (variant) => {
+    const own = createObjectValidatorFixture(variant);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(() => own.resolver.objectValidatorFacts(identity)).toThrow(
+      "unsupported-object-validator-boundary",
+    );
   });
 });

@@ -1507,3 +1507,90 @@ export function otherCarrier(event: object): unknown { return sharedCarrier(even
   emitSymbolFixture(own.root);
   return own;
 }
+
+export function objectValidatorRecord() {
+  const record = responsibilityRecord();
+  record.rawObjectInput = true;
+  record.rules = ["anti-slop/no-object-parameters"];
+  record.proofAssertions = [
+    "preserves original optional view",
+    "refuses malformed view before use",
+  ].map((name) => ({ path: record.proofs[0], testName: `object boundary ${name}` }));
+  return record;
+}
+
+function objectValidatorOwner(variant) {
+  const signatures = {
+    "wrong-input": "input: unknown",
+    "aliased-input": "input: Raw",
+    "optional-input": "input?: object",
+  };
+  const results = {
+    "unknown-result": "unknown",
+    "foreign-result": "Date | undefined",
+    "anonymous-result":
+      '{ readonly owner: string; readonly lifecycle: "loss" | "state" } | undefined',
+    "extra-arm": "View | string | undefined",
+  };
+  const input = signatures[variant] ?? "input: object";
+  const output = results[variant] ?? "View | undefined";
+  const generic = variant === "generic" ? "<T>" : "";
+  const body = ["valid", "unchecked"].includes(variant)
+    ? "const view = raw(input); return view !== undefined && complete(view) ? view : undefined;"
+    : "return undefined;";
+  const shape =
+    variant === "unchecked"
+      ? "return true;"
+      : 'try { return typeof Reflect.get(view, "owner") === "string" && ["loss", "state"].includes(Reflect.get(view, "lifecycle")); } catch { return false; }';
+  const alias = variant === "aliased-input" ? "type Raw = object;\n" : "";
+  return `${alias}export interface View { readonly owner: string; readonly lifecycle: "loss" | "state" }
+const marker = Symbol("fixture-view");
+function raw(input: object): object | undefined {
+  const value: unknown = Reflect.get(input, marker);
+  return typeof value === "object" && value !== null ? value : undefined;
+}
+function complete(view: object): view is View { ${shape} }
+export function validate${generic}(${input}): ${output} { ${body} }
+export function consume(input: object): boolean { return validate(input) !== undefined; }
+export function carrier(value: unknown): object {
+  const input = {}; Object.defineProperty(input, marker, { value }); return input;
+}
+`;
+}
+
+function objectValidatorProof() {
+  return `import { it, expect } from "vitest";
+import { validate, consume, carrier } from "alpha/runtime";
+it("object boundary preserves original optional view", () => {
+  const view = { owner: "fixture", lifecycle: "loss" };
+  const input = carrier(view);
+  expect(validate(input)).toBe(view);
+  expect(consume(input)).toBe(true);
+});
+it("object boundary refuses malformed view before use", () => {
+  const input = carrier({ owner: 42, lifecycle: "loss" });
+  expect(validate(input)).toBeUndefined();
+  expect(consume(input)).toBe(false);
+});
+`;
+}
+
+export function createObjectValidatorFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    config.compilerOptions.lib.push("DOM");
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", objectValidatorOwner(variant));
+    own.put("packages/alpha/src/proof.test.ts", objectValidatorProof());
+    own.put(
+      "src/consumer.ts",
+      'import { validate, consume } from "alpha/runtime"; export const view = validate({}); export const kept = consume({});',
+    );
+    const record = objectValidatorRecord();
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}

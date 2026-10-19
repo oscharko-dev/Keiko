@@ -20,6 +20,8 @@ import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-secu
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
   createObservationOptionsFixture,
+  createObjectValidatorFixture,
+  objectValidatorRecord,
   createDirectObservationCheckerFixture,
   createConsumerSeamFixture,
   createDiagnosticFixture,
@@ -3906,4 +3908,124 @@ describe("direct whole-receiver observation qualification", () => {
         .adaptations,
     ).toHaveLength(6);
   });
+});
+
+describe("optional object validator responsibility (#3918)", () => {
+  it("closes the opt-in without changing legacy observation options", () => {
+    const record = objectValidatorRecord();
+    expect(validatePolicy(responsibilityPolicy([record]))).toEqual([]);
+    for (const mutate of [
+      (entry) => {
+        entry.rawObjectInput = false;
+      },
+      (entry) => {
+        entry.rawObjectInput = null;
+      },
+      (entry) => {
+        entry.kind = "public-parser";
+      },
+      (entry) => {
+        entry.rules.push("anti-slop/no-unknown-parameters");
+      },
+      (entry) => {
+        entry.input.parameterIndex = 1;
+      },
+      (entry) => {
+        delete entry.proofAssertions;
+      },
+      (entry) => {
+        entry.directRawCheckerInputs = true;
+      },
+    ]) {
+      const invalid = structuredClone(record);
+      mutate(invalid);
+      expect(validatePolicy(responsibilityPolicy([invalid]))).not.toEqual([]);
+    }
+  });
+
+  it("requires the new declaration and identical actual producer roles", async () => {
+    const own = createObjectValidatorFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const ready = assessPolicyResponsibilities(subject, own.policy);
+    expect(ready.counts).toMatchObject({ ready: 1, pending: 1 });
+    expect(ready.assessments[0].slots).toHaveLength(1);
+    expect(ready.assessments[0].slots[0].rawObjectValidatorInput).toBe(true);
+    const absent = structuredClone(own.policy);
+    delete absent.responsibilities[0].rawObjectInput;
+    expect(assessPolicyResponsibilities(subject, absent).counts.ready).toBe(0);
+    const wrong = structuredClone(own.policy);
+    wrong.responsibilities[0].output.exportName = "consume";
+    const refused = assessPolicyResponsibilities(subject, wrong).assessments[0];
+    expect(refused.reasons).toContain("mismatched-object-validator-producer");
+    expect(refused.slots).toEqual([]);
+  });
+
+  it("does not adapt a pending tagged fact through either dispatch path", () => {
+    // Constructed dispatch reports only; these do not establish actual fact eligibility.
+    for (const kind of ["validator", "public-parser"]) {
+      const finding = {
+        path: "owner.ts",
+        rule: "anti-slop/no-known-value-widening",
+        line: 1,
+        column: 1,
+      };
+      const slot = { ...finding, rawObjectValidatorInput: true };
+      const assessment = {
+        id: "object",
+        kind,
+        structural: "ready",
+        semantic: "pending",
+        slots: [slot],
+      };
+      if (kind === "public-parser") slot.contributingResponsibilityIds = [assessment.id];
+      expect(
+        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+          .violations,
+      ).toEqual([finding]);
+      assessment.semantic = "qualified";
+      expect(
+        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+          .violations,
+      ).toEqual([]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses genuine semantic qualification for an unchecked raw view reaching its consumer",
+    async () => {
+      const own = createObjectValidatorFixture("unchecked");
+      await installSemanticFixtureTools(own);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
+      await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+        "semantic-proof-execution-failed",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "retains the root tag through genuine public proof completion",
+    async () => {
+      const own = createObjectValidatorFixture();
+      await installSemanticFixtureTools(own);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      const slot = pending.assessments[0].slots[0];
+      const finding = { path: slot.path, rule: slot.rule, line: slot.line, column: slot.column };
+      expect(adaptResponsibilityDiagnostics({ violations: [finding] }, pending).violations).toEqual(
+        [finding],
+      );
+      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
+      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+      expect(
+        qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
+      ).toBe(true);
+      expect(
+        adaptResponsibilityDiagnostics({ violations: [finding] }, qualified).violations,
+      ).toEqual([]);
+    },
+  );
 });

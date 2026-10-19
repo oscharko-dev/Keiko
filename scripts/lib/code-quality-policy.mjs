@@ -178,7 +178,21 @@ function validDirectCheckerOption(record) {
   return !Object.hasOwn(record, "directRawCheckerInputs") || record.directRawCheckerInputs === true;
 }
 
+function validObjectValidatorOption(record) {
+  return (
+    record.rawObjectInput === true &&
+    !Object.hasOwn(record, "additionalObservationForms") &&
+    !Object.hasOwn(record, "directRawCheckerInputs") &&
+    record.rules.length === 1 &&
+    record.rules[0] === "anti-slop/no-object-parameters" &&
+    record.input?.parameterIndex === 0 &&
+    record.proofAssertions?.length > 0
+  );
+}
+
 function validObservationOptions(record) {
+  if (record.kind === "validator" && Object.hasOwn(record, "rawObjectInput"))
+    return validObjectValidatorOption(record);
   const present = ["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"].some(
     (key) => Object.hasOwn(record, key),
   );

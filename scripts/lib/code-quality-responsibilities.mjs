@@ -108,11 +108,20 @@ function rawReaderIdentityReasons(record, roles, reasons) {
   if (roles.input.signatures[0]?.result.kind !== "unknown") reasons.push("nonraw-reader-output");
 }
 
+function objectValidatorIdentityReasons(record, roles, reasons) {
+  if (record.kind !== "validator" || record.rawObjectInput !== true) return;
+  const identity = (facts) =>
+    JSON.stringify(facts.identities.map(({ owner, producer }) => ({ owner, producer })));
+  if ([roles.transform, roles.output].some((facts) => identity(facts) !== identity(roles.input)))
+    reasons.push("mismatched-object-validator-producer");
+}
+
 function signatureReasons(record, roles) {
   const reasons = [];
   diagnosticIdentityReasons(record, roles, reasons);
   rawReaderIdentityReasons(record, roles, reasons);
   canonicalDecoderIdentityReasons(record, roles, reasons);
+  objectValidatorIdentityReasons(record, roles, reasons);
   const output = roles.output.signatures[0]?.result.kind;
   if (record.kind === "validator" && ["unknown", "any"].includes(output))
     reasons.push("unchecked-validator-output");
@@ -182,6 +191,8 @@ function responsibilitySlots(resolver, record, roles) {
     return [
       resolver.canonicalDecoderFacts(roles.input.identities[0], roles.output.identities[0]).slot,
     ];
+  if (record.kind === "validator" && record.rawObjectInput === true)
+    return resolver.objectValidatorFacts(roles.input.identities[0]).slots;
   return rawResponsibilitySlots(resolver, record, roles);
 }
 
@@ -320,7 +331,11 @@ function assessRecord(subject, resolver, record, files) {
 }
 
 function qualifiedAdaptationSlot(assessment, slot, assessments) {
-  if (slot.capturedUnknownPredicate && assessment.semantic !== "qualified") return false;
+  if (
+    (slot.capturedUnknownPredicate || slot.rawObjectValidatorInput) &&
+    assessment.semantic !== "qualified"
+  )
+    return false;
   return objectFormQualified(assessment, slot, assessments);
 }
 
@@ -510,7 +525,7 @@ function collectiveAdaptation(finding, assessments) {
         candidate.line === finding.line &&
         candidate.column === finding.column,
     );
-    if (slot && objectFormQualified(assessment, slot, assessments))
+    if (slot && qualifiedAdaptationSlot(assessment, slot, assessments))
       return { finding, responsibilityId: assessment.id, slot };
   }
   return null;
