@@ -1303,3 +1303,15 @@ a held cached-third-versus-fourth control is a later qualification obligation, n
 Raw carrier/registration parameters, shared readers/writers and final DTO authority remain pending.
 
 A validator explicitly declaring `anti-slop/no-known-value-widening` may additionally account for a direct captured-unknown scalar predicate argument. The root must be the actual unknown-input Identifier predicate, and the direct const capture must originate from its already qualified raw helper's standard unknown-valued dictionary. Private same-source predicate reference closure is required; typed erasure, unchecked raw-return roots and unsupported references remain unadapted. These supplemental call slots require current semantic qualification and confer no new helper-parameter, return or writer authority. Legacy raw-helper facts and rule activation stay unchanged.
+
+### Code Task acceptance raw dictionary declarations
+
+The three existing Code Task acceptance public-parser responsibilities may additionally declare
+`anti-slop/no-unsafe-dictionary-type` for actual raw `Record<string, unknown>` boolean-validation
+parameters admitted by the existing bounded single-root and collective helper machinery. The
+contribution, flow and manifest roots keep their existing public consumers, selected proofs and
+roles. Each new adaptation still requires complete current qualified contributors and executed
+proofs; declaration alone is not coverage. Exported readers and predicates, result-derived values,
+external callers, unsupported references and non-boolean dictionary helpers gain no authority.
+`no-runtime-typeof` is not declared by this metadata slice: checks on `ownField(...)` results are
+outside the existing raw-origin grammar and remain observations requiring separate disposition.
