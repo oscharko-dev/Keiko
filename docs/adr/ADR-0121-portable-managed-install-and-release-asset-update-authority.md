@@ -365,6 +365,18 @@ The existing process start and heartbeat events record the selected coordinate a
 observation state without paths, file contents or numeric process references in their extra fields.
 Native SQLite unavailability refuses before durable state instead of replacing the root by re-exec.
 
+The supported report Worker binds a private observation proxy before selecting or reading state.
+Its existing report/preparation protocol remains separate. The proxy delegates only bounded
+process and opened-file observations to the already selected main scope, never initializes the
+native decoder and never creates a Worker writer. Each synchronous request has its own fixed-size
+shared reply buffer and one original process-monotonic five-second deadline, including queue time.
+The main thread validates the closed request and empty buffer, claims it atomically, and publishes
+payload before terminal completion only within that grant. The Worker checks the closed completion
+and deadline after waking. Late replies cannot complete a fresh buffer or revive a terminal one.
+Job settlement closes this private authority before terminating the Worker, including cancellation
+or termination failure; the main root port remains independently owned. Existing caller failure
+events and root lifecycle availability evidence remain authoritative.
+
 These independently exercised Linux mechanisms do not admit an installed app or updater transition.
 The initial CLI still needs the complete detached outer-owner lifetime; each update still needs
 the direct BFF-created coordinator channel, separate installed-current and running-owner identities,

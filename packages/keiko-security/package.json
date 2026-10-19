@@ -55,6 +55,10 @@
       "types": "./dist/process-scope.d.ts",
       "import": "./dist/process-scope.js"
     },
+    "./process-scope-worker": {
+      "types": "./dist/process-scope-worker.d.ts",
+      "import": "./dist/process-scope-worker.js"
+    },
     "./native-process-scope": {
       "types": "./dist/native-process-scope.d.ts",
       "import": "./dist/native-process-scope.js"

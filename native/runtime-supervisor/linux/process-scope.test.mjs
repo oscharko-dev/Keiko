@@ -85,6 +85,7 @@ async function qualify(launcher, helper, root, mode, args = [mode], app = true) 
         classes: [...new Set(text.match(/\b(?:[A-Za-z]*Error|ERR_[A-Z_]+)\b/gu) ?? [])],
         frames: [...new Set(text.match(/[A-Za-z0-9_.-]+\.(?:mjs|js|ts):\d+:\d+/gu) ?? [])],
         bootstrap: text.split("\n").find((line) => line.startsWith("BOOTSTRAP ")),
+        support: text.split("\n").find((line) => line.startsWith("SUPPORT-DIAGNOSTIC ")),
       }),
     );
   } finally {
@@ -159,7 +160,9 @@ async function bff(launcher, helper, mode = "node") {
           ? "identity-refusal"
           : mode === "node-timeout"
             ? "timeout"
-            : "ready",
+            : mode === "node-support"
+              ? "support"
+              : "ready",
     ],
     mode !== "node-absent",
   );
@@ -211,6 +214,8 @@ try {
     qualify(launcher, helper, root, "foreign"));
   await test("real Node BFF binds before its first durable Activity Log record", async () =>
     bff(launcher, helper));
+  await test("supported report Worker reads native owner state through the existing main writer", async () =>
+    bff(launcher, helper, "node-support"));
   await test("native Node bootstrap refuses SQLite re-exec before durable state", async () =>
     bff(launcher, helper, "node-refused"));
   await test("native Node bootstrap refuses an absent owner port before durable state", async () =>

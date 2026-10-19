@@ -23,9 +23,17 @@ import {
 } from "../../../packages/keiko-security/dist/process-scope.js";
 import { openSafeArtifactFile } from "../../../packages/keiko-security/dist/fs-hardening.js";
 import { createNativeProcessScope } from "../../../packages/keiko-security/dist/native-process-scope.js";
+import { createProcessScopeWorkerBridge } from "../../../packages/keiko-security/dist/process-scope-worker.js";
 import { runUiCli, startProcessHeartbeat } from "../../../packages/keiko-cli/dist/ui.js";
 import { createFileServerLogSink } from "../../../packages/keiko-activity-log/dist/server-log.js";
+import { runSupportReportJob } from "../../../packages/keiko-server/dist/support-report-job.js";
+import { inflateSync } from "node:zlib";
+import {
+  createDesktopSupportReport,
+  parseSupportReport,
+} from "../../../packages/keiko-activity-log/dist/reader/index.js";
 
+const { AbortController } = globalThis;
 const [stateDir, staticRoot, hashesFile, port, mode] = process.argv.slice(2);
 assert(stateDir && staticRoot && hashesFile && port);
 let reported = false;
@@ -94,10 +102,64 @@ function awaitStartupRecord(outer) {
     clearInterval(poll);
     clearTimeout(deadline);
     await verifyDecoderLifetime(outer);
+    if (mode === "support") {
+      const direct = createDesktopSupportReport(stateDir);
+      assert(direct.summary.recordCount > 0);
+      await verifyReportCancellation(outer);
+      const report = await runSupportReportJob(stateDir);
+      process.stderr.write(
+        `SUPPORT-DIAGNOSTIC ${JSON.stringify({ mainRecords: direct.summary.recordCount, workerRecords: report.summary.recordCount, workerUnreadable: report.summary.manifestUnreadableCount, workerStatus: report.summary.status, workerReasons: report.summary.reasons })}\n`,
+      );
+      assert(report.summary.recordCount > 0);
+      assert.equal(report.summary.manifestUnreadableCount, 0);
+      const artifact = parseSupportReport(report.reportJson);
+      const selected = JSON.parse(
+        inflateSync(Buffer.from(artifact.evidence.payload, "base64")).toString("utf8"),
+      );
+      assert(
+        selected.some(
+          ({ record }) =>
+            record.op === "process.started" &&
+            record.pid === event.pid &&
+            record.instanceId === event.instanceId &&
+            record.seq === event.seq,
+        ),
+      );
+      await verifyWorkerFileOwner();
+      assert.equal(processLiveness(outer), "alive");
+      assert.equal(currentProcessScopeObservation(), "ready");
+    }
     reported = true;
     process.stdout.write("NODE-SCOPE\n");
     if (mode === "timeout") void verifyOwnerTimeout();
   }, 10);
+}
+
+async function verifyReportCancellation(outer) {
+  const controller = new AbortController();
+  const pending = runSupportReportJob(stateDir, undefined, controller.signal);
+  controller.abort();
+  await assert.rejects(pending, (error) => error.reason === "cancelled");
+  assert.equal(processLiveness(outer), "alive");
+  assert.equal(currentProcessScopeObservation(), "ready");
+}
+
+async function verifyWorkerFileOwner() {
+  const bridge = createProcessScopeWorkerBridge();
+  assert(bridge);
+  const worker = new Worker(
+    new URL("../process_scope_observer_worker_fixture.mjs", import.meta.url),
+    {
+      workerData: { scope: bridge.data, mode: "filesystem" },
+      transferList: [bridge.data.port],
+    },
+  );
+  try {
+    assert.deepEqual(await once(worker, "message"), [{ uid: 1000n, ready: true }]);
+  } finally {
+    bridge.dispose();
+    await worker.terminate();
+  }
 }
 
 async function verifyDecoderLifetime(outer) {

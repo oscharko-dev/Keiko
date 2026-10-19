@@ -1607,3 +1607,30 @@ support-Worker control has a passing main-thread report and a failing Worker pos
 assertion; its adaptation is the next bounded change. Initial/detached and successor ownership,
 real installed version transitions, both native P1 findings and all broader acceptance remain open.
 No issue checkbox or frozen quality result changes.
+
+## Checkpoint 60 — supported report Worker observations
+
+The supported report Worker now observes the existing selected main process scope through one
+private bounded channel before reading state. Its default report/preparation messages stay
+separate. A fresh shared reply buffer per request, closed admission, atomic publication and one
+queue-inclusive monotonic deadline prevent stale or terminal replies from supplying new results.
+The job closes this private authority before terminating the Worker, even when termination fails.
+The native decoder and main-thread-only writer remain independently owned.
+
+The actual native report failure changes from one failing case with 33 healthy controls to 34/34
+under both UID 1000 and UID 65534. The validated report includes the exact current start event; a
+Worker rejects a foreign opened directory even when its projected UID equals self. Startup
+cancellation followed by a fresh report preserves the main root. This does not claim cancellation
+during a native metadata request. The job retirement regression fails before its fix and all
+24 job controls pass afterwards. The final security and support runs pass 971 and 145 tests, with
+three existing security skips. Independent bridge and retirement controls pass 18 and six cases.
+
+Whole-graph typing, root/UI lint, actual Sonar, assembled package surface and all seven Activity
+Log checks pass. The first local analyzer and fixture-lint failures remain recorded; the final
+source uses simple liveness branches and the existing fixture global declaration.
+
+`native-report-worker-observations.json` binds final source/output retention and these bounded
+proofs. The separately frozen real ANN loader matrix already demonstrates one false refusal and
+three false grants across ten ownership cases; its product correction is next. Initial/coordinator
+and successor integration, installed transitions, explicit lease findings and wider acceptance
+remain open. No issue checkbox or frozen model-quality outcome changes.

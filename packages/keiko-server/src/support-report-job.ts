@@ -1,3 +1,7 @@
+import {
+  createProcessScopeWorkerBridge,
+  type ProcessScopeWorkerBridge,
+} from "@oscharko-dev/keiko-security/process-scope-worker";
 import { Worker } from "node:worker_threads";
 import {
   SUPPORT_REPORT_WORKER_TIMEOUT_MS,
@@ -157,9 +161,18 @@ async function awaitReport(
   }
 }
 
-async function releaseWorker(worker: Worker | undefined): Promise<void> {
+interface OwnedReportWorker {
+  readonly worker: Worker;
+  readonly scope: ProcessScopeWorkerBridge | undefined;
+}
+
+async function releaseWorker(worker: OwnedReportWorker | undefined): Promise<void> {
   try {
-    await worker?.terminate();
+    try {
+      worker?.scope?.dispose();
+    } finally {
+      await worker?.worker.terminate();
+    }
   } catch (error) {
     throw new SupportReportJobError("unavailable", error);
   } finally {
@@ -194,7 +207,7 @@ function reportAbandonedPreparation(
 }
 
 async function releaseReportJob(
-  worker: Worker | undefined,
+  worker: OwnedReportWorker | undefined,
   completed: boolean,
   stateDir: string,
   owned: OwnedReportPreparation | undefined,
@@ -210,6 +223,26 @@ async function releaseReportJob(
   }
 }
 
+function startReportWorker(stateDir: string, correlationId: string | undefined): OwnedReportWorker {
+  const scope = createProcessScopeWorkerBridge();
+  try {
+    const worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
+      workerData: {
+        stateDir,
+        correlationId,
+        ...(scope === undefined ? {} : { processScope: scope.data }),
+      },
+      ...(scope === undefined ? {} : { transferList: [scope.data.port] }),
+      resourceLimits: { maxOldGenerationSizeMb: 256 },
+    });
+    if (scope !== undefined) worker.once("exit", scope.dispose);
+    return { worker, scope };
+  } catch (error) {
+    scope?.dispose();
+    throw error;
+  }
+}
+
 /** Keep synchronous log scans off the request event loop, with one bounded worker per server. */
 export async function runSupportReportJob(
   stateDir: string,
@@ -221,21 +254,24 @@ export async function runSupportReportJob(
   if (running) throw new SupportReportJobError("busy");
   if (signal?.aborted === true) throw new SupportReportJobError("cancelled");
   running = true;
-  let worker: Worker | undefined;
+  let worker: OwnedReportWorker | undefined;
   let owned: OwnedReportPreparation | undefined;
   let completed = false;
   try {
-    worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
-      workerData: { stateDir, correlationId },
-      resourceLimits: { maxOldGenerationSizeMb: 256 },
-    });
-    const report = await awaitReport(worker, stateDir, correlationId, signal, (record): void => {
-      const preparation = { record, retired: false };
-      owned = preparation;
-      onPrepared?.((): void => {
-        reportAbandonedPreparation(stateDir, preparation, requestCorrelationId);
-      });
-    });
+    worker = startReportWorker(stateDir, correlationId);
+    const report = await awaitReport(
+      worker.worker,
+      stateDir,
+      correlationId,
+      signal,
+      (record): void => {
+        const preparation = { record, retired: false };
+        owned = preparation;
+        onPrepared?.((): void => {
+          reportAbandonedPreparation(stateDir, preparation, requestCorrelationId);
+        });
+      },
+    );
     completed = true;
     return report;
   } catch (error) {
