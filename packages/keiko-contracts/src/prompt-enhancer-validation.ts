@@ -1379,11 +1379,16 @@ function collectRankedPromptErrors(
   return admissions.every(Boolean);
 }
 
+interface PromptSafetyAssessmentCollection {
+  admitted: boolean;
+  values: readonly (PromptSafetyAssessment | undefined)[];
+}
+
 function collectRankedSafetyAssessmentListErrors(
   ranked: unknown,
   assessments: unknown,
   errors: string[],
-): { admitted: boolean; values: readonly (PromptSafetyAssessment | undefined)[] } {
+): PromptSafetyAssessmentCollection {
   if (!Array.isArray(assessments)) {
     errors.push("selection.rankedSafetyAssessments must be an array");
     return { admitted: false, values: [] };
@@ -1415,7 +1420,7 @@ function collectRankedSafetyAssessmentListErrors(
 function collectAssessmentMembers(
   assessments: readonly unknown[],
   errors: string[],
-): { admitted: boolean; values: readonly (PromptSafetyAssessment | undefined)[] } {
+): PromptSafetyAssessmentCollection {
   const values: (PromptSafetyAssessment | undefined)[] = [];
   const extent = assessments.length;
   if (!Number.isSafeInteger(extent) || extent < 0) {
