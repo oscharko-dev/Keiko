@@ -368,5 +368,6 @@
   ],
   "boundedEvidence": "docs/qa/evidence/4037/README.md",
   "closureRule": "Check acceptance only against actual completed evidence; close issues only after separately authorized and verified integration.",
-  "checkpoint38BoundedEvidence": "chat-creation-idempotency.json; no complete acceptance disposition or issue checkmark changed"
+  "checkpoint38BoundedEvidence": "chat-creation-idempotency.json; no complete acceptance disposition or issue checkmark changed",
+  "checkpoint39BoundedEvidence": "private-verification-diagnostics.json; no complete acceptance disposition or issue checkmark changed"
 }

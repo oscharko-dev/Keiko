@@ -64,6 +64,16 @@ describe("generated-test qualification uses complete actual runner observations"
     expect(verify(report(), report(true)).passed).toBe(true);
   });
 
+  it("keeps private runner diagnostics out of the public verification result", () => {
+    const baseline = report();
+    baseline.qualificationDiagnostics = {
+      text: "Synthetic private diagnostic must remain in the private execution artifact",
+    };
+    const result = verify(baseline, report(true));
+    expect(result.passed).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(baseline.qualificationDiagnostics.text);
+  });
+
   it("refuses an unhandled error hidden by the standard JSON reporter", () => {
     const mutation = report(true);
     mutation.qualification.unhandledErrors = 1;

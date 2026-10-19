@@ -1,6 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { JsonReporter } from "vitest/node";
+import { Buffer } from "node:buffer";
 import { processError } from "@vitest/utils/error";
-import { observeQualification } from "../testing/chat-skills-lab/qualification-reporter.mjs";
+import QualificationReporter, {
+  observeQualification,
+} from "../testing/chat-skills-lab/qualification-reporter.mjs";
+
+afterEach(() => vi.restoreAllMocks());
+
+async function actualReport(errors, reason = "passed") {
+  let report;
+  vi.spyOn(JsonReporter.prototype, "writeReport").mockImplementation((text) => {
+    report = JSON.parse(text);
+    return Promise.resolve();
+  });
+  const reporter = new QualificationReporter();
+  reporter.onInit({ config: { passWithNoTests: true }, snapshot: { summary: {} } });
+  await reporter.onTestRunEnd([], errors, reason);
+  return report;
+}
 
 expect.extend({
   toBeSyntheticOne(actual) {
@@ -32,6 +50,87 @@ function observe(errors, state = "failed", diagnosticAvailable = true) {
 }
 
 describe("actual runner error and lifecycle observations", () => {
+  it("retains the actual global error for private feedback without promoting its execution", async () => {
+    const report = await actualReport([
+      processError(new TypeError("Synthetic asynchronous collaborator failure")),
+    ]);
+    expect(report.qualification.unhandledErrors).toBe(1);
+    expect(report.qualificationDiagnostics?.text).toContain(
+      "Synthetic asynchronous collaborator failure",
+    );
+    expect(report.qualificationDiagnostics?.text).toContain("TypeError");
+    expect(report.qualificationDiagnostics).toMatchObject({
+      errorCount: 1,
+      capturedErrorCount: 1,
+      complete: true,
+      truncated: false,
+    });
+  });
+
+  it("bounds actual multibyte errors without splitting UTF-8 or losing the source count", async () => {
+    const report = await actualReport([
+      processError(new TypeError("🧪".repeat(5000))),
+      processError(new RangeError("Later diagnostic beyond the original byte grant")),
+    ]);
+    const diagnostics = report.qualificationDiagnostics;
+    expect(report.qualification.unhandledErrors).toBe(2);
+    expect(Buffer.byteLength(diagnostics.text)).toBeLessThanOrEqual(8192);
+    expect(diagnostics.text).toContain("TypeError");
+    expect(diagnostics.text).not.toContain("�");
+    expect(diagnostics.text).not.toContain("Later diagnostic");
+    expect(diagnostics).toMatchObject({
+      errorCount: 2,
+      capturedErrorCount: 1,
+      complete: false,
+      truncated: true,
+    });
+  });
+
+  it("does not claim an error was captured when no complete character fits", async () => {
+    const report = await actualReport([{ message: "x".repeat(8188) }, { message: "🧪" }]);
+    expect(report.qualificationDiagnostics).toMatchObject({
+      text: "x".repeat(8188),
+      errorCount: 2,
+      capturedErrorCount: 1,
+      complete: false,
+      truncated: true,
+    });
+  });
+
+  it("keeps missing global observations unknown on interruption", async () => {
+    const report = await actualReport(undefined, "interrupted");
+    expect(report.qualification).toMatchObject({ endReason: "interrupted", unhandledErrors: null });
+    expect(report.qualificationDiagnostics).toMatchObject({
+      errorCount: null,
+      capturedErrorCount: 0,
+      text: "",
+      complete: false,
+    });
+  });
+
+  it("does not manufacture a cause from an error name without message or location", async () => {
+    const report = await actualReport([{ name: "TypeError" }]);
+    expect(report.qualificationDiagnostics).toMatchObject({
+      errorCount: 1,
+      capturedErrorCount: 0,
+      text: "",
+      complete: false,
+      truncated: false,
+    });
+  });
+
+  it("keeps a clean observation empty", async () => {
+    const report = await actualReport([]);
+    expect(report.qualificationDiagnostics).toEqual({
+      schemaVersion: 1,
+      errorCount: 0,
+      capturedErrorCount: 0,
+      text: "",
+      complete: true,
+      truncated: false,
+    });
+  });
+
   it.each([false, true])(
     "recognizes the actual serialized matcher error, negated=%s",
     (negated) => {
