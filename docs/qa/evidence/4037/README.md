@@ -1503,3 +1503,30 @@ configuration, observed outcomes and remaining failures without publishing priva
 Do not replace frozen failed calibration or untouched held-out evaluation with these journeys.
 A failed visible journey remains open, receives the smallest causal fix and is exercised again.
 This acceptance has not yet been executed.
+
+## Current-source visible diagnostics and unchanged Files replay
+
+The published checkpoint 53 application was exercised visibly with its actual BFF, 301 built UI
+assets and the existing local gateway. An independent browser received approval through matching
+comparison codes. A synthetic private draft survived a real reload. Revocation removed its private
+draft access; renewed approval restored the same text. The narrow private receipt joins the unique
+chat identity and exact observed/stored text by hash and retains the actual rejected draft-read
+correlations. These observations do not qualify the full browser/profile/restart/SSD matrix.
+
+The Updates window and its real Check again action reported unavailable verification rather than
+claiming an available update. This checkout journey does not prove a packaged version transition.
+Both unchanged published skills were imported through the UI. One Java GWT task was sent with the
+selected Java skill and the connected synthetic project. Opening another browser's Settings in the
+shared workspace caused an unrequested source-intent cancellation. The first physical completion
+used 1,536 output tokens; the bounded continuation retained its remaining 6,656-token cap and was
+aborted. Only one user message and no final assistant answer were stored. The failed journey remains
+retained, React was not dispatched, and no generated-test or skill acceptance is claimed.
+
+A deterministic storage-replay regression fails on checkpoint 53: an unchanged opaque Files edge
+and an unrelated Settings window cause one cancellation. The existing other 59 scope tests pass.
+The correction restores the existing local edge directly only from its conversation-bound canonical
+acknowledgement when the persisted fingerprint and visible scope both agree. Missing/changed
+fingerprints and actual navigation retain the normal guards; unrelated pending/failed source holds
+survive. All 65 scope controls pass. The first candidate's failure to restore the local edge was
+caught by an existing regression and corrected without weakening that assertion. The corrected
+built application still requires the visible replay and remaining acceptance journeys.

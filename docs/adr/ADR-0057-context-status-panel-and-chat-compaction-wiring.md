@@ -193,6 +193,14 @@ The composer preserves drafts and displays localized pending/failure status. Exi
 `client.files-scope.decision` evidence joins `intent-pending`, `intent-applied`, `intent-failed`
 and `intent-send-refused` to the mutation correlation without paths, prompts or answers.
 
+A privacy-elided workspace replay is not itself a new source intent. For the same conversation and
+connection, an existing canonical acknowledgement may restore the local edge representation when
+its valid persisted fingerprint and scope both match the visible Files selection. This restoration
+does not PATCH the chat, fetch a new source list or cancel its response. Missing or changed proof,
+actual navigation and failed transitions retain the normal admission/recovery path; another source's
+pending or failed hold remains intact. The existing `automatic-suppressed` scope decision links to
+the original acknowledgement correlation without recording source paths.
+
 Git-change description authority is independent of source connectivity. Buffered and streaming
 turns require authority for the exact active comparison and return 409
 `GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED` when admission fails. Ordinary chat regeneration rejects

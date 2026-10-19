@@ -409,6 +409,111 @@ async function mountNativeFilesSession(
 }
 
 describe("AppShell canonical workspace scope synchronization", () => {
+  it("preserves an active response when another browser restores the same opaque Files edge", async () => {
+    const initial = fixture(["/manuals/Stable"]);
+    mocks.initialChat = chat([scope("/manuals/Stable")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+    const cancel = vi.fn();
+    const cancellation = renderHook(() => useChatScopeCancellation(cancel));
+    try {
+      render(<AppShell />);
+      await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+      cancel.mockClear();
+      mocks.fetchChats.mockClear();
+      vi.mocked(reportFilesScopeDecision).mockClear();
+      await storageReplay(
+        [...initial.wins, windowRecord("other-browser-settings", "settings", {})],
+        initial.conns,
+      );
+      await waitFor(() => expect(mocks.workspace?.wins).toHaveLength(3));
+      await storageReplay(
+        [...initial.wins, windowRecord("other-browser-settings", "settings", { tab: "security" })],
+        initial.conns,
+      );
+      expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable");
+      expect(cancel).not.toHaveBeenCalled();
+      expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+      expect(mocks.fetchChats).not.toHaveBeenCalled();
+      expect(mocks.serverChat?.connectedScopes).toEqual([scope("/manuals/Stable")]);
+      expect(chatScopeTransition("chat-1")).toBeUndefined();
+      expect(reportFilesScopeDecision).toHaveBeenCalledWith(
+        expect.any(String),
+        { decision: "automatic-suppressed" },
+        expect.any(String),
+      );
+    } finally {
+      cancellation.unmount();
+    }
+  });
+
+  it.each(["missing", "changed"] as const)(
+    "revalidates an opaque Files edge with a %s ownership fingerprint before retaining a response",
+    async (fingerprint) => {
+      const initial = fixture(["/manuals/Stable"]);
+      mocks.initialChat = chat([scope("/manuals/Stable")]);
+      mocks.serverChat = mocks.initialChat;
+      persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+      const cancel = vi.fn();
+      const cancellation = renderHook(() => useChatScopeCancellation(cancel));
+      try {
+        render(<AppShell />);
+        await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+        cancel.mockClear();
+        mocks.fetchChats.mockClear();
+        vi.mocked(reportFilesScopeDecision).mockClear();
+        const original = initial.conns[0];
+        if (original === undefined) throw new TypeError("Missing fixture connection");
+        const connection = { ...original };
+        if (fingerprint === "missing") delete connection.boundScopeFingerprint;
+        else connection.boundScopeFingerprint = connectedScopeFingerprint(scope("/manuals/Other"));
+        await storageReplay(initial.wins, [connection]);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(mocks.fetchChats).toHaveBeenCalled();
+        expect(mocks.serverChat?.connectedScopes).toEqual([scope("/manuals/Stable")]);
+        expect(reportFilesScopeDecision).not.toHaveBeenCalledWith(
+          expect.any(String),
+          { decision: "automatic-suppressed" },
+          expect.any(String),
+        );
+      } finally {
+        cancellation.unmount();
+      }
+    },
+  );
+
+  it.each([
+    ["other-source", "pending"],
+    ["other-source", "failed"],
+    ["edge-0", "pending"],
+  ] as const)(
+    "restores an unchanged opaque Files edge without releasing %s's %s hold",
+    async (source, status) => {
+      const initial = fixture(["/manuals/Stable"]);
+      mocks.initialChat = chat([scope("/manuals/Stable")]);
+      mocks.serverChat = mocks.initialChat;
+      persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+      render(<AppShell />);
+      await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+      const intent = beginChatScopeTransition("chat-1", source);
+      if (status === "failed") intent.settle(false);
+      mocks.fetchChats.mockClear();
+      try {
+        await storageReplay(
+          [...initial.wins, windowRecord("other-browser-settings", "settings", {})],
+          initial.conns,
+        );
+        expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable");
+        expect(chatScopeSourceTransition("chat-1", source)).toBe(status);
+        expect(chatScopeTransition("chat-1")).toBe(status);
+        expect(mocks.fetchChats).not.toHaveBeenCalled();
+        expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+      } finally {
+        intent.settle(true);
+      }
+    },
+  );
+
   it("cancels the bound response before a navigation PATCH acknowledgement", async () => {
     const initial = fixture(["/manuals/Old"]);
     mocks.initialChat = chat([scope("/manuals/Old")]);

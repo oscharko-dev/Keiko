@@ -765,6 +765,35 @@ function pruneFilesAcknowledgements<T>(
   }
 }
 
+function retainUnchangedFilesConnection(
+  connection: Connection,
+  conversationId: string,
+  nextScope: ChatConnectedScope,
+  acknowledgements: ReadonlyMap<string, ChatConnectedScope>,
+  correlations: ReadonlyMap<string, string>,
+  api: WorkspaceApi,
+): boolean {
+  if (chatScopeSourceTransition(conversationId, connection.id) === "failed") return false;
+  if (connectedScopeKey(boundScopeOf(connection)) === connectedScopeKey(nextScope)) return true;
+  const key = `${connection.id}\u0000${conversationId}`;
+  const acknowledged = acknowledgements.get(key);
+  if (
+    connection.boundScopeElided !== true ||
+    acknowledged === undefined ||
+    !isConnectedScopeFingerprint(connection.boundScopeFingerprint) ||
+    connectedScopeFingerprint(acknowledged) !== connection.boundScopeFingerprint ||
+    connectedScopeKey(acknowledged) !== connectedScopeKey(nextScope)
+  )
+    return false;
+  reportFilesScopeDecision(
+    newClientCorrelationId(),
+    { decision: "automatic-suppressed" },
+    correlations.get(key),
+  );
+  api.updateConnBoundScope(connection.id, acknowledged);
+  return true;
+}
+
 function automaticFilesAmbiguityIdentity(
   connection: Connection,
   chat: Chat,
@@ -2633,17 +2662,21 @@ function AppShellInner(): ReactNode {
     if (a === undefined || b === undefined) return;
     const chatWindowId = chatWindowIdOf(conn, a, b);
     if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) return;
-    const visibleScope = filesChatBindScope(a, b, Date.now());
-    if (visibleScope === null) return;
+    const nextScope = filesChatBindScope(a, b, Date.now());
+    if (nextScope === null) return;
     const chatWindow = a.type === "chat" ? a : b;
-    const nextScope = visibleScope;
-    const previousScope = boundScopeOf(conn);
     const conversationId =
       chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
     if (conversationId === undefined) return;
     if (
-      connectedScopeKey(previousScope) === connectedScopeKey(nextScope) &&
-      chatScopeSourceTransition(conversationId, conn.id) !== "failed"
+      retainUnchangedFilesConnection(
+        conn,
+        conversationId,
+        nextScope,
+        acknowledgedFilesScopesRef.current,
+        acknowledgedFilesCorrelationsRef.current,
+        ws.api,
+      )
     )
       return;
     const target: ChatBindingTarget = {
@@ -2661,7 +2694,7 @@ function AppShellInner(): ReactNode {
           conversationId,
         ),
     };
-    void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id, true).then(
+    void replaceFilesScope(chatWindowId, nextScope, boundScopeOf(conn), target, conn.id, true).then(
       (accepted) =>
         applyAcknowledgedFilesConnection(
           accepted,

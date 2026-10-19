@@ -835,6 +835,11 @@ system that exists, never beside it:
   Activity Log under their directory-read correlation, without paths or contents.
   Explicitly forgetting a failed Files edge releases only its own failed admission hold;
   pending work and independent source holds remain protected.
+  An unchanged privacy-elided Files edge may restore its local representation from the same
+  conversation/connection's canonical acknowledgement only when its persisted fingerprint and
+  visible scope both match. This does not start a new source intent or cancel a response. Missing
+  or changed proof and failed transitions retain normal recovery; other source holds remain intact.
+  The existing `automatic-suppressed` scope decision joins the original acknowledgement.
   A mounted Chat may establish its conversation through the existing runtime before its id is
   persisted in window cfg; refresh admission and failed-edge recovery use that same live identity.
   Initial Files bindings hold admission before an edge exists, using stable window ownership.

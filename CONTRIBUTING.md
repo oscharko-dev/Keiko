@@ -30,6 +30,12 @@ Chat draft recovery reuses the private UiStore and authenticated chat-bound revi
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.
 
+An unchanged privacy-elided Files connection may reuse its conversation-bound canonical
+acknowledgement only when the persisted fingerprint and visible scope both match. Restore the
+existing local edge without starting another source intent or cancelling its response. Missing or
+changed ownership and genuine navigation retain the normal guards; unrelated source holds remain
+intact. The existing `automatic-suppressed` Files scope decision joins the original acknowledgement.
+
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
 APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
