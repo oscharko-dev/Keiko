@@ -4,7 +4,9 @@
 // silently breaking a downstream caller. The trust-boundary nature of this package (it owns the
 // only safe-tool-execution surface) makes the "stable public surface" guarantee load-bearing.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 
 import { createRequire } from "node:module";
 import * as tools from "./index.js";
@@ -324,5 +326,16 @@ describe("keiko-tools public surface", () => {
     pin<GitRecoveryCommand>();
     pin<GitStageCommand>();
     expect(pin<GitUnstageCommand>()).toBeUndefined();
+  });
+});
+
+describe("canonical static tool schema precision (#3918)", () => {
+  it("preserves admitted JSON through source and public static exports", () => {
+    type SourceDefinitions = typeof tools.TOOL_DEFINITIONS;
+    type PublicDefinitions = typeof import("@oscharko-dev/keiko-tools").TOOL_DEFINITIONS;
+    expectTypeOf<SourceDefinitions[number]["parameters"]>().toEqualTypeOf<CatalogJsonObject>();
+    expectTypeOf<PublicDefinitions[number]["parameters"]>().toEqualTypeOf<CatalogJsonObject>();
+    expectTypeOf<SourceDefinitions>().toExtend<readonly ToolDefinition[]>();
+    expectTypeOf<PublicDefinitions>().toExtend<readonly ToolDefinition[]>();
   });
 });
