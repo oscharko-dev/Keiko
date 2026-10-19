@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import type { CatalogVersionRef } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  CatalogVersionRef,
+  CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import {
   CATALOG_DIALECTS,
   compileToolProjection,
@@ -296,5 +300,18 @@ describe("bounded terminal envelopes", () => {
     expect(() => validateToolResultEnvelope({ ...result, effectStarted: true })).toThrow(
       "result-contract-failed",
     );
+  });
+});
+
+describe("catalog gateway schema contract precision (#3918)", () => {
+  it("retains recursive JSON in source and canonical public results with legacy compatibility", () => {
+    type SourceDefinitions = ReturnType<typeof gatewayToolDefinitions>;
+    type PublicDefinitions = ReturnType<
+      typeof import("@oscharko-dev/keiko-tool-catalog").gatewayToolDefinitions
+    >;
+    expectTypeOf<SourceDefinitions[number]["parameters"]>().toEqualTypeOf<CatalogJsonObject>();
+    expectTypeOf<PublicDefinitions[number]["parameters"]>().toEqualTypeOf<CatalogJsonObject>();
+    expectTypeOf<SourceDefinitions>().toExtend<readonly ToolDefinition[]>();
+    expectTypeOf<PublicDefinitions>().toExtend<readonly ToolDefinition[]>();
   });
 });
