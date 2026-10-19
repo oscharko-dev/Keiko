@@ -73,6 +73,7 @@ import {
   runGroundedExploration,
   scanFirstSymbolLine,
   type GroundedAnswerer,
+  type OrchestratorDeps,
   type OrchestratorInput,
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
@@ -1432,6 +1433,41 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("does not let implicit Git metadata change current-policy evidence", async () => {
+    writeFileSync(
+      join(ROOT, "src/refunds.ts"),
+      "// Datura partners: refunds within 21 calendar days, up to EUR 7500 inclusive.\n",
+    );
+    const history = vi.fn<GitFileHistoryEvidenceProvider>(() =>
+      Promise.resolve([gitHistoryAtom("src/foo.ts", NOW)]),
+    );
+    const request = input({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({
+        text: "What refund period and maximum amount apply to Datura partners? Compare backend and frontend with rejected proposals.",
+      }),
+    });
+    const activityLog = createBufferedServerLogSink();
+    const deps: OrchestratorDeps = {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      gitFileHistoryEvidence: history,
+      activityLog,
+    };
+    const ordinary = await retrieveConnectedContextPack(request, deps);
+    mkdirSync(join(ROOT, ".git"));
+    const git = await retrieveConnectedContextPack(request, deps);
+    expect(history).not.toHaveBeenCalled();
+    expect(git.pack.files).toEqual(ordinary.pack.files);
+    expect(git.pack.files.some((file) => file.scopePath === "src/refunds.ts")).toBe(true);
+    expect(
+      activityLog.events.filter((event) => event.op === "search.connected-context.completed"),
+    ).toHaveLength(2);
+    expect(JSON.stringify(activityLog.events)).not.toContain("Datura");
+  });
+
   it("preserves retained-result uncertainty for an exact factual lookup in Git", async () => {
     mkdirSync(join(ROOT, ".git"));
     for (const name of ["first", "second"])
@@ -2573,7 +2609,7 @@ describe("runGroundedExploration", () => {
     expect(semanticCalls).toBe(1);
   });
 
-  it("records executed and skipped rings plus augmentation decisions without source bodies", async () => {
+  it("records factual retrieval without unrequested history and without source bodies", async () => {
     writeFileSync(join(ROOT, "manual.html"), "<p>other information</p>\n");
     const log = createBufferedServerLogSink();
     await retrieveConnectedContextPack(
@@ -2592,8 +2628,9 @@ describe("runGroundedExploration", () => {
     const event = log.events.find((item) => item.op === "search.connected-context.completed");
     expect(event?.extra).toMatchObject({
       executedRingKinds: ["lexical"],
-      skippedRingKinds: ["git-history"],
-      ringSkipReasons: ["no-git-metadata"],
+      plannedRingCount: 1,
+      skippedRingKinds: [],
+      ringSkipReasons: [],
       augmentationSkipped: true,
     });
     expect(
@@ -4754,7 +4791,9 @@ describe("runGroundedExploration", () => {
       await runGroundedExploration(
         input({
           scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
-          query: happyQuery({ text: "Investigate src/foo.ts and tests/foo.test.ts" }),
+          query: happyQuery({
+            text: "Investigate src/foo.ts and tests/foo.test.ts and recent Git history",
+          }),
         }),
         {
           correlationId: undefined,
@@ -6088,7 +6127,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("settles at the deadline when availability never settles and ignores its late result", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       type Availability = Awaited<ReturnType<RerankerSeam["isAvailable"]>>;
       let nowMs = NOW;
@@ -6144,7 +6183,7 @@ describe("runGroundedExploration", () => {
       query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
       budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 25 },
     });
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       type Candidates = Awaited<ReturnType<RerankerSeam["rerank"]>>;
       let nowMs = NOW;

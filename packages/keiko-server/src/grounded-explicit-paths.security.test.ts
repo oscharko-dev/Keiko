@@ -318,29 +318,32 @@ describe("explicit-path trust boundary", () => {
 });
 
 describe("bounded explicit basename discovery", () => {
-  it("caps discovery deterministically when more than ninety-six matches exist", async () => {
-    const files = Object.fromEntries(
-      Array.from({ length: 100 }, (_value, index) => [
-        `src/directory-${String(index).padStart(3, "0")}/probe.ts`,
-        `export const fact${String(index)} = ${String(index)};\n`,
-      ]),
-    );
-    const first = await retrieve("Explain probe.ts", { fs: memFs(root, files) });
-    const second = await retrieve("Explain probe.ts", { fs: memFs(root, files) });
-    for (const result of [first, second]) {
-      expect(
-        result.log.events.find((event) => event.op === "search.connected-context.source-details")
-          ?.extra,
-      ).toMatchObject({
-        basenameDiscoveryTermCount: 1,
-        basenameDiscoveryMatchCount: 96,
-        explicitPathAdmittedCount: 96,
-      });
-    }
-    expect(first.output.pack.files.map((file) => file.scopePath)).toEqual(
-      second.output.pack.files.map((file) => file.scopePath),
-    );
-  });
+  it.each(["probe.ts", "package-lock.json"])(
+    "caps discovery of %s at ninety-six matches",
+    async (name) => {
+      const files = Object.fromEntries(
+        Array.from({ length: 100 }, (_value, index) => [
+          `src/directory-${String(index).padStart(3, "0")}/${name}`,
+          `export const fact${String(index)} = ${String(index)};\n`,
+        ]),
+      );
+      const first = await retrieve(`Explain ${name}`, { fs: memFs(root, files) });
+      const second = await retrieve(`Explain ${name}`, { fs: memFs(root, files) });
+      for (const result of [first, second]) {
+        expect(
+          result.log.events.find((event) => event.op === "search.connected-context.source-details")
+            ?.extra,
+        ).toMatchObject({
+          basenameDiscoveryTermCount: 1,
+          basenameDiscoveryMatchCount: 96,
+          explicitPathAdmittedCount: 96,
+        });
+      }
+      expect(first.output.pack.files.map((file) => file.scopePath)).toEqual(
+        second.output.pack.files.map((file) => file.scopePath),
+      );
+    },
+  );
 
   it("preserves all five incident matches without admitting generated dependencies", async () => {
     const result = await retrieve("Explain validation.ts", {
@@ -372,24 +375,47 @@ describe("bounded explicit basename discovery", () => {
     });
   });
 
-  it("reports every admitted but unread basename under a one-file grant", async () => {
-    const files = {
-      "src/a/probe.ts": "export const first = 1;",
-      "src/b/probe.ts": "export const second = 2;",
-    };
-    const result = await retrieve("Explain probe.ts", {
-      fs: memFs(root, files),
-      budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
+  it.each(["probe.ts", "package-lock.json"])(
+    "reports unread %s matches under a one-file grant",
+    async (name) => {
+      const files = {
+        [`src/a/${name}`]: "export const first = 1;",
+        [`src/b/${name}`]: "export const second = 2;",
+      };
+      const result = await retrieve(`Explain ${name}`, {
+        fs: memFs(root, files),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
+      });
+      expect(result.output.pack.files).toHaveLength(1);
+      const unread = Object.keys(files).find(
+        (path) => !result.output.pack.files.some((file) => file.scopePath === path),
+      );
+      expect(unread).toBeDefined();
+      expect(result.output.pack.omitted).toContainEqual({
+        scopePath: unread,
+        reason: "budget-exhausted",
+        omittedAtMs: NOW,
+      });
+    },
+  );
+
+  it("contains canonical basename discovery in the selected directory before reads", async () => {
+    const allowed = "frontend/package-lock.json";
+    const rejected = [
+      "backend/package-lock.json",
+      "frontend/node_modules/other/package-lock.json",
+      "ignored/package-lock.json",
+    ];
+    writeFixture(allowed, '{"lockfileVersion": 3}\n');
+    for (const path of rejected) writeFixture(path, PRIVATE_BODY);
+    const reads: string[] = [];
+    const result = await retrieve('Inspect "package-lock.json".', {
+      kind: "directory",
+      relativePaths: ["frontend"],
+      fs: watchedFs(reads),
     });
-    expect(result.output.pack.files).toHaveLength(1);
-    const unread = Object.keys(files).find(
-      (path) => !result.output.pack.files.some((file) => file.scopePath === path),
-    );
-    expect(unread).toBeDefined();
-    expect(result.output.pack.omitted).toContainEqual({
-      scopePath: unread,
-      reason: "budget-exhausted",
-      omittedAtMs: NOW,
-    });
+    expect(result.output.pack.files.map((file) => file.scopePath)).toEqual([allowed]);
+    for (const path of rejected) expect(reads).not.toContain(join(root, path));
+    expect(JSON.stringify(result)).not.toContain(PRIVATE_BODY);
   });
 });

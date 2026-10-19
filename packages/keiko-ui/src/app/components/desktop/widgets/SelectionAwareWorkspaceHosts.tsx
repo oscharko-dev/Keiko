@@ -45,7 +45,7 @@ import {
 import styles from "./ChatChoiceNotice.module.css";
 import { NATIVE_FIELDSET_RESET_STYLE } from "../native-element-styles";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
-import { effectiveScopes, KEEP_FILES_FOLDER_CFG_KEY } from "../hooks/workspaceActions";
+import { effectiveScopes } from "../hooks/workspaceActions";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
@@ -301,6 +301,10 @@ interface ChatCreationControl {
   readonly pending: boolean;
 }
 
+function chatCreationFailed(creating: ChatCreationControl): boolean {
+  return creating.pending && creating.errorKey === "chat.creation.openFailed";
+}
+
 interface ChatCreationError {
   readonly chatId: string | undefined;
   readonly messageKey: ChatCreationNoticeKey;
@@ -357,10 +361,13 @@ function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttem
   return mountedRef;
 }
 
-function useIdentityRevision(identity: object): number {
+function useIdentityRevision(identity: object, retryFailedCreation: boolean): number {
   const stateRef = useRef({ identity, revision: 0 });
   if (stateRef.current.identity !== identity) {
-    stateRef.current = { identity, revision: stateRef.current.revision + 1 };
+    // Catalog refreshes replace callbacks while a slow creation is still pending. Only a
+    // settled failure may start a new attempt; callback identity is not a new user request.
+    const revision = stateRef.current.revision + (retryFailedCreation ? 1 : 0);
+    stateRef.current = { identity, revision };
   }
   return stateRef.current.revision;
 }
@@ -429,7 +436,8 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
   const { activeProject, chatId, coordinator, loading, newChatRequestId, title, updateCfg } = args;
   const [error, setError] = useState<ChatCreationError | null>(null);
   const pending = chatId === undefined;
-  const coordinatorRevision = useIdentityRevision(coordinator);
+  const retryFailedCreation = error?.messageKey === "chat.creation.openFailed";
+  const coordinatorRevision = useIdentityRevision(coordinator, retryFailedCreation);
   const requestId = pending
     ? (newChatRequestId ?? `initial-unbound-chat-${String(coordinatorRevision)}`)
     : undefined;
@@ -1223,18 +1231,12 @@ function BoundChatBody({
     },
     [activeProjectPath, ctx],
   );
-  const updateCfg = ctx.updateCfg;
-  const keepFolderChange = useCallback(
-    (keep: boolean): void => updateCfg({ [KEEP_FILES_FOLDER_CFG_KEY]: keep }),
-    [updateCfg],
-  );
   if (targetLookupFailed) return null;
   if (targetMissing) return <ChatNotFound choice={choice} />;
   if (waiting) return <ChatBindPending />;
   return (
     <ChatWindow
       windowId={ctx.windowId}
-      onKeepFolderChange={keepFolderChange}
       suspended={ctx.suspended === true}
       mini={ctx.mini === true}
       minimalChat={ctx.minimalChat === true}
@@ -1295,6 +1297,7 @@ function useBoundChatControls(
 ): {
   readonly configuredProjectMissing: boolean;
   readonly creating: ChatCreationControl;
+  readonly retryCreation: () => void;
 } {
   const coordinator = useChatCreationCoordinator(session.openNewChat, session.replaceChat);
   const configuredProject =
@@ -1312,7 +1315,13 @@ function useBoundChatControls(
     title: configuration.title,
     updateCfg: ctx.updateCfg,
   });
-  return { configuredProjectMissing, creating };
+  const retryCreation = (): void => {
+    if (!chatCreationFailed(creating)) return;
+    session.clearError?.();
+    // The existing owner and chat-bind lifecycle handle this new attempt, including evidence.
+    ctx.updateCfg({ newChatRequestId: newClientCorrelationId() });
+  };
+  return { configuredProjectMissing, creating, retryCreation };
 }
 
 function boundChatWaiting(args: {
@@ -1403,6 +1412,20 @@ function BoundChatAlerts({
     return <ChatHostAlert messageKey={controls.creating.errorKey} />;
   }
   return <ChatHostAlert messageKey={lookupMessage} />;
+}
+
+function ChatCreationRetry({
+  controls,
+}: {
+  readonly controls: ReturnType<typeof useBoundChatControls>;
+}): ReactNode {
+  const t = useTranslate();
+  if (!chatCreationFailed(controls.creating)) return null;
+  return (
+    <button type="button" className="lk-btn" onClick={controls.retryCreation}>
+      {t("common.retry")}
+    </button>
+  );
 }
 
 function useBoundChatWindowRuntime(
@@ -1497,12 +1520,13 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
         lookupFailed={targetLookupFailed}
         sessionError={session.error}
       />
+      <ChatCreationRetry controls={controls} />
       <ChatChoiceNotice decision={props.decision} state={noticeState} />
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         choice={props.choice}
         ctx={ctx}
-        targetLookupFailed={targetLookupFailed}
+        targetLookupFailed={targetLookupFailed || chatCreationFailed(controls.creating)}
         targetMissing={routing.targetMissing}
         waiting={waitingForTarget}
       />

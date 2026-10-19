@@ -580,6 +580,28 @@ describe("validateSelectedScope", () => {
 
 // ─── validateEvidenceAtom ─────────────────────────────────────────────────────
 describe("validateEvidenceAtom", () => {
+  it("accepts a body-free lexical query-group bitset", () => {
+    expect(
+      validateEvidenceAtom({
+        ...happyAtom(),
+        metrics: { lexicalQueryGroupKey: "3" },
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it.each(["", "0", "1", "2", "80", "03", "C", "f".repeat(33)])(
+    "rejects malformed lexical group identity %s",
+    (lexicalQueryGroupKey) => {
+      expectInvalidWithReason(
+        validateEvidenceAtom({
+          ...happyAtom(),
+          metrics: { lexicalQueryGroupKey },
+        }),
+        "lexicalQueryGroupKey",
+      );
+    },
+  );
+
   it("accepts the happy path with no ledgerRef", () => {
     expect(validateEvidenceAtom(happyAtom())).toEqual({ ok: true });
   });

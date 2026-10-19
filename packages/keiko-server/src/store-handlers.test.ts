@@ -191,13 +191,15 @@ function observeSerializedSignal(
   observed: ReturnType<typeof deferred<AbortSignal>>,
 ): ChatTurnSerializer {
   return {
+    ...serializer,
     runExclusive: <T>(
       chatId: string,
       signal: AbortSignal,
       operation: () => T | Promise<T>,
+      generation?: AbortController,
     ): Promise<T | typeof CHAT_TURN_WAIT_CANCELLED> => {
       observed.resolve(signal);
-      return serializer.runExclusive(chatId, signal, operation);
+      return serializer.runExclusive(chatId, signal, operation, generation);
     },
   };
 }

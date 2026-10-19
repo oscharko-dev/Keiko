@@ -148,6 +148,19 @@ function start(own, args = [], environment = {}, cwd = own.input.workspace) {
   return owned;
 }
 
+function timeoutError(owned, phase) {
+  return new Error(`fixed-entry-${phase}-timeout`, {
+    cause: {
+      ageMs: Math.min(60000, Math.max(0, Math.round(performance.now() - owned.lifecycle.started))),
+      readinessObserved: owned
+        .output()
+        .split("\n")
+        .some((line) => line.startsWith('{"url":')),
+      processExited: owned.child.exitCode !== null || owned.child.signalCode !== null,
+    },
+  });
+}
+
 async function ready(owned) {
   owned.lifecycle.phase = "ready";
   const deadline = Date.now() + 10000;
@@ -167,7 +180,7 @@ async function ready(owned) {
     if (owned.child.exitCode !== null) throw new Error("fixed-entry-exited-before-ready");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("fixed-entry-ready-timeout");
+  throw timeoutError(owned, "ready");
 }
 
 // Fixture finalization controls begin.
@@ -184,14 +197,19 @@ async function observeStartupRefusal(owned, observeReadiness = ready) {
   ]);
 }
 
-function waitForExit(owned) {
-  return Promise.race([
-    owned.exited,
-    new Promise((_, reject) => {
-      const timer = setTimeout(() => reject(new Error("fixed-entry-eof-timeout")), 5000);
-      timer.unref();
-    }),
-  ]);
+async function waitForExit(owned) {
+  let timer;
+  try {
+    return await Promise.race([
+      owned.exited,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(timeoutError(owned, "eof")), 5000);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function withFixture(body, toolProfile = "direct") {

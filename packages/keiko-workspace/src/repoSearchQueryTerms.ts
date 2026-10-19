@@ -451,6 +451,22 @@ function buildSingleCharacterGroups(tokens: readonly string[], caseSensitive: bo
   return groups;
 }
 
+function* naturalLanguageGroupTokens(queryText: string): Generator<string> {
+  for (const match of queryText.matchAll(QUERY_TOKEN_RE)) {
+    const token = match[0];
+    // Separate words are independent evidence, not interchangeable aliases. Keep known
+    // domain aliases and numbered/path identifiers on their existing expansion path.
+    if (
+      /^\p{L}[\p{L}\p{M}]*(?:-\p{L}[\p{L}\p{M}]*)+$/u.test(token) &&
+      !DOMAIN_ALIASES.has(token.toLowerCase())
+    ) {
+      yield* token.split("-");
+    } else {
+      yield token;
+    }
+  }
+}
+
 export function expandedQueryTermGroups(
   queryText: string,
   caseSensitive: boolean,
@@ -458,11 +474,11 @@ export function expandedQueryTermGroups(
   const groups: string[][] = [];
   const singleCharacterFallbacks: string[] = [];
   let total = 0;
-  for (const match of queryText.matchAll(QUERY_TOKEN_RE)) {
-    if (match[0].length === 1) {
-      singleCharacterFallbacks.push(match[0]);
+  for (const token of naturalLanguageGroupTokens(queryText)) {
+    if (token.length === 1) {
+      singleCharacterFallbacks.push(token);
     }
-    const group = expandTokenGroup(match[0], caseSensitive);
+    const group = expandTokenGroup(token, caseSensitive);
     const result = appendExpandedGroup(groups, group, total);
     total = result.total;
     if (result.shouldStop) {

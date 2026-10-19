@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { naturalLanguageContentTermGroups } from "./repoSearchMatchers.js";
 import { repositoryRouteDeclarationMarker } from "./repoSearchRoutes.js";
-import type { ScoredLine } from "./repoSearchLineSelection.js";
+import { lexicalQueryGroupKey, type ScoredLine } from "./repoSearchLineSelection.js";
 import {
   contentTermGroupsForSearch,
   routeQueryTermsForSearch,
@@ -179,7 +179,12 @@ export function bestCachedLexicalLines(
   prepared: CachedLexicalQuery,
 ): readonly ScoredLine[] {
   const scored = record.lines.flatMap((line): readonly ScoredLine[] => {
-    const hits = matchedGroupCounts(line.termHashes, prepared.lineGroups).exactHits;
+    const hashes = new Set(line.termHashes);
+    const groups = prepared.lineGroups.flatMap((group, index) =>
+      intersects(hashes, group.hashes) ? [index] : [],
+    );
+    const hits = groups.length;
+    const digest = lexicalQueryGroupKey(groups);
     return hits === 0
       ? []
       : [
@@ -188,6 +193,7 @@ export function bestCachedLexicalLines(
             startLine: line.startLine,
             endLine: line.endLine,
             score: hits / prepared.lineGroups.length,
+            ...(digest === undefined ? {} : { queryGroupKey: digest }),
           },
         ];
   });

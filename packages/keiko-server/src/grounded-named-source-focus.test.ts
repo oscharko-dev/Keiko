@@ -278,7 +278,8 @@ describe("live-admitted query-named source focus under the original grants", () 
       `Where is separateEvidence defined relative to ${TARGET}? Cite implementation lines.`,
     );
     expect(out.result.plan.targetDecision?.definitionRequested).toBe(true);
-    expect(out.historyScopes).toContainEqual([]);
+    expect(out.historyScopes).toEqual([]);
+    expect(out.result.pack.files.map((file) => file.scopePath)).toContain(TARGET);
     expect(out.prompt).toContain("source evidence requires actual citations");
   });
 

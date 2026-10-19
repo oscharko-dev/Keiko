@@ -1,8 +1,22 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Suspense, startTransition, type ComponentProps, type ReactNode } from "react";
 import { fetchFilesTree } from "@/lib/api";
 import { FilesWidget } from "./FilesWidget";
+import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import { nativeFilesChatFixture } from "../../../../../../../../tests/support/files-chat-native-support";
+
+const previewSuspension = vi.hoisted((): { current?: () => void } => ({}));
+vi.mock("./FilePreview", async (original) => {
+  const actual = await original<typeof import("./FilePreview")>();
+  return {
+    ...actual,
+    FilePreview(props: ComponentProps<typeof actual.FilePreview>): ReactNode {
+      previewSuspension.current?.();
+      return <actual.FilePreview {...props} />;
+    },
+  };
+});
 
 vi.mock("@/lib/api", async (original) => ({
   ...(await original<typeof import("@/lib/api")>()),
@@ -29,6 +43,7 @@ vi.mock("@/lib/client-diagnostics", async (original) => ({
 }));
 
 afterEach(() => {
+  delete previewSuspension.current;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -164,4 +179,198 @@ describe("Files canonical root while a child is loading", () => {
       await native.close();
     }
   });
+});
+
+describe("Files preview authority during background refresh", () => {
+  it.each(["canonical", "symlink"] as const)(
+    "retains the displayed file when the %s root refreshes",
+    async (kind) => {
+      const native = await nativeFilesChatFixture(true);
+      try {
+        vi.mocked(fetchFilesTree).mockImplementation(native.tree);
+        const active = vi.fn();
+        const props = {
+          initialDirectoryPath: "Alpha",
+          onActiveFileChange: active,
+          watchActive: false,
+        };
+        const mounted = render(
+          <FilesWidget root={kind === "symlink" ? native.alias : native.root} {...props} />,
+        );
+        await screen.findByRole("treeitem", { name: /one\.ts/u });
+        if (kind === "symlink") {
+          const canonical = await canonicalRoot(native);
+          mounted.rerender(<FilesWidget root={canonical} resolvedRoot={canonical} {...props} />);
+        }
+        fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
+        await screen.findByRole("button", { name: "Back to files" });
+        active.mockClear();
+        act(() => notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" }));
+        await waitFor(() => expect(active).toHaveBeenCalled());
+        expect(active).toHaveBeenLastCalledWith("Alpha/one.ts", native.root, "Alpha");
+        expect(screen.getByRole("button", { name: "Back to files" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Back to files" }));
+        expect(active).toHaveBeenLastCalledWith(null, native.root);
+        active.mockClear();
+        act(() => notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" }));
+        await waitFor(() => expect(active).toHaveBeenLastCalledWith(null, native.root, "Alpha"));
+      } finally {
+        cleanup();
+        await native.close();
+      }
+    },
+  );
+});
+
+function delayedRootRefresh(native: NativeFixture): {
+  readonly hold: () => void;
+  readonly entered: Promise<void>;
+  readonly release: () => void;
+} {
+  const entered = deferred<void>();
+  const released = deferred<void>();
+  let holding = false;
+  vi.mocked(fetchFilesTree).mockImplementation(async (root, path = "") => {
+    const response = await native.tree(root, path);
+    if (holding && root === native.root && path === "") {
+      entered.resolve();
+      await released.promise;
+    }
+    return response;
+  });
+  return {
+    hold: (): void => {
+      holding = true;
+    },
+    entered: entered.promise,
+    release: (): void => released.resolve(),
+  };
+}
+
+it.each(["close-preview", "change-root"] as const)(
+  "does not restore an old selection after %s during a root refresh",
+  async (action) => {
+    const native = await nativeFilesChatFixture();
+    const pending = delayedRootRefresh(native);
+    try {
+      const active = vi.fn();
+      const mounted = render(
+        <FilesWidget
+          root={native.root}
+          initialDirectoryPath="Alpha"
+          onActiveFileChange={active}
+          watchActive={false}
+        />,
+      );
+      fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
+      await screen.findByRole("button", { name: "Back to files" });
+      pending.hold();
+      await act(async () => {
+        notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+        await pending.entered;
+      });
+      if (action === "close-preview")
+        fireEvent.click(screen.getByRole("button", { name: "Back to files" }));
+      else {
+        mounted.rerender(
+          <FilesWidget
+            root={`${native.root}/Beta`}
+            onActiveFileChange={active}
+            watchActive={false}
+          />,
+        );
+        await screen.findByRole("treeitem", { name: /two\.ts/u });
+      }
+      active.mockClear();
+      await act(async () => pending.release());
+      expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
+      expect(active.mock.calls.some(([path]) => path === "Alpha/one.ts")).toBe(false);
+      if (action === "close-preview")
+        expect(active).toHaveBeenLastCalledWith(null, native.root, "Alpha");
+      else expect(active).not.toHaveBeenCalled();
+    } finally {
+      pending.release();
+      cleanup();
+      await native.close();
+    }
+  },
+);
+
+it("keeps the committed selection while a concurrent preview render is suspended", async () => {
+  const native = await nativeFilesChatFixture();
+  const pending = delayedRootRefresh(native);
+  const preview = deferred<void>();
+  let attempted = false;
+  try {
+    const active = vi.fn();
+    render(
+      <Suspense fallback={<span>Loading preview</span>}>
+        <FilesWidget
+          root={native.root}
+          initialDirectoryPath="Alpha"
+          onActiveFileChange={active}
+          watchActive={false}
+        />
+      </Suspense>,
+    );
+    const row = await screen.findByRole("treeitem", { name: /one\.ts/u });
+    pending.hold();
+    await act(async () => {
+      notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+      await pending.entered;
+    });
+    previewSuspension.current = (): void => {
+      attempted = true;
+      throw preview.promise;
+    };
+    act(() =>
+      startTransition(() => {
+        fireEvent.click(row);
+      }),
+    );
+    expect(attempted).toBe(true);
+    expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
+    active.mockClear();
+    await act(async () => pending.release());
+    expect(active).toHaveBeenLastCalledWith(null, native.root, "Alpha");
+    expect(active.mock.calls.some(([path]) => path === "Alpha/one.ts")).toBe(false);
+  } finally {
+    cleanup();
+    delete previewSuspension.current;
+    pending.release();
+    preview.resolve();
+    await native.close();
+  }
+});
+
+it("clears a preview and its directory when an unchanged root resolves elsewhere", async () => {
+  const native = await nativeFilesChatFixture();
+  try {
+    let replaced = false;
+    const resolved = `${native.root}/Beta`;
+    vi.mocked(fetchFilesTree).mockImplementation((root, path = "") =>
+      native.tree(replaced ? resolved : root, path),
+    );
+    const active = vi.fn();
+    render(
+      <FilesWidget
+        root={native.root}
+        initialDirectoryPath="Alpha"
+        onActiveFileChange={active}
+        watchActive={false}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
+    await screen.findByRole("button", { name: "Back to files" });
+    active.mockClear();
+    replaced = true;
+    act(() => notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" }));
+    await waitFor(() => expect(active).toHaveBeenCalled());
+    expect(active).toHaveBeenLastCalledWith(null, resolved, null);
+    expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
+    expect(await screen.findByRole("treeitem", { name: /two\.ts/u })).toBeInTheDocument();
+  } finally {
+    cleanup();
+    await native.close();
+  }
 });

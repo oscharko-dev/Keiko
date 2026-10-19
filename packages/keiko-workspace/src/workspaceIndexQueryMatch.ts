@@ -1,4 +1,5 @@
 import type { ScoredLine } from "./repoSearchLineSelection.js";
+import { isLexicalQueryGroupKey } from "@oscharko-dev/keiko-contracts/connected-context";
 
 const MAX_QUERY_MATCH_LINES = 128;
 
@@ -35,16 +36,25 @@ function validLineFields(value: {
   );
 }
 
+function normalizeLineGroup(value: object): Pick<ScoredLine, "queryGroupKey"> | undefined {
+  const digest = "queryGroupKey" in value ? value.queryGroupKey : undefined;
+  if (digest !== undefined && !isLexicalQueryGroupKey(digest)) return undefined;
+  return digest === undefined ? {} : { queryGroupKey: digest };
+}
+
 function normalizeLine(value: unknown): ScoredLine | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (!("line" in value && "startLine" in value && "endLine" in value && "score" in value))
     return undefined;
   if (!validLineFields(value)) return undefined;
+  const optional = normalizeLineGroup(value);
+  if (optional === undefined) return undefined;
   return {
     line: value.line,
     startLine: value.startLine,
     endLine: value.endLine,
     score: value.score,
+    ...optional,
   };
 }
 

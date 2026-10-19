@@ -3,7 +3,8 @@ import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { ChatScopeNotice, type ChatScopeNoticeProps } from "../ChatScopeNotice";
+import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+import type { updateChatConnectedScopes } from "@/lib/api";
 import { ConnectedScopePill } from "../ConnectedScopePill";
 import { toUserErrorNotice } from "../format-error";
 import type {
@@ -302,6 +303,37 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("reloads a bootstrap snapshot invalidated by an acknowledged scope mutation", async () => {
+    const initial = chat({ id: "chat-scope-bootstrap", updatedAt: 1 });
+    const changed = chat({
+      id: initial.id,
+      updatedAt: 2,
+      connectedScopes: [
+        { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 2 },
+      ],
+    });
+    const pending = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats)
+      .mockResolvedValueOnce({ chats: [initial] })
+      .mockResolvedValue({ chats: [changed] });
+    vi.mocked(fetchChatMessages)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ messages: [] });
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+    act(() => notifyChatUpsert(changed));
+    await act(async () => pending.resolve({ messages: [] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.connectedScopes).toEqual(changed.connectedScopes);
+    expect(result.current.chats.find((entry) => entry.id === initial.id)?.connectedScopes).toEqual(
+      changed.connectedScopes,
+    );
+    await waitFor(() => expect(result.current.draftPersistence?.phase).toBe("saved"));
+    unmount();
+  });
+
   it("restores the private unsent draft when a chat window is reopened", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
@@ -1915,7 +1947,7 @@ function ScopeRefreshHarness({
   persist,
 }: {
   readonly capture: (session: UseChatSessionResult) => void;
-  readonly persist: NonNullable<ChatScopeNoticeProps["updateScopes"]>;
+  readonly persist: typeof updateChatConnectedScopes;
 }): ReactNode {
   const session = useChatSession({ autoCreate: false });
   useEffect((): void => capture(session), [capture, session]);
@@ -1925,12 +1957,18 @@ function ScopeRefreshHarness({
     <div>
       <output data-testid="scope-refresh-identity">{active.groundingScopeIdentity}</output>
       <ConnectedScopePill chat={active} onDisconnect={session.replaceChat} updateScopes={persist} />
-      <ChatScopeNotice
-        chat={active}
-        onChatChanged={session.replaceChat}
-        onKeepFolderChange={(): void => undefined}
-        updateScopes={persist}
-      />
+      <button
+        onClick={(): void => {
+          void replaceGroundingScopeList(
+            active,
+            scopeRefreshChats().folder.connectedScopes ?? [],
+            persist,
+            session.replaceChat,
+          ).then((reply) => session.replaceChat(reply.chat));
+        }}
+      >
+        Navigate to folder
+      </button>
       <button
         onClick={(): void => {
           void session.sendMessage({ text: "Inspect the current folder" });
@@ -1969,7 +2007,7 @@ async function mountScopeRefreshRace(): Promise<{
   readonly session: () => UseChatSessionResult;
   readonly observer: ReturnType<typeof renderHook<UseChatSessionResult, never>>;
   readonly chats: ReturnType<typeof scopeRefreshChats>;
-  readonly persist: NonNullable<ChatScopeNoticeProps["updateScopes"]>;
+  readonly persist: typeof updateChatConnectedScopes;
 }> {
   const chats = scopeRefreshChats();
   vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-doc" })] });
@@ -1985,7 +2023,7 @@ async function mountScopeRefreshRace(): Promise<{
     current = session;
   };
   const persist = vi
-    .fn<NonNullable<ChatScopeNoticeProps["updateScopes"]>>()
+    .fn<typeof updateChatConnectedScopes>()
     .mockResolvedValue({ chat: chats.restored });
   render(<ScopeRefreshHarness capture={capture} persist={persist} />);
   await waitFor(() =>
@@ -1996,7 +2034,7 @@ async function mountScopeRefreshRace(): Promise<{
   const observer = renderHook(() => useChatSession({ autoCreate: false }));
   await waitFor(() => expect(observer.result.current.loading).toBe(false));
   act(() => notifyChatUpsert(chats.file));
-  await screen.findByRole("button", { name: "Keep folder" });
+  await screen.findByTitle("/repo/src/validation.ts");
   return {
     session: (): UseChatSessionResult => {
       if (current === undefined) throw new TypeError("Missing mounted session");
@@ -2010,7 +2048,7 @@ async function mountScopeRefreshRace(): Promise<{
 
 describe("grounded post-answer refresh scope acknowledgement ownership", () => {
   it.each([false, true])(
-    "preserves Keep folder ACK while a %s-matched list is pending",
+    "preserves navigation ACK while a %s-matched list is pending",
     async (matched) => {
       const fixture = await mountScopeRefreshRace();
       const pending = deferred<Awaited<ReturnType<typeof fetchChats>>>();
@@ -2018,7 +2056,9 @@ describe("grounded post-answer refresh scope acknowledgement ownership", () => {
       vi.mocked(fetchChats).mockClear();
       fireEvent.click(screen.getByRole("button", { name: "Send scope question" }));
       await waitFor(() => expect(fetchChats).toHaveBeenCalledOnce());
-      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep folder" })));
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Navigate to folder" })),
+      );
       expect(fixture.persist).toHaveBeenCalledWith(
         fixture.chats.file.id,
         fixture.chats.folder.connectedScopes,

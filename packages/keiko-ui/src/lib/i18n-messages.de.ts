@@ -749,11 +749,6 @@ export const DE_MESSAGES = {
   "connection.armTitle": "Einmal klicken, um das Entfernen vorzubereiten.",
   "connection.removeQuestion": "Entfernen?",
   "connection.cancelled": "Entfernen abgebrochen — die Verbindung wurde nicht entfernt.",
-  "scope.notice.narrowed": "Der verbundene Bereich wurde zu {scope} geändert.",
-  "scope.notice.widened": "Der verbundene Bereich wurde auf {scope} erweitert.",
-  "scope.notice.keepFolder": "Ordner behalten",
-  "scope.notice.ok": "OK",
-  "scope.notice.failed": "Der Ordner konnte nicht beibehalten werden.",
   "chat.grounding.help":
     "Keiko sucht für quellenbezogene Antworten in den verbundenen Quellen und kennzeichnet allgemeines Wissen als eigene Einschätzung. Das Modell hat keine Datei-Werkzeuge. Öffne eine Datei in Dateien oder erwähne sie mit @, um sie in den Bereich aufzunehmen.",
   "scope.missing.add": "Datei in den Bereich aufnehmen",
@@ -767,11 +762,6 @@ export const DE_MESSAGES = {
   "scope.missing.failed": "Die Datei konnte nicht in den Bereich aufgenommen werden.",
   "scope.pill.filesInFolder": "{count} Dateien in {name}",
   "scope.pill.accessibleWithPath": "{label} ({path})",
-  "scope.boundary.noun.repository": "den verbundenen Stammordner",
-  "scope.boundary.noun.folder": "den verbundenen Ordner",
-  "scope.boundary.noun.fileScope": "den verbundenen Datei-Scope",
-  "scope.boundary.description":
-    "Keiko darf nur {noun} auswerten; Safe-Read-Ausschlüsse und Kontextbudgets greifen vor jeder Antwort.",
   "scope.disconnect.error": "Scope konnte nicht getrennt werden.",
   "scope.disconnect.aria": "{label} vom Chat trennen",
   "scope.disconnect.title": "{label} vom Chat trennen",

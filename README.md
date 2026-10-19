@@ -90,6 +90,20 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
+## What's new in 1.2.4
+
+- **Slow-gateway resilience.** Chat waits through extended response-start silence within bounded gateway deadlines, preserves unchanged drafts after cancellation and avoids duplicate conversations during model-catalog refresh.
+- **Clearer connected sources.** The compact Sources header follows acknowledged Files navigation without OK or Keep folder confirmations. Completed conversation history remains intact. A source snapshot invalidated while a window loads is refreshed before that window becomes ready.
+- **More relevant repository evidence.** Search improves compound-term and related-source selection, retains explicitly requested files, and excludes incidental lockfiles while preserving dependency-version evidence. Cooperative indexing keeps existing authority and resource limits.
+- **Windows host containment.** OpenCode metadata and home resolution stay inside private host state; original host and dependency-consumer compatibility tests cover the supported integration.
+
+The [Java/Spring Boot skill](scripts/testing/chat-skills-lab/skills/java-spring-unit-tests.md) and
+[React/MUI/Vitest skill](scripts/testing/chat-skills-lab/skills/react-mui-vitest-tests.md) are editable
+candidates for review. Immediate client cancellation before source acknowledgement, complete
+multi-source compaction qualification and repeated generated-test quality remain tracked in
+[follow-up #4040](https://github.com/oscharko-dev/Keiko/issues/4040). This release does not claim
+complete Gemma qualification.
+
 ## What's new in 1.2.3
 
 - **Reliable dictation through LiteLLM.** Browser recordings are normalized to mono PCM16 WAV for compatible Whisper deployments. Click the microphone to record, follow the subtle input waveform, and click the same control to stop. The transcript is inserted directly into your editable draft; it is never sent automatically.

@@ -2409,15 +2409,16 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     return sharedBootstrapInflight.then(cloneSessionPatch);
   }
   const version = sharedBootstrapVersion;
-  const pending = bootstrapSession(false)
+  const pending: Promise<Partial<SessionState>> = bootstrapSession(false)
     .then((patch) => {
+      // A scope mutation can settle while messages are loading. Reload the invalidated
+      // snapshot instead of restoring its obsolete sources into a newly mounted window.
+      if (sharedBootstrapVersion !== version) return sharedBootstrapSession(false);
       const value = cloneSessionPatch(patch);
-      if (sharedBootstrapVersion === version) {
-        sharedBootstrapCache = {
-          expiresAt: Date.now() + SHARED_BOOTSTRAP_TTL_MS,
-          value,
-        };
-      }
+      sharedBootstrapCache = {
+        expiresAt: Date.now() + SHARED_BOOTSTRAP_TTL_MS,
+        value,
+      };
       return cloneSessionPatch(value);
     })
     .finally(() => {

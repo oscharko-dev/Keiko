@@ -12,6 +12,11 @@ const REPAIR_TEXT_MAX = 131_072;
 const INSERTION_MAX = 32;
 const MARKER_BODY_LENGTH_RE = /^.{1,512}$/su;
 const PADDING_MAX = 16;
+
+export function fitsCitationRepairTextLimit(text: string): boolean {
+  return text.length <= REPAIR_TEXT_MAX;
+}
+
 interface MarkerInsertion {
   readonly start: number;
   readonly end: number;
@@ -123,7 +128,8 @@ export function validateCitationRepair(
   index: PackCitationIndex,
   numericMarkers?: ReadonlySet<number>,
 ): boolean {
-  if (original.length > REPAIR_TEXT_MAX || repaired.length > REPAIR_TEXT_MAX) return false;
+  if (!fitsCitationRepairTextLimit(original) || !fitsCitationRepairTextLimit(repaired))
+    return false;
   if (splitOwnAssessment(original).assessment !== splitOwnAssessment(repaired).assessment)
     return false;
   if (!hasSupportedRepairMarkers(repaired, index, numericMarkers)) return false;

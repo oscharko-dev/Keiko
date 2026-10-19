@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { buildCspHeader } from "./csp.js";
+import { createChatTurnSerializer } from "./chat-turn-serializer.js";
 import { runGroundedAskInput } from "./grounded-qa.js";
 import { createNodeUiStore } from "./store/index.js";
 import {
@@ -46,6 +47,8 @@ afterEach(async () => {
 interface ProviderState {
   mode: "hold" | "healthy" | "failure";
   calls: number;
+  answerContent: string;
+  readonly requests: string[];
   closes: number;
   readonly entered: ReturnType<typeof deferred>;
 }
@@ -80,7 +83,7 @@ function providerReply(res: ServerResponse, state: ProviderState): void {
             choices: [
               {
                 index: 0,
-                message: { role: "assistant", content: "The value is 37. [src/feature.ts:1]" },
+                message: { role: "assistant", content: state.answerContent },
                 finish_reason: "stop",
               },
             ],
@@ -94,12 +97,19 @@ async function provider(): Promise<{ baseUrl: string; state: ProviderState }> {
   const state: ProviderState = {
     mode: "hold",
     calls: 0,
+    requests: [],
+    answerContent: "The value is 37. [src/feature.ts:1]",
     closes: 0,
     entered: deferred(),
   };
   const server = createServer((req, res): void => {
-    req.resume();
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string): void => {
+      body += chunk;
+    });
     req.once("end", (): void => {
+      state.requests.push(body);
       providerReply(res, state);
     });
   });
@@ -168,12 +178,43 @@ function ask(
   chatId: string,
   clientTurnId: string,
   signal?: AbortSignal,
+  content = QUESTION,
 ): Promise<Response> {
   return fetch(`${base}/api/chats/messages/grounded`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-    body: JSON.stringify({ chatId, content: QUESTION, clientTurnId }),
+    body: JSON.stringify({ chatId, content, clientTurnId }),
     signal: signal ?? AbortSignal.timeout(10_000),
+  });
+}
+
+function desktopRequest(
+  base: string,
+  chatId: string,
+  surface: "buffered" | "streamed" | "regenerated",
+  signal: AbortSignal,
+  assistantMessageId?: string,
+): Promise<Response> {
+  const suffix = { buffered: "", streamed: "/stream", regenerated: "/regenerate" }[surface];
+  return fetch(`${base}/api/desktop/chat${suffix}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+    body: JSON.stringify({
+      chatId,
+      projectPath: join(directory, "workspace"),
+      content: QUESTION,
+      assistantMessageId,
+    }),
+    signal,
+  });
+}
+
+function patchChat(base: string, chatId: string, patch: unknown): Promise<Response> {
+  return fetch(`${base}/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+    body: JSON.stringify(patch),
+    signal: AbortSignal.timeout(3_000),
   });
 }
 
@@ -188,6 +229,211 @@ function assertReopened(dbPath: string, chatId: string, state: "cancelled" | "fa
 }
 
 describe("native grounded turn cancellation persistence", () => {
+  it("cancels the active native answer before acknowledging a connected-source change", async () => {
+    const upstream = await provider();
+    const { deps, chatId, dbPath } = runtime(upstream.baseUrl);
+    const base = await nativeServer(deps);
+    const controller = new AbortController();
+    const pending = ask(base, chatId, "source-change-native-turn", controller.signal).catch(
+      (error: unknown) => error,
+    );
+    try {
+      await upstream.state.entered.promise;
+      const root = join(directory, "workspace");
+      writeFileSync(join(root, "src/selected.ts"), "export const selected = 73;\n");
+      const scopes = [
+        { root, kind: "files", relativePaths: ["src/selected.ts"], connectedAtMs: 2 },
+      ];
+      const update = await fetch(`${base}/api/chats?id=${encodeURIComponent(chatId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({ connectedScopes: scopes }),
+        signal: AbortSignal.timeout(3_000),
+      });
+      expect(update.status).toBe(200);
+      const cancelled = await pending;
+      expect(cancelled).toBeInstanceOf(Response);
+      expect((cancelled as Response).status).toBe(499);
+      expect(await (cancelled as Response).json()).toMatchObject({ error: { code: "CANCELLED" } });
+      await vi.waitFor(() => {
+        expect(upstream.state.closes).toBe(1);
+      });
+      expect(upstream.state.calls).toBe(1);
+      expect(deps.store.findChatById(chatId)?.connectedScopes).toEqual(scopes);
+      assertReopened(dbPath, chatId, "cancelled");
+      expect(listEvidence(deps.evidenceStore)).toEqual([]);
+      expect(upstream.state.requests[0]).toContain("export const value = 37;");
+      expect(upstream.state.requests[0]).not.toContain("export const selected = 73;");
+      upstream.state.mode = "healthy";
+      upstream.state.answerContent = "The selected value is 73. [src/selected.ts:1]";
+      const next = await ask(
+        base,
+        chatId,
+        "new-scope-answer",
+        undefined,
+        "Explain src/selected.ts.",
+      );
+      expect(next.status).toBe(200);
+      expect(((await next.json()) as { content: string }).content).toContain("73");
+      expect(upstream.state.calls).toBe(2);
+      expect(upstream.state.requests.at(-1)).toContain("export const selected = 73;");
+      expect(upstream.state.requests.at(-1)).not.toContain("export const value = 37;");
+    } finally {
+      controller.abort();
+      await pending;
+    }
+  });
+
+  it.each(["buffered", "streamed", "regenerated"] as const)(
+    "cancels a native %s answer when a new source is connected",
+    async (surface) => {
+      const upstream = await provider();
+      const { deps, chatId } = runtime(upstream.baseUrl);
+      deps.store.updateChat(chatId, { connectedScopes: null });
+      const base = await nativeServer(deps);
+      const controller = new AbortController();
+      upstream.state.mode = "healthy";
+      expect((await desktopRequest(base, chatId, "buffered", controller.signal)).status).toBe(200);
+      const history = deps.store.listMessages(chatId);
+      upstream.state.mode = "hold";
+      const pending = desktopRequest(
+        base,
+        chatId,
+        surface,
+        controller.signal,
+        history.at(-1)?.id,
+      ).then(async (response) => ({ status: response.status, body: await response.text() }));
+      try {
+        await upstream.state.entered.promise;
+        expect(
+          (
+            await patchChat(base, chatId, {
+              connectedScopes: [{ kind: "workspace-root", relativePaths: [], connectedAtMs: 2 }],
+            })
+          ).status,
+        ).toBe(200);
+        const result = await pending;
+        if (surface === "streamed") {
+          expect(result.status).toBe(200);
+          expect(result.body).toBe("event: cancelled\ndata: {}\n\n");
+        } else expect(result.status).toBe(499);
+        await vi.waitFor(() => {
+          expect(upstream.state.closes).toBe(1);
+        });
+        expect(upstream.state.calls).toBe(2);
+        expect(deps.store.listMessages(chatId).slice(0, history.length)).toEqual(history);
+        expect(
+          deps.store.listMessages(chatId).filter((message) => message.role === "assistant"),
+        ).toHaveLength(1);
+      } finally {
+        controller.abort();
+        await pending.catch((error: unknown) => error);
+      }
+    },
+  );
+
+  it.each([
+    { connectedScopes: [{ kind: "files", relativePaths: ["../outside.ts"], connectedAtMs: 2 }] },
+    { connectedScopes: [{ kind: "files", relativePaths: ["src/missing.ts"], connectedAtMs: 2 }] },
+    { connectedScopes: null, title: "" },
+    { connectedScopes: null, expectedGroundingScopeIdentity: `gsi-v1:${"0".repeat(64)}` },
+  ])(
+    "rejects invalid or conflicting patches without cancelling the held answer: %j",
+    async (patch) => {
+      const upstream = await provider();
+      const { deps, chatId } = runtime(upstream.baseUrl);
+      const base = await nativeServer(deps);
+      const controller = new AbortController();
+      const pending = ask(base, chatId, "held-invalid-change", controller.signal).catch(
+        (error: unknown) => error,
+      );
+      try {
+        await upstream.state.entered.promise;
+        const before = deps.store.findChatById(chatId);
+        const response = await patchChat(base, chatId, patch);
+        expect([400, 403, 404, 409]).toContain(response.status);
+        expect(upstream.state.closes).toBe(0);
+        expect(upstream.state.calls).toBe(1);
+        expect(deps.store.findChatById(chatId)).toEqual(before);
+      } finally {
+        controller.abort();
+        await pending;
+      }
+    },
+  );
+
+  it("does not cancel for canonical duplicate sources or timestamp-only changes", async () => {
+    const upstream = await provider();
+    const { deps, chatId } = runtime(upstream.baseUrl);
+    const serializer = createChatTurnSerializer();
+    const enter = vi.spyOn(serializer, "runExclusive");
+    const base = await nativeServer({ ...deps, chatTurnSerializer: serializer });
+    const controller = new AbortController();
+    const pending = ask(base, chatId, "held-noop-change", controller.signal).catch(
+      (error: unknown) => error,
+    );
+    try {
+      await upstream.state.entered.promise;
+      const scope = {
+        root: join(directory, "workspace"),
+        kind: "files",
+        relativePaths: ["src/feature.ts"],
+        connectedAtMs: 2,
+      };
+      const update = patchChat(base, chatId, { connectedScopes: [scope, scope] });
+      await vi.waitFor(() => {
+        expect(enter).toHaveBeenCalledTimes(2);
+      });
+      expect(upstream.state.closes).toBe(0);
+      expect(upstream.state.calls).toBe(1);
+      controller.abort();
+      await pending;
+      expect((await update).status).toBe(200);
+      expect(deps.store.findChatById(chatId)?.connectedScopes).toEqual([scope]);
+    } finally {
+      controller.abort();
+      await pending;
+    }
+  });
+
+  it("cancels on adding a second repository and preserves the complete earlier conversation", async () => {
+    const upstream = await provider();
+    upstream.state.mode = "healthy";
+    const { deps, chatId, stateDir } = runtime(upstream.baseUrl);
+    const base = await nativeServer(deps);
+    expect((await ask(base, chatId, "completed-before-source-change")).status).toBe(200);
+    const history = deps.store.listMessages(chatId);
+    const evidence = listEvidence(deps.evidenceStore);
+    upstream.state.mode = "hold";
+    const controller = new AbortController();
+    const pending = ask(base, chatId, "held-second-repository", controller.signal);
+    try {
+      await upstream.state.entered.promise;
+      const root = join(directory, "other-repository");
+      mkdirSync(root);
+      writeFileSync(join(root, "feature.ts"), "export const second = 73;\n");
+      const previous = deps.store.findChatById(chatId)?.connectedScopes ?? [];
+      const scopes = [
+        ...previous,
+        { root, kind: "workspace-root", relativePaths: [], connectedAtMs: 2 },
+      ];
+      expect((await patchChat(base, chatId, { connectedScopes: scopes })).status).toBe(200);
+      expect((await pending).status).toBe(499);
+      expect(deps.store.listMessages(chatId).slice(0, history.length)).toEqual(history);
+      expect(listEvidence(deps.evidenceStore)).toEqual(evidence);
+      expect(deps.store.findChatById(chatId)?.connectedScopes).toEqual(scopes);
+      const raw = readPersistedActivityLog(stateDir);
+      expect(analyzeLogText(raw).evidence.classification).toBe("supported");
+      expect(raw).toContain('"outcome":"cancellation-requested"');
+      expect(raw).toContain('"cancelledGenerationCount":1');
+      expect(raw).not.toContain(root);
+      expect(raw).not.toContain(QUESTION);
+    } finally {
+      controller.abort();
+      await pending.catch((error: unknown) => error);
+    }
+  });
+
   it("persists the actual client stop through SQLite reopen and releases the native upstream once", async () => {
     const upstream = await provider();
     const { deps, chatId, dbPath, stateDir } = runtime(upstream.baseUrl);

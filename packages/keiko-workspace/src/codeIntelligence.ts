@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { readWorkspaceFile, readWorkspaceFilePrefixForEvidence } from "./discovery.js";
 import { FileTooLargeError } from "./errors.js";
+import { findImportPathSuffix } from "./importPathSuffix.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
@@ -1152,10 +1153,7 @@ function resolveGoModuleTarget(
 }
 
 function suffixCandidate(pathSet: ReadonlySet<string>, suffix: string): string | undefined {
-  const normalized = normalizeScopePath(suffix).toLowerCase();
-  const matches = [...pathSet].filter((path) => path.toLowerCase().endsWith(normalized));
-  matches.sort((a, b) => a.length - b.length || (a < b ? -1 : 1));
-  return matches[0];
+  return findImportPathSuffix(pathSet, normalizeScopePath(suffix).toLowerCase());
 }
 
 function resolvePythonRelativeImport(
@@ -1474,14 +1472,40 @@ function collectTypescriptImportEdges(
   return edges;
 }
 
+const resolvedImportsByInventory = new WeakMap<
+  readonly CodeImportEdge[],
+  ReadonlyMap<string, readonly CodeImportEdge[]>
+>();
+
+// Internal immutable-inventory seam; absent from the public package surface.
+export function resolvedImportEdgesForFile(
+  scopePath: string,
+  imports: readonly CodeImportEdge[],
+): readonly CodeImportEdge[] {
+  let byFile = resolvedImportsByInventory.get(imports);
+  if (byFile === undefined) {
+    const grouped = new Map<string, CodeImportEdge[]>();
+    for (const edge of imports) {
+      if (edge.targetPath === undefined) continue;
+      const importerPath = edge.importerPath;
+      const fileEdges = grouped.get(importerPath) ?? [];
+      fileEdges.push(edge);
+      grouped.set(importerPath, fileEdges);
+    }
+    byFile = grouped;
+    resolvedImportsByInventory.set(imports, byFile);
+  }
+  return byFile.get(scopePath) ?? [];
+}
+
 function resolvedTargetsBySpecifier(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
   kind?: CodeImportEdge["kind"],
 ): ReadonlyMap<string, string> {
   const targets = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath !== file.scopePath || edge.targetPath === undefined) continue;
+  for (const edge of resolvedImportEdgesForFile(file.scopePath, imports)) {
+    if (edge.targetPath === undefined) continue;
     if (kind !== undefined && edge.kind !== kind) continue;
     targets.set(edge.specifier, edge.targetPath);
   }
@@ -1639,8 +1663,8 @@ function buildPythonTargetBySpecifier(
   imports: readonly CodeImportEdge[],
 ): ReadonlyMap<string, string> {
   const targetBySpecifier = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath === scopePath && edge.targetPath !== undefined) {
+  for (const edge of resolvedImportEdgesForFile(scopePath, imports)) {
+    if (edge.targetPath !== undefined) {
       targetBySpecifier.set(edge.specifier, edge.targetPath);
     }
   }
@@ -5206,33 +5230,69 @@ function dtoContractEdgeFor(source: CodeSymbol, target: CodeSymbol): DtoContract
   };
 }
 
-// Pairs are unordered, so the inner scan starts past the source index and every pair is visited
-// exactly once.
-function collectDtoContractEdgesFrom(
+interface IndexedDtoSymbol {
+  readonly symbol: CodeSymbol;
+  readonly index: number;
+}
+
+function dtoTargetsForLanguage(
   typed: readonly CodeSymbol[],
+  language: CodeLanguage,
+  cache: Map<CodeLanguage, readonly IndexedDtoSymbol[]>,
+): readonly IndexedDtoSymbol[] {
+  const cached = cache.get(language);
+  if (cached !== undefined) return cached;
+  const targets = typed.flatMap((symbol, index) =>
+    symbol.language === language ? [] : [{ symbol, index }],
+  );
+  cache.set(language, targets);
+  return targets;
+}
+
+function firstLaterDtoTarget(targets: readonly IndexedDtoSymbol[], sourceIndex: number): number {
+  let low = 0;
+  let high = targets.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const target = targets[middle];
+    if (target === undefined || target.index > sourceIndex) high = middle;
+    else low = middle + 1;
+  }
+  return low;
+}
+
+// Retain source/target inventory order while excluding same-language pairs before the inner scan.
+// Only later targets can emit an edge, so every eligible unordered pair is still emitted once.
+function collectDtoContractEdgesFrom(
+  source: CodeSymbol,
   sourceIndex: number,
+  targets: readonly IndexedDtoSymbol[],
   edges: DtoContractEdge[],
   control: StructuralExecutionControl,
 ): void {
-  const source = typed[sourceIndex];
-  for (let j = sourceIndex + 1; j < typed.length; j += 1) {
+  for (let index = firstLaterDtoTarget(targets, sourceIndex); index < targets.length; index += 1) {
     if (structuralExecutionStopped(control)) break;
-    const target = typed[j];
-    if (source === undefined || target === undefined) continue;
-    const edge = dtoContractEdgeFor(source, target);
+    const target = targets[index];
+    if (target === undefined) continue;
+    const edge = dtoContractEdgeFor(source, target.symbol);
     if (edge !== undefined) edges.push(edge);
   }
 }
 
-function linkDtoContracts(
+// Internal export for deterministic work-bound tests; absent from the public package surface.
+export function linkDtoContracts(
   symbols: readonly CodeSymbol[],
   control: StructuralExecutionControl,
 ): readonly DtoContractEdge[] {
   const typed = symbols.filter((symbol) => symbol.fields.length > 0);
   const edges: DtoContractEdge[] = [];
+  const targetsByLanguage = new Map<CodeLanguage, readonly IndexedDtoSymbol[]>();
   for (let i = 0; i < typed.length; i += 1) {
     if (structuralExecutionStopped(control)) break;
-    collectDtoContractEdgesFrom(typed, i, edges, control);
+    const source = typed[i];
+    if (source === undefined) continue;
+    const targets = dtoTargetsForLanguage(typed, source.language, targetsByLanguage);
+    collectDtoContractEdgesFrom(source, i, targets, edges, control);
   }
   return edges;
 }
@@ -5489,7 +5549,7 @@ function readCandidateInto(args: SourceReadArgs, relativePath: string): Candidat
   }
 }
 
-function readSources(
+function* readSources(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
@@ -5497,12 +5557,7 @@ function readSources(
   control: StructuralExecutionControl,
   readCompleteSource: InternalBuildDeps["readSource"],
   assertSourceAllowed: InternalBuildDeps["assertSourceAllowed"],
-): {
-  files: readonly SourceFile[];
-  skipped: number;
-  partiallyIndexed: number;
-  truncated: boolean;
-} {
+): Generator<"source", SourceReadTally, void> {
   const tally: SourceReadTally = { files: [], skipped: 0, partiallyIndexed: 0, truncated: false };
   const args: SourceReadArgs = {
     scope,
@@ -5521,6 +5576,7 @@ function readSources(
     if (readCandidateInto(args, candidate.relativePath) === "stop") {
       break;
     }
+    yield "source";
   }
   return tally;
 }
@@ -5604,6 +5660,56 @@ export function buildCodeIntelligenceIndexFromCandidates(
   candidateSet: CandidateSet,
   deps?: InternalBuildDeps,
 ): CodeIntelligenceIndex {
+  const steps = codeIntelligenceBuildSteps(scope, limits, fs, candidateSet, deps);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+// Request-local callers already share one promise. Yield between bounded source batches and
+// graph stages without splitting the index or weakening the descriptor/authority checks.
+export function buildCodeIntelligenceIndexFromCandidatesAsync(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  deps?: InternalBuildDeps,
+): Promise<CodeIntelligenceIndex> {
+  const steps = codeIntelligenceBuildSteps(scope, limits, fs, candidateSet, deps);
+  return new Promise(
+    (resolve, reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) => {
+      const advance = (): void => {
+        try {
+          const step = advanceCodeIntelligenceBatch(steps);
+          if (step.done) resolve(step.value);
+          else setImmediate(advance);
+        } catch (error) {
+          if (error instanceof Error) reject(error);
+          else reject(new Error("Code index build failed", { cause: error }));
+        }
+      };
+      advance();
+    },
+  );
+}
+
+function advanceCodeIntelligenceBatch(
+  steps: Generator<"source" | "stage", CodeIntelligenceIndex, void>,
+): IteratorResult<"source" | "stage", CodeIntelligenceIndex> {
+  let step = steps.next();
+  for (let size = 1; !step.done && step.value !== "stage" && size < 32; size += 1) {
+    step = steps.next();
+  }
+  return step;
+}
+
+function* codeIntelligenceBuildSteps(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  deps?: InternalBuildDeps,
+): Generator<"source" | "stage", CodeIntelligenceIndex, void> {
   const executionControl =
     deps?.executionControl ??
     createStructuralExecutionControl(limits.elapsedMsMax, deps?.nowMs ?? Date.now, deps?.signal);
@@ -5676,7 +5782,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
       indexCache.delete(cacheKey);
     }
   }
-  const { files, skipped, partiallyIndexed, truncated } = readSources(
+  const { files, skipped, partiallyIndexed, truncated } = yield* readSources(
     scope,
     limits,
     fs,
@@ -5685,6 +5791,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
     deps?.readSource,
     deps?.assertSourceAllowed,
   );
+  yield "stage";
   const pathSet = new Set(files.map((file) => file.scopePath));
   const importResolver = collectTsImportResolverConfig(
     scope,
@@ -5695,33 +5802,39 @@ export function buildCodeIntelligenceIndexFromCandidates(
   const buildState: ControlledBuildState = {
     truncated: truncated || importResolver.truncated,
   };
+  yield "stage";
   const packageDependencies = controlledBuild(
     executionControl,
     buildState,
     [] as readonly PackageDependencyEdge[],
     () => linkPackageDependencies(importResolver.packages),
   );
+  yield "stage";
   const imports = controlledBuild(
     executionControl,
     buildState,
     [] as readonly CodeImportEdge[],
     () => files.flatMap((file) => collectImportEdges(file, pathSet, importResolver)),
   );
+  yield "stage";
   const symbols = controlledBuild(executionControl, buildState, [] as readonly CodeSymbol[], () =>
     files.flatMap((file) => collectSymbols(file)),
   );
+  yield "stage";
   const reExports = controlledBuild(
     executionControl,
     buildState,
     [] as readonly TypescriptReExportBinding[],
     () => files.flatMap((file) => collectTypescriptReExportBindings(file, imports)),
   );
+  yield "stage";
   const defaultExports = controlledBuild(
     executionControl,
     buildState,
     [] as readonly TypescriptDefaultExport[],
     () => files.flatMap((file) => collectTypescriptDefaultExports(file)),
   );
+  yield "stage";
   const reExportResolver = buildTypescriptReExportResolverContext(
     reExports,
     defaultExports,
@@ -5730,6 +5843,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
     executionControl,
     certifiedModuleImportsByFile(imports, pathSet, importResolver, executionControl),
   );
+  yield "stage";
   const importBindings = controlledBuild(
     executionControl,
     buildState,
@@ -5741,33 +5855,40 @@ export function buildCodeIntelligenceIndexFromCandidates(
           : collectTypescriptImportBindings(file, imports, reExportResolver),
       ),
   );
+  yield "stage";
   const calls = controlledBuild(executionControl, buildState, [] as readonly CodeCallEdge[], () =>
     collectCalls(files, symbols, imports, importBindings),
   );
+  yield "stage";
   const references = controlledBuild(
     executionControl,
     buildState,
     [] as readonly CodeReferenceEdge[],
     () => collectReferences(files, symbols, importBindings),
   );
+  yield "stage";
   const endpoints = controlledBuild(
     executionControl,
     buildState,
     [] as readonly ApiEndpoint[],
     () => files.flatMap((file) => collectEndpoints(file)),
   );
+  yield "stage";
   const apiContracts = controlledBuild(
     executionControl,
     buildState,
     [] as readonly ApiContractEdge[],
     () => linkApiContracts(endpoints, executionControl),
   );
+  yield "stage";
   const dtoContracts = controlledBuild(
     executionControl,
     buildState,
     [] as readonly DtoContractEdge[],
     () => linkDtoContracts(symbols, executionControl),
   );
+  yield "stage";
+  if (structuralExecutionStopped(executionControl)) buildState.truncated = true;
   const index: CodeIntelligenceIndex = {
     imports,
     symbols,

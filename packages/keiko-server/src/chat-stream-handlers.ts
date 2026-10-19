@@ -1,3 +1,4 @@
+import { raceAbort } from "./abort-race.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
@@ -905,6 +906,7 @@ async function runGitChangeDescriptionStream(
       const denial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
       return denial ?? persistGitChangeDescriptionTurn(ctx, deps, prepared, controller.signal);
     },
+    controller,
   );
   if (result === CHAT_TURN_WAIT_CANCELLED) {
     return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
@@ -929,19 +931,22 @@ async function runDesktopChatStream(
   if (activeGitChangeScope(start.parsed.chat) !== undefined) {
     return runGitChangeDescriptionStream(ctx, deps, start, controller);
   }
-  // Reuse configuration initialization before admission; streaming never initiates a probe.
-  await awaitInitializedConversationReadiness(
-    deps,
-    start.parsed.request.modelId ?? start.parsed.chat.selectedModel,
-    ctx.correlationId,
-  );
   const streamState: DesktopChatStreamState = { started: false };
   const result = await runSerializedChatTurn(
     deps,
     start.parsed.request.chatId,
     controller.signal,
-    () =>
-      runAdmittedDesktopChatStream(
+    async () => {
+      // Cancel this waiter without aborting the shared configuration-owned readiness probe.
+      await raceAbort(
+        awaitInitializedConversationReadiness(
+          deps,
+          start.parsed.request.modelId ?? start.parsed.chat.selectedModel,
+          ctx.correlationId,
+        ),
+        controller.signal,
+      );
+      return runAdmittedDesktopChatStream(
         ctx,
         deps,
         start,
@@ -950,7 +955,9 @@ async function runDesktopChatStream(
           streamState.started = true;
         },
         onAdmitted,
-      ),
+      );
+    },
+    controller,
   );
   if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
   return streamState.started

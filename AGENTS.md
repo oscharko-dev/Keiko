@@ -454,9 +454,13 @@ system that exists, never beside it:
   selection uses the final six available source-detail fields. Additional selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
-  Contextual keep-one fallback logs its closed ranking source and remains low confidence. Its
+  Contextual below-floor fallback logs its closed ranking source and remains low confidence. Its
   lexical producer order requires matching live content identities and excludes semantic or
-  successfully reranked selections. Short ordinary documents may use the existing canonical
+  successfully reranked selections. At most two additional eligible content peers may share the
+  first retained source's same-query matched-group key; equal numeric scores alone do not
+  qualify. Existing read/byte grants remain binding. `keepOneFallbackApplied` describes exactly
+  one retained fallback source, and the existing completion count records the actual size.
+  Short ordinary documents may use the existing canonical
   reader's complete current redacted source only within both existing byte grants; explicit
   selections and certified/source-code ranges retain their geometry (ADR-0022).
   The six-reference intake preserves the primary local trace frame and explicitly named question
@@ -818,11 +822,13 @@ system that exists, never beside it:
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
   and originating request retain the existing causal link. Candidate counts and model-authored
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
-  `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing
+  `client.scope.notice` records scope narrowing, widening and adding missing
   evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
   `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
   `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
-  The existing timeline carries these dispositions and counts without scope paths or notice text.
+  `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
+  folder or asks for confirmation. The existing timeline carries these dispositions and counts
+  without scope paths or notice text.
   `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
   `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
   `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch

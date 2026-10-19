@@ -5,7 +5,7 @@ import {
   type InternalWorkspaceTextRead,
 } from "./discovery.js";
 import type { CodeIntelligenceIndex } from "./codeIntelligence.js";
-import { buildCodeIntelligenceIndexFromCandidates } from "./codeIntelligence.js";
+import { buildCodeIntelligenceIndexFromCandidatesAsync } from "./codeIntelligence.js";
 import { buildEndpointContractGraphFromCandidates } from "./endpointContractGraph.js";
 import { endpointSourcePreferences } from "./endpointContractSource.js";
 import type { EndpointContractGraph } from "./endpointContractTypes.js";
@@ -684,7 +684,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         0,
         this.limits.maxFilesScanned ?? candidates.files.length,
       );
-      return buildCodeIntelligenceIndexFromCandidates(
+      return buildCodeIntelligenceIndexFromCandidatesAsync(
         this.scope,
         this.limits,
         this.executionFs,

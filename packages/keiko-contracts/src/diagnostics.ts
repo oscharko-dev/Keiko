@@ -424,6 +424,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "send-failure-skipped-owner",
   "send-failure-skipped-draft",
   "send-failure-skipped-unproven",
+  "send-cancel-requested",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",

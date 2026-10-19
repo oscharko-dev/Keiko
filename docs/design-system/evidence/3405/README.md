@@ -25,6 +25,17 @@ The current suite includes the real-BFF outage journey. Both the main server and
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source
 through normal CLI credential migration and subsequent restarts.
 
+The source-label cleanup in PR #4039 regenerated this evidence again on 2026-10-16 using the
+same Node 24.18.0 runtime. All eight unchanged tests passed; only `11-progress-state.png` changed
+PNG bytes, and the three JSON records now bind the updated English/German message sources.
+The evidence freshness check passed. This remains updater fixture evidence, not Chat scope proof.
+
+The 2026-10-19 merge of PR #4013 source `bbc778f` with `dev` source `babee4b` recaptured
+all 17 artifacts through the same producer before committing the merge. All eight unchanged
+Chromium tests passed in 56.3 seconds, including the real-BFF outage journey, and the evidence
+freshness check passed against the combined eight UI source and four harness hashes. This is
+macOS arm64 updater fixture evidence with the same limits described below.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
