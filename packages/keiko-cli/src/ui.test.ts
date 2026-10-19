@@ -126,6 +126,10 @@ function extraOf(event: ServerLogEvent | undefined): Readonly<Record<string, unk
 }
 
 describe("parseUiArgs", () => {
+  it("retains a validated explicit launch identity for the effective server environment", () => {
+    expect(expectParsed(["--launch-id", "a".repeat(32)]).launchId).toBe("a".repeat(32));
+    expect(parseUiArgs(["--launch-id", `${"a".repeat(32)}\n`])).toBeNull();
+  });
   it("defaults the port to 1983", () => {
     expect(parseUiArgs([])).toEqual({
       port: DEFAULT_UI_PORT,
@@ -423,50 +427,57 @@ describe("runUiCli", () => {
     }
   });
 
-  it("lets a process-local harness replace only handler dependency composition", async () => {
-    const { io } = captureIo();
-    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-handler-deps-"));
-    const stateDir = join(cwd, ".keiko");
-    let input: BuildHandlerDepsOptions | undefined;
-    let built: UiHandlerDeps | undefined;
-    let served: UiHandlerDeps | undefined;
-    try {
-      const code = await runUiCli(
-        ["--port", "4399"],
-        io,
-        {},
-        {
-          staticRoot,
-          hashesFile: join(staticRoot, "csp-hashes.json"),
-          cwd,
-          buildHandlerDeps: (options) => {
-            input = options;
-            built = buildUiHandlerDeps(options);
-            return built;
+  it.each([
+    { source: "environment", args: [], expected: "a".repeat(32) },
+    { source: "explicit flag", args: ["--launch-id", "b".repeat(32)], expected: "b".repeat(32) },
+  ])(
+    "composes real handler dependencies with the launch identity from $source",
+    async ({ args, expected }) => {
+      const { io } = captureIo();
+      const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-handler-deps-"));
+      const stateDir = join(cwd, ".keiko");
+      let input: BuildHandlerDepsOptions | undefined;
+      let built: UiHandlerDeps | undefined;
+      let served: UiHandlerDeps | undefined;
+      try {
+        const code = await runUiCli(
+          ["--port", "4399", ...args],
+          io,
+          { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+          {
+            staticRoot,
+            hashesFile: join(staticRoot, "csp-hashes.json"),
+            cwd,
+            buildHandlerDeps: (options) => {
+              input = options;
+              built = buildUiHandlerDeps(options);
+              return built;
+            },
+            createServer: ({ handlerDeps }) => {
+              served = handlerDeps;
+              return fakeServer({});
+            },
           },
-          createServer: ({ handlerDeps }) => {
-            served = handlerDeps;
-            return fakeServer({});
-          },
-        },
-      );
+        );
 
-      expect(code).toBe(0);
-      expect(input).toMatchObject({
-        configPath: undefined,
-        evidenceDir: undefined,
-        uiDbPath: undefined,
-        initialProjectPath: cwd,
-        env: { KEIKO_STATE_DIR: stateDir },
-        updateStartupRecovery: undefined,
-      });
-      expect(typeof input?.portableHandoffShutdown).toBe("function");
-      expect(served).toBe(built);
-    } finally {
-      closeHandlerDeps(built);
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
+        expect(code).toBe(0);
+        expect(input).toMatchObject({
+          configPath: undefined,
+          evidenceDir: undefined,
+          uiDbPath: undefined,
+          initialProjectPath: cwd,
+          env: { KEIKO_STATE_DIR: stateDir, KEIKO_UI_LAUNCH_ID: expected },
+          updateStartupRecovery: undefined,
+        });
+        expect(typeof input?.portableHandoffShutdown).toBe("function");
+        expect(served).toBe(built);
+        expect(served?.env.KEIKO_UI_LAUNCH_ID).toBe(expected);
+      } finally {
+        closeHandlerDeps(built);
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps readiness closed through pre-listen and opens only after post-listen recovery", async () => {
     const { io, out } = captureIo();

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f0685fbcdead196b739de7da1dddcca8a80763b033a7d9f2dbbbe68cc67e057e",
+    "catalogDigest": "01b1db1f557015cafb97a008cceed0241f2b5a5c013ddafc4345734bcee49843",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2354,6 +2354,51 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/lifecycle-browser-activity.ts:11",
         "emitterSites": ["packages/keiko-cli/src/lifecycle-browser-activity.ts:76"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "cli.lifecycle.health",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "lifecycle-health-activity.emitLifecycleHealth",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["start", "tracked"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["healthy", "process-exited", "health-timeout", "identity-mismatch"]
+          },
+          "launchBound": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "process-lifecycle",
+        "failureClasses": ["process-startup"],
+        "proofIds": ["cli.lifecycle.health.decision"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:11",
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:54"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28168,7 +28213,7 @@
         "proofIds": ["process.heartbeat.resources", "process.heartbeat.event-loop"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:90",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1269"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1276"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28297,7 +28342,7 @@
         "proofIds": ["process.started.runtime", "process.started.configuration"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:118",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1394"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1401"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37106,7 +37151,7 @@
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:218",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1658"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1665"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45681,16 +45726,16 @@
         "requiredProductSurfaces": ["keiko-cli"],
         "requiredLifecycleOperations": {
           "start": ["process.started"],
-          "state": [],
+          "state": ["cli.lifecycle.health"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": [],
+        "requiredCausalOperations": ["cli.lifecycle.health"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["process.started"],
+        "requiredProofOperations": ["cli.lifecycle.health", "process.started"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["process.started"],
+        "requiredResourceOperations": ["cli.lifecycle.health", "process.started"],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -81472,24 +81517,64 @@
           "failureClass": "process-startup",
           "requirementContract": "process-startup",
           "productSurfaces": ["keiko-cli"],
-          "lifecycleTransitions": ["start"],
+          "lifecycleTransitions": ["start", "state"],
           "lifecycleOperations": {
             "start": ["process.started"],
-            "state": [],
+            "state": ["cli.lifecycle.health"],
             "end": [],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
             {
+              "op": "cli.lifecycle.health",
+              "mode": "correlation"
+            },
+            {
               "op": "process.started",
               "mode": "none"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["process.started"],
+          "resourceSignals": ["cli.lifecycle.health", "process.started"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "cli.lifecycle.health",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "process-lifecycle",
+              "safeContextFields": [
+                {
+                  "name": "launchBound",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.lifecycle.health.decision"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "process.started",
               "owner": "keiko-cli",
@@ -90829,6 +90914,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.lifecycle.health",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:14",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui-process-stop.ts:61",
@@ -95984,6 +96075,7 @@
     "cli.audit.started",
     "cli.install-layout.normalized",
     "cli.lifecycle.browser-handoff",
+    "cli.lifecycle.health",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",

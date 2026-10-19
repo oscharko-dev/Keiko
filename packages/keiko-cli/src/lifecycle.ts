@@ -39,6 +39,8 @@ import {
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import { emitBrowserHandoff } from "./lifecycle-browser-activity.js";
+import { emitLifecycleHealth } from "./lifecycle-health-activity.js";
+import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import type { CliIo } from "./runner.js";
 import {
   createCliSecurityLogSink,
@@ -62,7 +64,7 @@ import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
 type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
-type HealthProbeFn = (url: string) => Promise<HealthProbeResult>;
+type HealthProbeFn = (url: string, timeoutMs?: number) => Promise<HealthProbeResult>;
 type SleepFn = (ms: number) => Promise<void>;
 type ProcessKiller = (pid: number, signal?: NodeJS.Signals | 0) => void;
 type BrowserOpener = (url: string) => void | Promise<void>;
@@ -72,7 +74,6 @@ type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
 const KEIKO_PROCESS_TITLE = "Keiko";
 const PORTABLE_RECOVERED_LAUNCH_ENV = "KEIKO_PORTABLE_RECOVERED_LAUNCH";
-const LAUNCH_ID = /^[a-f0-9]{32}$/u;
 const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter>> = {
   "--port": (raw, value) => {
     raw.portRaw = value;
@@ -108,7 +109,7 @@ function recoveredLaunchId(encoded: string | undefined): string {
     throw new TypeError("invalid recovered launch identity");
   }
   const launchId = (decoded as Record<string, unknown>).launchId;
-  if (typeof launchId !== "string" || !LAUNCH_ID.test(launchId)) {
+  if (!isKeikoUiLaunchId(launchId)) {
     throw new TypeError("invalid recovered launch identity");
   }
   return launchId;
@@ -188,6 +189,7 @@ interface LifecycleRuntimeDeps {
 interface HealthProbeResult {
   readonly reachable: boolean;
   readonly version: string | undefined;
+  readonly launchId?: string | undefined;
   // The server's diagnostic readiness (#3532), when the health body carried a valid block.
   readonly diagnostics?: ActivityLogReadinessSnapshot | undefined;
 }
@@ -208,7 +210,8 @@ function readFlagValue(args: readonly string[], index: number): string | null {
 
 function parsePositiveSeconds(raw: string): number | null {
   if (!/^[1-9]\d*$/.test(raw)) return null;
-  return Number(raw) * 1000;
+  const milliseconds = Number(raw) * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : null;
 }
 
 function optionOrEnv(
@@ -327,19 +330,27 @@ function healthResult(statusCode: number | undefined, body: string): HealthProbe
   }
   try {
     const payload = JSON.parse(body) as unknown;
+    const launchId: unknown =
+      typeof payload === "object" && payload !== null
+        ? Reflect.get(payload, "launchId")
+        : undefined;
     return {
       reachable: true,
       version: healthVersion(payload),
       diagnostics: healthDiagnostics(payload),
+      ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
     };
   } catch {
     return { reachable: true, version: undefined };
   }
 }
 
-function defaultHealthProbe(url: string): Promise<HealthProbeResult> {
+function defaultHealthProbe(
+  url: string,
+  timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
+): Promise<HealthProbeResult> {
   return new Promise((resolveProbe) => {
-    const request = httpGet(url, { timeout: HEALTH_PROBE_TIMEOUT_MS }, (response) => {
+    const request = httpGet(url, { signal: AbortSignal.timeout(timeoutMs) }, (response) => {
       const chunks: Buffer[] = [];
       let size = 0;
       response.on("data", (chunk: Buffer) => {
@@ -358,18 +369,19 @@ function defaultHealthProbe(url: string): Promise<HealthProbeResult> {
         resolveProbe({ reachable: false, version: undefined });
       });
     });
-    request.once("timeout", () => {
-      request.destroy();
-    });
     request.once("error", () => {
       resolveProbe({ reachable: false, version: undefined });
     });
   });
 }
 
-async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<HealthProbeResult> {
+async function fetchHealthProbe(
+  url: string,
+  fetchImpl: FetchFn,
+  timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
+): Promise<HealthProbeResult> {
   try {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) });
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
     return healthResult(response.status, await response.text());
   } catch {
     return { reachable: false, version: undefined };
@@ -732,18 +744,29 @@ type StartOutcome = "healthy" | "process-exited" | "health-timeout";
 async function waitForHealth(
   options: LifecycleOptions,
   pid: number,
+  launchId: string,
   deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
 ): Promise<StartOutcome> {
   // Monotonic clock so a wall-clock adjustment during startup does not skip the health
   // window (forward jump) or hold it open indefinitely (backward jump).
-  const start = performance.now();
-  while (performance.now() - start <= options.startTimeoutMs) {
+  const deadline = performance.now() + options.startTimeoutMs;
+  while (performance.now() < deadline) {
     if (!deps.isProcessAlive(pid)) return "process-exited";
-    const health = await deps.healthProbe(healthUrl(options));
-    if (health.version === SDK_VERSION && deps.isProcessAlive(pid)) {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining <= 0) break;
+    const health = await deps.healthProbe(
+      healthUrl(options),
+      Math.min(HEALTH_PROBE_TIMEOUT_MS, remaining),
+    );
+    if (
+      health.version === SDK_VERSION &&
+      health.launchId === launchId &&
+      deps.isProcessAlive(pid) &&
+      performance.now() < deadline
+    ) {
       return "healthy";
     }
-    await deps.sleep(500);
+    await deps.sleep(Math.min(500, Math.max(0, deadline - performance.now())));
   }
   return "health-timeout";
 }
@@ -771,13 +794,12 @@ function keepAlreadyRunningUi(
     emitBrowserHandoff(deps.securityLogSink, { outcome: "headless", attestationProvided: false });
     return true;
   }
-  const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
-  if (record.launchId === undefined || !verify(record.pid, record.launchId)) {
+  if (record.launchId === undefined) {
     io.out("Run `keiko restart` to open an authenticated browser for this older launch.\n");
     emitBrowserHandoff(deps.securityLogSink, {
       outcome: "restart-required",
       attestationProvided: false,
-      reason: record.launchId === undefined ? "launch-id-missing" : "identity-unverified",
+      reason: "launch-id-missing",
     });
     return true;
   }
@@ -818,7 +840,18 @@ async function handleStaleRunning(
   running: PidRecord,
 ): Promise<number | "start"> {
   const health = await deps.healthProbe(healthUrl(options));
+  if (
+    !trackedUiStillOwned(options, deps, running) ||
+    healthConflictsWithTracked(health, running.launchId)
+  ) {
+    emitLifecycleHealth(deps.securityLogSink, "tracked", "identity-mismatch", false);
+    io.err(
+      "keiko start: health did not confirm the tracked launch identity; ownership is retained.\n",
+    );
+    return 1;
+  }
   if (health.version === SDK_VERSION) {
+    emitLifecycleHealth(deps.securityLogSink, "tracked", "healthy", running.launchId !== undefined);
     return keepAlreadyRunningUi(options, io, deps, running) ? 0 : 1;
   }
   io.out(
@@ -827,6 +860,35 @@ async function handleStaleRunning(
   const stopped = await cmdStop(options, io, deps);
   if (stopped !== 0) return stopped;
   return "start";
+}
+
+function trackedUiStillOwned(
+  options: LifecycleOptions,
+  deps: LifecycleRuntimeDeps,
+  record: PidRecord,
+): boolean {
+  const current = readPidRecord(pidFile(options));
+  if (
+    current?.pid !== record.pid ||
+    current.launchId !== record.launchId ||
+    current.browserOpenSupported !== record.browserOpenSupported ||
+    !deps.isProcessAlive(record.pid)
+  ) {
+    return false;
+  }
+  const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
+  return record.launchId === undefined || verify(record.pid, record.launchId);
+}
+
+function healthConflictsWithTracked(
+  health: HealthProbeResult,
+  launchId: string | undefined,
+): boolean {
+  if (launchId === undefined || !health.reachable) return false;
+  if (health.launchId !== undefined) return health.launchId !== launchId;
+  // Older servers did not emit launchId. Their confirmed owned process may still be restarted;
+  // only the current version's health can authorize retaining a modern launch as healthy.
+  return health.version === SDK_VERSION;
 }
 
 async function reportUnhealthyStart(
@@ -940,7 +1002,8 @@ async function cmdStart(
   if (!publishPidOrKillChild(options, io, deps, child.pid, launchId)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
-  const startOutcome = await waitForHealth(options, child.pid, deps);
+  const startOutcome = await waitForHealth(options, child.pid, launchId, deps);
+  emitLifecycleHealth(deps.securityLogSink, "start", startOutcome, startOutcome === "healthy");
   if (startOutcome === "healthy") {
     return reportHealthyStart(
       options,
@@ -1083,7 +1146,8 @@ function runtimeDeps(
     healthProbe:
       fetchImpl === undefined
         ? defaultHealthProbe
-        : (url: string): Promise<HealthProbeResult> => fetchHealthProbe(url, fetchImpl),
+        : (url: string, timeoutMs?: number): Promise<HealthProbeResult> =>
+            fetchHealthProbe(url, fetchImpl, timeoutMs),
     sleep:
       deps.sleep ??
       ((ms: number): Promise<void> => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))),

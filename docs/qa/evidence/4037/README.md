@@ -1,5 +1,60 @@
 # Chat/Files qualification observations
 
+## Checkpoint 66: bind startup health to the selected instance and total deadline
+
+A healthy version string could falsely confirm a different, missing or malformed launch identity.
+An actual registered health producer over owned HTTP and a real own child reproduces three false
+admissions alongside its healthy matching control. A fifth case streams the genuine producer body
+in eight chunks: each gap is below the old socket inactivity timeout, while completion exceeds the
+unchanged one-second qualification start grant. The old CLI still reports healthy. A separate
+independent continuous-whitespace transport control remains pending beyond its original one-second
+request grant.
+
+CLI startup now requires its selected launch identity, installed version, live child observation
+and a final monotonic deadline check. Node’s built-in HTTP client uses a total AbortSignal deadline, including the
+response body, clipped to the remaining startup grant. Non-finite and unsafe numeric durations
+refuse at parsing; valid representable durations and default grants remain unchanged. Tracked
+starts recheck the canonical PID/launch/capability tuple, liveness and process identity after the
+probe, including headless starts. Changed or unknown ownership is retained. The legacy version-only
+read path remains explicitly limited; it does not establish native generation ownership. Verified
+older-version processes without the additive field keep their existing safe restart path.
+
+The health route projects only the validated server dependency environment identity. The CLI's
+existing identity grammar moves unchanged to one leaf owner. The UI entry previously discarded a
+validated --launch-id: it now retains that selection in its effective environment, health/browser
+composition and shutdown polling. The explicit selection takes precedence over stale ambient data.
+The existing Activity Log records closed health decisions with a launch-bound Boolean and command
+correlation, without the identity, PID, URL, pairing material or health body. ADR-0141 reflects these
+readiness and authority boundaries.
+
+Six source admission/deadline controls fail before the first repair with three healthy controls;
+two additional post-probe owner changes fail on the retained first repair. Four original numeric
+range controls also fail before their correction. The final signed five-case public-CLI/actual-HTTP
+fixture passes on macOS ARM64 and Linux ARM64 UID1000/65534, preserving the same one-second selected
+grants. These use a controlled spawner, post-admission port snapshot and exact own-child identity
+predicate; they do not launch an installed BFF or qualify native W/S ownership. The independent
+continuous stream now aborts after its original grant and preserves the complete-body positive.
+Independent tracked-tuple, effective-env, duration, actual canonical formatter and segmented file
+sink observations retain their own explicit scope.
+
+The final full CLI suite passes1441 tests with one existing skip across72 suites; the affected
+server group passes876 with two existing skips across49 suites; the two contract suites pass343.
+The actual fresh UI/assembled package check passes6384files and the unchanged editor gzip ceiling.
+The first Sonar run rejects a nested diagnostic ternary. Its smaller final conditional mapping
+preserves all sixteen declared event tuples exactly, and the real analyzer passes afterwards.
+Full root/UI lint belongs to the first frozen source; the final changed logger is separately
+linted, with the other runtime owners joined by identical hashes. Final exact sources,77 retained
+owner/dependency paths, gate receipts, failure dispositions and independent reports are bound in
+[`startup-health-identity.json`](startup-health-identity.json).
+
+The first timeout fixture supplied seconds incorrectly; its original result earns no one-second
+budget credit. Corrected signed v2/v3 fixtures use the actual one-second flags. An unsupported
+mock-port setup, an accidental default-heap lint OOM, outdated success mocks and their corrected
+probe/operation-specific controls remain retained. A suspected grammar newline bug is explicitly
+refuted rather than claimed as a repair. No acceptance ledger or frozen model outcome changes.
+Installed cross-version/SSD/recovery, full native generation transfer, broader live UI/browser/search
+and both skill acceptance obligations remain open.
+
 ## Checkpoint 65: preserve updater decisions and aggregate state under ownership
 
 Three independent actual-manager counterexamples exposed updater state races. A caller could pass

@@ -81,6 +81,25 @@ ADR adds an authority layer above them; it does not replace, relax, or re-weight
 routing facts, and no knowledge of a `runId`, ever authorizes a content read. A request that
 satisfies all four but carries no valid session is treated exactly as an unpaired stranger.
 
+CLI startup health is instance/readiness evidence and never read authority. The health route may
+project the exact validated, non-credential launch identity from its server dependency environment.
+The shared leaf grammar is also used by CLI state and argument parsing. A fresh CLI start requires
+the selected launch identity, installed version, live owned child and a final monotonic deadline
+check. The existing startup grant bounds the whole HTTP request, including a trickling body;
+individual socket activity does not renew it. CLI duration parsing refuses non-finite or unsafe
+millisecond budgets instead of admitting an unbounded or rounded grant; representable positive
+durations keep their existing semantics. A tracked modern launch is rechecked after the probe
+against the current canonical PID tuple, liveness and process identity before it is retained as
+healthy, including headless starts. Mismatch or uncertainty preserves tracking and refuses.
+Version-only legacy inspection remains a compatibility path and does not establish native
+generation ownership or app-session authority.
+
+An explicitly validated `ui --launch-id` selection is retained in the effective server environment,
+including health, browser handoff and shutdown polling; a stale ambient identity cannot substitute
+for that selection. The existing Activity Log records the CLI decision with closed phase/outcome
+and launch-bound Boolean fields under the process-startup failure class, without the identity,
+PID, request URL, pairing secret or health body.
+
 ### D2 — Content-bearing reads require an explicitly approved app session
 
 Read authority for content is a server-issued **app session**, initially established when a pairing

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f0685fbcdead196b739de7da1dddcca8a80763b033a7d9f2dbbbe68cc67e057e" as const;
+  "01b1db1f557015cafb97a008cceed0241f2b5a5c013ddafc4345734bcee49843" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -33320,24 +33320,64 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "process-startup",
       requirementContract: "process-startup",
       productSurfaces: ["keiko-cli"],
-      lifecycleTransitions: ["start"],
+      lifecycleTransitions: ["start", "state"],
       lifecycleOperations: {
         start: ["process.started"],
-        state: [],
+        state: ["cli.lifecycle.health"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "cli.lifecycle.health",
+          mode: "correlation",
+        },
+        {
           op: "process.started",
           mode: "none",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["process.started"],
+      resourceSignals: ["cli.lifecycle.health", "process.started"],
       replayReferences: [],
       operations: [
+        {
+          op: "cli.lifecycle.health",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "process-lifecycle",
+          safeContextFields: [
+            {
+              name: "launchBound",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.lifecycle.health.decision"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "process.started",
           owner: "keiko-cli",
@@ -42253,6 +42293,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.audit.started": "runtime-packages",
     "cli.install-layout.normalized": "runtime-packages",
     "cli.lifecycle.browser-handoff": "ui",
+    "cli.lifecycle.health": "ui",
     "cli.lifecycle.stop-escalated": "ui",
     "cli.lifecycle.stop-escalation-failed": "ui",
     "cli.lifecycle.stop-request-failed": "ui",

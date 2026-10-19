@@ -12,6 +12,12 @@
 // own files.
 
 import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
+import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
+export {
+  KEIKO_UI_LAUNCH_ID_ENV,
+  UI_LAUNCH_ID_FLAG,
+  isKeikoUiLaunchId,
+} from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import {
   closeSync,
   constants as fsConstants,
@@ -214,14 +220,6 @@ function createExclusivePidFileSlot(path: string): number {
   }
   rmSync(path, { force: true });
   return openPidFileNoFollow(path, exclusive);
-}
-
-export const KEIKO_UI_LAUNCH_ID_ENV = "KEIKO_UI_LAUNCH_ID";
-export const UI_LAUNCH_ID_FLAG = "--launch-id";
-const UI_LAUNCH_ID_PATTERN = /^[0-9a-f]{32}$/;
-
-export function isKeikoUiLaunchId(value: string): boolean {
-  return UI_LAUNCH_ID_PATTERN.test(value);
 }
 
 export interface PidRecord {

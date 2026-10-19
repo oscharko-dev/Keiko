@@ -239,6 +239,10 @@
       "types": "./dist/diagnostics.d.ts",
       "import": "./dist/diagnostics.js"
     },
+    "./runtime/ui-launch": {
+      "types": "./dist/ui-launch.d.ts",
+      "import": "./dist/ui-launch.js"
+    },
     "./runtime/runtime-qualification": {
       "types": "./dist/runtime-qualification.d.ts",
       "import": "./dist/runtime-qualification.js"

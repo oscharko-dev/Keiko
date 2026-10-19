@@ -18,6 +18,7 @@
 // lands in subsequent epic children.
 
 export type { KEIKO_CONTRACTS_VERSION, KEIKO_PRODUCT_VERSION } from "./version.js";
+export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export type { clampUnit } from "./numeric.js";

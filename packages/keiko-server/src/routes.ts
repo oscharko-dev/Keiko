@@ -18,6 +18,10 @@ import {
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  KEIKO_UI_LAUNCH_ID_ENV,
+  isKeikoUiLaunchId,
+} from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
@@ -458,11 +462,13 @@ export interface RouteDefinition {
 // `diagnostics` is additive (#3532): the Activity Log readiness evaluated before this server
 // accepted work, with a live lost-event count. It is a closed, body-free projection — states,
 // reason codes and a count — so a health probe never discloses a path or an error message.
-function health(): RouteResult {
+function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const launchId = deps.env[KEIKO_UI_LAUNCH_ID_ENV];
   const body: HealthResponse = {
     status: "ok",
     version: SDK_VERSION,
     diagnostics: currentActivityLogReadiness(),
+    ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
   };
   return { status: 200, body };
 }

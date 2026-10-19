@@ -33,9 +33,13 @@ import {
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
-import { writeExclusivePidFile } from "./state-paths.js";
+import { readPidRecord, writeExclusivePidFile } from "./state-paths.js";
 
 const TEST_LAUNCH_ID = "ab".repeat(16);
+
+function readCurrentLaunchId(root: string, stateDirectory = ".keiko"): string | undefined {
+  return readPidRecord(join(root, stateDirectory, "ui.pid"))?.launchId;
+}
 
 async function runLifecycle(
   ...args: Parameters<typeof runLifecycleCli>
@@ -135,44 +139,52 @@ async function withHealthServer<T>(
 async function expectNativeHealthStartFailure(
   handler: (request: IncomingMessage, response: ServerResponse) => void,
 ): Promise<void> {
-  await withHealthServer(handler, async (port) => {
-    const root = makeRoot();
-    const c = makeIo();
-    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    let now = 0;
-    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
-      now += 600;
-      return now;
-    });
-    // #KEIKO-0437: cmdStart's unhealthy branch now runs the shared terminateAndConfirm
-    // loop. Model the child as "SIGTERM-responsive" so the terminate loop exits at its
-    // first liveness poll — realistic behavior for a child that received SIGTERM, and
-    // keeps these tests bounded to the wait-for-health path they exist to exercise.
-    let aliveCalls = 0;
-    try {
-      const code = await runLifecycle(
-        "start",
-        ["--port", String(port), "--start-timeout", "1", "--stop-timeout", "1"],
-        c.io,
-        {},
-        {
-          cwd: root,
-          spawnFn: () => child,
-          isProcessAlive: () => {
-            aliveCalls += 1;
-            return aliveCalls === 1;
+  let probes = 0;
+  await withHealthServer(
+    (request, response) => {
+      probes += 1;
+      handler(request, response);
+    },
+    async (port) => {
+      const root = makeRoot();
+      const c = makeIo();
+      const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+      let now = 0;
+      const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+      // #KEIKO-0437: cmdStart's unhealthy branch now runs the shared terminateAndConfirm
+      // loop. Model the child as "SIGTERM-responsive" so the terminate loop exits at its
+      // first liveness poll — realistic behavior for a child that received SIGTERM, and
+      // keeps these tests bounded to the wait-for-health path they exist to exercise.
+      let aliveCalls = 0;
+      try {
+        const code = await runLifecycle(
+          "start",
+          ["--port", String(port), "--start-timeout", "1", "--stop-timeout", "1"],
+          c.io,
+          {},
+          {
+            cwd: root,
+            spawnFn: () => child,
+            isProcessAlive: () => {
+              aliveCalls += 1;
+              return aliveCalls === 1;
+            },
+            isPortAvailable: () => Promise.resolve(true),
+            killProcess: vi.fn(),
+            sleep: (ms): Promise<void> => {
+              now += ms;
+              return Promise.resolve();
+            },
           },
-          isPortAvailable: () => Promise.resolve(true),
-          killProcess: vi.fn(),
-          sleep: () => Promise.resolve(),
-        },
-      );
-      expect(code).toBe(1);
-      expect(c.err()).toContain("UI did not become healthy");
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
+        );
+        expect(probes).toBeGreaterThan(0);
+        expect(code).toBe(1);
+        expect(c.err()).toContain("UI did not become healthy");
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
 }
 
 afterEach(() => {
@@ -182,6 +194,40 @@ afterEach(() => {
 });
 
 describe("runLifecycleCli", () => {
+  it.each(["1", "9007199254740"])(
+    "keeps a positive representable duration %s valid",
+    async (value) => {
+      const c = makeIo();
+      const code = await runLifecycle(
+        "status",
+        ["--start-timeout", value, "--stop-timeout", value],
+        c.io,
+        {},
+        { cwd: makeRoot() },
+      );
+      expect(code).not.toBe(2);
+      expect(c.err()).not.toContain("Usage:");
+      expect(c.out()).toContain("not running");
+    },
+  );
+
+  it.each(
+    ["--start-timeout", "--stop-timeout"].flatMap((flag) =>
+      ["9".repeat(400), "9007199254741"].map((value) => ({ flag, value })),
+    ),
+  )(
+    "rejects a non-finite or unsafe duration %# for $flag before lifecycle work",
+    async ({ flag, value }) => {
+      const root = makeRoot();
+      const c = makeIo();
+      const spawnFn = vi.fn();
+      const code = await runLifecycle("status", [flag, value], c.io, {}, { cwd: root, spawnFn });
+      expect(code).toBe(2);
+      expect(c.err()).toContain("Usage:");
+      expect(spawnFn).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["invalid alphabet", "%%%"],
     ["non-canonical base64url", "a"],
@@ -222,7 +268,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ version: SDK_VERSION }));
+      response.end(JSON.stringify({ version: SDK_VERSION, launchId: readCurrentLaunchId(root) }));
     });
     await new Promise<void>((resolveListen) => {
       server.listen(0, "127.0.0.1", resolveListen);
@@ -384,6 +430,7 @@ describe("runLifecycleCli", () => {
         Response.json({
           status: "ok",
           version: SDK_VERSION,
+          launchId: readCurrentLaunchId(root),
           diagnostics: {
             readiness: "degraded",
             reasons: ["level-silent"],
@@ -420,7 +467,12 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const fetchImpl = vi.fn(() =>
       Promise.resolve(
-        Response.json({ status: "ok", version: SDK_VERSION, diagnostics: { readiness: "fine" } }),
+        Response.json({
+          status: "ok",
+          version: SDK_VERSION,
+          launchId: readCurrentLaunchId(root),
+          diagnostics: { readiness: "fine" },
+        }),
       ),
     );
 
@@ -456,7 +508,13 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root, ".keiko-test") },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -507,7 +565,13 @@ describe("runLifecycleCli", () => {
           spawned.push({ args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root, ".keiko-test") },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -552,7 +616,13 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -661,7 +731,13 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -697,7 +773,13 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -739,7 +821,12 @@ describe("runLifecycleCli", () => {
                 return child;
               },
               fetchImpl: () =>
-                Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+                Promise.resolve(
+                  Response.json(
+                    { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+                    { status: 200 },
+                  ),
+                ),
               isProcessAlive: () => true,
               isPortAvailable: () => Promise.resolve(true),
               killProcess: vi.fn(),
@@ -794,7 +881,13 @@ describe("runLifecycleCli", () => {
           spawnedEnvs.push(opts.env);
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -843,7 +936,13 @@ describe("runLifecycleCli", () => {
           spawnedEnvs.push(opts.env);
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -871,7 +970,13 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: vi.fn(),
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -908,7 +1013,12 @@ describe("runLifecycleCli", () => {
         cwd: root,
         spawnFn,
         fetchImpl: () =>
-          Promise.resolve(Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 })),
+          Promise.resolve(
+            Response.json(
+              { status: "ok", version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         killProcess: vi.fn(),
         sleep: () => Promise.resolve(),
@@ -937,7 +1047,12 @@ describe("runLifecycleCli", () => {
         cwd: root,
         spawnFn,
         fetchImpl: () =>
-          Promise.resolve(Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 })),
+          Promise.resolve(
+            Response.json(
+              { status: "ok", version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         killProcess: vi.fn(),
         openExternal,
@@ -985,7 +1100,7 @@ describe("runLifecycleCli", () => {
               Response.json(
                 probe === 1
                   ? { status: "ok", version: "0.1.2" }
-                  : { status: "ok", version: SDK_VERSION },
+                  : { status: "ok", version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
                 { status: 200 },
               ),
             );
@@ -1034,7 +1149,9 @@ describe("runLifecycleCli", () => {
             // child after the restart reports the current SDK version so startup completes.
             return Promise.resolve(
               Response.json(
-                probe === 1 ? { status: "ok" } : { status: "ok", version: SDK_VERSION },
+                probe === 1
+                  ? { status: "ok" }
+                  : { status: "ok", version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
                 { status: 200 },
               ),
             );
@@ -1080,7 +1197,10 @@ describe("runLifecycleCli", () => {
           return fetchCalls === 1
             ? Promise.reject(new Error("connection refused"))
             : Promise.resolve(
-                Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 }),
+                Response.json(
+                  { status: "ok", version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+                  { status: 200 },
+                ),
               );
         },
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
@@ -1150,7 +1270,12 @@ describe("runLifecycleCli", () => {
         cwd: root,
         spawnFn: () => child,
         fetchImpl: () =>
-          Promise.resolve(Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 })),
+          Promise.resolve(
+            Response.json(
+              { status: "ok", version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => false,
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
@@ -1181,15 +1306,17 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const child = { pid: 24681, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     const fetchImpl = vi.fn(() =>
-      Promise.resolve(Response.json({ status: "ok", version: "0.0.0-wrong" }, { status: 200 })),
+      Promise.resolve(
+        Response.json(
+          { status: "ok", version: "0.0.0-wrong", launchId: readCurrentLaunchId(root) },
+          { status: 200 },
+        ),
+      ),
     );
     const killProcess = vi.fn();
     const nowSpy = vi.spyOn(performance, "now");
     let now = 0;
-    nowSpy.mockImplementation(() => {
-      now += 600;
-      return now;
-    });
+    nowSpy.mockImplementation(() => now);
     let aliveCalls = 0;
 
     try {
@@ -1208,7 +1335,10 @@ describe("runLifecycleCli", () => {
           },
           isPortAvailable: () => Promise.resolve(true),
           killProcess,
-          sleep: () => Promise.resolve(),
+          sleep: (ms): Promise<void> => {
+            now += ms;
+            return Promise.resolve();
+          },
         },
       );
 
@@ -1336,7 +1466,13 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -1385,7 +1521,13 @@ describe("runLifecycleCli", () => {
         cwd: root,
         platform: () => "win32",
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -1715,7 +1857,13 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -1808,7 +1956,13 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
           linkSync(victim, join(stateDir, "ui.pid"));
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -1868,7 +2022,13 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -1907,7 +2067,13 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -1945,7 +2111,13 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),

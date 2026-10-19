@@ -2110,6 +2110,8 @@ export interface HealthResponse {
   readonly status: "ok";
   readonly version: string;
   readonly diagnostics: ActivityLogReadinessSnapshot;
+  /** The server-owned instance identity, when this process was started by a modern launcher. */
+  readonly launchId?: string;
 }
 
 const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);

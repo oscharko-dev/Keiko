@@ -262,6 +262,7 @@ export interface UiCliArgs {
   readonly evidenceDir: string | undefined;
   readonly config: string | undefined;
   readonly uiDbPath: string | undefined;
+  readonly launchId?: string;
   /** Internal native-launcher handoff; never an environment-supplied process identity. */
   readonly runtimeOwner?: true;
 }
@@ -485,6 +486,7 @@ export function parseUiArgs(args: readonly string[]): UiParseResult {
     evidenceDir: evidenceRaw,
     config: configRaw,
     uiDbPath: uiDbRaw,
+    ...launchIdOption(launchIdRaw),
     ...(raw.runtimeOwner === undefined ? {} : { runtimeOwner: raw.runtimeOwner }),
   };
 }
@@ -492,6 +494,10 @@ export function parseUiArgs(args: readonly string[]): UiParseResult {
 function browserHost(host: string | undefined): Pick<UiCliArgs, "host"> {
   if (host === undefined) return {};
   return { host: host === "localhost" ? "localhost" : "127.0.0.1" };
+}
+
+function launchIdOption(launchId: string | undefined): Pick<UiCliArgs, "launchId"> {
+  return launchId === undefined ? {} : { launchId };
 }
 
 function defaultStaticRoot(cwd: string): string {
@@ -578,6 +584,7 @@ function withDefaultLocalRuntimeStateEnv(
     KEIKO_STATE_DIR: stateDir,
     KEIKO_UI_HOST: UI_HOST,
     KEIKO_UI_PORT: String(parsed.port),
+    ...(parsed.launchId === undefined ? {} : { [KEIKO_UI_LAUNCH_ID_ENV]: parsed.launchId }),
   };
   if (parsed.uiDbPath === undefined && !hasEnvValue(next.KEIKO_UI_DATA_DIR)) {
     next.KEIKO_UI_DATA_DIR = defaultUiDataDir(stateDir);
@@ -1616,7 +1623,7 @@ async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promi
     onShutdown: stopHeartbeat,
     closeActivityLog,
     peekShutdownRequest: () =>
-      peekShutdownRequest(stateDir, currentProcessId(), process.env[KEIKO_UI_LAUNCH_ID_ENV]),
+      peekShutdownRequest(stateDir, currentProcessId(), options.runtimeEnv[KEIKO_UI_LAUNCH_ID_ENV]),
     pollBrowserRequest: createBrowserHandoffPoll({
       stateDir,
       pid: currentProcessId(),
