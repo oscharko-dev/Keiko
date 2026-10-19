@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "3a3c567e20d7be6690f75ad66f7a4468b7c643b6d60adf95a077de0a1dfbc33d" as const;
+  "a4f83221be504dfb75affbdb19e9233e1c63375e14d7cb7096a7062a7f06de5b" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -31555,6 +31555,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "safe-version",
               required: false,
             },
+            {
+              name: "workerState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
@@ -31567,7 +31573,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["search.native-runtime-resolved.state"],
+          proofIds: [
+            "search.native-runtime-resolved.state",
+            "search.native-runtime-resolved.worker",
+          ],
           replayReferences: [],
           missingObligations: [],
         },
@@ -31623,6 +31632,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "safe-version",
               required: false,
             },
+            {
+              name: "workerState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
@@ -31635,7 +31650,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["search.native-runtime-resolved.state"],
+          proofIds: [
+            "search.native-runtime-resolved.state",
+            "search.native-runtime-resolved.worker",
+          ],
           replayReferences: [],
           missingObligations: [],
         },

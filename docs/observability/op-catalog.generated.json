@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3a3c567e20d7be6690f75ad66f7a4468b7c643b6d60adf95a077de0a1dfbc33d",
+    "catalogDigest": "a4f83221be504dfb75affbdb19e9233e1c63375e14d7cb7096a7062a7f06de5b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31176,6 +31176,12 @@
             "required": true,
             "values": ["resolved", "unavailable", "invalid"]
           },
+          "workerState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["ready", "runtime-invalid", "build-failed", "unavailable"]
+          },
           "version": {
             "type": "string",
             "dataClass": "safe-version",
@@ -31187,10 +31193,13 @@
         "lifecycle": "state",
         "analyzerProjection": "capability",
         "failureClasses": ["native-runtime-unavailable", "native-runtime-invalid"],
-        "proofIds": ["search.native-runtime-resolved.state"],
+        "proofIds": [
+          "search.native-runtime-resolved.state",
+          "search.native-runtime-resolved.worker"
+        ],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:32",
-        "emitterSites": ["packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:405"]
+        "registrationSite": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:37",
+        "emitterSites": ["packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:418"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -79574,6 +79583,12 @@
                   "type": "string",
                   "dataClass": "safe-version",
                   "required": false
+                },
+                {
+                  "name": "workerState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -79587,7 +79602,10 @@
                 "frames": false,
                 "causeChain": false
               },
-              "proofIds": ["search.native-runtime-resolved.state"],
+              "proofIds": [
+                "search.native-runtime-resolved.state",
+                "search.native-runtime-resolved.worker"
+              ],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -79642,6 +79660,12 @@
                   "type": "string",
                   "dataClass": "safe-version",
                   "required": false
+                },
+                {
+                  "name": "workerState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -79655,7 +79679,10 @@
                 "frames": false,
                 "causeChain": false
               },
-              "proofIds": ["search.native-runtime-resolved.state"],
+              "proofIds": [
+                "search.native-runtime-resolved.state",
+                "search.native-runtime-resolved.worker"
+              ],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -91382,7 +91409,7 @@
     {
       "op": "search.native-runtime-resolved",
       "category": "search",
-      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:35",
+      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:40",
       "package": "keiko-local-knowledge"
     },
     {
@@ -92192,7 +92219,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-store-open.ts:262",
+      "site": "packages/keiko-server/src/local-knowledge-store-open.ts:263",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

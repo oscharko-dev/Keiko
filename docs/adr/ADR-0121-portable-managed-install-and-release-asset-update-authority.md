@@ -377,6 +377,18 @@ Job settlement closes this private authority before terminating the Worker, incl
 or termination failure; the main root port remains independently owned. Existing caller failure
 events and root lifecycle availability evidence remain authoritative.
 
+The ANN Worker uses that same private observation bridge before opening its approved native runtime.
+It holds both the binary and its immediate parent across module loading and compares lossless
+BigInt descriptor metadata before asking the selected scope for ownership. Unknown ownership
+refuses; root/caller ownership still requires the existing non-writable POSIX mode, object type,
+symlink, digest, runtime-version and pre/post-load identity checks. Windows retains its existing
+ACL-independent checks. The existing index owner closes the private authority on construction or
+build failure, deadline expiry, Worker error/exit, eviction/reset and query discard, before requesting
+termination. No second index cache, native decoder, report writer or special UID exception is added.
+The existing native-runtime Activity Log operation records one closed Worker build result separately
+from cold digest resolution. The existing BFF composition supplies its process log sink; accepted
+and refused builds include no file path, descriptor, inode, UID, query or content.
+
 These independently exercised Linux mechanisms do not admit an installed app or updater transition.
 The initial CLI still needs the complete detached outer-owner lifetime; each update still needs
 the direct BFF-created coordinator channel, separate installed-current and running-owner identities,

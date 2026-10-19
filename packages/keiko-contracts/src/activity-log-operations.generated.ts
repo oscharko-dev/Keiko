@@ -29854,6 +29854,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["resolved", "unavailable", "invalid"],
       },
+      workerState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["ready", "runtime-invalid", "build-failed", "unavailable"],
+      },
       version: {
         type: "string",
         dataClass: "safe-version",
@@ -29865,7 +29871,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "state",
     analyzerProjection: "capability",
     failureClasses: ["native-runtime-unavailable", "native-runtime-invalid"],
-    proofIds: ["search.native-runtime-resolved.state"],
+    proofIds: ["search.native-runtime-resolved.state", "search.native-runtime-resolved.worker"],
     releaseImpact: "patch",
   },
   {

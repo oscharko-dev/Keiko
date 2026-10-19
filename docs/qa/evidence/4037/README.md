@@ -1634,3 +1634,18 @@ proofs. The separately frozen real ANN loader matrix already demonstrates one fa
 three false grants across ten ownership cases; its product correction is next. Initial/coordinator
 and successor integration, installed transitions, explicit lease findings and wider acceptance
 remain open. No issue checkbox or frozen model-quality outcome changes.
+
+## Held ANN runtime ownership and Worker settlement
+
+`native-ann-worker-ownership.json` records the actual ten-case before/after owner matrix,
+lossless held binary/parent proof, private Worker lifetime, default 20,001-vector ANN integration
+and registered build-result formatting. The same approved ELF, frozen owner fixtures and grants
+remain. Each UID completes 18 requests, including 16 identical concurrent warm requests and an
+index rebuild; these prove concurrency/lifecycle rather than distinct-query isolation.
+
+The existing Activity Log distinguishes cold digest resolution from one closed Worker build
+result. Main-thread BFF composition uses the existing process sink. Actual native formatter
+checks, 33 independent controlled loader cases, 15 independent controlled owner cases, causal
+failures and local command receipts retain their separate scopes. Final test parameterization
+changes no product runtime or frozen native input. Complete updater, visible UI, skill, 96-criterion
+and delivery acceptance remain open.

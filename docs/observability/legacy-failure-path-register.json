@@ -1592,12 +1592,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts",
-      "owner": "openVerifiedRuntime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/retrieval/vector-index.ts",
       "owner": "reportUnexpectedFailure",
       "kind": "unregistered-catch",
