@@ -1,6 +1,7 @@
 import { withImmediateTransaction } from "./transaction.js";
 import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
+import { createBrowserApprovalStore } from "./browserApprovals.js";
 import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
@@ -677,6 +678,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
     markdownSkills: createMarkdownSkillStore(db, options.now),
+    browserApprovals: createBrowserApprovalStore(db),
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
       createProjectRecord(db, options, path, name),

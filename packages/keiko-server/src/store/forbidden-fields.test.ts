@@ -190,6 +190,8 @@ const ALLOWED_GITHUB_ISSUE_READER_AUTHORIZATION_COLUMNS = new Set([
 // table missing here still fails the forbidden-substring scan; this pin only guarantees the
 // human review happens too.
 const EXPECTED_TABLES = new Set([
+  "browser_approvals",
+  "browser_approval_installation",
   "chat_drafts",
   "chat_messages",
   "chats",
@@ -216,6 +218,31 @@ const EXPECTED_TABLES = new Set([
   "workspace_manifests",
   "workspace_trust_records",
 ]);
+
+describe("forbidden-fields — browser public identity approval (#4043)", () => {
+  it.each([
+    ["browser_approval_installation", ["singleton", "installation_id", "observed_at"]],
+    [
+      "browser_approvals",
+      [
+        "approval_id",
+        "public_x",
+        "public_y",
+        "origin",
+        "approved_at",
+        "expires_at",
+        "last_used_at",
+      ],
+    ],
+  ] as const)("limits %s to public identity and bounded approval metadata", (table, columns) => {
+    const inspector = openMigratedSchema(join(tmpDir, "browser-approval-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, table))).toEqual(new Set(columns));
+    } finally {
+      inspector.close();
+    }
+  });
+});
 
 // ── Forbidden substring patterns (case-insensitive) ─────────────────────────
 // Any column whose name contains one of these substrings leaks a credential-class

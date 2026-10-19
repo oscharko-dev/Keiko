@@ -19,6 +19,7 @@ import {
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionMint, SessionRegistry } from "./sessionRegistry.js";
+import type { BrowserApprovalService } from "./browserApproval.js";
 import {
   contentFreeErrorClass,
   type ServerDiagnosticSink,
@@ -55,6 +56,7 @@ export type CodingAppSessionEnsureResult =
   | { readonly status: "unavailable" };
 
 export interface CodingAppSessionChannel {
+  readonly browserApproval?: BrowserApprovalService | undefined;
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
   readonly ensureLocalSession: (cookieToken: string | undefined) => CodingAppSessionEnsureResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
@@ -89,6 +91,7 @@ export interface CodingAppSessionChannel {
 
 export interface CodingAppSessionChannelDeps {
   readonly registry: SessionRegistry;
+  readonly browserApproval?: BrowserApprovalService | undefined;
   /** Absent = fail-closed production posture: no session issuable, every read content-free. */
   readonly pairingPort?: SessionPairingPort | undefined;
   /** Absent = channel serves content-free even to a paired session (this wave's production posture). */
@@ -402,6 +405,7 @@ export function createCodingAppSessionChannel(
   const { registry, pairingPort, contentSource, diagnostics } = deps;
   const admission = makeLiveSubscriptionAdmission();
   return {
+    browserApproval: deps.browserApproval,
     pair: (attestation: unknown): CodingAppSessionPairResult =>
       pairSession(registry, pairingPort, attestation),
     ensureLocalSession: (cookieToken: string | undefined): CodingAppSessionEnsureResult => {

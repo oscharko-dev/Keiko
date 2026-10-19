@@ -135,6 +135,7 @@ import {
 import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { CODING_RUNTIME_ROUTE_GROUP } from "./coding-runtime/codingRuntimeRoutes.js";
 import { CODING_APP_SESSION_ROUTE_GROUP } from "./coding-app-session/codingAppSessionRoutes.js";
+import { BROWSER_APPROVAL_ROUTES } from "./coding-app-session/browserApprovalRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -1642,6 +1643,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.
   ...CODING_APP_SESSION_ROUTE_GROUP,
+  ...BROWSER_APPROVAL_ROUTES,
   // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
   // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.

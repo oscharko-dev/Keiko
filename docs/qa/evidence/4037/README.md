@@ -749,3 +749,48 @@ their parameter scope; its two failures are retained and corrected before the fi
 passes. These checks do not establish real Windows APIs, signed ES containment, the missing
 generation-ownership transition or genuine packaged update/restart/rollback/SSD acceptance. The
 broader native and model acceptance holds remain open.
+
+## Checkpoint 30: explicit browser-approval server owner and retained React failure
+
+The existing app-session channel now exposes a bounded request/approve/challenge/prove/inspect/revoke
+path. An already approved local session must approve the exact requester key and comparison code;
+completion and renewal require fresh P-256 proof over installation, server instance, exact origin,
+purpose, subject, nonce and lifetime. Optional remembering requires both human choices and has an
+immutable thirty-day deadline. The existing private UI SQLite owner stores only public identity and
+bounded approval metadata through additive schema V45; no new bearer or credential store is added.
+The original registry owns every new session, lifetime, rotation, cookie repair and revocation.
+
+The auditor found two defects before publication. A known expiry could become renewal-eligible after
+restart and clock rollback; the existing UI store now persists the observation floor. Operation
+release could observe approval expiry without removing the record, allowing rollback to revive it;
+release now removes the identical expired registry record. Final identical causal suites reproduce
+one failure and fourteen healthy controls, then fifteen passes, and one failure and ten healthy
+controls, then eleven passes respectively. Earlier causal attempts remain retained. Independent
+actual-owner checks pass seven and four controls for these scoped repairs.
+
+`browser-approval-server-core.json` binds sources and proofs. All 43 owning suites pass 858 tests,
+including nine mounted-BFF HTTP controls. A newly approved cookie saves and reads a protected chat
+draft; revocation makes that same access fail. The real Node WebCrypto interoperability control is
+not native-browser evidence. Service recomposition over SQLite is not an OS restart; closing, moving
+and reopening a temporary store is not an SSD journey. UI, IndexedDB, boot/recovery and real
+Chrome/Safari/Firefox/profile/restart/SSD qualification remain open. Schema V45 is forward-only;
+packaged rollback and state compatibility remain unqualified. No release version is assigned and no
+installed working instance is changed. Cookie port scope, hostile same-origin code/local origin
+takeover and privileged clock/state restoration are explicit threat-model limits.
+
+`react-feedback-v5.json` preserves the failed six-case paired known-fixture experiment: twelve
+phases, 52 physical calls, 23 task/citation attempts and 29 separately counted noncase calls. No
+first-pass output is baseline-eligible. One raw post-feedback control output passes the correct
+subject and dispatches eight mutant trials, detecting four; these are zero credited workflow results.
+Every feedback phase violates the frozen observation contract, and the intended smaller input cap
+was not applied to the authoritative top-level configuration. Actual cumulative usage stays within
+the original grants, which does not establish the missing enforcement. A pure retrieval replay
+explains the fragile contiguous marker without demonstrating material loss in the original request.
+The separately found extractor-refusal feedback defect was not exercised in these generated phases.
+All attempts and original results remain unchanged; both customer skills remain unaccepted.
+
+The published parent also has a failed macOS-x64 cold-refusal CI control. Its real log records
+expiry at 5,003 ms without readiness or process exit. The unchanged targeted ARM64 case passes in
+1.89 seconds, which does not qualify x64 or diagnose its cause. Its cold import/refusal versus EOF
+phase ordering remains under investigation. Full native updater, model benefit, historical96,
+exact-head CI/review and authorized merge holds remain open.

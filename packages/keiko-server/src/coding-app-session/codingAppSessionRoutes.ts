@@ -25,13 +25,8 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
-import {
-  STREAMING,
-  type HandlerOutcome,
-  type RouteContext,
-  type RouteDefinition,
-  type RouteResult,
-} from "../routes.js";
+import { STREAMING } from "../route-outcome.js";
+import type { HandlerOutcome, RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import { createSessionStreamWriter, createSessionStreamTransport } from "./sessionStreamWriter.js";
 import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";

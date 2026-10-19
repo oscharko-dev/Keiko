@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c6ac72013e299b10d0fa227683f6335e02d191cd4b88cd8ad8f57698f226cb43" as const;
+  "7482d3e3dda897f7cddd1de4768eb2d20eecd9d76f15f5346235b328c0fe10e1" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5344,12 +5344,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-app-session.operation.state"],
+        state: ["coding-app-session.browser-approval.state", "coding-app-session.operation.state"],
         end: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "coding-app-session.browser-approval.state",
+          mode: "correlation",
+        },
         {
           op: "coding-app-session.local-session.confirmed",
           mode: "correlation",
@@ -5365,12 +5369,49 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "coding-app-session.browser-approval.state",
         "coding-app-session.local-session.confirmed",
         "coding-app-session.operation.state",
         "coding-app-session.paired",
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-app-session.browser-approval.state",
+          owner: "keiko-server",
+          category: "http",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "action",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sessionCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-app-session.browser-approval.state.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-app-session.local-session.confirmed",
           owner: "keiko-server",
@@ -41912,6 +41953,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.support-report.preparation-failed": "client-diagnostics",
     "client.support-report.prepared": "client-diagnostics",
     "client.update-notice.presented": "client-diagnostics",
+    "coding-app-session.browser-approval.state": "tools-workflows",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.confirmed": "tools-workflows",

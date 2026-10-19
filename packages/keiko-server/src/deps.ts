@@ -454,6 +454,7 @@ import {
   type CodingAppSessionContentSource,
 } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createBrowserApprovalService } from "./coding-app-session/browserApproval.js";
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
@@ -4913,8 +4914,12 @@ function buildAssemblyCodingAppSessionChannel(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
 ): ReturnType<typeof createCodingAppSessionChannel> {
+  const registry = createSessionRegistry();
+  const store = args.bundle.uiStore.browserApprovals;
   return createCodingAppSessionChannel({
-    registry: createSessionRegistry(),
+    registry,
+    browserApproval:
+      store === undefined ? undefined : createBrowserApprovalService({ registry, store }),
     pairingPort:
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
     contentSource:

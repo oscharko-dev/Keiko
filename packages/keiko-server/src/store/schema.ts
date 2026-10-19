@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 44;
+export const SCHEMA_VERSION = 45;
 
 interface Migration {
   readonly version: number;
@@ -1685,6 +1685,23 @@ export const MIGRATIONS: readonly Migration[] = [
       chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
       text TEXT NOT NULL,
       revision INTEGER NOT NULL CHECK (revision >= 1)
+    ) STRICT;`,
+  },
+  {
+    version: 45,
+    sql: `CREATE TABLE browser_approval_installation (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      installation_id TEXT NOT NULL CHECK (length(installation_id) = 32),
+      observed_at INTEGER NOT NULL DEFAULT 0 CHECK (observed_at >= 0)
+    ) STRICT;
+    CREATE TABLE browser_approvals (
+      approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 36),
+      public_x TEXT NOT NULL CHECK (length(public_x) = 43),
+      public_y TEXT NOT NULL CHECK (length(public_y) = 43),
+      origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 128),
+      approved_at INTEGER NOT NULL CHECK (approved_at >= 0),
+      expires_at INTEGER NOT NULL CHECK (expires_at > approved_at),
+      last_used_at INTEGER NOT NULL CHECK (last_used_at >= approved_at AND last_used_at < expires_at)
     ) STRICT;`,
   },
 ];

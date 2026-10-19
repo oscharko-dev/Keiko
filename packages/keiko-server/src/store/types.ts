@@ -11,6 +11,7 @@
 // the literal specifier so the extension must match exactly.
 import type { CodingHistoryStore } from "./codingHistory.js";
 import type { MarkdownSkillStore } from "./markdownSkills.js";
+import type { BrowserApprovalStore } from "./browserApprovals.js";
 import type {
   Project,
   Chat,
@@ -111,6 +112,7 @@ export type ChatTurnCompletion =
 
 export interface UiStore {
   readonly markdownSkills: MarkdownSkillStore;
+  readonly browserApprovals?: BrowserApprovalStore | undefined;
   readonly codingHistory?: CodingHistoryStore | undefined;
   readonly listProjects: () => readonly Project[];
   readonly createProject: (path: string, name?: string) => Project;

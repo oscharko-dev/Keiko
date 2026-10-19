@@ -81,17 +81,18 @@ ADR adds an authority layer above them; it does not replace, relax, or re-weight
 routing facts, and no knowledge of a `runId`, ever authorizes a content read. A request that
 satisfies all four but carries no valid session is treated exactly as an unpaired stranger.
 
-### D2 — Content-bearing reads require a launcher-attested app session
+### D2 — Content-bearing reads require an explicitly approved app session
 
-Read authority for content is a server-issued **app session**, established only when a pairing
+Read authority for content is a server-issued **app session**, initially established when a pairing
 request is approved by a server-private `SessionPairingPort`. The port's production implementation
 is bound to a trusted launcher/OS authority: it approves only a fresh, single-use, process-bound
 attestation that an arbitrary local process cannot forge because it does not hold the launcher's
 process-scoped pairing secret. The port is injected into production composition through the same
 "injected production ports, never a fallback consumer" seam that ADR-0137/#2377 established for the
 runtime start-confirmation plane. **Absence of the port is an intentional fail-closed production
-posture:** if no launcher authority is present, no session can be issued and every content read
-returns the content-free projection. The exact launcher-to-browser delivery of the attestation is
+posture:** without launcher attestation or an existing explicitly remembered browser approval,
+an unauthenticated caller cannot establish authority. Protected reads return their existing
+content-free projection. The exact launcher-to-browser delivery of the attestation is
 finalized with the UI plumbing in W1.5; the server-side authority, the session, and the channel are
 complete and independently testable through the port here.
 
@@ -116,6 +117,61 @@ missing projections after an upgrade, including the authenticated support-report
 pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
+
+#### Explicit browser approval (#4043)
+
+The same channel and session registry support approval of another browser by an already approved
+local session. The requester supplies only a public P-256 point and an explicit optional remember
+choice. A bounded five-minute request carries a random identifier and an eight-digit comparison
+code. The human compares that code in the requesting browser and in the authenticated approval
+surface. Merely knowing the request identifier or comparison code cannot issue a session: completion
+also proves possession of the exact approved private key. There is no unauthenticated launcher
+invocation, fallback bearer, browser-supplied principal, or grant of task/autonomy authority.
+
+Completion and remembered renewal use distinct, single-use challenges valid for at most sixty
+seconds. Domain-separated signed bytes bind the installation, current server instance, exact
+scheme/host/port origin, purpose, subject, random challenge identity and nonce, and issuance/expiry.
+The server accepts only canonical public coordinates and IEEE-P1363 ECDSA-SHA256 signatures.
+Consuming a challenge removes it before verification; replay, malformed input, a different origin,
+an expired request, and restart-invalidated challenges cannot mint a session. Pending requests are
+bounded to 32 and challenges to 64; a new challenge replaces the previous challenge for that subject
+and purpose. JSON uses the existing bounded pairing reader and all existing Host/Origin/CSRF and
+content guards remain mandatory. These new POST routes additionally require the exact transport
+origin, rather than the routing URL's placeholder authority.
+
+Remembering requires an explicit choice from both requester and approver. The existing private UI
+SQLite store owns schema V45: a stable random installation identity and monotone observed-time
+floor, plus at most 32 approved public keys with their exact origin, immutable approval/expiry times
+and last successful use. No private key, cookie, signature, challenge or reusable bearer is stored
+there. Expiry is at most thirty days after human approval and never slides on use. A full inventory
+refuses another remembered grant instead of evicting a valid one. A persisted observation floor
+prevents an already observed expiry from becoming usable after restart and clock rollback; invalid
+or backwards time refuses approval operations until the existing floor is reached.
+
+Remembered renewal requires a fresh challenge and a current unrevoked public approval. It issues
+ordinary process-memory sessions through the existing registry, with validity capped by both the
+usual session lifetime and the original approval deadline. Rotation, cookie repair and active
+operation protection cannot extend that deadline. Operation release irreversibly removes an
+approval-expired session even when release is its first expiry observer. Revocation synchronously
+removes the durable approval, pending completion state and every associated live session through
+the same registry. Within the single BFF owner, verification, store mutation and mint/revocation
+contain no asynchronous gap. A lost completion response can rotate its existing session with a
+fresh proof during the original request window; it cannot mint again after revocation or eviction.
+
+The browser implementation must keep a session-only private key in memory and may remember an
+explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. That UI and
+the real Chrome/Safari/Firefox restart, profile and SSD journeys remain qualification requirements;
+server controls alone do not establish their acceptance. The UI must show remembered expiry and
+revocation, preserve an authenticated session if optional key persistence fails, and report that
+failure honestly. New remembered state is additive, private and tied to the existing installation,
+not to its directory path; moving protected state does not grant trust to unrelated installations
+or OS users. No release version is assigned by this implementation checkpoint.
+
+Origin identity is not OS application identity. Existing cookies are not isolated by TCP port;
+neither nonextractability nor IndexedDB protects against hostile script in the same origin,
+including a local server that takes over that origin while Keiko is stopped. Current CSP and
+transport guards remain in force. This design does not promise protection from same-origin code,
+privileged OS clock/state tampering, or restoration of a revoked database from an old backup.
 
 ### D3 — The authenticated channel is a distinct transport, not a widening of the unauthenticated union
 
@@ -434,9 +490,10 @@ existence, and `CodingWorkbenchRuntimeSnapshot` carries none of it.
   reads onto the channel without inventing a second session mechanism; W1.6–W1.9 project transcript,
   plan, tool activity, and run-scoped diffs through the channel's content source.
 - The channel is runtime-neutral: the deferred Codex follow-up epic reuses it unchanged.
-- Restart expiry is free and durable-store risk is avoided, at the cost that a server restart
-  requires re-pairing — acceptable and correct for a local-first, launcher-started product; the
-  durable encrypted store is a deliberate Wave-3 decision.
+- Every live session still expires on restart. An explicitly remembered browser can establish a
+  fresh session within its original bounded approval through proof of possession; session-only
+  browsers require fresh human approval or launcher pairing. Durable public approval metadata lives
+  in the existing protected UI store, and never makes a prior cookie survive restart.
 - The existing unauthenticated status/SSE surface is unchanged and stays content-free; no existing
   route is migrated or claimed safe by this ADR (route enforcement is W1.5).
 - The channel wire types are held in `keiko-server` for this wave and promoted to `keiko-contracts`

@@ -7,6 +7,7 @@
 // `<sessionId>.<secret>`; only the browser holds it, and it never appears in any diagnostic here.
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { isBrowserApprovalId } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1_000;
 const DEFAULT_ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1_000;
@@ -34,6 +35,10 @@ export interface SessionMint {
 
 export interface SessionRegistry {
   readonly mint: (principalLabel: string) => SessionMint;
+  readonly mintForApproval: (
+    principalLabel: string,
+    approval: SessionApprovalBinding,
+  ) => SessionMint;
   readonly verify: (cookieToken: string | undefined) => AppSession | undefined;
   /** Non-touching validity check for persistent server streams; never refreshes idle expiry. */
   readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
@@ -45,7 +50,14 @@ export interface SessionRegistry {
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly rotate: (sessionId: string) => SessionMint | undefined;
   readonly revoke: (sessionId: string) => void;
+  readonly revokeApproval: (approvalId: string) => number;
   readonly sessionCount: () => number;
+}
+
+/** Browser identity approval caps session validity; it grants no task or autonomy authority. */
+export interface SessionApprovalBinding {
+  readonly approvalId: string;
+  readonly expiresAtMs: number;
 }
 
 export interface SessionRegistryDeps {
@@ -66,6 +78,16 @@ interface StoredSession {
   lastSeenAtMs: number;
   activeOperationCount: number;
   readonly rotationCount: number;
+  readonly approval?: SessionApprovalBinding;
+}
+
+interface SessionIssue {
+  readonly sessionId: string;
+  readonly principalLabel: string;
+  readonly rotationCount: number;
+  readonly issuedAtMs: number;
+  readonly lastSeenAtMs: number;
+  readonly approval?: SessionApprovalBinding;
 }
 
 interface RegistryState {
@@ -116,8 +138,16 @@ function describe(stored: StoredSession): AppSession {
 
 function isExpired(state: RegistryState, stored: StoredSession, nowMs: number): boolean {
   return (
+    approvalExpired(stored, nowMs) ||
     nowMs - stored.issuedAtMs > state.absoluteTtlMs ||
     (stored.activeOperationCount === 0 && nowMs - stored.lastSeenAtMs > state.idleTtlMs)
+  );
+}
+
+function approvalExpired(stored: StoredSession, nowMs: number): boolean {
+  return (
+    stored.approval !== undefined &&
+    (!Number.isFinite(nowMs) || nowMs < stored.lastSeenAtMs || nowMs >= stored.approval.expiresAtMs)
   );
 }
 
@@ -149,31 +179,49 @@ function evictOldestIfFull(state: RegistryState): NonNullable<SessionMint["capac
   return { expiredSessionCount, evictedSessionClass: inactive.length > 0 ? "inactive" : "active" };
 }
 
-function storeSession(
-  state: RegistryState,
-  sessionId: string,
-  principalLabel: string,
-  rotationCount: number,
-  issuedAtMs = state.now(),
-): SessionMint {
+function storeSession(state: RegistryState, issue: SessionIssue): SessionMint {
   const secret = state.mintSecret();
-  const nowMs = state.now();
   const stored: StoredSession = {
-    sessionId,
+    ...issue,
     secretHash: saltedHash(state.salt, secret),
-    principalLabel,
-    issuedAtMs,
-    lastSeenAtMs: nowMs,
     activeOperationCount: 0,
-    rotationCount,
+    ...(issue.approval === undefined ? {} : { approval: { ...issue.approval } }),
   };
-  state.sessions.set(sessionId, stored);
-  return { session: describe(stored), cookieToken: `${sessionId}.${secret}` };
+  state.sessions.set(issue.sessionId, stored);
+  return { session: describe(stored), cookieToken: `${issue.sessionId}.${secret}` };
 }
 
-function mintSession(state: RegistryState, principalLabel: string): SessionMint {
+function mintSession(
+  state: RegistryState,
+  principalLabel: string,
+  approval?: SessionApprovalBinding,
+): SessionMint {
+  const issuedAtMs = state.now();
+  assertApprovalBinding(approval, issuedAtMs);
   const capacityDecision = evictOldestIfFull(state);
-  return { ...storeSession(state, state.mintSessionId(), principalLabel, 0), capacityDecision };
+  return {
+    ...storeSession(state, {
+      sessionId: state.mintSessionId(),
+      principalLabel,
+      rotationCount: 0,
+      issuedAtMs,
+      lastSeenAtMs: issuedAtMs,
+      ...(approval === undefined ? {} : { approval }),
+    }),
+    capacityDecision,
+  };
+}
+
+function assertApprovalBinding(approval: SessionApprovalBinding | undefined, nowMs: number): void {
+  if (approval === undefined) return;
+  if (
+    !isBrowserApprovalId(approval.approvalId) ||
+    !Number.isFinite(nowMs) ||
+    !Number.isSafeInteger(approval.expiresAtMs) ||
+    approval.expiresAtMs <= nowMs
+  ) {
+    throw new TypeError("Invalid browser approval session binding");
+  }
 }
 
 function verifySession(
@@ -201,23 +249,30 @@ function verifyForCookieRepair(
   cookieToken: string | undefined,
 ): number | undefined {
   const verified = verifySession(state, cookieToken, true);
-  return verified === undefined
-    ? undefined
-    : Math.max(0, state.absoluteTtlMs - (state.now() - verified.issuedAtMs));
+  if (verified === undefined) return undefined;
+  const nowMs = state.now();
+  const remaining = state.absoluteTtlMs - (nowMs - verified.issuedAtMs);
+  const approval = state.sessions.get(verified.sessionId)?.approval;
+  return Math.max(
+    0,
+    Math.min(remaining, approval === undefined ? remaining : approval.expiresAtMs - nowMs),
+  );
 }
 
 function rotateSession(state: RegistryState, sessionId: string): SessionMint | undefined {
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
+  const nowMs = state.now();
   state.sessions.delete(sessionId);
-  if (isExpired(state, stored, state.now())) return undefined;
-  return storeSession(
-    state,
+  if (isExpired(state, stored, nowMs)) return undefined;
+  return storeSession(state, {
     sessionId,
-    stored.principalLabel,
-    stored.rotationCount + 1,
-    stored.issuedAtMs,
-  );
+    principalLabel: stored.principalLabel,
+    rotationCount: stored.rotationCount + 1,
+    issuedAtMs: stored.issuedAtMs,
+    lastSeenAtMs: nowMs,
+    ...(stored.approval === undefined ? {} : { approval: stored.approval }),
+  });
 }
 
 function beginSessionOperation(
@@ -235,12 +290,12 @@ function beginSessionOperation(
     released = true;
     stored.activeOperationCount -= 1;
     const nowMs = state.now();
-    if (
-      state.sessions.get(stored.sessionId) === stored &&
-      nowMs - stored.issuedAtMs <= state.absoluteTtlMs
-    ) {
-      stored.lastSeenAtMs = nowMs;
+    if (state.sessions.get(stored.sessionId) !== stored) return;
+    if (approvalExpired(stored, nowMs) || nowMs - stored.issuedAtMs > state.absoluteTtlMs) {
+      state.sessions.delete(stored.sessionId);
+      return;
     }
+    stored.lastSeenAtMs = nowMs;
   };
 }
 
@@ -257,6 +312,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
   };
   return {
     mint: (principalLabel: string): SessionMint => mintSession(state, principalLabel),
+    mintForApproval: (principalLabel, approval): SessionMint =>
+      mintSession(state, principalLabel, approval),
     verify: (cookieToken: string | undefined): AppSession | undefined =>
       verifySession(state, cookieToken, true),
     inspect: (cookieToken: string | undefined): AppSession | undefined =>
@@ -275,6 +332,17 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
     revoke: (sessionId: string): void => {
       state.sessions.delete(sessionId);
     },
+    revokeApproval: (approvalId: string): number => revokeApprovalSessions(state, approvalId),
     sessionCount: (): number => state.sessions.size,
   };
+}
+
+function revokeApprovalSessions(state: RegistryState, approvalId: string): number {
+  let revoked = 0;
+  for (const session of state.sessions.values()) {
+    if (session.approval?.approvalId !== approvalId) continue;
+    state.sessions.delete(session.sessionId);
+    revoked += 1;
+  }
+  return revoked;
 }
