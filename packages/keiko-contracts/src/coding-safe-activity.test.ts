@@ -385,6 +385,50 @@ describe("coding safe-activity contract", () => {
     }
   });
 
+  it("preserves local serialization phases after earlier member errors", async () => {
+    const { vi } = await import("vitest");
+    const base = availableFeed();
+    if (base.availability !== "available") throw new TypeError("expected available fixture");
+    const turn = base.turns[0];
+    if (turn === undefined) throw new TypeError("expected turn fixture");
+    const [first, second] = turn.messages;
+    if (first === undefined || second === undefined) {
+      throw new TypeError("expected nested fixture");
+    }
+    const badMessage = { ...first, role: "system", occurredAt: "invalid" };
+    const sibling = { ...second, messageId: "msg_trace_sibling" };
+    const laterMessage = { ...first, messageId: "msg_trace_later" };
+    const laterTurn = {
+      ...turn,
+      turnId: "turn_trace_later",
+      messages: [laterMessage],
+      tools: [],
+    };
+    const currentPlan = plan();
+    const value = {
+      ...base,
+      turns: [{ ...turn, messages: [badMessage, sibling] }, laterTurn],
+      plan: currentPlan,
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(validateCodingSafeActivityFeed(value)).toEqual({
+        ok: false,
+        errors: [
+          "safeActivityFeed.turns[0].messages[0].role is invalid",
+          "safeActivityFeed.turns[0].messages[0].occurredAt must be a strict UTC millisecond instant",
+        ],
+      });
+      expect(stringify).toHaveBeenCalledTimes(4);
+      expect(stringify.mock.calls[0]?.[0]).toBe(sibling);
+      expect(stringify.mock.calls[1]?.[0]).toBe(laterMessage);
+      expect(stringify.mock.calls[2]?.[0]).toBe(laterTurn);
+      expect(stringify.mock.calls[3]?.[0]).toBe(currentPlan);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   // KEIKO-0749: validatePlan / validateTurn / validateMessage each call `serializedBytes` (a
   // full JSON.stringify traversal) to check the deep byte budget. Before the fix they ran that
   // call even when the structure had already failed shape validation — wasting a deep

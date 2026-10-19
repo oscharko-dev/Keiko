@@ -203,7 +203,11 @@ function validateFeed(value: unknown): CodingWorkbenchValidationResult<CodingSaf
   if (!isRecord(value)) return invalid("safe activity feed must be an object");
   const errors = exactKeys(value, feedKeys(value.availability), "safeActivityFeed");
   const admitted = checkFeed(value, errors);
-  if (errors.length === 0 && serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES) {
+  if (
+    admitted &&
+    errors.length === 0 &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES
+  ) {
     errors.push("safeActivityFeed exceeds the aggregate UTF-8 byte budget");
   }
   return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
@@ -303,6 +307,25 @@ function validateFeedTurns(value: Record<string, unknown>, errors: string[]): bo
 function validatePlan(value: unknown, errors: string[]): value is CodingSafeActivityPlan {
   const before = errors.length;
   const path = "safeActivityFeed.plan";
+  const admitted = checkPlan(value, path, errors);
+  // KEIKO-0749: mirror validateFeed's guard — only serialise for the byte budget check when the
+  // structure is otherwise valid. serializedBytes runs JSON.stringify over the entire nested
+  // object; running it on a value the caller has already failed shape-validation on wastes work.
+  if (
+    admitted &&
+    errors.length === before &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES
+  ) {
+    errors.push(`${path} exceeds the plan UTF-8 byte budget`);
+  }
+  return admitted;
+}
+
+function checkPlan(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is CodingSafeActivityPlan {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
     return false;
@@ -321,15 +344,6 @@ function validatePlan(value: unknown, errors: string[]): value is CodingSafeActi
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (planHasTruncatedStep(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated steps`);
-  }
-  // KEIKO-0749: mirror validateFeed's guard — only serialise for the byte budget check when the
-  // structure is otherwise valid. serializedBytes runs JSON.stringify over the entire nested
-  // object; running it on a value the caller has already failed shape-validation on wastes work.
-  if (
-    errors.length === before &&
-    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES
-  ) {
-    errors.push(`${path} exceeds the plan UTF-8 byte budget`);
   }
   return [revision, anchor, updated, steps, truncated].every(Boolean);
 }
@@ -415,6 +429,25 @@ function validateTurn(
 ): value is CodingSafeActivityTurn {
   const before = errors.length;
   const path = `safeActivityFeed.turns[${String(index)}]`;
+  const admitted = checkTurn(value, path, ids, errors);
+  // KEIKO-0749: only run the deep serializedBytes call when the structure is otherwise valid,
+  // mirroring validateFeed's own guard.
+  if (
+    admitted &&
+    errors.length === before &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES
+  ) {
+    errors.push(`${path} exceeds the turn UTF-8 byte budget`);
+  }
+  return admitted;
+}
+
+function checkTurn(
+  value: unknown,
+  path: string,
+  ids: FeedIdentities,
+  errors: string[],
+): value is CodingSafeActivityTurn {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
     return false;
@@ -427,14 +460,6 @@ function validateTurn(
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (turnHasTruncatedMessage(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated messages`);
-  }
-  // KEIKO-0749: only run the deep serializedBytes call when the structure is otherwise valid,
-  // mirroring validateFeed's own guard.
-  if (
-    errors.length === before &&
-    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES
-  ) {
-    errors.push(`${path} exceeds the turn UTF-8 byte budget`);
   }
   return turn && messages && tools && truncated;
 }
@@ -470,6 +495,24 @@ function validateMessage(
   errors: string[],
 ): value is CodingSafeActivityMessage {
   const before = errors.length;
+  const admitted = checkMessage(value, path, ids, errors);
+  // KEIKO-0749: only run the deep serializedBytes call when the structure is otherwise valid.
+  if (
+    admitted &&
+    errors.length === before &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES
+  ) {
+    errors.push(`${path} exceeds the message UTF-8 byte budget`);
+  }
+  return admitted;
+}
+
+function checkMessage(
+  value: unknown,
+  path: string,
+  ids: Set<string>,
+  errors: string[],
+): value is CodingSafeActivityMessage {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
     return false;
@@ -493,13 +536,6 @@ function validateMessage(
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
-  }
-  // KEIKO-0749: only run the deep serializedBytes call when the structure is otherwise valid.
-  if (
-    errors.length === before &&
-    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES
-  ) {
-    errors.push(`${path} exceeds the message UTF-8 byte budget`);
   }
   return [message, role, occurred, segments, reasoning, truncated].every(Boolean);
 }
@@ -755,7 +791,13 @@ function validateUtcMilliseconds(value: unknown, path: string, errors: string[])
   return true;
 }
 
-function serializedBytes(value: object): number {
+function serializedBytes(
+  value:
+    | CodingSafeActivityFeed
+    | CodingSafeActivityPlan
+    | CodingSafeActivityTurn
+    | CodingSafeActivityMessage,
+): number {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length;
   } catch {
