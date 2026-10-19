@@ -1280,3 +1280,24 @@ whole; the complete server-log owner remains a separate mandatory physical gate.
 path requires its own selected assertion, and the selector cap remains16. Qualification and native
 coordinate comparison on the actual candidate are required; metadata alone proves no runtime
 coverage. The raw-carrier helper and every other object observation retain their obligations.
+
+### Direct whole-event checker input composition
+
+The same support responsibility may additionally opt into `directRawCheckerInputs: true`, only
+with its existing validated actual raw-object boundary contract. The private checker flag does not
+implicitly opt the root coordinate into adaptation. This admits parameters only for private,
+directly called same-source checkers receiving the unchanged whole original input through bounded
+unannotated immutable const aliases. The existing qualified observer is the only permitted use of
+the selected receiver inside a checker. Complete incoming references and bounded receiver uses
+exclude other public callers, escapes, property/call-result origins, casts, copies, typed aliases,
+rebindings, callback captures and parameter initializers. Derived envelopes/field results, canonical arguments and void
+remain legitimate and gain no output or other-parameter authority. No general purity/effect
+analysis is asserted. Recursive/multi-root checker composition remains unsupported, rather than
+silently dropping incoming contributors. Every attributed root requires its current binding and
+complete exact executed proof assertions before a new checker slot adapts. Existing default slots,
+numeric object forms, scopes, limits, sixteen selectors and physical gates remain unchanged.
+
+The selected public consumer adds fresh-producer unknown-operation, category and envelope refusal
+phases without dropping registration via spread. Existing C2 four-read source/public proofs remain;
+a held cached-third-versus-fourth control is a later qualification obligation, not metadata evidence.
+Raw carrier/registration parameters, shared readers/writers and final DTO authority remain pending.

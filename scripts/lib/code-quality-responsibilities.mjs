@@ -158,10 +158,24 @@ function responsibilitySlots(resolver, record, roles) {
   if (record.kind === "raw-own-property-reader")
     return [resolver.rawReaderFacts(roles.input.identities[0]).slot];
   if (record.kind === "raw-property-observation")
-    return resolver.propertyObservationFacts(roles.input.identities[0], {
-      rawObjectInput: record.rawObjectInput,
-      additionalObservationForms: record.additionalObservationForms,
-    }).slots;
+    return resolver
+      .propertyObservationFacts(roles.input.identities[0], {
+        rawObjectInput: record.rawObjectInput,
+        additionalObservationForms: record.additionalObservationForms,
+        directRawCheckerInputs: record.directRawCheckerInputs,
+      })
+      .slots.map((slot) =>
+        slot.observationRoots
+          ? {
+              ...slot,
+              observationRoots: slot.observationRoots.map((root) => ({
+                ...root,
+                recordId: record.id,
+                proofAssertions: structuredClone(record.proofAssertions),
+              })),
+            }
+          : slot,
+      );
   if (record.kind === "typed-parameter-recheck")
     return resolver.typedRecheckFacts(roles.input.identities[0], record.input.parameterIndex).slots;
   if (record.kind === "raw-canonical-json-decoder")
@@ -417,9 +431,50 @@ function objectComponentRoots(roots) {
   );
 }
 
+function observationProofRootReady(record) {
+  return (
+    record.kind === "raw-property-observation" &&
+    record.structural === "ready" &&
+    record.semantic === "qualified" &&
+    record.consumerBinding?.bound === true &&
+    record.consumerBinding.status === "ready"
+  );
+}
+
+function qualifiedObservationRoot(root, slot, assessments) {
+  const matches = assessments.filter((record) => record.id === root.recordId);
+  if (matches.length !== 1) return false;
+  const record = matches[0];
+  return (
+    observationProofRootReady(record) &&
+    objectRootIdentity(root, record, slot) &&
+    objectProofsCompleted(root.proofAssertions, record)
+  );
+}
+
+function validObservationProofRoot(root) {
+  return root && typeof root.recordId === "string" && root.recordId.length > 0 && root.index === 0;
+}
+
+function qualifiedObservationRoots(assessment, slot, assessments) {
+  if (slot.observationRoots === undefined) return true;
+  const roots = slot.observationRoots;
+  return (
+    Array.isArray(roots) &&
+    roots.length > 0 &&
+    roots.every(validObservationProofRoot) &&
+    roots.some((root) => root.recordId === assessment.id) &&
+    new Set(roots.map((root) => root.recordId)).size === roots.length &&
+    roots.every((root) => qualifiedObservationRoot(root, slot, assessments))
+  );
+}
+
 function objectFormQualified(assessment, slot, assessments) {
   if (slot.rule !== "anti-slop/no-object-parameters") return true;
-  if (assessment.kind !== "public-parser") return slot.objectForm === undefined;
+  if (assessment.kind !== "public-parser")
+    return (
+      slot.objectForm === undefined && qualifiedObservationRoots(assessment, slot, assessments)
+    );
   if (slot.objectForm !== "json-utf8-byte-measurement") return false;
   const roots = slot.componentRoots;
   if (!objectComponentRoots(roots)) return false;

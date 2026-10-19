@@ -20,6 +20,7 @@ import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-secu
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
   createObservationOptionsFixture,
+  createDirectObservationCheckerFixture,
   createConsumerSeamFixture,
   createDiagnosticFixture,
   createContextDiagnosticFixture,
@@ -3773,5 +3774,106 @@ describe("optional own-key and raw-root observation capability", () => {
     const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
     expect(report.assessments[0].structural).not.toBe("ready");
     expect(report.assessments[0].slots ?? []).toEqual([]);
+  });
+});
+
+describe("direct whole-receiver observation qualification", () => {
+  it.each([
+    ["trusted consumer", "function persist(_event: object): void {}", "persist(event);"],
+    [
+      "callback capture",
+      "",
+      'const callback = (): unknown => runtimeProperty(event, "value"); void callback;',
+    ],
+    ["container escape", "", "const saved = { event }; void saved;"],
+    ["typed alias", "", "const alias: object = event; void alias;"],
+    [
+      "mutation call alias",
+      "",
+      'const alias = event; Object.defineProperty(alias, "changed", {value: true});',
+    ],
+    ["written alias", "", "const alias = event; (alias as {changed: boolean}).changed = true;"],
+  ])("withholds the receiver escaping through %s", async (_name, prefix, extra) => {
+    const own = createDirectObservationCheckerFixture();
+    roots.push(own.root);
+    const path = "packages/alpha/src/owner.ts";
+    const original = readFileSync(join(own.root, path), "utf8");
+    own.put(
+      path,
+      prefix +
+        original.replace(
+          'return { duration: runtimeProperty(event, "duration") };',
+          extra + ' return { duration: runtimeProperty(event, "duration") };',
+        ),
+    );
+    emitSymbolFixture(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("ready");
+    expect(report.assessments[0].slots).toHaveLength(9);
+  });
+  it("withholds a checker whose omitted default parameter escapes the receiver", async () => {
+    const own = createDirectObservationCheckerFixture();
+    roots.push(own.root);
+    const path = "packages/alpha/src/owner.ts";
+    const original = readFileSync(join(own.root, path), "utf8");
+    const changed =
+      "function persist(_event: object): void {}\n" +
+      original.replace(
+        "function readEnvelope(event: object):",
+        "function readEnvelope(event: object, unused = persist(event)):",
+      );
+    expect(changed).toContain("readEnvelope(original)");
+    own.put(path, changed);
+    emitSymbolFixture(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("ready");
+    expect(report.assessments[0].slots).toHaveLength(9);
+  });
+  it("requires every current contributor and its completed proofs for the four new slots", async () => {
+    const own = createDirectObservationCheckerFixture();
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const record = report.assessments[0];
+    expect(record.slots).toHaveLength(10);
+    const findings = record.slots.map(({ path, rule, line, column }) => ({
+      path,
+      rule,
+      line,
+      column,
+    }));
+    const ready = {
+      ...record,
+      semantic: "qualified",
+      proofs: record.proofs.map((proof) => ({ ...proof, executed: true })),
+      proofAssertions: own.record.proofAssertions.map((proof) => ({ ...proof, status: "passed" })),
+    };
+    expect(
+      adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [ready] })
+        .adaptations,
+    ).toHaveLength(10);
+    const incomplete = { ...ready, proofAssertions: [] };
+    expect(
+      adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [incomplete] })
+        .adaptations,
+    ).toHaveLength(6);
+    const other = { ...ready, id: "other-contributor", slots: [], semantic: "pending" };
+    const joined = {
+      ...ready,
+      slots: ready.slots.map((slot) =>
+        slot.observationRoots
+          ? {
+              ...slot,
+              observationRoots: [
+                ...slot.observationRoots,
+                { ...slot.observationRoots[0], recordId: other.id },
+              ],
+            }
+          : slot,
+      ),
+    };
+    expect(
+      adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [joined, other] })
+        .adaptations,
+    ).toHaveLength(6);
   });
 });

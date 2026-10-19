@@ -3351,9 +3351,146 @@ function observationOwnKeyFacts(states) {
   };
 }
 
+function wholeObservationAlias(symbol) {
+  const declaration = symbol?.valueDeclaration;
+  return declaration && !declaration.type && !exportedDeclaration(declaration)
+    ? aliasInitializer(declaration)
+    : null;
+}
+
+function wholeObservationOrigin(state, expression) {
+  if (rawOrigin(state, expression)?.length !== 0) return false;
+  const seen = new Set();
+  let node = rawParentheses(expression);
+  while (ts.isIdentifier(node)) {
+    const symbol = state.context.checker.getSymbolAtLocation(node);
+    if (symbol === state.parameterSymbol) return true;
+    if (seen.has(symbol) || seen.size >= state.compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    seen.add(symbol);
+    const initializer = wholeObservationAlias(symbol);
+    if (!initializer) return false;
+    node = rawParentheses(initializer);
+  }
+  return false;
+}
+
+function observationReceiverAlias(node) {
+  const declaration = node.parent;
+  return (
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer === node &&
+    !declaration.type &&
+    !exportedDeclaration(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    Boolean(aliasInitializer(declaration))
+  );
+}
+
+function observationReceiverCall(call, receiver) {
+  return (
+    ts.isCallExpression(call) &&
+    call.arguments.length === 2 &&
+    call.arguments[0] === receiver &&
+    !call.typeArguments?.length
+  );
+}
+
+function observationReceiverUse(state, node, observer) {
+  if (!directRawBody(node, state.callable)) return false;
+  if (declarationReference(node)) return true;
+  let outer = node;
+  while (ts.isParenthesizedExpression(outer.parent)) outer = outer.parent;
+  if (observationReceiverAlias(outer)) return true;
+  const call = outer.parent;
+  if (!observationReceiverCall(call, outer)) return false;
+  const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
+  return Boolean(target && sameProducer(target.identity, observer.identity));
+}
+
+function observationReceiverReference(state, node) {
+  const symbol = referenceValueSymbol(state.context, node);
+  if (symbol === state.parameterSymbol) return true;
+  const initializer = wholeObservationAlias(symbol);
+  return Boolean(initializer && wholeObservationOrigin(state, initializer));
+}
+
+function writtenObservationAlias(state, node) {
+  if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name) || !node.initializer)
+    return false;
+  if (!wholeObservationOrigin(state, node.initializer)) return false;
+  const symbol = state.context.checker.getSymbolAtLocation(node.name);
+  return Boolean(symbol && writtenSymbol(state.context, state.nodes, symbol));
+}
+
+function observationReceiverSafe(state, observer) {
+  if (writtenSymbol(state.context, state.nodes, state.parameterSymbol)) return false;
+  if (state.nodes.some((node) => writtenObservationAlias(state, node))) return false;
+  return !state.nodes.some(
+    (node) =>
+      ts.isIdentifier(node) &&
+      node.getStart() >= state.callable.body.getStart() &&
+      node.end <= state.callable.body.end &&
+      observationReceiverReference(state, node) &&
+      !observationReceiverUse(state, node, observer),
+  );
+}
+
+function directObservationChecker(state, root, qualified, observer) {
+  const parameter = state.callable.parameters[state.index];
+  if (state.callable.parameters.some((candidate) => candidate.initializer)) return false;
+  return (
+    state.key !== root.key &&
+    qualified.has(state.key) &&
+    observationParameter(parameter, ts.SyntaxKind.ObjectKeyword) &&
+    state.incoming.length > 0 &&
+    state.incoming.every(
+      (edge) =>
+        edge.state === root.key &&
+        edge.origin.length === 0 &&
+        wholeObservationOrigin(root, edge.call.arguments[state.index]),
+    ) &&
+    observationReceiverSafe(state, observer)
+  );
+}
+
+function directObservationCheckerFacts(compiler, reached, observer) {
+  const owned = reached[0];
+  // Validate the actual boundary signature without implicitly adapting its coordinate.
+  observationRootFacts(owned.identity, owned);
+  const nodes = sourceNodes(compiler, owned.source);
+  const root = rawState(compiler, owned.context, owned.source, nodes, owned, 0);
+  if (!root || writtenSymbol(root.context, nodes, root.parameterSymbol))
+    throw new TypeError("unsupported-direct-observation-root");
+  const states = new Map([[root.key, root]]);
+  // This capability is intentionally DIRECT: only the actual root's call arguments form edges.
+  rawCallEdges(root, states, [root]);
+  if (states.size > compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  assertRawAcyclic(states);
+  const qualified = qualifiedRawStates(root, states);
+  const supported = [...states.values()].filter((state) =>
+    directObservationChecker(state, root, qualified, observer),
+  );
+  if (supported.length === 0) throw new TypeError("unsupported-direct-observation-checkers");
+  return supported.map((state) => ({
+    ...annotationSlot(
+      state.context,
+      state.source,
+      state.callable.parameters[state.index].type,
+      state.identity,
+      "parameter",
+      state.index,
+    ),
+    rule: "anti-slop/no-object-parameters",
+    observationRoots: [{ identity: root.identity, index: 0 }],
+  }));
+}
+
 function assertObservationOptions(options) {
   if (options.rawObjectInput !== undefined && options.rawObjectInput !== true)
     throw new TypeError("unsupported-property-observation-input");
+  if (options.directRawCheckerInputs !== undefined && options.directRawCheckerInputs !== true)
+    throw new TypeError("unsupported-direct-observation-option");
   const forms = options.additionalObservationForms;
   if (
     forms !== undefined &&
@@ -3362,13 +3499,16 @@ function assertObservationOptions(options) {
     throw new TypeError("unsupported-property-observation-form");
   if (
     Object.keys(options).some(
-      (key) => key !== "rawObjectInput" && key !== "additionalObservationForms",
+      (key) =>
+        key !== "rawObjectInput" &&
+        key !== "additionalObservationForms" &&
+        key !== "directRawCheckerInputs",
     )
   )
     throw new TypeError("unsupported-property-observation-option");
 }
 
-function additionalObservationFacts(compiler, identity, states, options) {
+function additionalObservationFacts(compiler, identity, states, options, observer) {
   assertObservationOptions(options);
   const slots = [];
   const facts = [];
@@ -3382,6 +3522,8 @@ function additionalObservationFacts(compiler, identity, states, options) {
     slots.push(...keys.slots);
     facts.push(keys.fact);
   }
+  if (options.directRawCheckerInputs === true)
+    slots.push(...directObservationCheckerFacts(compiler, states, observer));
   compiler.assertCurrent();
   return { slots, facts };
 }
@@ -3420,7 +3562,7 @@ function propertyObservationFacts(compiler, identity, options = {}) {
       rule: "anti-slop/no-reflect-get",
     },
   ];
-  const additional = additionalObservationFacts(compiler, identity, states, options);
+  const additional = additionalObservationFacts(compiler, identity, states, options, state);
   slots.push(...additional.slots);
   compiler.assertCurrent();
   return {

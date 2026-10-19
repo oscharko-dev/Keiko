@@ -1653,3 +1653,23 @@ describe("closed optional observation policy declarations", () => {
     },
   );
 });
+
+describe("direct observation checker opt-in", () => {
+  it("retains sixteen assertions and keeps root and checker opt-ins independent", () => {
+    const record = policy.responsibilities[8];
+    expect(record.directRawCheckerInputs).toBe(true);
+    expect(record.proofAssertions).toHaveLength(16);
+    expect(validatePolicy(policy)).toEqual([]);
+    const missingRoot = structuredClone(policy);
+    delete missingRoot.responsibilities[8].rawObjectInput;
+    expect(validatePolicy(missingRoot)).toEqual([]);
+    const removed = structuredClone(policy);
+    delete removed.responsibilities[8].directRawCheckerInputs;
+    expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+  });
+  it.each([false, "direct", []])("refuses an invalid checker option %j", (value) => {
+    const changed = structuredClone(policy);
+    changed.responsibilities[8].directRawCheckerInputs = value;
+    expect(validatePolicy(changed)).toContain("invalid-responsibilities");
+  });
+});

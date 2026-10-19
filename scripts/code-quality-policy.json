@@ -557,6 +557,7 @@
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "raw-property-observation",
       "rawObjectInput": true,
+      "directRawCheckerInputs": true,
       "additionalObservationForms": ["own-key-identity"],
       "rules": [
         "anti-slop/no-object-parameters",

@@ -23,6 +23,7 @@ import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
   createObservationOptionsFixture,
+  createDirectObservationCheckerFixture,
   createResponsibilityFixture,
   createEnforcementFixture,
   createCrossOwnerEnforcementFixture,
@@ -3310,5 +3311,40 @@ describe("closed optional observation compiler facts", () => {
     expect(() =>
       own.resolver.propertyObservationFacts(identity, { rawObjectInput: true }),
     ).toThrow();
+  });
+});
+
+describe("direct whole-receiver observation checker facts", () => {
+  it("adds four direct checker inputs without granting shared carriers or other parameters", async () => {
+    const own = createDirectObservationCheckerFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const identity = own.resolver.resolveProofExport(own.record.input).identities[0];
+    const legacy = { rawObjectInput: true, additionalObservationForms: ["own-key-identity"] };
+    const before = own.resolver.propertyObservationFacts(identity, legacy);
+    expect(before.slots).toHaveLength(6);
+    const after = own.resolver.propertyObservationFacts(identity, {
+      ...legacy,
+      directRawCheckerInputs: true,
+    });
+    expect(after.slots.slice(0, 6)).toStrictEqual(before.slots);
+    expect(after.slots).toHaveLength(10);
+    expect(
+      after.slots
+        .slice(6)
+        .every((slot) => slot.index === 0 && slot.rule === "anti-slop/no-object-parameters"),
+    ).toBe(true);
+    expect(
+      after.slots
+        .slice(6)
+        .every(
+          (slot) =>
+            slot.observationRoots.length === 1 &&
+            slot.observationRoots[0].identity.producer.start === identity.producer.start,
+        ),
+    ).toBe(true);
   });
 });

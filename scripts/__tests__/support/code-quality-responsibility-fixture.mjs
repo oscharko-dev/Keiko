@@ -1439,3 +1439,40 @@ function observationFixtureRecord(path, options) {
     ...options,
   };
 }
+
+export function createDirectObservationCheckerFixture(options = {}) {
+  const own = createObservationOptionsFixture({
+    rawObjectInput: true,
+    additionalObservationForms: ["own-key-identity"],
+    directRawCheckerInputs: true,
+    ...options,
+  });
+  const path = "packages/alpha/src/owner.ts";
+  const helpers = `
+function readEnvelope(event: object): { readonly duration: unknown } {
+  return { duration: runtimeProperty(event, "duration") };
+}
+function locate(event: object): number {
+  const value = runtimeProperty(event, "value");
+  if (typeof value !== "number") throw new TypeError("invalid value");
+  return value;
+}
+function compare(event: object, registration: object, canonical: number): void {
+  if (runtimeProperty(event, "value") !== canonical) throw new TypeError("mismatch");
+  void registration;
+}
+function readFields(event: object): unknown { return runtimeProperty(event, "extra"); }
+function sharedCarrier(event: object): unknown { return runtimeProperty(event, "marker"); }
+export function otherCarrier(event: object): unknown { return sharedCarrier(event); }
+`;
+  let source = readFileSync(join(own.root, path), "utf8");
+  source =
+    helpers +
+    source.replace(
+      '  return { admitted: runtimeProperty(event, "value") === 1',
+      '  const original = event; const envelope = readEnvelope(original); const value = locate(original); compare(original, {}, value); const fields = readFields(original); void envelope; void fields; sharedCarrier(original); return { admitted: runtimeProperty(event, "value") === 1',
+    );
+  own.put(path, source);
+  emitSymbolFixture(own.root);
+  return own;
+}

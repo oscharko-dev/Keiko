@@ -1480,4 +1480,26 @@ it("public observation consumer preserves canonical validator identity and refus
   expect(() => validatePublicObservation({ ...event })).toThrow(
     new publicSupportAdmission.ActivityLogEventValidationError("unregistered-operation"),
   );
+  const phases: readonly {
+    field: string;
+    value: string;
+    kind: ActivityLogEventValidationError["kind"];
+  }[] = [
+    { field: "op", value: "fixture.unknown.operation", kind: "unregistered-operation" },
+    { field: "category", value: "diagnostic", kind: "registration-mismatch" },
+    { field: "durationMs", value: "not-a-number", kind: "invalid-field-type" },
+  ];
+  for (const phase of phases) {
+    const fresh: unknown = Reflect.apply(publicSupportAdmission.activityLogEvent, undefined, [
+      operation,
+      {},
+      { generation: 1 },
+    ]);
+    if (typeof fresh !== "object" || fresh === null) throw new TypeError("event object required");
+    expect(validatePublicObservation(fresh)).toBe(operation);
+    Object.defineProperty(fresh, phase.field, { value: phase.value });
+    expect(() => validatePublicObservation(fresh)).toThrow(
+      new publicSupportAdmission.ActivityLogEventValidationError(phase.kind),
+    );
+  }
 });

@@ -165,16 +165,28 @@ function validCanonicalDecoderRules(record) {
   );
 }
 
-function validObservationOptions(record) {
-  const hasRoot = Object.hasOwn(record, "rawObjectInput");
-  const hasForm = Object.hasOwn(record, "additionalObservationForms");
-  if ((hasRoot || hasForm) && record.kind !== "raw-property-observation") return false;
+function validObservationFormOption(record) {
+  if (!Object.hasOwn(record, "additionalObservationForms")) return true;
   return (
-    (!hasRoot || record.rawObjectInput === true) &&
-    (!hasForm ||
-      (Array.isArray(record.additionalObservationForms) &&
-        record.additionalObservationForms.length === 1 &&
-        record.additionalObservationForms[0] === "own-key-identity"))
+    Array.isArray(record.additionalObservationForms) &&
+    record.additionalObservationForms.length === 1 &&
+    record.additionalObservationForms[0] === "own-key-identity"
+  );
+}
+
+function validDirectCheckerOption(record) {
+  return !Object.hasOwn(record, "directRawCheckerInputs") || record.directRawCheckerInputs === true;
+}
+
+function validObservationOptions(record) {
+  const present = ["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"].some(
+    (key) => Object.hasOwn(record, key),
+  );
+  if (present && record.kind !== "raw-property-observation") return false;
+  return (
+    (!Object.hasOwn(record, "rawObjectInput") || record.rawObjectInput === true) &&
+    validObservationFormOption(record) &&
+    validDirectCheckerOption(record)
   );
 }
 
@@ -229,7 +241,7 @@ function responsibilityKeys(record) {
   ];
   if (record !== null && typeof record === "object" && Object.hasOwn(record, "proofAssertions"))
     keys.push("proofAssertions");
-  for (const option of ["rawObjectInput", "additionalObservationForms"])
+  for (const option of ["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"])
     if (record !== null && typeof record === "object" && Object.hasOwn(record, option))
       keys.push(option);
   return keys;
@@ -337,6 +349,7 @@ function retainsProofAssertion(record, proof) {
 function observationOptionShrank(current, record) {
   return (
     (record.rawObjectInput === true && current.rawObjectInput !== true) ||
+    (record.directRawCheckerInputs === true && current.directRawCheckerInputs !== true) ||
     (record.additionalObservationForms ?? []).some(
       (form) => !(current.additionalObservationForms ?? []).includes(form),
     )
