@@ -1430,3 +1430,19 @@ remains in the ledger, and the campaign is not a completed balanced comparison.
 `basic-skill-v5-terminal.json` joins the input and credential-excluding terminal archives. No
 case is repeated or regraded and no budget is enlarged. No skill benefit, higher capability
 level, held-out acceptance or global model limit is inferred from this incomplete comparison.
+
+## Checkpoint 51 — own proxy startup and lifetime failures
+
+The existing lab proxy startup now rejects original asynchronous and synchronous listen errors
+before constructing a BFF. Its own startup error and ready listeners are removed on either outcome, preserving Node's
+pre-existing internal listener. Lifetime server
+errors retain a body-free current-case indicator on the existing physical recorder. A late
+listening callback cannot revive a failed construction.
+
+The same five public constructor controls retain three failures/two healthy before and five
+passes after. Eight expanded startup/lifetime controls include an actual ephemeral bind and an
+actual EADDRINUSE refusal preserving its healthy blocker. The auditor found a retained ready
+callback in the first candidate; the same baseline-relative actual HTTP controls retain one
+failure/one healthy before and two passes after correction. All seven lab suites pass 88 tests.
+`lab-proxy-startup.json` binds the scope. Frozen v5 inputs and failed outcomes remain unchanged;
+no new live-generation, skill-benefit or updater acceptance is claimed.

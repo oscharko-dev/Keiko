@@ -446,8 +446,30 @@ function createObservedProxy(provider, state, physical, getScope) {
     log: () => undefined,
     logError: () => physical.push({ caseId: getScope().id, error: "proxy-upstream-failed" }),
   });
+  proxy.on("error", () => physical.push({ caseId: getScope().id, error: "proxy-server-failed" }));
   observeProxy(proxy, physical, getScope);
   return proxy;
+}
+
+export function listenProxy(proxy) {
+  return new Promise((resolve, reject) => {
+    const failed = (error) => {
+      proxy.off("error", failed);
+      proxy.off("listening", ready);
+      reject(error);
+    };
+    const ready = () => {
+      proxy.off("error", failed);
+      proxy.off("listening", ready);
+      resolve();
+    };
+    proxy.once("error", failed);
+    try {
+      proxy.listen(0, "127.0.0.1", ready);
+    } catch (error) {
+      failed(error);
+    }
+  });
 }
 
 export async function startRuntime(
@@ -469,7 +491,7 @@ export async function startRuntime(
     compactionPrompts = await canonicalCompactionPrompts();
   let scope = { id: "setup", question: "", skillBody, source, sourceWitnesses, compactionPrompts };
   const proxy = createObservedProxy(provider, state, physical, () => scope);
-  await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  await listenProxy(proxy);
   const { project, env, bff, close } = await startObservedBff(
     realpathSync(dir),
     proxy,
