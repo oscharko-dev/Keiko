@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c5319259b89f60074d425bd7badfde796b040fc403a8d16d66f200ab23644fa8"
+    "catalogDigest": "f0685fbcdead196b739de7da1dddcca8a80763b033a7d9f2dbbbe68cc67e057e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 548,
-    "proofCount": 561,
-    "resolvedProofCount": 561,
+    "operationCount": 549,
+    "proofCount": 562,
+    "resolvedProofCount": 562,
     "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -712,6 +712,7 @@
         "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.legacy-snapshot-imported",
+        "update.runtime.state-write",
         "update.session.lifecycle"
       ],
       "scenarios": [
@@ -2666,6 +2667,9 @@
       "packages/keiko-cli/src/ui.activity-log-proof.test.ts"
     ],
     "update.runtime.legacy-snapshot-imported.count": [
+      "packages/keiko-server/src/update-runtime-activity.test.ts"
+    ],
+    "update.runtime.state-write.exclusive": [
       "packages/keiko-server/src/update-runtime-activity.test.ts"
     ],
     "update.session.lifecycle.transition": ["packages/keiko-server/src/update-session.test.ts"],

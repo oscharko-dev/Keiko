@@ -328,6 +328,24 @@ The JSON lease remains authoritative for valid live/unknown owners, publication 
 identity. An available guard does not authorize reclaiming such a record or clearing an uncertain
 remediation result. The existing Activity Log records closed acquisition/busy/owner-held/release/
 failure outcomes, an opaque attempt identity and action digest with the originating correlation.
+Run and defer decisions recheck outcome uncertainty after acquiring that exact action owner.
+Deferral cannot mark an unsettled live or unknown action complete or release its owner.
+Automatic pending-status persistence rechecks absence under the same per-action owner. It retains
+an action that another owner has since started, completed or marked uncertain. Restart completion
+uses one aggregate snapshot, requires the requested target to match that snapshot, preserves
+unrelated and uncertain rows, and publishes one revision-checked transition. It never adopts a
+newer snapshot to retarget or complete a different update.
+
+Aggregate runtime-state writes use the same stable zero-data SQLite guard mechanism at
+`updates/.keiko/guards/runtime-state.json`. The short synchronous critical section covers the
+complete persisted revision read, transition validation, durable replacement and flush. Busy
+admission and stale revisions refuse explicitly; the writer never silently merges or retries a
+stale snapshot. Different remediation actions retain their independent lifetime owners while
+sharing this aggregate publication boundary. Failed writes close only their own short guard.
+Closed written/busy/failed observations use the existing Activity Log with an opaque write identity
+and caller correlation, without state bodies, paths or credentials. The same private-reader denial
+and stable-inode rules apply to both guard locations.
+
 Exclusion applies to cooperating guarded peers; old active writers that ignore the guard must be
 drained by the existing installation-generation ownership boundary. These controls do not establish
 foreign PID incarnation, installed generation transfer or an actual cross-version update.

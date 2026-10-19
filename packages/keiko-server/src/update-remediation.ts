@@ -12,12 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_REMEDIATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-remediation";
 import type { LocalKnowledgeRemediationPort } from "./local-knowledge-remediation.js";
-import {
-  FEATURE_LABELS,
-  draftsForImpact,
-  restartDraft,
-  type ActionDraft,
-} from "./update-remediation-drafts.js";
+import { FEATURE_LABELS, draftsForImpact, type ActionDraft } from "./update-remediation-drafts.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import {
   emitServerDiagnostic,
@@ -197,25 +192,29 @@ function upsertRuntimeAction(input: {
   readonly status: RuntimeRemediationStatus;
   readonly now: () => number;
   readonly warningCode?: UpdateRuntimeWarningCode | undefined;
+  readonly correlationId?: string | undefined;
 }): void {
   const current = input.localState.readRuntimeState();
   const next = current.remediations.filter(
     (item) => !(item.store === input.draft.store && item.remediation === input.draft.remediation),
   );
-  input.localState.writeRuntimeState({
-    ...current,
-    ...(input.targetVersion === undefined ? {} : { targetVersion: input.targetVersion }),
-    remediations: [
-      ...next,
-      {
-        store: input.draft.store,
-        remediation: input.draft.remediation,
-        status: input.status,
-        updatedAt: nowIso(input.now),
-        ...(input.warningCode === undefined ? {} : { warningCode: input.warningCode }),
-      },
-    ],
-  });
+  input.localState.writeRuntimeState(
+    {
+      ...current,
+      ...(input.targetVersion === undefined ? {} : { targetVersion: input.targetVersion }),
+      remediations: [
+        ...next,
+        {
+          store: input.draft.store,
+          remediation: input.draft.remediation,
+          status: input.status,
+          updatedAt: nowIso(input.now),
+          ...(input.warningCode === undefined ? {} : { warningCode: input.warningCode }),
+        },
+      ],
+    },
+    input.correlationId,
+  );
 }
 
 function persistPending(
@@ -226,18 +225,31 @@ function persistPending(
 ): void {
   for (const draft of drafts) {
     if (persistedStatus(localState, draft) !== undefined || !draft.required) continue;
-    if (draft.kind === "manual-review") {
-      upsertRuntimeAction({
-        localState,
-        targetVersion,
-        draft,
-        status: "failed",
-        now,
-        warningCode: "manual-review-required",
-      });
-      continue;
-    }
-    upsertRuntimeAction({ localState, targetVersion, draft, status: "pending", now });
+    persistPendingDraft(localState, targetVersion, draft, now);
+  }
+}
+
+function persistPendingDraft(
+  localState: UpdateLocalStateManager,
+  targetVersion: string | undefined,
+  draft: ActionDraft,
+  now: () => number,
+): void {
+  const release = localState.acquireRemediationLease(draft.actionId);
+  if (release === undefined) return;
+  try {
+    if (persistedStatus(localState, draft) !== undefined) return;
+    const manual = draft.kind === "manual-review";
+    upsertRuntimeAction({
+      localState,
+      targetVersion,
+      draft,
+      now,
+      status: manual ? "failed" : "pending",
+      ...(manual ? { warningCode: "manual-review-required" } : {}),
+    });
+  } finally {
+    release();
   }
 }
 
@@ -324,6 +336,7 @@ function persistOutcomeUncertainty(
     upsertRuntimeAction({
       localState: options.localState,
       targetVersion: request.targetVersion,
+      correlationId,
       draft,
       status: "running",
       now,
@@ -367,6 +380,7 @@ function persistDraftStatusSafely(
     upsertRuntimeAction({
       localState: options.localState,
       targetVersion: request.targetVersion,
+      correlationId,
       draft,
       status,
       now,
@@ -441,14 +455,20 @@ function deferDraft(
       409,
     );
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status: "deferred",
-    now,
-  });
-  recordRemediationAudit(options, request, draft, "deferred", correlationId);
+  const releaseLease = acquireDraftLease(options, draft, correlationId);
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      correlationId,
+      draft,
+      status: "deferred",
+      now,
+    });
+    recordRemediationAudit(options, request, draft, "deferred", correlationId);
+  } finally {
+    releaseLease();
+  }
 }
 
 function assertDraftOutcomeKnown(
@@ -515,6 +535,28 @@ function acquireRunningDraftLease(
   draft: ActionDraft,
   correlationId: string,
 ): () => void {
+  const releaseLease = acquireDraftLease(options, draft, correlationId);
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      correlationId,
+      draft,
+      status: "running",
+      now,
+    });
+    return releaseLease;
+  } catch (error) {
+    releaseLease();
+    throw error;
+  }
+}
+
+function acquireDraftLease(
+  options: UpdateRemediationManagerOptions,
+  draft: ActionDraft,
+  correlationId: string,
+): () => void {
   const releaseLease = options.localState.acquireRemediationLease(draft.actionId, correlationId);
   if (releaseLease === undefined) {
     throw new UpdateRemediationError(
@@ -524,13 +566,7 @@ function acquireRunningDraftLease(
     );
   }
   try {
-    upsertRuntimeAction({
-      localState: options.localState,
-      targetVersion: request.targetVersion,
-      draft,
-      status: "running",
-      now,
-    });
+    assertDraftOutcomeKnown(options, draft);
     return releaseLease;
   } catch (error) {
     releaseLease();
@@ -562,15 +598,18 @@ function completeRestartAction(
   targetVersion?: string,
 ): UpdateRemediationStatusReport {
   const current = options.localState.readRuntimeState();
-  for (const item of current.remediations) {
-    if (item.remediation !== "restart-required") continue;
-    upsertRuntimeAction({
-      localState: options.localState,
-      targetVersion,
-      draft: restartDraft(item.store),
-      status: "completed",
-      now,
-    });
+  if (targetVersion !== undefined && current.targetVersion !== targetVersion) {
+    return statusFor(options, now, { targetVersion });
+  }
+  const remediations = current.remediations.map((item) =>
+    item.remediation === "restart-required" &&
+    item.status !== "completed" &&
+    item.warningCode !== "remediation-outcome-uncertain"
+      ? { ...item, status: "completed" as const, updatedAt: nowIso(now) }
+      : item,
+  );
+  if (remediations.some((item, index) => item !== current.remediations[index])) {
+    options.localState.writeRuntimeState({ ...current, remediations });
   }
   return statusFor(options, now, { targetVersion });
 }

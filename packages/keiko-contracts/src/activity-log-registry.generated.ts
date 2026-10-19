@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c5319259b89f60074d425bd7badfde796b040fc403a8d16d66f200ab23644fa8" as const;
+  "f0685fbcdead196b739de7da1dddcca8a80763b033a7d9f2dbbbe68cc67e057e" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -39543,7 +39543,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["update.install-mode.detected", "update.remediation.lease", "update.runtime.event"],
+        state: [
+          "update.install-mode.detected",
+          "update.remediation.lease",
+          "update.runtime.event",
+          "update.runtime.state-write",
+        ],
         end: [],
         failure: [],
         loss: [],
@@ -39561,12 +39566,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "update.runtime.event",
           mode: "correlation",
         },
+        {
+          op: "update.runtime.state-write",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
         "update.install-mode.detected",
         "update.remediation.lease",
         "update.runtime.event",
+        "update.runtime.state-write",
       ],
       replayReferences: [],
       operations: [
@@ -39871,6 +39881,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["update.runtime.event.body-free"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "update.runtime.state-write",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "writeId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["update.runtime.state-write.exclusive"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42713,6 +42753,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "update.runtime.event": "runtime-packages",
     "update.runtime.legacy-import-deferred": "ui",
     "update.runtime.legacy-snapshot-imported": "runtime-packages",
+    "update.runtime.state-write": "runtime-packages",
     "update.session.lifecycle": "runtime-packages",
     "voice.dialogue.stage": "client-diagnostics",
     "voice.live-dictation.capacity-rejected": "model-gateway",

@@ -27,7 +27,7 @@ import { isDeepStrictEqual } from "node:util";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { assertSqliteStatePath, chmodIfPresent } from "@oscharko-dev/keiko-security/fs-hardening";
 import { sqliteErrorLike } from "@oscharko-dev/keiko-security/sqlite-corruption";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   ReleaseImpactRemediation,
   UpdateActivationWalState,
@@ -97,8 +97,10 @@ import {
 import {
   updateRuntimeActivityEvent,
   updateRemediationLeaseEvent,
+  updateRuntimeStateWriteEvent,
   type UpdateRuntimeActivityFields,
   type UpdateRemediationLeaseState,
+  type UpdateRuntimeStateWriteStatus,
 } from "./update-runtime-activity.js";
 import {
   isOptionalProcessIdentity,
@@ -160,7 +162,10 @@ export interface UpdateLocalStateManager {
   readonly repairStores: (stores: readonly UpdateStateStore[]) => UpdateLocalStateRepairResult;
   readonly readRuntimeState: () => UpdateRuntimeState;
   readonly inspectRuntimeState: () => UpdateRuntimeStateInspection;
-  readonly writeRuntimeState: (state: UpdateRuntimeState) => UpdateRuntimeState;
+  readonly writeRuntimeState: (
+    state: UpdateRuntimeState,
+    correlationId?: string,
+  ) => UpdateRuntimeState;
   readonly acquireRemediationLease: (
     actionId: string,
     correlationId?: string,
@@ -685,7 +690,7 @@ function acquireRemediationLeaseRecord(
   return undefined;
 }
 
-function openRemediationLeaseGuard(path: string): DatabaseSync | undefined {
+function openUpdateStateGuard(path: string): DatabaseSync | undefined {
   const guardPath = join(dirname(path), ".keiko", "guards", basename(path));
   assertSqliteStatePath(guardPath);
   mkdirPrivate(dirname(guardPath));
@@ -723,7 +728,7 @@ function acquireRemediationLease(
   let guard: DatabaseSync | undefined;
   let release: (() => void) | undefined;
   try {
-    guard = openRemediationLeaseGuard(path);
+    guard = openUpdateStateGuard(path);
     if (guard === undefined) {
       log("busy");
       return undefined;
@@ -780,25 +785,37 @@ function recordRemediationLeaseActivity(
   },
   state: UpdateRemediationLeaseState,
 ): void {
+  emitLocalStateActivity(
+    context,
+    updateRemediationLeaseEvent(observation.correlationId, {
+      leaseId: observation.leaseId,
+      actionDigest: observation.actionDigest,
+      state,
+    }),
+    "update.remediation.lease",
+  );
+}
+
+function emitLocalStateActivity(
+  context: ManagerContext,
+  event: SecurityLogEvent,
+  operation: string,
+): boolean {
   try {
-    context.activityLog?.write(
-      updateRemediationLeaseEvent(observation.correlationId, {
-        leaseId: observation.leaseId,
-        actionDigest: observation.actionDigest,
-        state,
-      }),
-    );
+    context.activityLog?.write(event);
+    return true;
   } catch (error) {
     emitServerDiagnostic(
       context.diagnostics,
       serverDiagnosticFromError({
-        correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
-        operation: "update.remediation.lease",
+        correlationId: event.correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation,
         source: "update-local-state",
         error,
         redact: (): string => "A bounded update diagnostic failed.",
       }),
     );
+    return false;
   }
 }
 
@@ -1790,7 +1807,10 @@ function durableReplace(path: string, content: string): void {
   }
 }
 
-function writeRuntimeState(context: ManagerContext, state: UpdateRuntimeState): UpdateRuntimeState {
+function publishRuntimeState(
+  context: ManagerContext,
+  state: UpdateRuntimeState,
+): UpdateRuntimeState {
   const persisted = inspectRuntimeState(context);
   if (!("state" in persisted)) throw new UpdateRuntimeStateError(persisted.status);
   const currentRevision = persisted.state.revision;
@@ -1814,6 +1834,40 @@ function writeRuntimeState(context: ManagerContext, state: UpdateRuntimeState): 
     throw new UpdateRuntimeStateError("unwritable");
   }
   return next;
+}
+
+function writeRuntimeState(
+  context: ManagerContext,
+  state: UpdateRuntimeState,
+  correlationId?: string,
+): UpdateRuntimeState {
+  const writeId = randomUUID();
+  let outcome: UpdateRuntimeStateWriteStatus = "failed";
+  let guard: DatabaseSync | undefined;
+  try {
+    guard = openUpdateStateGuard(runtimeStatePath(context.stateDir));
+    if (guard === undefined) {
+      outcome = "busy";
+      throw new UpdateRuntimeStateError("unwritable");
+    }
+    const next = publishRuntimeState(context, state);
+    guard.close();
+    outcome = "written";
+    return next;
+  } catch (error) {
+    if (error instanceof UpdateRuntimeStateError) throw error;
+    throw new UpdateRuntimeStateError("unwritable");
+  } finally {
+    try {
+      if (guard?.isOpen === true) guard.close();
+    } finally {
+      emitLocalStateActivity(
+        context,
+        updateRuntimeStateWriteEvent(correlationId, writeId, outcome),
+        "update.runtime.state-write",
+      );
+    }
+  }
 }
 
 function updateArtifactActivityFields(
@@ -1905,24 +1959,12 @@ function recordAuditEvent(
     occurredAt: nowIso(context.now),
     ...input,
   };
-  try {
-    context.activityLog?.write(
-      updateRuntimeActivityEvent(event.correlationId, updateRuntimeActivityFields(event), failure),
-    );
-    return { event };
-  } catch (error) {
-    emitServerDiagnostic(
-      context.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: event.correlationId ?? UNKNOWN_CORRELATION_ID,
-        operation: "update.runtime.activity-log",
-        source: "update-local-state",
-        error,
-        redact: (): string => "A bounded update diagnostic failed.",
-      }),
-    );
-    return { event, warning: "Update activity event could not be emitted." };
-  }
+  const emitted = emitLocalStateActivity(
+    context,
+    updateRuntimeActivityEvent(event.correlationId, updateRuntimeActivityFields(event), failure),
+    "update.runtime.activity-log",
+  );
+  return emitted ? { event } : { event, warning: "Update activity event could not be emitted." };
 }
 
 function repairStores(
@@ -1955,7 +1997,8 @@ export function createUpdateLocalStateManager(
     repairStores: (stores): UpdateLocalStateRepairResult => repairStores(context, stores),
     readRuntimeState: (): UpdateRuntimeState => readRuntimeState(context),
     inspectRuntimeState: (): UpdateRuntimeStateInspection => inspectRuntimeState(context),
-    writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
+    writeRuntimeState: (state, correlationId): UpdateRuntimeState =>
+      writeRuntimeState(context, state, correlationId),
     acquireRemediationLease: (actionId, correlationId): (() => void) | undefined =>
       acquireRemediationLease(context, actionId, correlationId),
     recordAuditEvent: (type, input, failure): AuditEventRecord =>

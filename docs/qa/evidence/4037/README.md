@@ -1,5 +1,48 @@
 # Chat/Files qualification observations
 
+## Checkpoint 65: preserve updater decisions and aggregate state under ownership
+
+Three independent actual-manager counterexamples exposed updater state races. A caller could pass
+an old uncertainty check, wait for a prior operation to persist an uncertain result, then clear that
+warning and execute again. A defer request could mark unsettled work deferred and enable the
+completion predicate while its real action lease remained held. Two different action owners could
+both validate revision1, publish revision2 and lose the other owner's uncertainty. Atomic rename
+alone did not provide compare-and-swap.
+
+Run and defer now share the existing action admission and recheck uncertainty under that exact
+owner. Aggregate publication reuses the already bundled SQLite guard mechanism for one short
+synchronous critical section covering persisted revision inspection through durable replacement and
+flush. Busy and stale writers refuse; no automatic merge, retry queue, new dependency or data store
+is added. Both guard locations use the existing private `.keiko` reader denial. Closed state-write
+observations carry an opaque attempt and request correlation on the existing Activity Log.
+
+Two adjacent failure-first controls also expose automatic status initialization overwriting a newly
+uncertain row and old restart completion retargeting a newer aggregate. Initialization now rechecks
+absence under the action owner. Restart completion retains one matching-target snapshot and
+publishes one revision-checked transition, preserving unrelated and uncertain rows. An unused
+restart-draft constructor is removed.
+
+The fixed-behavior source controls fail before their respective repairs. The frozen external
+qualification also fails all three intended safety assertions against retained published64 owners
+and their exact original draft dependency. The same signed fixture passes on macOS ARM64 and Linux
+ARM64 UID1000/65534. It uses actual public managers, private filesystem state, separate real owned
+processes and actual SQLite guards; remediation work and one terminal-write failure are controlled
+ports. Eight further Linux runs retain contention, owned-process death, requested-release repair and
+unreadable-live-owner controls. These are mechanical state/ownership proofs. Installed update
+activation, full native generation transfer, browser journeys and model/skill acceptance remain
+separate obligations.
+
+The independent auditor additionally verifies seven adjacent actual-manager cases and joins actual
+manager written/busy/stale-failed observations through the canonical formatter. This formatter
+check does not qualify a durable file sink or transport. The full affected updater group passes812
+tests across47 suites, with two existing skips. Final scoped gates and exact source/output bindings
+are recorded in [`remediation-state-admission.json`](remediation-state-admission.json).
+
+The initial ESM spy setup failure, first historical overlay's missing removed export, intermediate
+registration failures and a mistakenly named intermediate-candidate log are retained with explicit
+dispositions. None earns before-fix or final acceptance credit. No acceptance checkbox, frozen
+model input/outcome or overall completion state changes in this checkpoint.
+
 ## Checkpoint 55: retain a pending Chat creation identity across browsers
 
 One visible New chat action on published54 created two conversations, then displayed

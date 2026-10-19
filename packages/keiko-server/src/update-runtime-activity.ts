@@ -21,6 +21,50 @@ import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 export type UpdateRemediationLeaseState =
   "acquired" | "busy" | "owner-held" | "released" | "failed";
 
+export type UpdateRuntimeStateWriteStatus = "written" | "busy" | "failed";
+
+const UPDATE_RUNTIME_STATE_WRITE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.runtime.state-write",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-runtime-activity.updateRuntimeStateWriteEvent",
+  fields: {
+    writeId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["written", "busy", "failed"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-runtime"],
+  proofIds: ["update.runtime.state-write.exclusive"],
+  releaseImpact: "patch",
+});
+
+export function updateRuntimeStateWriteEvent(
+  correlationId: string | undefined,
+  writeId: string,
+  state: UpdateRuntimeStateWriteStatus,
+): SecurityLogEvent {
+  return activityLogEvent(
+    UPDATE_RUNTIME_STATE_WRITE_OPERATION,
+    {
+      correlationId: correlationIdOrUnknown(correlationId),
+      level: state === "written" ? "info" : "warn",
+      ...(state === "written" ? {} : { errorKind: state === "busy" ? "conflict" : "write-failed" }),
+    },
+    { writeId, state, completeness: "complete", loss: "none" },
+  );
+}
+
 const UPDATE_REMEDIATION_LEASE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

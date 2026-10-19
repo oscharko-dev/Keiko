@@ -813,7 +813,7 @@ describe("update runtime state and audit events", () => {
       revision: 2,
       targetVersion: "0.2.13",
     });
-    expect(readdirSync(join(stateDir, "updates"))).toEqual(["runtime-state.json"]);
+    expect(readdirSync(join(stateDir, "updates")).sort()).toEqual([".keiko", "runtime-state.json"]);
   });
 
   it("rejects stale revision writes instead of silently losing a concurrent update", () => {
