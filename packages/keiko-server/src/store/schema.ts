@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 45;
+export const SCHEMA_VERSION = 46;
 
 interface Migration {
   readonly version: number;
@@ -1702,6 +1702,14 @@ export const MIGRATIONS: readonly Migration[] = [
       approved_at INTEGER NOT NULL CHECK (approved_at >= 0),
       expires_at INTEGER NOT NULL CHECK (expires_at > approved_at),
       last_used_at INTEGER NOT NULL CHECK (last_used_at >= approved_at AND last_used_at < expires_at)
+    ) STRICT;`,
+  },
+  {
+    version: 46,
+    sql: `CREATE TABLE chat_creation_intents (
+      request_key TEXT PRIMARY KEY CHECK (length(request_key) = 64),
+      intent_sha256 TEXT NOT NULL CHECK (length(intent_sha256) = 64),
+      chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL
     ) STRICT;`,
   },
 ];

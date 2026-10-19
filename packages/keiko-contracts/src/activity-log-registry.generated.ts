@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "99a75157c82d7653a448b14287336eabd030661145755e82de4fcf3626892c11" as const;
+  "5d96479072a6eb4cf18420cea75628dea6c91da82f93699bbf06068360606163" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 348,
-  completeClassCount: 348,
+  supportedClassCount: 349,
+  completeClassCount: 349,
   completeness: "complete",
   classes: [
     {
@@ -2294,6 +2294,56 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["chat.continuity.rehydration.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "chat-creation-intent",
+      requirementContract: "chat-creation-intent",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["chat.creation.intent"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "chat.creation.intent",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["chat.creation.intent"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "chat.creation.intent",
+          owner: "keiko-server",
+          category: "setup",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["chat.creation.intent.decision"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -41981,6 +42031,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "chat.continuity.capture": "bff",
     "chat.continuity.degraded": "bff",
     "chat.continuity.rehydration": "bff",
+    "chat.creation.intent": "bff",
     "chat.creation.rejected": "bff",
     "chat.draft.operation": "bff",
     "chat.regeneration.rejected": "bff",

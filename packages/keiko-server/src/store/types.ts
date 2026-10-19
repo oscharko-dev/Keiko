@@ -37,6 +37,17 @@ import type {
 // id, which the evidence of the chat's reference id joins (#3557 review). Never on the wire.
 export interface StoreCreateChatOptions extends CreateChatOptions {
   readonly correlationId?: string | undefined;
+  readonly creationRequestId?: string | undefined;
+  readonly automaticModelSelection?: boolean | undefined;
+}
+
+export interface ChatCreationIntent {
+  readonly requestId: string;
+  readonly projectPath: string;
+  readonly title: string;
+  readonly requestedModelId: string | undefined;
+  readonly branchLabel: string | undefined;
+  readonly correlationId: string | undefined;
 }
 export type {
   Project,
@@ -122,6 +133,7 @@ export interface UiStore {
 
   readonly listChats: (projectPath: string, limit?: number) => readonly Chat[];
   readonly findChatById: (id: string) => Chat | undefined;
+  readonly replayChatCreation: (intent: ChatCreationIntent) => Chat | undefined;
   readonly readChatDraft: (id: string) => ChatDraft;
   readonly updateChatDraft: (id: string, update: ChatDraftUpdate) => ChatDraft;
   readonly createChat: (

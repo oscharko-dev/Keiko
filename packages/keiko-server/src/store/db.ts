@@ -1,4 +1,5 @@
 import { withImmediateTransaction } from "./transaction.js";
+import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
 import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
 import { createBrowserApprovalStore } from "./browserApprovals.js";
@@ -210,6 +211,13 @@ function deriveProjectName(explicit: string | undefined, path: string): string {
   return explicit;
 }
 
+function assertChatProjectAvailable(db: DatabaseSync, projectPath: string): void {
+  const project = sqlGetProject(db, projectPath);
+  if (project !== undefined && !isProjectAvailable(project)) {
+    throw invalidRequest("Project path is unavailable.");
+  }
+}
+
 function createChatRecord(
   db: DatabaseSync,
   options: ResolvedFactoryOptions,
@@ -218,18 +226,30 @@ function createChatRecord(
   selectedModel: string,
   opts: StoreCreateChatOptions | undefined,
 ): Chat {
-  const project = sqlGetProject(db, projectPath);
-  if (project !== undefined && !isProjectAvailable(project)) {
-    throw invalidRequest("Project path is unavailable.");
-  }
-  return sqlInsertChat(db, {
-    id: options.newChatId(opts?.correlationId),
-    projectPath,
-    title,
-    selectedModel,
-    opts,
-    now: options.now(),
-  });
+  assertChatProjectAvailable(db, projectPath);
+  const create = (): Chat =>
+    sqlInsertChat(db, {
+      id: options.newChatId(opts?.correlationId),
+      projectPath,
+      title,
+      selectedModel,
+      opts,
+      now: options.now(),
+    });
+  return opts?.creationRequestId === undefined
+    ? create()
+    : withChatCreationIntent(
+        db,
+        {
+          requestId: opts.creationRequestId,
+          projectPath,
+          title,
+          requestedModelId: opts.automaticModelSelection === true ? undefined : selectedModel,
+          branchLabel: opts.branchLabel,
+          correlationId: opts.correlationId,
+        },
+        create,
+      );
 }
 
 function createMessageRecord(
@@ -693,6 +713,10 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         ? sqlListChats(db, projectPath)
         : sqlListChatsLimited(db, projectPath, limit),
     findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
+    replayChatCreation: (intent): Chat | undefined => {
+      assertChatProjectAvailable(db, intent.projectPath);
+      return replayChatCreationIntent(db, intent);
+    },
     readChatDraft: (id) => readChatDraft(db, id),
     updateChatDraft: (id, update) => updateChatDraft(db, id, update),
     createChat: (

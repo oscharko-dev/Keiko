@@ -9,7 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
+import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import type { RuntimeGatewayConfig } from "./deps.js";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
@@ -180,6 +183,21 @@ function deps(
 
 function base(): string {
   return `http://${UI_HOST}:${String(port)}`;
+}
+
+function unobservedRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
+  return {
+    storagePath: join(tmp, "unobserved-gateway.json"),
+    current: () => config,
+    present: () => true,
+    set: () => undefined,
+    verification: () => UNVERIFIED_GATEWAY,
+    generation: () => 0,
+    recordVerification: () => undefined,
+    verifiedCapability: () => undefined,
+    recordVerifiedCapability: () => undefined,
+    clearVerifiedCapability: () => false,
+  };
 }
 
 function customModelConfig(
@@ -353,6 +371,131 @@ describe("desktop chat routes", () => {
     expect(body.chat).toMatchObject({ projectPath: projectDir, selectedModel: CHAT_MODEL });
     expect(body.messages).toEqual([]);
   });
+
+  it("shares one persisted chat for a creation intent submitted by independent clients", async () => {
+    const body = JSON.stringify({
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      creationRequestId: "9c710d81-b368-4dad-a5ae-1c261cc20c67",
+    });
+    const responses = await Promise.all(
+      [0, 1].map(() =>
+        fetch(`${base()}/api/desktop/chats`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body,
+        }),
+      ),
+    );
+    const identifiers: string[] = [];
+    for (const response of responses) {
+      expect(response.status).toBe(201);
+      const result = (await response.json()) as { chat: { id: string } };
+      identifiers.push(result.chat.id);
+    }
+    expect(new Set(identifiers).size).toBe(1);
+    expect(store.listChats(projectDir)).toHaveLength(1);
+  });
+
+  it.each([null, 1, {}, [], "", "../escape", "x".repeat(161)])(
+    "refuses malformed creation identity %j before model or store work",
+    async (creationRequestId) => {
+      const before = seenRequests.length;
+      const response = await fetch(`${base()}/api/desktop/chats`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL, creationRequestId }),
+      });
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(seenRequests).toHaveLength(before);
+      expect(store.listChats(projectDir)).toHaveLength(0);
+    },
+  );
+
+  it.each([true, false])(
+    "recovers a committed creation after the configured model changes (automatic=%s)",
+    async (automatic) => {
+      await restartWithDeps(
+        deps(fakeModel("unused"), { config: customModelConfig("model-a"), configPresent: true }),
+      );
+      const input = {
+        projectPath: projectDir,
+        creationRequestId: "lost-creation-response",
+        ...(automatic ? {} : { modelId: "model-a" }),
+      };
+      const post = (body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chats`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify(body),
+        });
+      const first = await post(input);
+      expect(first.status).toBe(201);
+      const created = (await first.json()) as { chat: { id: string } };
+      await restartWithDeps(
+        deps(fakeModel("unused"), { config: customModelConfig("model-b"), configPresent: true }),
+      );
+      const replay = await post(input);
+      expect(replay.status).toBe(201);
+      expect(await replay.json()).toMatchObject({
+        chat: { id: created.chat.id, selectedModel: "model-a" },
+      });
+      const conflict = await post({ ...input, modelId: "model-b" });
+      expect(conflict.status).toBe(409);
+      await conflict.text();
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      const fresh = await post({ projectPath: projectDir, creationRequestId: "new-creation" });
+      expect(fresh.status).toBe(201);
+      expect(await fresh.json()).toMatchObject({ chat: { selectedModel: "model-b" } });
+      expect(store.listChats(projectDir)).toHaveLength(2);
+      const invalid = await post({ modelId: "model-a", creationRequestId: "fresh-removed-model" });
+      expect(invalid.status).toBe(400);
+      await invalid.text();
+    },
+  );
+
+  it.each([true, false])(
+    "recovers accepted creation while new admission has no readiness observation (automatic=%s)",
+    async (automatic) => {
+      const input = {
+        projectPath: projectDir,
+        creationRequestId: "accepted-before-model-unavailable",
+        ...(automatic ? {} : { modelId: CHAT_MODEL }),
+      };
+      const post = (body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chats`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify(body),
+        });
+      const first = await post(input);
+      expect(first.status).toBe(201);
+      const created = (await first.json()) as { chat: { id: string } };
+      await restartWithDeps(
+        deps(fakeModel("unused"), {
+          config: customModelConfig("unavailable-model"),
+          configPresent: true,
+          gatewayConfig: unobservedRuntimeGatewayConfig(customModelConfig("unavailable-model")),
+          modelPortFactory: () => undefined,
+        }),
+      );
+      const replay = await post(input);
+      expect(replay.status).toBe(201);
+      expect(await replay.json()).toMatchObject({ chat: { id: created.chat.id } });
+      const fresh = await post({
+        projectPath: projectDir,
+        modelId: "unavailable-model",
+        creationRequestId: "new-unready-creation",
+      });
+      const refused = conversationModelNotReadyResult();
+      expect(fresh.status).toBe(refused.status);
+      if (typeof refused.body !== "object" || refused.body === null)
+        throw new TypeError("Expected the canonical model admission error object.");
+      expect(await fresh.json()).toMatchObject(refused.body);
+      expect(store.listChats(projectDir)).toHaveLength(1);
+    },
+  );
 
   it("keeps internal managed-worktree projects out of the returned project catalog", async () => {
     const managedRoot = join(projectDir, ".keiko", "ui", "task-workspaces");

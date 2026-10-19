@@ -1564,7 +1564,11 @@ export interface UseChatSessionResult {
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
   // blank/whitespace falls back to DEFAULT_CHAT_TITLE.
-  openNewChat: (project?: ProjectWithAvailability, title?: string) => Promise<Chat | undefined>;
+  openNewChat: (
+    project?: ProjectWithAvailability,
+    title?: string,
+    creationRequestId?: string,
+  ) => Promise<Chat | undefined>;
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<ProjectWithAvailability | undefined>;
@@ -3812,6 +3816,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (
       projectOverride?: ProjectWithAvailability,
       title?: string,
+      creationRequestId?: string,
     ): Promise<Chat | undefined> => {
       const preservedSelection =
         !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
@@ -3830,8 +3835,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         const trimmedTitle = title?.trim();
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
-        const created = await createDesktopChat(
-          createChatInput(
+        const created = await createDesktopChat({
+          ...createChatInput(
             modelId,
             !preservedSelection,
             trimmedTitle !== undefined && trimmedTitle.length > 0
@@ -3839,7 +3844,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               : DEFAULT_CHAT_TITLE,
             targetPath,
           ),
-        );
+          ...(creationRequestId === undefined ? {} : { creationRequestId }),
+        });
         notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;

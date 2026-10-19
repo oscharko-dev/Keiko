@@ -19,6 +19,33 @@ describe("keiko-server store MIGRATIONS", () => {
   });
 });
 
+describe("v46 migration — durable chat creation intents", () => {
+  it("retains existing conversations and private drafts across repeated migration runs", () => {
+    const db = openWithForeignKeys();
+    try {
+      applyMigrationsUpTo(db, 45);
+      db.prepare("INSERT INTO projects VALUES (?, ?, ?, ?, ?)").run("/fixture", "Fixture", 0, 1, 1);
+      db.prepare(
+        "INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run("existing-chat", "/fixture", "Existing", "model", 1, 1);
+      db.prepare("INSERT INTO chat_drafts VALUES (?, ?, ?)").run("existing-chat", "Unsent", 3);
+      runMigrations(db);
+      runMigrations(db);
+      expect(db.prepare("SELECT title FROM chats WHERE id = ?").get("existing-chat")).toEqual({
+        title: "Existing",
+      });
+      expect(
+        db.prepare("SELECT text, revision FROM chat_drafts WHERE chat_id = ?").get("existing-chat"),
+      ).toEqual({ text: "Unsent", revision: 3 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM chat_creation_intents").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
 // Issue #3400 (epic #3384) — the v28 migration is the first to widen the `relationships` V5
 // CHECK constraint, which SQLite cannot ALTER, so the table is rebuilt. Unlike the V20 rebuild
 // precedent, `relationships` has a live child foreign key

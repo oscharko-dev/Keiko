@@ -192,6 +192,7 @@ const ALLOWED_GITHUB_ISSUE_READER_AUTHORIZATION_COLUMNS = new Set([
 const EXPECTED_TABLES = new Set([
   "browser_approvals",
   "browser_approval_installation",
+  "chat_creation_intents",
   "chat_drafts",
   "chat_messages",
   "chats",
@@ -238,6 +239,19 @@ describe("forbidden-fields — browser public identity approval (#4043)", () => 
     const inspector = openMigratedSchema(join(tmpDir, "browser-approval-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(columns));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — chat creation intent metadata", () => {
+  it("stores only hashed intent identities and the nullable owned chat reference", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "chat-creation-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_creation_intents"))).toEqual(
+        new Set(["request_key", "intent_sha256", "chat_id"]),
+      );
     } finally {
       inspector.close();
     }

@@ -267,7 +267,7 @@
       "sourceRequirement": "A user opening Keiko directly in Chrome, Safari or Firefox can complete a clear browser-independent local approval flow and save authenticated chat drafts.",
       "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
       "currentDisposition": "not fully qualified",
-      "remainingProof": "Actual direct Chrome/Safari/Firefox approval and authenticated draft saving."
+      "remainingProof": "Bounded native Safari private-window direct approval/save is recorded in chat-creation-idempotency.json; full Chrome/Firefox and persisted-profile native Safari flows remain."
     },
     {
       "sourceIssue": 4043,
@@ -275,7 +275,7 @@
       "sourceRequirement": "Remembering a browser is optional and requires an explicit human choice; an approved browser can reconnect after a Keiko restart within the remembered approval's bounded validity.",
       "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
       "currentDisposition": "not fully qualified",
-      "remainingProof": "Optional explicit remembered approval with bounded reconnect after real restart."
+      "remainingProof": "Native Safari explicitly remembered key reconnects after a real same-origin BFF restart in the bounded v1 run; other browsers, browser-process/profile restart and complete validity matrix remain."
     },
     {
       "sourceIssue": 4043,
@@ -283,7 +283,7 @@
       "sourceRequirement": "Users can inspect and revoke remembered browser access; revocation prevents subsequent renewal and invalidates associated live access as specified by the existing session owner.",
       "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
       "currentDisposition": "not fully qualified",
-      "remainingProof": "Actual inspect/revoke flow preventing renewal and associated live access."
+      "remainingProof": "Actual native Safari session and remembered revocations deny the same existing draft after reload; full cross-browser/profile renewal and live-session matrix remains."
     },
     {
       "sourceIssue": 4043,
@@ -299,7 +299,7 @@
       "sourceRequirement": "Restart, multiple browser profiles and SSD relocation/use are verified through real product flows, including failure and recovery states. No promise of trust across unrelated installations, OS users or missing protected state is inferred.",
       "sourceBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
       "currentDisposition": "not fully qualified",
-      "remainingProof": "Actual profiles/restart/SSD relocation/failure/recovery; no installation/OS identity promise."
+      "remainingProof": "Real same-origin BFF process restart is proven in the bounded Safari v1 run; browser-process restart, multiple persisted profiles, SSD relocation/failure/recovery remain."
     },
     {
       "sourceIssue": 4043,
@@ -367,5 +367,6 @@
     }
   ],
   "boundedEvidence": "docs/qa/evidence/4037/README.md",
-  "closureRule": "Check acceptance only against actual completed evidence; close issues only after separately authorized and verified integration."
+  "closureRule": "Check acceptance only against actual completed evidence; close issues only after separately authorized and verified integration.",
+  "checkpoint38BoundedEvidence": "chat-creation-idempotency.json; no complete acceptance disposition or issue checkmark changed"
 }

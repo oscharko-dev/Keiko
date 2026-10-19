@@ -788,7 +788,11 @@ describe("useChatSession bootstrap", () => {
 
     let opened: Chat | undefined;
     await act(async () => {
-      opened = await result.current.openNewChat(project("/other"), "  Grounding release check  ");
+      opened = await result.current.openNewChat(
+        project("/other"),
+        "  Grounding release check  ",
+        "shared-window-intent",
+      );
     });
 
     // Relocated pin (review finding on #3221): with no chats and no user pick, the bootstrap
@@ -797,6 +801,7 @@ describe("useChatSession bootstrap", () => {
     expect(createDesktopChat).toHaveBeenCalledWith({
       title: "Grounding release check",
       projectPath: "/other",
+      creationRequestId: "shared-window-intent",
     });
     expect(opened?.id).toBe("chat-project-override");
     expect(result.current.activeProject?.path).toBe("/other");

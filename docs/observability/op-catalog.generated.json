@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "99a75157c82d7653a448b14287336eabd030661145755e82de4fcf3626892c11",
+    "catalogDigest": "5d96479072a6eb4cf18420cea75628dea6c91da82f93699bbf06068360606163",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1465,6 +1465,40 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:80",
         "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:159"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "chat.creation.intent",
+        "category": "setup",
+        "owner": "keiko-server",
+        "emitter": "store.chatCreationIntents.logChatCreationIntent",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["created", "reused", "refused", "failed"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["chat-creation-intent"],
+        "proofIds": ["chat.creation.intent.decision"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/store/chatCreationIntents.ts:15",
+        "emitterSites": ["packages/keiko-server/src/store/chatCreationIntents.ts:45"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33646,8 +33680,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:138",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:924"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:139",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:948"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37702,6 +37736,27 @@
     },
     "exemptions": [],
     "failureClassContracts": [
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "chat-creation-intent",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["chat.creation.intent"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["chat.creation.intent"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["chat.creation.intent"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["chat.creation.intent"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
@@ -47506,8 +47561,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 348,
-      "completeClassCount": 348,
+      "supportedClassCount": 349,
+      "completeClassCount": 349,
       "completeness": "complete",
       "classes": [
         {
@@ -49808,6 +49863,56 @@
                 "causeChain": false
               },
               "proofIds": ["chat.continuity.rehydration.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "chat-creation-intent",
+          "requirementContract": "chat-creation-intent",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["chat.creation.intent"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "chat.creation.intent",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["chat.creation.intent"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "chat.creation.intent",
+              "owner": "keiko-server",
+              "category": "setup",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["chat.creation.intent.decision"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -91686,7 +91791,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1708",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1710",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92130,7 +92235,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2057",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2059",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92171,6 +92276,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.creation.intent",
+      "category": "setup",
+      "site": "packages/keiko-server/src/store/chatCreationIntents.ts:18",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.creation.rejected",
       "category": "unknown",
       "site": "packages/keiko-server/src/chat-activity.ts:86",
@@ -92185,7 +92296,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1403",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1405",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -94818,7 +94929,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:141",
+      "site": "packages/keiko-server/src/store/db.ts:142",
       "package": "keiko-server"
     },
     {
@@ -95387,6 +95498,7 @@
     "chat.continuity.capture",
     "chat.continuity.degraded",
     "chat.continuity.rehydration",
+    "chat.creation.intent",
     "chat.creation.rejected",
     "chat.draft.operation",
     "chat.memory.auto-maintenance",

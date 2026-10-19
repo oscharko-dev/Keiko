@@ -398,6 +398,18 @@ export interface CreateChatOptions {
   readonly branchLabel?: string;
 }
 
+/** An opaque creation intent coalesces retries; it never grants chat or source authority. */
+export function isDesktopChatCreationRequestId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u.test(value);
+}
+
+export interface DesktopChatCreateRequestWire {
+  readonly projectPath?: string | undefined;
+  readonly title?: string | undefined;
+  readonly modelId?: string | undefined;
+  readonly creationRequestId?: string | undefined;
+}
+
 export interface UpdateProjectPatch {
   readonly name?: string;
   readonly favorite?: boolean;

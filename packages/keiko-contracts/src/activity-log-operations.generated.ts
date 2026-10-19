@@ -1397,6 +1397,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.creation.intent",
+    category: "setup",
+    owner: "keiko-server",
+    emitter: "store.chatCreationIntents.logChatCreationIntent",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["created", "reused", "refused", "failed"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-creation-intent"],
+    proofIds: ["chat.creation.intent.decision"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.creation.rejected",
     category: "gateway",
     owner: "keiko-server",

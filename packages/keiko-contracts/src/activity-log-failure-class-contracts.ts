@@ -6,6 +6,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "chat-creation-intent",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["chat.creation.intent"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["chat.creation.intent"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["chat.creation.intent"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["chat.creation.intent"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "chat-draft-persistence",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

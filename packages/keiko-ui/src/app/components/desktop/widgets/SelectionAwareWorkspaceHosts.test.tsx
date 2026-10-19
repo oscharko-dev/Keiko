@@ -12,6 +12,7 @@ import type {
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
+import type { ChatSessionApi } from "../hooks/useChatSession";
 import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps } from "./cards/EditorWidget";
@@ -100,7 +101,9 @@ const chatSessionState = vi.hoisted(() => ({
   clearError: vi.fn(),
   memoryEnabled: true,
   openChat: vi.fn(async (_chat: Chat): Promise<void> => undefined),
-  openNewChat: vi.fn(async (): Promise<Chat | undefined> => undefined),
+  openNewChat: vi.fn<ChatSessionApi["openNewChat"]>(
+    async (): Promise<Chat | undefined> => undefined,
+  ),
   openProject: vi.fn(async (_project: ProjectWithAvailability): Promise<void> => undefined),
   replaceChat: vi.fn((_chat: Chat): void => undefined),
   setMemoryEnabled: vi.fn((_enabled: boolean): void => undefined),
@@ -1101,6 +1104,36 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(normalizedChatTitle(" \t\n ")).toBeUndefined();
   });
 
+  it("forwards the same intent from independently mounted hosts of one shared window", async (): Promise<void> => {
+    const cfg = { newChatRequestId: "shared-creation" };
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={cfg} ctx={context()} />
+        <ChatWindowSessionHost cfg={cfg} ctx={context()} />
+      </I18nProvider>,
+    );
+    await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledTimes(2));
+    // Each browser owns its coordinator; durable coalescing belongs to the server/store.
+    expect(defaultOpenNewChat.mock.calls.map((call) => call[2])).toEqual([
+      "shared-creation",
+      "shared-creation",
+    ]);
+  });
+
+  it("keeps legacy unbound windows independent while retaining their stable window intent", async (): Promise<void> => {
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{}} ctx={context({ windowId: "legacy-a" })} />
+        <ChatWindowSessionHost cfg={{}} ctx={context({ windowId: "legacy-b" })} />
+      </I18nProvider>,
+    );
+    await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledTimes(2));
+    expect(defaultOpenNewChat.mock.calls.map((call) => call[2])).toEqual([
+      "window:legacy-a",
+      "window:legacy-b",
+    ]);
+  });
+
   it("keeps a replacement creation after a detached same-key request settles (#3210)", async (): Promise<void> => {
     const original = deferred<Chat | undefined>();
     const replacement = deferred<Chat | undefined>();
@@ -1250,9 +1283,17 @@ describe("ChatWindowSessionHost target missing", () => {
     );
 
     await waitFor((): void =>
-      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(projectB, created.title),
+      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(
+        projectB,
+        created.title,
+        "configured-project-request",
+      ),
     );
-    expect(chatSessionState.openNewChat).not.toHaveBeenCalledWith(projectA, created.title);
+    expect(chatSessionState.openNewChat).not.toHaveBeenCalledWith(
+      projectA,
+      created.title,
+      "configured-project-request",
+    );
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: created.id,
       projectPath: projectB.path,
@@ -1336,9 +1377,12 @@ describe("ChatWindowSessionHost target missing", () => {
       const ctx = context();
       render(<ChatCreationRetryHarness ctx={ctx} />);
       const retry = await screen.findByRole("button", { name: "Retry" });
+      const originalIntent = defaultOpenNewChat.mock.calls[0]?.[2];
+      expect(originalIntent).toEqual(expect.any(String));
       reportClientDiagnosticMock.mockClear();
       await userEvent.setup().click(retry);
       await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledTimes(2));
+      expect(defaultOpenNewChat.mock.calls[1]?.[2]).toBe(originalIntent);
       expect(chatSessionState.clearError).toHaveBeenCalledOnce();
       expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
       expect(screen.getByRole("status")).toHaveTextContent("Opening chat...");
@@ -1412,7 +1456,11 @@ describe("ChatWindowSessionHost target missing", () => {
     );
 
     await waitFor((): void => {
-      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(undefined, created.title);
+      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(
+        undefined,
+        created.title,
+        "request-1",
+      );
     });
     expect(screen.getByText("Opening chat...")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-window")).not.toBeInTheDocument();
@@ -1651,8 +1699,18 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
     await waitFor((): void => expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2));
-    expect(chatSessionState.openNewChat).toHaveBeenNthCalledWith(1, projectA, chatA.title);
-    expect(chatSessionState.openNewChat).toHaveBeenNthCalledWith(2, projectB, chatB.title);
+    expect(chatSessionState.openNewChat).toHaveBeenNthCalledWith(
+      1,
+      projectA,
+      chatA.title,
+      "project-request",
+    );
+    expect(chatSessionState.openNewChat).toHaveBeenNthCalledWith(
+      2,
+      projectB,
+      chatB.title,
+      "project-request",
+    );
 
     await act(async (): Promise<void> => {
       creationA.resolve(chatA);

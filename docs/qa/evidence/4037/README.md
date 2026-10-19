@@ -1065,3 +1065,27 @@ prompts, grants, scoring and all frozen qualification product sources remain unc
 Full exact-head CI, native generation ownership and packaged update/restart/recovery/state/SSD,
 browser UI and real browsers, both skill benefit/convention/held-out matrices, Chat/search/source 96,
 review settlement and authorized integration remain open.
+
+## Checkpoint 38: one durable conversation per shared creation intent
+
+Two independently mounted browser coordinators could submit the same shared-window creation
+without a server-owned intent, allocating two conversations. The actual mounted HTTP regression
+fails before the repair. The existing private UiStore now commits the bounded creation identity
+and chat atomically, scoped to the project. A delivery retry preserves the identity, while an
+explicit new conversation remains independent. Existing A→B→A navigation and late-result pins
+remain intact. Deleted or closed conversations cannot be resurrected by replay. The additive
+schema46 migration preserves existing chats and private drafts; it does not prove updater rollback.
+
+The frozen v1 actual native Safari private-window run joins pre-grant denial, explicit session
+approval, acknowledged draft save, page reload and revocation to the same existing resource and
+the real Activity Log by request correlation. An explicitly remembered key then reconnects after
+a real BFF process replacement at the identical allocated origin, preserving the same38-byte
+draft at revision1. Subsequent remembered revocation denies renewal and protected reads. Exactly
+one conversation remains. All6299 compiled workspace artifacts and301 served assets match the
+pre-start witness through shutdown. Three physical provider calls remain accounted for; this is
+not a zero-inference claim. Owned test windows and BFFs were closed.
+
+`chat-creation-idempotency.json` binds these scoped observations and the retained failed controls.
+The v2 candidate only decomposes the creation effect to meet the existing UI function-size limit;
+v1 native evidence is not relabelled as v2 or final-head acceptance. Full cross-browser/profile/SSD,
+installed updater, source-answer, skill and exact-head integration obligations remain open.

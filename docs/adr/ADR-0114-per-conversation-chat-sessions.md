@@ -60,6 +60,17 @@ windows.
    window aborts and disposes only that instance. Cold bootstrap requests and chat-mutation
    notifications remain shared and ref-counted, avoiding N identical network bootstraps while
    preserving per-window mutable state.
+   A shared window's accepted creation identity also reaches the server. The existing private
+   UiStore atomically binds that opaque identity and project to one conversation (schema 46),
+   so independent browser coordinators and delivery retries cannot create duplicate conversations.
+   Retries retain the accepted identity; an explicit new conversation receives a new identity.
+   Legacy unbound windows use their stable window identity. Changed creation parameters conflict,
+   while an omitted model remains an automatic choice independent of later default election.
+   Recovery returns the originally accepted conversation before current model admission; genuinely
+   new requests still require the unchanged model guards. An explicit model remains part of the intent,
+   and deletion retains a tombstone rather than resurrecting a conversation. This identity grants
+   no browser session, project access or draft authority. The existing Activity Log records only
+   the closed creation decision, completeness and loss state under the request correlation.
    Unsent text is additionally saved per `chatId` in the existing private UiStore (schema 44),
    through authenticated draft reads and revision-checked writes. Reload restores only that
    conversation's text; a conversation switch does not erase another conversation's saved draft.

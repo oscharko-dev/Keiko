@@ -326,6 +326,22 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
+#### Durable chat creation intents (schema 46, issues #4040/#4043)
+
+The existing private UiStore retains `chat_creation_intents` in the same transactional database.
+One framed digest identifies the project and opaque creation request; a second binds the initial
+title, requested model choice and branch. An omitted model is distinct from every explicit model;
+the model originally elected for that automatic request belongs to the accepted chat result.
+A replay recovers that result before current model admission, even if the default changed or is
+now unavailable. Genuinely new creation retains its original model admission guards.
+A `BEGIN IMMEDIATE` transaction inserts the conversation and
+intent together, or returns the existing conversation without reverting subsequent edits.
+Conflicting parameters and closed or deleted targets are refused. The nullable chat reference
+uses `ON DELETE SET NULL`, retaining a tombstone after chat or project deletion. The table stores
+only those two digests and the chat reference, with no new copy of user text or browser authority.
+The forward migration preserves existing conversations and drafts. Older readers continue to
+reject a newer schema; this migration alone does not establish updater rollback compatibility.
+
 #### Private Markdown instruction library (issue #4023)
 
 Schema v42 adds `markdown_skills` and `markdown_skill_revisions` to this same private UI
