@@ -615,6 +615,9 @@ reference, attached and dangling counts share the closed reconciliation outcome.
 `ambiguousMarkerCount` and `droppedImplicitCount`; optional weak-overlap/grouped counts describe
 only measurements actually made. Omitted metrics must not be interpreted as measured zeroes.
 
+`client.composer.activity` records `draft-notifications-ready` when the private draft notification
+subscription mounts in layout, before browser input or passive effects, without draft text.
+
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
 `unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records

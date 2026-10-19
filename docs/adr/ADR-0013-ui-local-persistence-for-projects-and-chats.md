@@ -405,6 +405,9 @@ explicitly; ordinary Chat remains available.
 
 ### Private composer drafts (schema 44, #4026)
 
+The draft notification subscription mounts in layout before browser input or passive effects;
+`client.composer.activity` records `draft-notifications-ready` without draft text.
+
 The same permission-protected UI database retains one private text draft and monotonic revision
 per chat in `chat_drafts`. The chat foreign key cascades deletion. The existing paired app session
 guards reads and writes through `/api/chats/:id/draft`; writes revalidate the session after reading

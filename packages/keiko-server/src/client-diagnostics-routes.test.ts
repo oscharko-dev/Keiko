@@ -298,6 +298,7 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   it.each([
+    "draft-notifications-ready",
     "workspace-viewport-fitted",
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",

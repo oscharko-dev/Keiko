@@ -1128,6 +1128,8 @@ normalization failures use the existing body-free client diagnostic sink (ADR-01
 Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
 Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
 browser persistence; stale revisions fail closed (ADR-0114 D1).
+The private draft notification subscription mounts in layout before browser input or passive effects;
+`client.composer.activity` records `draft-notifications-ready` without draft text.
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:

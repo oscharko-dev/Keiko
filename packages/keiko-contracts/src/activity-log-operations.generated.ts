@@ -3154,6 +3154,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "initialized",
+          "draft-notifications-ready",
           "input-limit",
           "code-ready",
           "code-language-detected",

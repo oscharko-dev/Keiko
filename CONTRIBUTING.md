@@ -35,6 +35,8 @@ only whole-repository enforcement. Source, parser, plugin, scope and inventory f
 Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+The private draft notification subscription mounts in layout before browser input or passive effects;
+`client.composer.activity` records `draft-notifications-ready` without draft text.
 
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
