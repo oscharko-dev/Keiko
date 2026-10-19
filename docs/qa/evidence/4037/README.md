@@ -922,3 +922,48 @@ feedback characterization, with unchanged customer skills and all physical calls
 not untouched held-out evidence or skill acceptance. Native generation ownership, packaged update
 journeys, browser UI and real browsers, both skill matrices, Chat/search/source96, final exact-head
 required checks, review settlement and authorized integration remain open.
+
+## Checkpoint 35: observe the intended runtime stage and bound readiness requests
+
+The Node26 CI timed-writer test did not establish that an owned child or packet write existed
+before expecting unreaped-process recovery. Its harness now forwards the existing manager clock;
+the original20ms write timer remains unchanged. The post-spawn control requires a captured child
+and writer entry before recovery-required. A separate exact pre-spawn deadline refuses without
+spawn, bytes or readiness and leaves the manager stopped. Identical stage controls have one failure
+and one healthy result before the harness correction, then two passes. All165 owning tests pass on
+both macOS and actual offline LinuxARM64 under Node26.8.1. Product runtime deadlines are unchanged.
+
+The existing development readiness observer could wait indefinitely on stalled response headers
+or body, keeping an old-target observation in flight after the child port changed. Its existing
+API/UI request path now applies one five-second signal spanning both phases. Two actual HTTP
+controls fail before the change and pass afterward. A private replay of the actual readiness owner
+declarations with real HTTP endpoints observes a stalled old port, then changes the target while
+that observation is in flight: the parent remains unready; the repair reaches readiness after the
+old request expires. Exact-source timings are bound in the JSON record. These are
+controlled fixture observations, not a reconstruction of the historical CI proxy failure.
+
+The auditor's actual owner-function controls have four failures/four healthy results before the
+change and eight passes afterward, with inert fetch/clock delivery. Both complete owning suites
+pass125 tests on macOS and Linux, including actual Next/BFF warmup and actual child-port reselection
+and public proxy recovery. An initial Linux fixture cleanup failed because the source was read-only;
+the final run uses an exact1231-file UI copy in a writable isolated tmpfs, preserving main sources.
+`readiness-and-runtime-stage.json` binds the exact controls, original CI logs and scope limits.
+
+The frozen Gemma V6 campaign stopped at its first initial measurement failure: one dispatched case,
+zero feedback, zero further cases and zero generated-test execution. All five physical calls remain
+retained: two task/citation attempts and three separately classified readiness calls. Actual task
+usage is12396 input/4096 output; gateway admission and material source/skill observations pass, but
+the original saved-answer join refuses. It receives no execution, benefit or skill acceptance credit.
+
+Two measurement-schema mistakes were diagnosed offline: the stored evidence ID lives under
+groundedAnswer, and the public scope ID is the contracts producer's path-free projection rather
+than the raw scope ID. Actual stored/returned answer metadata agree completely, and correcting
+only those accessors lets the retained physical/raw-scope/source joins agree. That replay does not
+change V6's frozen failed verdict. `react-feedback-v6.json` binds the immutable terminal archive and
+original observations. A prospective V7 protocol commissions actual canonical store/projection
+shapes and returns nonzero on terminal measurement failures. Customer skills, task/profile,
+prompts, grants, scoring and all frozen qualification product sources remain unchanged.
+
+Full exact-head CI, native generation ownership and packaged update/restart/recovery/state/SSD,
+browser UI and real browsers, both skill benefit/convention/held-out matrices, Chat/search/source96,
+review settlement and authorized integration remain open.

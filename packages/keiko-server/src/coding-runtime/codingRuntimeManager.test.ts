@@ -5521,6 +5521,7 @@ function hostTransportHarness(input: {
   readonly canSpawn?: () => boolean;
   readonly reaps?: boolean;
   readonly onSpawn?: () => void;
+  readonly now?: () => number;
 }): {
   readonly manager: CodingRuntimeManager;
   readonly captures: { executable: string; args: readonly string[]; cwd: string }[];
@@ -5535,6 +5536,7 @@ function hostTransportHarness(input: {
   const handshake = vi.fn(() => Promise.resolve({ ok: true as const }));
   const manager = createTestCodingRuntimeManager({
     processEnv: {},
+    ...(input.now === undefined ? {} : { now: input.now }),
     diagnostics: {
       record: (record): void => {
         diagnostics.push(record);
@@ -5676,17 +5678,51 @@ describe("inactive fixed host prepared transport", () => {
   it("retains recovery when a timed-out packet writer cannot prove process reap", async () => {
     const workspace = tempDir("keiko-host-workspace-");
     const program = await preparedHostFixture(workspace);
+    let writeEntered = false;
     const stdin = new Writable({
       write(): void {
-        /* Noncooperative test transport. */
+        writeEntered = true;
       },
     });
-    const harness = hostTransportHarness({ program, stdin, lifetime: true, reaps: false });
+    const harness = hostTransportHarness({
+      program,
+      stdin,
+      lifetime: true,
+      reaps: false,
+      now: () => 1_000,
+    });
     await expect(
       startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 }),
     ).resolves.toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(harness.captures).toHaveLength(1);
+    expect(writeEntered).toBe(true);
     expect(harness.handshake).not.toHaveBeenCalled();
     expect(harness.manager.health().status).toBe("recovery-required");
+  });
+
+  it("keeps a pre-spawn deadline distinct from unproven child recovery", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    const stdin = new PassThrough();
+    let clock = 1_000;
+    const harness = hostTransportHarness({
+      program,
+      stdin,
+      lifetime: true,
+      reaps: false,
+      now: () => clock,
+      canSpawn: () => {
+        clock = 1_020;
+        return true;
+      },
+    });
+    await expect(
+      startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 }),
+    ).resolves.toMatchObject({ ok: false, failureCode: "start-timeout" });
+    expect(harness.captures).toHaveLength(0);
+    expect(stdin.readableLength).toBe(0);
+    expect(harness.handshake).not.toHaveBeenCalled();
+    expect(harness.manager.health().status).toBe("stopped");
   });
 
   it("freshly refuses changed host bytes before spawn", async () => {

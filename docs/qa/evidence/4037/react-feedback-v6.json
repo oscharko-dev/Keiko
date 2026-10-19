@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "classification": "Terminal failed prospective V6 known-fixture feedback measurement. Original frozen verdict is unchanged. No generated test execution, workflow benefit, held-out or skill acceptance credit.",
+  "qualificationSourceHead": "1df1384e51580eaeb5193cd9dbbe1a3590d635f8",
+  "sourceManifestSha256": "2037e68727d86f61bbf62498d517dea5f0274ff44eb790231df6689f8c1a4e07",
+  "sourceArchive": {
+    "classification": "Prospective source revision3 archived before any V6 task call; earlier revisions and all V5 bytes retained.",
+    "manifestSha256": "2037e68727d86f61bbf62498d517dea5f0274ff44eb790231df6689f8c1a4e07",
+    "archiveSha256": "1e50df2a1a57c075185910c5c427624bc3aea1bb6c73024990f57924fb280504",
+    "archiveBytes": 9130363,
+    "regularMembers": 2262,
+    "sourceFiles": 2224,
+    "helpers": 9,
+    "inputs": 6,
+    "commissioningReceipts": 13,
+    "commissioningSources": 8,
+    "originalV5FilesUnchanged": 2093
+  },
+  "terminalArchive": {
+    "classification": "Immutable terminal failed V6 archive. One initial case, no feedback/furthercases/generatedexecution or benefit credit. Original frozen source archive remains separate unchanged.",
+    "archiveSha256": "461322acf7b45a6c08282efc3e9eadb0d108f4eddbbfef12b5d13fd3a4d3d73b",
+    "archiveBytes": 195922,
+    "memberCount": 35,
+    "ledgerSha256": "cd7111d47e092bca93aa9953808ff8f0968421faa38e2056ac536834e57657be",
+    "physicalCalls": 5,
+    "taskCalls": 2,
+    "readinessCalls": 3,
+    "reason": "saved-answer-run-mismatch"
+  },
+  "plannedCases": 6,
+  "dispatchedCases": 1,
+  "initialPhases": 1,
+  "feedbackPhases": 0,
+  "remainingCasesNotDispatched": 5,
+  "originalProcessExitCode": 0,
+  "originalVerdict": "failed",
+  "originalRefusal": "saved-answer-run-mismatch",
+  "originalContract": false,
+  "executionCredit": 0,
+  "observation": {
+    "persistedContentAgrees": true,
+    "sourceAndSkillObserved": true,
+    "gatewayAdmissionValid": true,
+    "unexpectedWorkflowCalls": 0,
+    "chargedTaskUsage": {
+      "input": 12396,
+      "output": 4096
+    },
+    "physical": [
+      {
+        "canonicalPromptTokens": 43,
+        "operation": "readiness",
+        "caseRequest": false,
+        "status": 200,
+        "usage": {
+          "completion_tokens": 29,
+          "prompt_tokens": 31,
+          "total_tokens": 60,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "finishReason": "stop",
+        "responseKind": "complete"
+      },
+      {
+        "canonicalPromptTokens": 43,
+        "operation": "readiness",
+        "caseRequest": false,
+        "status": 200,
+        "usage": {
+          "completion_tokens": 53,
+          "prompt_tokens": 31,
+          "total_tokens": 84,
+          "prompt_tokens_details": {
+            "cached_tokens": 30
+          }
+        },
+        "finishReason": "stop",
+        "responseKind": "complete"
+      },
+      {
+        "canonicalPromptTokens": 4972,
+        "maxTokens": 4096,
+        "operation": "conversation",
+        "caseRequest": true,
+        "status": 200,
+        "usage": {
+          "completion_tokens": 3296,
+          "prompt_tokens": 4038,
+          "total_tokens": 7334,
+          "completion_tokens_details": {
+            "reasoning_tokens": 1227,
+            "text_tokens": 2069
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 8
+          }
+        },
+        "finishReason": "stop",
+        "responseKind": "complete"
+      },
+      {
+        "canonicalPromptTokens": 7424,
+        "maxTokens": 800,
+        "operation": "conversation",
+        "caseRequest": true,
+        "status": 200,
+        "usage": {
+          "completion_tokens": 800,
+          "prompt_tokens": 6039,
+          "total_tokens": 6839,
+          "completion_tokens_details": {
+            "reasoning_tokens": 687,
+            "text_tokens": 113
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "finishReason": "length",
+        "responseKind": "complete"
+      },
+      {
+        "canonicalPromptTokens": 43,
+        "operation": "readiness",
+        "caseRequest": false,
+        "status": 200,
+        "usage": {
+          "completion_tokens": 49,
+          "prompt_tokens": 31,
+          "total_tokens": 80,
+          "prompt_tokens_details": {
+            "cached_tokens": 27
+          }
+        },
+        "finishReason": "stop",
+        "responseKind": "complete"
+      }
+    ]
+  },
+  "diagnosis": [
+    "The observer incorrectly expected top-level ChatMessage.evidenceRunId. The actual canonical rowToMessage/listMessages producer keeps this value under groundedAnswer.evidenceRunId. The retained value and full stored groundedAnswer equal the actual returned answer.",
+    "The observer also compared the public contextPack scope display ID to the raw internal scope ID. The actual contracts display producer intentionally projects the raw ID. Raw scope hash, full current binding/fingerprint and both physical source frames agree in an offline replay after correcting these two accessors.",
+    "Earlier synthetic commissioning objects used the same incorrect shapes, so their passing status did not establish producer-to-observer compatibility. They and the failed run remain preserved."
+  ],
+  "prospectiveRepair": {
+    "classification": "Fresh V7 protocol, not a retry/reinterpretation or recredit of V6. No V7 result is recorded here.",
+    "canonicalStoreControls": 16,
+    "campaignControls": 12,
+    "customerSkillChanges": 0,
+    "taskOrProfileChanges": 0,
+    "promptInstructionsAdded": 0,
+    "grantChanges": 0,
+    "modelSpecificPromptRulesAdded": 0,
+    "changes": [
+      "Use actual nested stored-groundedAnswer identity and full returned/stored metadata equality.",
+      "Use the exact actual path-free display producer while preserving authoritative raw scope/binding/physical-source guards.",
+      "Return nonzero after terminal measurement/infrastructure failure and owned cleanup; observed generated quality failures remain ordinary experiment outcomes."
+    ]
+  },
+  "limitations": [
+    "V6 stopped before any executor dispatch. It establishes no correct-subject, mutation, naming or skill-benefit pass.",
+    "The retained known credit-hold fixture is not an untouched held-out task.",
+    "The frozen qualification source is older than the final product head; no final exact-head feature acceptance is implied.",
+    "Both customer skills, all uncompleted epic acceptance and final exact-head required checks/reviews/integration remain open."
+  ]
+}
