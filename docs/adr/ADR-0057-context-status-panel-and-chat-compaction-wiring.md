@@ -199,7 +199,11 @@ its valid persisted fingerprint and scope both match the visible Files selection
 does not PATCH the chat, fetch a new source list or cancel its response. Missing or changed proof,
 actual navigation and failed transitions retain the normal admission/recovery path; another source's
 pending or failed hold remains intact. The existing `automatic-suppressed` scope decision links to
-the original acknowledgement correlation without recording source paths.
+the original acknowledgement correlation without recording source paths. A newly created full
+Files edge must retain that receipt before its first privacy-elided replay. The existing confirmed
+Chat cache carries the correlation only after canonical source acknowledgement; the edge ledger
+accepts it only for the same conversation and a unique canonical scope matching the bound
+fingerprint. An unproven, newer or equal-time replacement Chat does not inherit that receipt.
 
 Git-change description authority is independent of source connectivity. Buffered and streaming
 turns require authority for the exact active comparison and return 409

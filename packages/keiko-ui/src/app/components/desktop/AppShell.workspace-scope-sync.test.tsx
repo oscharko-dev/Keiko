@@ -307,6 +307,13 @@ async function storageReplay(
   });
 }
 
+function mountedWorkspaceSnapshot(): { wins: AppWindow[]; conns: Connection[] } {
+  const workspace = mocks.workspace;
+  if (workspace === undefined || workspace.wins === null)
+    throw new TypeError("Missing mounted workspace.");
+  return { wins: workspace.wins, conns: workspace.conns };
+}
+
 async function mountAmbiguousFiles(
   runtimeOnly = false,
 ): Promise<{ wins: AppWindow[]; conns: Connection[] }> {
@@ -409,6 +416,50 @@ async function mountNativeFilesSession(
 }
 
 describe("AppShell canonical workspace scope synchronization", () => {
+  it.each([
+    { kind: "workspace-root", cfg: {} },
+    { kind: "directory", cfg: { activeDirectoryPath: "Alpha" } },
+    { kind: "files", cfg: { activeFilePath: "Alpha/one.ts" } },
+  ])(
+    "preserves a response when the first full $kind acknowledgement is replayed as opaque",
+    async ({ kind, cfg }) => {
+      const initial = fixture(["/manuals/Stable"]);
+      Object.assign(initial.wins[1]?.cfg ?? {}, cfg);
+      initial.conns.length = 0;
+      mocks.initialChat = chat([]);
+      mocks.serverChat = mocks.initialChat;
+      persist(initial.wins, initial.conns);
+      const cancel = vi.fn();
+      const cancellation = renderHook(() => useChatScopeCancellation(cancel));
+      try {
+        render(<AppShell />);
+        await screen.findByTestId("workspace");
+        await auditConnect();
+        await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+        expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe(kind);
+        expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
+        const { wins: windows, conns: connections } = mountedWorkspaceSnapshot();
+        const canonicalScopes = mocks.serverChat?.connectedScopes;
+        cancel.mockClear();
+        mocks.fetchChats.mockClear();
+        mocks.updateChatConnectedScopes.mockClear();
+        await storageReplay(
+          [...windows, windowRecord("other-browser-settings", "settings", {})],
+          connections,
+        );
+        await waitFor(() => expect(mocks.workspace?.wins).toHaveLength(3));
+        expect(cancel).not.toHaveBeenCalled();
+        expect(mocks.fetchChats).not.toHaveBeenCalled();
+        expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+        expect(mocks.serverChat?.connectedScopes).toEqual(canonicalScopes);
+        expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable");
+        expect(chatScopeTransition("chat-1")).toBeUndefined();
+      } finally {
+        cancellation.unmount();
+      }
+    },
+  );
+
   it("preserves an active response when another browser restores the same opaque Files edge", async () => {
     const initial = fixture(["/manuals/Stable"]);
     mocks.initialChat = chat([scope("/manuals/Stable")]);

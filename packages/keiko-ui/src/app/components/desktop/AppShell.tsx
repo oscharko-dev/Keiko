@@ -625,6 +625,16 @@ interface FilesPatchAcknowledgement {
   scope?: ChatConnectedScope;
 }
 
+interface ConfirmedGroundingChat {
+  readonly chat: Chat;
+  readonly correlationId: string | undefined;
+}
+
+interface FilesAcknowledgementEvidence {
+  readonly confirmed: ConfirmedGroundingChat | undefined;
+  readonly fingerprints: Map<string, string | undefined>;
+}
+
 function captureCanonicalFilesAcknowledgement(
   acknowledgement: FilesPatchAcknowledgement,
   chat: Chat,
@@ -687,10 +697,12 @@ function captureFilesPatchAcknowledgement(
   submitted: readonly ChatConnectedScope[],
   requested: ChatConnectedScope,
   chat: Chat,
-): void {
+): boolean {
   acknowledgement.chat = chat;
   const accepted = canonicalFilesPatchScope(submitted, requested, chat);
-  if (accepted !== undefined) acknowledgement.scope = accepted;
+  if (accepted === undefined) return false;
+  acknowledgement.scope = accepted;
+  return true;
 }
 
 function acknowledgeFilesScope(input: {
@@ -803,16 +815,63 @@ function pruneFilesAcknowledgements<T>(
   }
 }
 
+function captureFullFilesAcknowledgement(
+  connection: Connection,
+  conversationId: string,
+  bound: ChatConnectedScope,
+  acknowledgements: Map<string, ChatConnectedScope>,
+  correlations: Map<string, string>,
+  evidence: FilesAcknowledgementEvidence | undefined,
+): void {
+  const edgeKey = `${connection.id}\u0000${conversationId}`;
+  if (evidence === undefined || acknowledgements.has(edgeKey)) return;
+  const confirmed = evidence.confirmed;
+  if (
+    confirmed?.correlationId === undefined ||
+    confirmed.chat.id !== conversationId ||
+    !isConnectedScopeFingerprint(connection.boundScopeFingerprint) ||
+    connectedScopeFingerprint(bound) !== connection.boundScopeFingerprint
+  )
+    return;
+  const candidates = effectiveScopes(confirmed.chat).filter(
+    (scope) => connectedScopeFingerprint(scope) === connection.boundScopeFingerprint,
+  );
+  if (candidates.length !== 1) return;
+  acknowledgeFilesScope({
+    correlationId: confirmed.correlationId,
+    edgeKey,
+    connectionId: connection.id,
+    chat: confirmed.chat,
+    nextScope: bound,
+    connections: [connection],
+    scopes: acknowledgements,
+    fingerprints: evidence.fingerprints,
+    correlations,
+  });
+}
+
 function retainUnchangedFilesConnection(
   connection: Connection,
   conversationId: string,
   nextScope: ChatConnectedScope,
-  acknowledgements: ReadonlyMap<string, ChatConnectedScope>,
-  correlations: ReadonlyMap<string, string>,
+  acknowledgements: Map<string, ChatConnectedScope>,
+  correlations: Map<string, string>,
   api: WorkspaceApi,
+  evidence?: FilesAcknowledgementEvidence,
 ): boolean {
   if (chatScopeSourceTransition(conversationId, connection.id) === "failed") return false;
-  if (connectedScopeKey(boundScopeOf(connection)) === connectedScopeKey(nextScope)) return true;
+  const bound = boundScopeOf(connection);
+  if (bound !== null && connectedScopeKey(bound) === connectedScopeKey(nextScope)) {
+    captureFullFilesAcknowledgement(
+      connection,
+      conversationId,
+      bound,
+      acknowledgements,
+      correlations,
+      evidence,
+    );
+    return true;
+  }
   const key = `${connection.id}\u0000${conversationId}`;
   const acknowledged = acknowledgements.get(key);
   if (
@@ -1817,11 +1876,15 @@ function AppShellInner(): ReactNode {
     },
     [t],
   );
-  const confirmedGroundingChatsRef = useRef(new Map<string, Chat>());
-  const rememberGroundingChat = useCallback((chat: Chat): void => {
+  const confirmedGroundingChatsRef = useRef(new Map<string, ConfirmedGroundingChat>());
+  const rememberGroundingChat = useCallback((chat: Chat, correlationId?: string): void => {
     const previous = confirmedGroundingChatsRef.current.get(chat.id);
-    if (previous === undefined || chat.updatedAt >= previous.updatedAt) {
-      confirmedGroundingChatsRef.current.set(chat.id, chat);
+    if (previous === undefined || chat.updatedAt >= previous.chat.updatedAt) {
+      confirmedGroundingChatsRef.current.set(chat.id, {
+        chat,
+        correlationId:
+          correlationId ?? (previous?.chat === chat ? previous.correlationId : undefined),
+      });
     }
   }, []);
   const publishRefreshedGroundingChat = useCallback((chat: Chat): void => {
@@ -1849,7 +1912,7 @@ function AppShellInner(): ReactNode {
       const sessionChat =
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
-      const confirmed = confirmedGroundingChatsRef.current.get(chatId);
+      const confirmed = confirmedGroundingChatsRef.current.get(chatId)?.chat;
       const chat = latestGroundingChat(sessionChat, confirmed);
       if (chat !== undefined && !refresh) return chat.status === "closed" ? undefined : chat;
       const projectPath =
@@ -2002,7 +2065,10 @@ function AppShellInner(): ReactNode {
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
         captureCanonicalFilesAcknowledgement(acknowledgement, chat, canonicalScopes, nextScope);
-        rememberGroundingChat(chat);
+        rememberGroundingChat(
+          chat,
+          acknowledgement.scope === undefined ? undefined : attempt.correlationId,
+        );
         publishRefreshedGroundingChat(chat);
         return true;
       }
@@ -2048,8 +2114,11 @@ function AppShellInner(): ReactNode {
         {
           remember: rememberGroundingChat,
           expectedIdentity: chat.groundingScopeIdentity,
-          observed: (observedChat): void =>
-            captureFilesPatchAcknowledgement(acknowledgement, next, scope, observedChat),
+          observed: (observedChat): void => {
+            if (captureFilesPatchAcknowledgement(acknowledgement, next, scope, observedChat)) {
+              rememberGroundingChat(observedChat, attempt.correlationId);
+            }
+          },
         },
       );
       if (persisted === undefined) return false;
@@ -2103,7 +2172,7 @@ function AppShellInner(): ReactNode {
           edgeKey,
           connectionId,
           nextScope: acknowledgement.scope ?? nextScope,
-          chat: acknowledgement.chat ?? confirmedGroundingChatsRef.current.get(chatKey),
+          chat: acknowledgement.chat ?? confirmedGroundingChatsRef.current.get(chatKey)?.chat,
           connections: wsConnectionsForBindingRef.current,
           scopes: acknowledgedFilesScopesRef.current,
           fingerprints: acknowledgedFilesFingerprintsRef.current,
@@ -2497,7 +2566,7 @@ function AppShellInner(): ReactNode {
           (currentChatSessionRef.current.activeChat?.id === chatId
             ? currentChatSessionRef.current.activeChat
             : undefined),
-        confirmedGroundingChatsRef.current.get(chatId),
+        confirmedGroundingChatsRef.current.get(chatId)?.chat,
       ),
     [],
   );
@@ -2694,6 +2763,23 @@ function AppShellInner(): ReactNode {
     // must not retrigger this ownership transition scan.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceLinkRevision, ws.api]);
+  const retainCurrentFilesConnection = (
+    conn: Connection,
+    conversationId: string,
+    scope: ChatConnectedScope,
+  ): boolean =>
+    retainUnchangedFilesConnection(
+      conn,
+      conversationId,
+      scope,
+      acknowledgedFilesScopesRef.current,
+      acknowledgedFilesCorrelationsRef.current,
+      ws.api,
+      {
+        confirmed: confirmedGroundingChatsRef.current.get(conversationId),
+        fingerprints: acknowledgedFilesFingerprintsRef.current,
+      },
+    );
   const rebindFilesConnection = (conn: Connection): void => {
     const a = ws.winsById.get(conn.a);
     const b = ws.winsById.get(conn.b);
@@ -2706,17 +2792,7 @@ function AppShellInner(): ReactNode {
     const conversationId =
       chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
     if (conversationId === undefined) return;
-    if (
-      retainUnchangedFilesConnection(
-        conn,
-        conversationId,
-        nextScope,
-        acknowledgedFilesScopesRef.current,
-        acknowledgedFilesCorrelationsRef.current,
-        ws.api,
-      )
-    )
-      return;
+    if (retainCurrentFilesConnection(conn, conversationId, nextScope)) return;
     const target: ChatBindingTarget = {
       conversationId,
       sourceWindowId: a.type === "files" ? a.id : b.id,
