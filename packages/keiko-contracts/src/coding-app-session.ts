@@ -111,7 +111,7 @@ function checkBoundedText(
   return true;
 }
 
-function serializedUtf8Bytes(value: object): number {
+function serializedUtf8Bytes(value: CodingAppSessionChannelSnapshot): number {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length;
   } catch {
@@ -166,6 +166,13 @@ export function validateCodingAppSessionChannelSnapshot(
   if (!isRecord(value)) return invalid("channel snapshot must be an object");
   const errors = exactKeys(value, ["schemaVersion", "content"], "channelSnapshot");
   const admitted = checkChannelSnapshot(value, errors);
+  if (
+    admitted &&
+    errors.length === 0 &&
+    serializedUtf8Bytes(value) > CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES
+  ) {
+    errors.push("channel snapshot exceeds the aggregate UTF-8 byte budget");
+  }
   return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
 
@@ -177,11 +184,5 @@ function checkChannelSnapshot(
   if (!version) errors.push("channelSnapshot.schemaVersion is invalid");
   const content =
     value.content === null || checkChannelContent(value.content, "channelSnapshot.content", errors);
-  if (
-    errors.length === 0 &&
-    serializedUtf8Bytes(value) > CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES
-  ) {
-    errors.push("channel snapshot exceeds the aggregate UTF-8 byte budget");
-  }
   return version && content;
 }
