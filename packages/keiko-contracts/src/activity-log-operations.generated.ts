@@ -4825,6 +4825,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-app-session.expired",
+    category: "http",
+    owner: "keiko-server",
+    emitter: "coding-app-session.sessionRegistry.recordObservedExpiry",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      expiredSessionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      sessionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["approval", "lifetime", "inactivity", "invalid-clock"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-app-session-pairing"],
+    proofIds: ["coding-app-session.expired.observation"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-app-session.local-session.confirmed",
     category: "http",
     owner: "keiko-server",

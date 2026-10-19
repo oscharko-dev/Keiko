@@ -72,5 +72,19 @@
     "The full affected native suite runs actual original host/route/guard owners on ARM64; it does not qualify x64.",
     "The original failed x64 attempt remains retained. Exact-head x64 evidence and cause analysis are still required.",
     "No timeout increase, skipped assertion, process-generation ownership change or release-impact waiver is introduced."
-  ]
+  ],
+  "subsequentCiObservation": {
+    "head": "034a572572eecae8b734142027e0e869dd800c7a",
+    "job": "https://github.com/oscharko-dev/Keiko/actions/runs/39181616028/job/117835812270",
+    "rawLogSha256": "b8223b703a084e47a44e0b0715aacf698cd48065ae292a93e63e14816df6b066",
+    "platform": "macos-x64",
+    "passed": 59,
+    "failed": 0,
+    "refusalObserved": true,
+    "stderrByteCount": 19,
+    "firstStderrAtMs": 3150,
+    "refusalAtMs": 3150,
+    "wholeTwoProcessCaseMs": 6555.026618,
+    "scope": "Successful later exact-head owner CI evidence; does not reconstruct or diagnose the earlier failed attempt or qualify native updater ownership."
+  }
 }

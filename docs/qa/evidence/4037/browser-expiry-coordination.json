@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "classification": "Cross-owner browser grant expiry repair in the existing session registry, browser-approval service and private UiStore composition. Not complete browser UI, native browsers, OS restart, SSD or updater acceptance.",
+  "parentHead": "034a572572eecae8b734142027e0e869dd800c7a",
+  "sources": [
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-code-inventory.generated.ts",
+      "sha256": "ef39cff7cd54552a533e3a805d59dfe30dccc7f7a5f62efde61af645a26c8e7a"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "5952bb25b534ada79972373700242c305444a6eedb6571e00ad85aea5cf39bfe"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "21d54c9a278189283e375d3c9d4eeea472adb495aee6c990c4b5cbd4555fa39a"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "6e122fa1d77363714d022d26716f946da09ca84d5d5ce0448e522c9cda8ee808"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApproval.expiry-observation.test.ts",
+      "sha256": "ec12b9eab87a32cffdaf9fef6ab48cabbadd3691f3cee82a56404e6d725e5a6f"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApproval.ts",
+      "sha256": "f088838ba13e1270cb06db46825b31fc56826bc6db8e26fe5e1600906a774673"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts",
+      "sha256": "88b7ed202d346801d02a1931df22d6759c9ed590e1116af6a4795b5a0948b862"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.browser-approval.test.ts",
+      "sha256": "230414588669722d09e1c7ba3544646ab9a1f46413bb0af5987b945dd5b44b37"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts",
+      "sha256": "bbe02949f72e6d04cdde72b519f3b25bd56a7711127a63d2f1dbb2dfb4425590"
+    },
+    {
+      "path": "packages/keiko-server/src/deps.ts",
+      "sha256": "9157845d715ce5ebe35494978bfda88b2a9f37e43673c9be919fc1ed2befb1a9"
+    },
+    {
+      "path": "scripts/__tests__/chat-skills-lab.test.mjs",
+      "sha256": "7dbb5c1c0222b18d9ed0b7fab262d244ac1f97c6626b993acf1c8461e80f6914"
+    }
+  ],
+  "sourceManifestSha256": "cd16764d39ad92f341598db84bcdacb80f8a00d15a46200d701478c5a7d4dd8a",
+  "failure": "A service observation could persist grant expiry without invalidating associated live sessions; a registry observation could invalidate a cookie without persisting remembered-grant expiry. After a backwards clock correction either live access or a fresh signed renewal could revive the expired grant.",
+  "repair": [
+    "Every valid browser-approval time observation invokes bounded expiry on the existing registry.",
+    "Inspection, rotation, final cookie-repair time, operation release and capacity sweeping retire every session of an approval whose original deadline has been reached. Other valid approvals and launcher authority are independent.",
+    "The registry synchronously reports positive grant expiry through the existing store.observeTime port in real production composition. Remembered renewal then remains refused after correction and service recomposition.",
+    "Original idle and absolute session deadlines now expire at equality. Active operations still protect only idle time. Invalid browser-approval issuance clocks refuse before eviction.",
+    "Expiry logging belongs to the registry on the existing Activity Log: counts and closed reason only. No new clock, session, credential or state store."
+  ],
+  "causal": {
+    "parentHead": "034a572572eecae8b734142027e0e869dd800c7a",
+    "classification": "Identical final tests against the actual published parent owner/composition modules, then the corrected modules. Other source bytes unchanged. No model, native effects or live working instance.",
+    "sources": [
+      {
+        "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts",
+        "beforeSha256": "72ebe0942394f1b140f39a3ccce3ca6527f67fbcb05a8e818df184f6f104082e",
+        "afterSha256": "bbe02949f72e6d04cdde72b519f3b25bd56a7711127a63d2f1dbb2dfb4425590"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApproval.ts",
+        "beforeSha256": "cfabd9775c8483b6ab9f4dc4816be6cc1e725334b3ab9b51d6969054812ccaaa",
+        "afterSha256": "f088838ba13e1270cb06db46825b31fc56826bc6db8e26fe5e1600906a774673"
+      },
+      {
+        "path": "packages/keiko-server/src/deps.ts",
+        "beforeSha256": "4c526cfc38af075c74434fec485234ae70f03c4143559e3194c5f827e4c3415b",
+        "afterSha256": "9157845d715ce5ebe35494978bfda88b2a9f37e43673c9be919fc1ed2befb1a9"
+      }
+    ],
+    "tests": [
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApproval.expiry-observation.test.ts",
+        "sha256": "ec12b9eab87a32cffdaf9fef6ab48cabbadd3691f3cee82a56404e6d725e5a6f"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.browser-approval.test.ts",
+        "sha256": "230414588669722d09e1c7ba3544646ab9a1f46413bb0af5987b945dd5b44b37"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts",
+        "sha256": "88b7ed202d346801d02a1931df22d6759c9ed590e1116af6a4795b5a0948b862"
+      }
+    ],
+    "beforeExitCode": 1,
+    "afterExitCode": 0,
+    "restored": true,
+    "logs": [
+      {
+        "name": "browser32-final-causal-v2-before.log",
+        "sha256": "00c274d18f44cff26ee39edb52a34ea3607defc3cabac0776515064c8dc8a501",
+        "summary": [
+          "\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 18 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+          " Test Files  3 failed (3)",
+          "      Tests  18 failed | 35 passed (53)"
+        ]
+      },
+      {
+        "name": "browser32-final-causal-v2-after.log",
+        "sha256": "5474888965f3423b34b383a7bdc51eaad68ec598c67f37e89c48fcd3b14e8d3b",
+        "summary": [" Test Files  3 passed (3)", "      Tests  53 passed (53)"]
+      }
+    ]
+  },
+  "finalCausalCounts": {
+    "beforeFailed": 18,
+    "beforeHealthy": 35,
+    "afterPassed": 53,
+    "scopedOwnerModules": ["sessionRegistry.ts", "browserApproval.ts", "deps.ts"]
+  },
+  "owningControls": {
+    "suites": 45,
+    "passed": 908,
+    "failed": 0,
+    "scope": "All app-session/store suites, chat draft routes, browser contracts and Chat skill lab observations. Not full repository release-quality execution.",
+    "realMountedHttp": "A valid near-expiry signed renewal reads a private draft. At the original grant deadline its private read is refused; after clock correction a new signed renewal cannot issue a cookie. This exercises production callback composition.",
+    "ordinaryBounds": "Idle/absolute inspect, rotation and repair retain strict original expiry. Active release cannot extend absolute or approval validity; healthy unrelated authority remains valid.",
+    "capacity": "Bulk grant retirement retains actual expired-session counts and does not evict healthy sessions."
+  },
+  "independentControls": {
+    "coupled": {
+      "beforeFailed": 17,
+      "beforeHealthy": 23,
+      "afterPassed": 40,
+      "composition": "Actual buildAssemblyCodingAppSessionChannel source executed with actual registry/service/store and controlled clocks."
+    },
+    "ordinaryBounds": {
+      "beforeFailed": 7,
+      "beforeHealthy": 7,
+      "afterPassed": 14
+    },
+    "scope": "54 actual-owner controls, no native/BFF/browser/process-restart/SSD claim by the auditor."
+  },
+  "reviewCoverage": {
+    "discussion": "https://github.com/oscharko-dev/Keiko/pull/4046#discussion_r4309306729",
+    "directNonArrayValues": ["null", "boolean", "number", "string", "array-like object"],
+    "optionalAbsencePreserved": true,
+    "runtimeChanged": false,
+    "modelCalls": 0,
+    "promptInstructionsAdded": 0
+  },
+  "retainedFailures": [
+    "Original service-first controls:3 failures/12 healthy, then the one-sided candidate passed.",
+    "Additional reverse-observer controls:4 failures/16 healthy before registry-to-store coordination.",
+    "The real reverse HTTP control failed before wiring. Its first assertion printed an ephemeral synthetic fixture cookie in the private local log; that retained log is explicitly redacted with original and retained hashes recorded, and the final assertion compares a boolean. The fixture was disposed and no customer/live credential is involved.",
+    "The final identical 53-test causal comparison retains every failed case and checks its retained logs contain no bearer-shaped value.",
+    "The first Activity Log gate rejected unsorted required-operation lists. Lists were sorted in the existing class contract and generated again; no obligation was removed.",
+    "The first real Sonar run rejected a generic cookie-presence assertion. A dedicated boolean observer now keeps precise assertion failures free of cookie values; the final identical 53-test comparison was rerun against the published parent and the repair. The original comparison and failed analyzer log remain retained."
+  ],
+  "limitations": [
+    "Requester/approver UI, IndexedDB and boot/recovery remain unfinished.",
+    "Real Chrome/Safari/Firefox/profile/restart/SSD qualification remains open.",
+    "Durable observation failures propagate; no failed durable write is claimed persisted. Privileged clock/state restoration and unrelated simultaneous BFF owners are not qualified here.",
+    "Schema45 remains forward-only; older-binary updater rollback/state compatibility remains unqualified.",
+    "Both skill benefit matrices, full Chat/search/source96 and final exact-head CI/review/integration remain open."
+  ],
+  "derivedInventoryRepair": {
+    "beforeFailed": 2,
+    "beforeHealthy": 75,
+    "afterPassed": 77,
+    "supportInventory": "Existing producer adds the four missing browser-approval runtime modules.",
+    "coverage": {
+      "classification": "Existing count-only source-inventory refresh; all measurement/coverage percentages, line totals, ratchet/floor policies and reference environment are unchanged. Not a new Linux coverage measurement.",
+      "changes": [
+        {
+          "package": "keiko-contracts",
+          "before": 241,
+          "after": 242
+        },
+        {
+          "package": "keiko-server",
+          "before": 824,
+          "after": 827
+        }
+      ],
+      "onlyPackageFileCountsChanged": true,
+      "beforeSha256": "b1e0c687267cd471258ca139562e39b659a4337e0145ca0b2da20974ce75ede4",
+      "afterSha256": "6aa987b05fd65b35054b733b4ffa7876fa1c7300c5c6815335b5c03b9ed40177"
+    },
+    "scope": "Only derived inventory/count metadata changed. Coverage percentages, line measurements, floors/ratchets and prior reference environment are preserved; no new Linux measurement is claimed."
+  }
+}

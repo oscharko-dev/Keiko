@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
@@ -27,7 +27,11 @@ const ROOT = "/api/coding-workbench/app-session/browser";
 const servers: AppSessionTestServer[] = [];
 
 afterEach(async () => {
-  for (const server of servers.splice(0)) await server.close();
+  try {
+    for (const server of servers.splice(0)) await server.close();
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 async function fixture(): Promise<{
@@ -65,8 +69,16 @@ function keyPair(): { readonly publicKey: KeyObject; readonly privateKey: KeyObj
   return generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 }
 
-async function approveBrowser(server: AppSessionTestServer, owner: string): Promise<Response> {
-  const pair = keyPair();
+/** Keep a failed assertion body-free even when the server incorrectly issues a credential. */
+function sessionCookieIssued(response: Response): boolean {
+  return extractSessionCookie(response) !== undefined;
+}
+
+async function approveBrowser(
+  server: AppSessionTestServer,
+  owner: string,
+  pair = keyPair(),
+): Promise<Response> {
   const jwk = pair.publicKey.export({ format: "jwk" });
   const requested = await post(server, "request", {
     publicKey: { x: jwk.x, y: jwk.y },
@@ -86,20 +98,56 @@ async function approveBrowser(server: AppSessionTestServer, owner: string): Prom
     owner,
   );
   expect(await approved.json()).toEqual({ state: "accepted" });
-  const challenged = await post(server, "challenge", {
-    purpose: "complete",
-    subjectId: pending.request.requestId,
-  });
+  return proveFor(server, "complete", pending.request.requestId, pair.privateKey);
+}
+
+async function proveFor(
+  server: AppSessionTestServer,
+  purpose: "complete" | "renew",
+  subjectId: string,
+  privateKey: KeyObject,
+): Promise<Response> {
+  const challenged = await post(server, "challenge", { purpose, subjectId });
   const challenge = (await challenged.json()) as BrowserApprovalChallengeResult;
   if (challenge.state !== "challenge") throw new Error("Missing browser challenge");
   const signature = sign("sha256", Buffer.from(browserApprovalChallengeText(challenge.challenge)), {
-    key: pair.privateKey,
+    key: privateKey,
     dsaEncoding: "ieee-p1363",
   }).toString("base64url");
   return post(server, "prove", { challengeId: challenge.challenge.challengeId, signature });
 }
 
 describe("browser approval on the real mounted BFF", () => {
+  it("refuses renewal after a protected read first observes expiry and time is corrected", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation((): number => now);
+    const { server, owner } = await fixture();
+    const pair = keyPair();
+    const approved = await approveBrowser(server, owner, pair);
+    const body = (await approved.json()) as BrowserApprovalProofResult;
+    if (body.state !== "active" || body.approval === undefined) throw new Error("Missing approval");
+    const project = server.deps.store.createProject(process.cwd());
+    const chat = server.deps.store.createChat(project.path, "Expiry fixture", "fixture-model");
+    const draft = `${server.baseUrl}/api/chats/${chat.id}/draft`;
+    now = body.approval.expiresAtMs - 2_000;
+    const renewed = await proveFor(server, "renew", body.approval.approvalId, pair.privateKey);
+    const cookie = extractSessionCookie(renewed);
+    if (cookie === undefined) throw new Error("Missing near-expiry session");
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(200);
+    now = body.approval.expiresAtMs;
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(404);
+    now = body.approval.expiresAtMs - 1_000;
+    const challengeReply = await post(server, "challenge", {
+      purpose: "renew",
+      subjectId: body.approval.approvalId,
+    });
+    const result = (await challengeReply.json()) as BrowserApprovalChallengeResult;
+    if (result.state === "challenge") {
+      const attempted = await proveFor(server, "renew", body.approval.approvalId, pair.privateKey);
+      expect(sessionCookieIssued(attempted)).toBe(false);
+      expect(await attempted.json()).toEqual({ state: "unavailable" });
+    } else expect(result).toEqual({ state: "unavailable" });
+  });
   it("records only registered body-free approval lifecycle evidence", async () => {
     const { server, owner } = await fixture();
     const route = BROWSER_APPROVAL_ROUTES.find((entry) => entry.method === "GET");

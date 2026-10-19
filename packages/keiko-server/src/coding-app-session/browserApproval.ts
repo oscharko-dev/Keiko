@@ -105,6 +105,7 @@ function observedTime(state: ApprovalState): number | undefined {
     now > Number.MAX_SAFE_INTEGER - BROWSER_APPROVAL_REMEMBER_TTL_MS
   )
     return undefined;
+  state.registry.expireApprovalsAt(now);
   if (!state.store.observeTime(now)) return undefined;
   state.lastObservedAtMs = now;
   for (const [id, request] of state.requests) {

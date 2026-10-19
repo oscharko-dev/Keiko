@@ -7,6 +7,12 @@
 // `<sessionId>.<secret>`; only the browser holds it, and it never appears in any diagnostic here.
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { isBrowserApprovalId } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1_000;
@@ -51,6 +57,8 @@ export interface SessionRegistry {
   readonly rotate: (sessionId: string) => SessionMint | undefined;
   readonly revoke: (sessionId: string) => void;
   readonly revokeApproval: (approvalId: string) => number;
+  /** Share an expiry observed by the browser-approval owner with every associated live session. */
+  readonly expireApprovalsAt: (observedAtMs: number) => number;
   readonly sessionCount: () => number;
 }
 
@@ -61,6 +69,9 @@ export interface SessionApprovalBinding {
 }
 
 export interface SessionRegistryDeps {
+  readonly activityLog?: ServerLogSink | undefined;
+  /** Persist a positively observed grant expiry through the existing private approval owner. */
+  readonly observeApprovalExpiry?: ((observedAtMs: number) => void) | undefined;
   readonly now?: () => number;
   readonly idleTtlMs?: number;
   readonly absoluteTtlMs?: number;
@@ -91,6 +102,8 @@ interface SessionIssue {
 }
 
 interface RegistryState {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly observeApprovalExpiry?: ((observedAtMs: number) => void) | undefined;
   readonly sessions: Map<string, StoredSession>;
   readonly now: () => number;
   readonly idleTtlMs: number;
@@ -100,6 +113,48 @@ interface RegistryState {
   readonly salt: string;
   readonly mintSessionId: () => string;
   readonly mintSecret: () => string;
+}
+
+const EXPIRY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.expired",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.sessionRegistry.recordObservedExpiry",
+  fields: {
+    expiredSessionCount: { type: "integer", dataClass: "count", required: true },
+    sessionCount: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["approval", "lifetime", "inactivity", "invalid-clock"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.expired.observation"],
+  releaseImpact: "patch",
+});
+
+type ExpiryReason = "approval" | "lifetime" | "inactivity" | "invalid-clock";
+
+function recordObservedExpiry(
+  state: RegistryState,
+  expiredSessionCount: number,
+  reason: ExpiryReason,
+): void {
+  if (expiredSessionCount === 0 || state.activityLog === undefined) return;
+  state.activityLog.write(
+    activityLogEvent(
+      EXPIRY_OPERATION,
+      { level: "info", correlationId: UNKNOWN_CORRELATION_ID },
+      { expiredSessionCount, sessionCount: state.sessions.size, reason },
+    ),
+  );
 }
 
 /** Salted hash of a session secret: HMAC-SHA256 keyed by the per-registry salt (ADR-0141 D4). */
@@ -139,16 +194,36 @@ function describe(stored: StoredSession): AppSession {
 function isExpired(state: RegistryState, stored: StoredSession, nowMs: number): boolean {
   return (
     approvalExpired(stored, nowMs) ||
-    nowMs - stored.issuedAtMs > state.absoluteTtlMs ||
-    (stored.activeOperationCount === 0 && nowMs - stored.lastSeenAtMs > state.idleTtlMs)
+    nowMs - stored.issuedAtMs >= state.absoluteTtlMs ||
+    (stored.activeOperationCount === 0 && nowMs - stored.lastSeenAtMs >= state.idleTtlMs)
   );
 }
 
 function approvalExpired(stored: StoredSession, nowMs: number): boolean {
   return (
     stored.approval !== undefined &&
-    (!Number.isFinite(nowMs) || nowMs < stored.lastSeenAtMs || nowMs >= stored.approval.expiresAtMs)
+    (!Number.isSafeInteger(nowMs) ||
+      nowMs < 0 ||
+      nowMs < stored.lastSeenAtMs ||
+      nowMs >= stored.approval.expiresAtMs)
   );
+}
+
+function expireStoredSession(state: RegistryState, stored: StoredSession, nowMs: number): number {
+  if (
+    Number.isSafeInteger(nowMs) &&
+    stored.approval !== undefined &&
+    nowMs >= stored.approval.expiresAtMs
+  )
+    return expireApprovalSessions(state, nowMs);
+  const expired = state.sessions.delete(stored.sessionId) ? 1 : 0;
+  recordObservedExpiry(state, expired, expiryReason(state, stored, nowMs));
+  return expired;
+}
+
+function expiryReason(state: RegistryState, stored: StoredSession, nowMs: number): ExpiryReason {
+  if (approvalExpired(stored, nowMs)) return "invalid-clock";
+  return nowMs - stored.issuedAtMs >= state.absoluteTtlMs ? "lifetime" : "inactivity";
 }
 
 function sweepExpiredSessions(state: RegistryState): number {
@@ -156,8 +231,7 @@ function sweepExpiredSessions(state: RegistryState): number {
   const nowMs = state.now();
   for (const stored of state.sessions.values()) {
     if (isExpired(state, stored, nowMs)) {
-      state.sessions.delete(stored.sessionId);
-      expiredSessionCount += 1;
+      expiredSessionCount += expireStoredSession(state, stored, nowMs);
     }
   }
   return expiredSessionCount;
@@ -216,7 +290,8 @@ function assertApprovalBinding(approval: SessionApprovalBinding | undefined, now
   if (approval === undefined) return;
   if (
     !isBrowserApprovalId(approval.approvalId) ||
-    !Number.isFinite(nowMs) ||
+    !Number.isSafeInteger(nowMs) ||
+    nowMs < 0 ||
     !Number.isSafeInteger(approval.expiresAtMs) ||
     approval.expiresAtMs <= nowMs
   ) {
@@ -236,7 +311,7 @@ function verifySession(
   if (stored === undefined) return undefined;
   const nowMs = state.now();
   if (isExpired(state, stored, nowMs)) {
-    state.sessions.delete(stored.sessionId);
+    expireStoredSession(state, stored, nowMs);
     return undefined;
   }
   if (!timingSafeEqual(saltedHash(state.salt, parsed.secret), stored.secretHash)) return undefined;
@@ -251,8 +326,14 @@ function verifyForCookieRepair(
   const verified = verifySession(state, cookieToken, true);
   if (verified === undefined) return undefined;
   const nowMs = state.now();
+  const stored = state.sessions.get(verified.sessionId);
+  if (stored === undefined) return undefined;
+  if (isExpired(state, stored, nowMs)) {
+    expireStoredSession(state, stored, nowMs);
+    return undefined;
+  }
   const remaining = state.absoluteTtlMs - (nowMs - verified.issuedAtMs);
-  const approval = state.sessions.get(verified.sessionId)?.approval;
+  const approval = stored.approval;
   return Math.max(
     0,
     Math.min(remaining, approval === undefined ? remaining : approval.expiresAtMs - nowMs),
@@ -263,8 +344,11 @@ function rotateSession(state: RegistryState, sessionId: string): SessionMint | u
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
   const nowMs = state.now();
+  if (isExpired(state, stored, nowMs)) {
+    expireStoredSession(state, stored, nowMs);
+    return undefined;
+  }
   state.sessions.delete(sessionId);
-  if (isExpired(state, stored, nowMs)) return undefined;
   return storeSession(state, {
     sessionId,
     principalLabel: stored.principalLabel,
@@ -291,8 +375,8 @@ function beginSessionOperation(
     stored.activeOperationCount -= 1;
     const nowMs = state.now();
     if (state.sessions.get(stored.sessionId) !== stored) return;
-    if (approvalExpired(stored, nowMs) || nowMs - stored.issuedAtMs > state.absoluteTtlMs) {
-      state.sessions.delete(stored.sessionId);
+    if (approvalExpired(stored, nowMs) || nowMs - stored.issuedAtMs >= state.absoluteTtlMs) {
+      expireStoredSession(state, stored, nowMs);
       return;
     }
     stored.lastSeenAtMs = nowMs;
@@ -302,6 +386,8 @@ function beginSessionOperation(
 export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRegistry {
   const state: RegistryState = {
     sessions: new Map<string, StoredSession>(),
+    activityLog: deps.activityLog,
+    observeApprovalExpiry: deps.observeApprovalExpiry,
     now: deps.now ?? Date.now,
     idleTtlMs: deps.idleTtlMs ?? DEFAULT_IDLE_TTL_MS,
     absoluteTtlMs: deps.absoluteTtlMs ?? DEFAULT_ABSOLUTE_TTL_MS,
@@ -333,8 +419,24 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
       state.sessions.delete(sessionId);
     },
     revokeApproval: (approvalId: string): number => revokeApprovalSessions(state, approvalId),
+    expireApprovalsAt: (observedAtMs: number): number =>
+      expireApprovalSessions(state, observedAtMs),
     sessionCount: (): number => state.sessions.size,
   };
+}
+
+function expireApprovalSessions(state: RegistryState, observedAtMs: number): number {
+  if (!Number.isSafeInteger(observedAtMs) || observedAtMs < 0)
+    throw new TypeError("Invalid browser approval expiry observation");
+  let expired = 0;
+  for (const session of state.sessions.values()) {
+    if (session.approval === undefined || observedAtMs < session.approval.expiresAtMs) continue;
+    state.sessions.delete(session.sessionId);
+    expired += 1;
+  }
+  recordObservedExpiry(state, expired, "approval");
+  if (expired > 0) state.observeApprovalExpiry?.(observedAtMs);
+  return expired;
 }
 
 function revokeApprovalSessions(state: RegistryState, approvalId: string): number {

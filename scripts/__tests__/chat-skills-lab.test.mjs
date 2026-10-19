@@ -60,6 +60,21 @@ describe("private Chat skill qualification observations", () => {
       ).toThrow("source-witness-list-invalid");
     },
   );
+  it.each([
+    { label: "null", value: null },
+    { label: "boolean", value: false },
+    { label: "number", value: 7 },
+    { label: "string", value: "marker" },
+    { label: "array-like object", value: { 0: "marker", length: 1 } },
+  ])("rejects a directly supplied non-array source-witness value: $label", ({ value }) => {
+    expect(() =>
+      requestObservation({ messages: [] }, 4, "wire", { ...scope, sourceWitnesses: value }),
+    ).toThrow("source-witness-list-invalid");
+  });
+  it("retains optional source-witness absence without inventing observations", () => {
+    const observed = requestObservation({ messages: [] }, 4, "wire", scope);
+    expect(observed).not.toHaveProperty("sourceWitnesses");
+  });
   it("rejects missing source-witness slots instead of emitting absent observations", () => {
     expect(() =>
       requestObservation({ messages: [] }, 4, "wire", { ...scope, sourceWitnesses: Array(1) }),

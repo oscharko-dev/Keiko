@@ -812,3 +812,49 @@ targeted run. All 59 affected native owner tests pass on ARM64, with no skip; th
 appears at 547 ms. `native-cold-refusal-observation.json` binds those exact observations and logs.
 This is measurement repair, not an explanation or fix of the x64 failure. Native generation
 ownership and packaged update/restart/rollback/SSD acceptance remain open.
+
+## Checkpoint 32: share known expiry across the existing owners
+
+Independent review found that a grant already refused by BrowserApprovalService could leave its
+previously issued cookie valid after a clock correction. Investigation also reproduced the reverse:
+a private read could observe grant expiry while the remembered key remained eligible for fresh
+renewal after correction. The actual mounted BFF reproduced that second path before the repair.
+
+Both directions now use the existing registry and UiStore. A service time observation asks the
+registry to retire reached approval deadlines. Registry inspection, rotation, operation release,
+capacity cleanup and the final cookie-repair clock observation invalidate associated sessions and
+synchronously persist positive grant expiry through the existing store observation port. Valid
+other approvals and launcher sessions remain independent. Idle and absolute boundaries now reject
+equality; active operations still protect inactivity only. The registry logs counts and closed
+reason on the existing Activity Log, without identities or bearers. No clock or session store is added.
+
+The identical final 53-test controls against the published parent owners/composition have eighteen
+failures and 35 healthy controls; the repair passes all 53. All 45 owning suites pass 908 tests. An
+independent actual production-composition replay has seventeen failures/23 healthy controls then
+forty passes; fourteen ordinary-boundary controls have seven failures/seven healthy then fourteen
+passes. These 54 independent controls do not run a BFF, native process or browser. Root HTTP coverage
+separately proves private draft access, deadline refusal and no fresh cookie after clock correction.
+`browser-expiry-coordination.json` binds the exact sources, preserved failures and scoped outcomes.
+
+The source-witness review now has direct null/boolean/number/string/array-like controls plus optional
+absence. The existing runtime already refuses those malformed values; its logic and model prompts
+are unchanged. No inference was used for this coverage repair.
+
+The later head31 macOS-x64 CI owner job passes all59 tests and observes refusal at3150 ms; its two-
+process case takes6555 ms. This is subsequent successful evidence, not a reconstruction or diagnosis
+of head29's failed attempt. Its observation is retained with the original native diagnostic evidence.
+Browser UI/native journeys, genuine updater ownership/version/rollback/state/SSD, both skills,
+original96, final required checks and authorized integration remain open.
+
+The head31 coverage shard exposed two omitted derived inventories. Both exact local tests fail
+before repair (two failures/75 healthy). The existing support-code producer adds exactly the four
+new runtime modules. The existing count-only coverage refresh changes contracts241→242 and
+server824→827; every coverage percentage, line measurement, floor/ratchet and reference-environment
+field is unchanged. All77 controls then pass. No fresh Linux measurement or lowered threshold is
+claimed. The first local expiry-registry gate also rejected unsorted obligation lists; sorting the
+existing requirements and regenerating repairs the metadata without removing an obligation.
+
+A separate same-head31 x64 job fails cold refusal with age5004 ms, no readiness, no exit,
+refusalObserved=false and stderrByteCount=0. The successful x64 job's3150 ms refusal does not explain
+that failed attempt. The new evidence rules out already-emitted refusal for that particular timeout;
+cold initialization/acquisition remains under investigation before any phase-bound change.

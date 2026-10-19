@@ -200,11 +200,31 @@ appears hashed.
 
 The session registry is in process memory and holds no durable bearer material, so a server restart
 invalidates every prior session by construction (restart expiry). A session additionally expires on
-explicit revocation (launcher revocation or sign-out), on inactivity past an idle bound, and on an
-absolute lifetime bound; rotation issues a fresh secret and invalidates the prior one. In every one
+explicit revocation (launcher revocation or sign-out), or when its inactivity or absolute lifetime
+limit is reached; rotation issues a fresh secret and invalidates the prior one. In every one
 of these cases the prior cookie immediately yields the content-free projection. There is exactly one
 authority per BFF process; this composes with, and does not duplicate, the single-active-run model
 of ADR-0137.
+
+Idle and absolute lifetimes use half-open intervals: equality at the deadline is expired. Every
+expiry observation removes the invalid record before denial; a later clock correction cannot
+revive it. Active operations protect only inactivity, including their final release, and never
+postpone an absolute or approval deadline.
+
+Approval expiry is coordinated through these same owners in both directions. A valid time
+observation by browser approval asks the existing registry to retire all approval-bound sessions
+whose original grant deadline has been reached. Registry inspection, direct rotation, operation
+release, cookie repair's final clock read and capacity sweeping use that same bounded retirement
+when they observe an expired approval. Healthy grants and launcher sessions remain independent;
+idle or session-absolute expiry does not revoke a still-valid remembered grant. The registry
+synchronously reports a positively observed approval expiry through its injected private-store
+port, composed from the existing `BrowserApprovalStore.observeTime`. Thus a private read cannot
+observe grant expiry and then leave the remembered key eligible for renewal after clock rollback.
+The existing Activity Log records only expired-session count, remaining registry count and a closed
+reason class on `coding-app-session.expired`, without a session/approval identity or bearer. This
+shared BFF maintenance observation uses the existing unknown-correlation sentinel. Store or sink
+failures propagate through the existing diagnostics; no failed durable write is represented as a
+successful persisted observation.
 
 Secret rotation preserves the original issuance time and absolute deadline, including repeated
 rotations. The registry rejects direct rotation of idle-expired or absolutely expired authority;

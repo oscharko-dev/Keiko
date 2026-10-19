@@ -4914,8 +4914,11 @@ function buildAssemblyCodingAppSessionChannel(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
 ): ReturnType<typeof createCodingAppSessionChannel> {
-  const registry = createSessionRegistry();
   const store = args.bundle.uiStore.browserApprovals;
+  const registry = createSessionRegistry({
+    activityLog: args.options.activityLog ?? processServerLogSink(),
+    observeApprovalExpiry: store?.observeTime,
+  });
   return createCodingAppSessionChannel({
     registry,
     browserApproval:

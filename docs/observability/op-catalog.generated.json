@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7482d3e3dda897f7cddd1de4768eb2d20eecd9d76f15f5346235b328c0fe10e1",
+    "catalogDigest": "046a9781a1ce1458898a9dabb62036e1b6190743f6cbb0b2dbf01f7c8a90b028",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5041,6 +5041,50 @@
         "emitterSites": [
           "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:197"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-app-session.expired",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "coding-app-session.sessionRegistry.recordObservedExpiry",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "expiredSessionCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "sessionCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["approval", "lifetime", "inactivity", "invalid-clock"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-app-session-pairing"],
+        "proofIds": ["coding-app-session.expired.observation"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:118",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:152"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38852,6 +38896,7 @@
           "start": [],
           "state": [
             "coding-app-session.browser-approval.state",
+            "coding-app-session.expired",
             "coding-app-session.operation.state"
           ],
           "end": ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
@@ -38860,6 +38905,7 @@
         },
         "requiredCausalOperations": [
           "coding-app-session.browser-approval.state",
+          "coding-app-session.expired",
           "coding-app-session.local-session.confirmed",
           "coding-app-session.operation.state",
           "coding-app-session.paired"
@@ -38867,6 +38913,7 @@
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "coding-app-session.browser-approval.state",
+          "coding-app-session.expired",
           "coding-app-session.local-session.confirmed",
           "coding-app-session.operation.state",
           "coding-app-session.paired"
@@ -38874,6 +38921,7 @@
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "coding-app-session.browser-approval.state",
+          "coding-app-session.expired",
           "coding-app-session.local-session.confirmed",
           "coding-app-session.operation.state",
           "coding-app-session.paired"
@@ -52790,6 +52838,7 @@
             "start": [],
             "state": [
               "coding-app-session.browser-approval.state",
+              "coding-app-session.expired",
               "coding-app-session.operation.state"
             ],
             "end": ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
@@ -52799,6 +52848,10 @@
           "causalEdges": [
             {
               "op": "coding-app-session.browser-approval.state",
+              "mode": "correlation"
+            },
+            {
+              "op": "coding-app-session.expired",
               "mode": "correlation"
             },
             {
@@ -52817,6 +52870,7 @@
           "lossSignals": [],
           "resourceSignals": [
             "coding-app-session.browser-approval.state",
+            "coding-app-session.expired",
             "coding-app-session.local-session.confirmed",
             "coding-app-session.operation.state",
             "coding-app-session.paired"
@@ -52856,6 +52910,42 @@
                 "causeChain": false
               },
               "proofIds": ["coding-app-session.browser-approval.state.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "coding-app-session.expired",
+              "owner": "keiko-server",
+              "category": "http",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "expiredSessionCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "sessionCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["coding-app-session.expired.observation"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -92244,6 +92334,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-app-session.expired",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:121",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-app-session.local-session.confirmed",
       "category": "http",
       "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:104",
@@ -95251,6 +95347,7 @@
     "coding-app-session.channel.closed",
     "coding-app-session.channel.opened",
     "coding-app-session.channel.subscribe",
+    "coding-app-session.expired",
     "coding-app-session.local-session.confirmed",
     "coding-app-session.operation.state",
     "coding-app-session.paired",

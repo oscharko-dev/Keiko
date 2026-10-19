@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7482d3e3dda897f7cddd1de4768eb2d20eecd9d76f15f5346235b328c0fe10e1" as const;
+  "046a9781a1ce1458898a9dabb62036e1b6190743f6cbb0b2dbf01f7c8a90b028" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5344,7 +5344,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-app-session.browser-approval.state", "coding-app-session.operation.state"],
+        state: [
+          "coding-app-session.browser-approval.state",
+          "coding-app-session.expired",
+          "coding-app-session.operation.state",
+        ],
         end: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
         failure: [],
         loss: [],
@@ -5352,6 +5356,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "coding-app-session.browser-approval.state",
+          mode: "correlation",
+        },
+        {
+          op: "coding-app-session.expired",
           mode: "correlation",
         },
         {
@@ -5370,6 +5378,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lossSignals: [],
       resourceSignals: [
         "coding-app-session.browser-approval.state",
+        "coding-app-session.expired",
         "coding-app-session.local-session.confirmed",
         "coding-app-session.operation.state",
         "coding-app-session.paired",
@@ -5409,6 +5418,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-app-session.browser-approval.state.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-app-session.expired",
+          owner: "keiko-server",
+          category: "http",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "expiredSessionCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sessionCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-app-session.expired.observation"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -41956,6 +42001,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-app-session.browser-approval.state": "tools-workflows",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
+    "coding-app-session.expired": "tools-workflows",
     "coding-app-session.local-session.confirmed": "tools-workflows",
     "coding-app-session.operation.state": "tools-workflows",
     "coding-app-session.paired": "tools-workflows",
