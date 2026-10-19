@@ -12,6 +12,7 @@ import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // root suite's stricter node16 tsconfig. looksLikeSecretShape (from keiko-contracts) is imported
 // by the leaf, not here.
 import { isSecretShapedString } from "./isSecretShapedString";
+import { chatCreationModelChoiceOf } from "./chatCreationModelChoice";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
@@ -105,6 +106,8 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   chat: [
     "chatId",
     "newChatRequestId",
+    "newChatModelSelection",
+    "newChatModelId",
     CHAT_ID_FINGERPRINT_CFG_KEY,
     CHAT_ID_CHOSEN_CFG_KEY,
     "memoryEnabled",
@@ -738,6 +741,16 @@ function sanitizeGenericConfigValue(
   return persistence === "durable.ui" ? REDACTED_WORKSPACE_CONFIG_VALUE : undefined;
 }
 
+function blockInvalidChatCreationModel(
+  type: WindowType,
+  original: Record<string, unknown>,
+  sanitized: AppWindow["cfg"],
+): void {
+  if (type !== "chat" || chatCreationModelChoiceOf(original) !== null) return;
+  sanitized["newChatModelSelection"] = "unavailable";
+  delete sanitized["newChatModelId"];
+}
+
 function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["cfg"] {
   if (!isRecord(cfg)) return {};
   const persistence = WIN_META[type].persistence;
@@ -755,6 +768,7 @@ function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["c
   if (type === "chat" && out["projectPathPrivacy"] === "omit") {
     delete out["projectPath"];
   }
+  blockInvalidChatCreationModel(type, cfg, out);
   return out;
 }
 

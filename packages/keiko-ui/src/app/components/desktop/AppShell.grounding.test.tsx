@@ -25,6 +25,7 @@ import type {
 } from "./hooks/useWorkspace.types";
 import { MAX_WORKSPACE_WINDOWS, sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import type { ChatCreationModelChoice } from "./hooks/chatCreationModelChoice";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
 import { clearChatScopeTransitions, registerChatWindowRuntime } from "./windows/chatWindowActivity";
@@ -86,6 +87,7 @@ interface TestSession {
   readonly error: string | undefined;
   readonly noEligibleModels: boolean;
   readonly selectedModel: string;
+  readonly creationModelChoice?: ChatCreationModelChoice;
   readonly replaceChat: (chat: Chat) => void;
 }
 
@@ -1265,6 +1267,29 @@ describe("AppShell grounding connections", () => {
     expect(Object.hasOwn(newChatCfg ?? {}, "chatId")).toBe(true);
     expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(false);
   });
+
+  it.each([
+    [{ kind: "automatic" } as const, { newChatModelSelection: "automatic" }],
+    [
+      { kind: "explicit", modelId: "model-original" } as const,
+      { newChatModelSelection: "explicit", newChatModelId: "model-original" },
+    ],
+  ])(
+    "captures the originating session model choice on confirmation (%j)",
+    async (choice, expected): Promise<void> => {
+      const add = vi.fn<WorkspaceApi["add"]>((): string => "chat-window");
+      mocks.state.workspaceResult = workspaceResult([], [], workspaceApi({ add }));
+      const session = mocks.state.session;
+      if (session === undefined) throw new TypeError("Missing test session.");
+      mocks.state.session = { ...session, creationModelChoice: choice };
+      const user = userEvent.setup();
+      await renderMounted();
+      await user.click(await screen.findByTestId("left-rail"));
+      await user.click(await screen.findByRole("button", { name: "Confirm new chat" }));
+      expect(add).toHaveBeenCalledOnce();
+      expect(add.mock.calls[0]?.[1]).toMatchObject(expected);
+    },
+  );
 
   it("drops retained edges without unbinding when a chat window changes conversation", async (): Promise<void> => {
     const api = workspaceApi();

@@ -1,6 +1,7 @@
 "use client";
 
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
+import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
   useChatMarkdownSkill,
   chatSkillBlocksSend,
@@ -807,6 +808,22 @@ function isPreservedSelection(
   );
 }
 
+function currentChatCreationModelChoice(
+  modelId: string | undefined,
+  elected: boolean,
+  selectedModel: string | undefined,
+  models: readonly ModelCapability[],
+): ChatCreationModelChoice {
+  if (modelId === undefined) {
+    return !elected && selectedModel !== undefined
+      ? { kind: "explicit", modelId: selectedModel }
+      : { kind: "automatic" };
+  }
+  return !elected && isPreservedSelection(selectedModel, models)
+    ? { kind: "explicit", modelId }
+    : { kind: "automatic" };
+}
+
 // Resolution WITH provenance (review finding on #3221): the resolved id alone cannot say WHO
 // chose it. A fallback elected here must never later masquerade as a deliberate choice — the
 // session state stores `elected` alongside the id so a create request built from an elected
@@ -1542,6 +1559,7 @@ export interface UseChatSessionResult {
   // Undefined when no usable model is offered or a deliberate choice is temporarily held.
   // Ready alternatives remain selectable while the held choice cannot submit.
   selectedModel: string | undefined;
+  readonly creationModelChoice?: ChatCreationModelChoice | undefined;
   // true when loading is complete and no eligible model is available.
   noEligibleModels: boolean;
   draft: string;
@@ -1568,6 +1586,7 @@ export interface UseChatSessionResult {
     project?: ProjectWithAvailability,
     title?: string,
     creationRequestId?: string,
+    creationModelChoice?: ChatCreationModelChoice,
   ) => Promise<Chat | undefined>;
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
@@ -2451,6 +2470,14 @@ type SessionModelSelection = Pick<
   "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
 >;
 
+function rememberedSessionSelection(state: SessionModelSelection): ResolvedSelection {
+  return {
+    id: state.selectedModel ?? state.restorableModelId,
+    elected:
+      state.selectedModel !== undefined ? state.selectedModelElected : state.restorableModelElected,
+  };
+}
+
 function sessionModelSelection(state: SessionState): SessionModelSelection {
   return {
     selectedModel: state.selectedModel,
@@ -2529,16 +2556,13 @@ function refreshSessionModels(
   result: Extract<GatewayModelRefreshResult, { kind: "success" }>,
 ): SessionState {
   const catalog = sessionCatalogState(result.models, result.source, result.correlationId);
-  const elected =
-    previous.selectedModel !== undefined
-      ? previous.selectedModelElected
-      : previous.restorableModelElected;
+  const remembered = rememberedSessionSelection(previous);
   return {
     ...previous,
     ...catalog,
     ...selectSessionModel(
-      previous.selectedModel ?? previous.restorableModelId,
-      elected,
+      remembered.id,
+      remembered.elected,
       catalog.models,
       catalog.unreadyConversationModelIds,
     ),
@@ -2627,6 +2651,7 @@ function selectionForPersistedChat(state: SessionState, chat: Chat): SessionMode
 // configuredModelsAvailable=false) as "gateway missing" and would mount the modal setup dialog
 // over a fully configured workspace for the duration of every catalog read.
 function clearSessionModelsForPendingRefresh(previous: SessionState): SessionState {
+  const remembered = rememberedSessionSelection(previous);
   return {
     ...previous,
     models: [],
@@ -2638,11 +2663,8 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     // undefined, so chained retries must keep the earliest memo.
     selectedModel: undefined,
     selectedModelElected: false,
-    restorableModelId: previous.selectedModel ?? previous.restorableModelId,
-    restorableModelElected:
-      previous.selectedModel !== undefined
-        ? previous.selectedModelElected
-        : previous.restorableModelElected,
+    restorableModelId: remembered.id,
+    restorableModelElected: remembered.elected,
   };
 }
 
@@ -3812,20 +3834,33 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     reportSessionSelection(sessionStateRef.current, "refused");
   }, [t]);
 
+  const { id: rememberedModelId, elected: rememberedModelElected } =
+    rememberedSessionSelection(state);
+  const creationModelChoice = useMemo(
+    (): ChatCreationModelChoice =>
+      currentChatCreationModelChoice(
+        selectedSessionModelId,
+        rememberedModelElected,
+        rememberedModelId,
+        state.models,
+      ),
+    [selectedSessionModelId, rememberedModelElected, rememberedModelId, state.models],
+  );
   const openNewChat = useCallback(
     async (
       projectOverride?: ProjectWithAvailability,
       title?: string,
       creationRequestId?: string,
+      originalModelChoice?: ChatCreationModelChoice,
     ): Promise<Chat | undefined> => {
-      const preservedSelection =
-        !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
-      const modelId = selectedSessionModelId;
-      if (modelId === undefined) {
+      if (originalModelChoice === undefined && selectedSessionModelId === undefined) {
         if (selectionUnavailable) refuseHeldSelection();
         else setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
       }
+      const choice = originalModelChoice ?? creationModelChoice;
+      const preservedSelection = choice.kind === "explicit";
+      const modelId = choice.kind === "explicit" ? choice.modelId : "";
       setError(undefined);
       setNotice(undefined);
       setStreamingAssistantMessage(undefined);
@@ -3863,11 +3898,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch,
       selectionUnavailable,
       refuseHeldSelection,
-      state.selectedModel,
-      state.selectedModelElected,
+      creationModelChoice,
       selectedSessionModelId,
       state.activeProject,
-      state.models,
     ],
   );
 
@@ -5297,6 +5330,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
+      creationModelChoice,
       noEligibleModels,
       markdownSkill,
       draft: draftState,
@@ -5357,6 +5391,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeProject,
       state.activeChat,
       state.selectedModel,
+      creationModelChoice,
       noEligibleModels,
       markdownSkill,
       draftPersistence,

@@ -341,6 +341,14 @@ and the unchanged secret-shape heuristic. The browser generates a fresh secure i
 heuristic, using at most 32 draws; exhaustion reports a body-free diagnostic before a window is
 created. An accepted chat binding removes the pending request. Legacy unbound windows retain
 their existing stable window identity; this reference grants no session or source authority.
+New pending windows also capture the originating automatic or explicit model selection through
+the existing session selection owner. A restored host forwards that same choice; its local model
+catalog or selected conversation cannot reinterpret the request. Automatic selection still omits
+`modelId`, and explicit selection retains the exact original id. The private server replay and
+fresh readiness/authority guards remain authoritative. Legacy absence preserves existing behavior;
+incomplete or unsafe new snapshots retain a closed unavailable marker and a visible, logged refusal
+instead of falling back to a local election. Unsafe explicit selections refuse before window
+acceptance. A successful canonical binding clears the pending identity and model metadata together.
 A `BEGIN IMMEDIATE` transaction inserts the conversation and
 intent together, or returns the existing conversation without reverting subsequent edits.
 Conflicting parameters and closed or deleted targets are refused. The nullable chat reference

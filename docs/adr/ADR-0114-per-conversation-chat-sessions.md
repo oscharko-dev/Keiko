@@ -91,6 +91,12 @@ windows.
    Pending window snapshots preserve the same closed, secret-checked creation reference across
    independently connected browsers. Generating a persistable reference uses bounded secure
    draws; exhaustion fails before window creation and records a body-free client diagnostic.
+   The same pending snapshot retains the originating automatic/explicit model choice. Independent
+   hosts forward that choice through the existing creation owner; local catalog changes cannot
+   change its meaning. A new incomplete or unsafe snapshot stays visibly blocked, with no legacy
+   election fallback. Accepted bindings clear pending identity and selection together. Legacy calls
+   retain their local readiness refusal; captured requests use the existing backend replay before
+   fresh admission, which retains its original model and authority checks.
    Unsent text is additionally saved per `chatId` in the existing private UiStore (schema 44),
    through authenticated draft reads and revision-checked writes. Reload restores only that
    conversation's text; a conversation switch does not erase another conversation's saved draft.

@@ -43,6 +43,27 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it.each([
+    { newChatModelSelection: "explicit" },
+    { newChatModelSelection: "explicit", newChatModelId: `ghp_${"A".repeat(36)}` },
+    { newChatModelSelection: "automatic", newChatModelId: "another-model" },
+  ])("keeps an invalid pending model choice visibly blocked (%j)", (snapshot): void => {
+    const pending = win({
+      id: "blocked-chat-window",
+      type: "chat",
+      cfg: { newChatRequestId: "shared-creation", ...snapshot },
+    });
+    const blocked = [
+      {
+        ...pending,
+        cfg: { newChatRequestId: "shared-creation", newChatModelSelection: "unavailable" },
+      },
+    ];
+    const saved = sanitizePersistedWindows([pending]);
+    expect(saved).toEqual(blocked);
+    expect(parsePersistedWindows(JSON.stringify(saved))).toEqual(blocked);
+  });
+
   it("retains a pending Chat creation intent through every workspace round trip", (): void => {
     const pending = win({
       id: "shared-chat-window",

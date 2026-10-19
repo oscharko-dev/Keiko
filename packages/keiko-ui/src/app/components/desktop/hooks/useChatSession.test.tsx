@@ -808,6 +808,56 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.messages[0]?.id).toBe("created-msg");
   });
 
+  it.each([
+    {
+      choice: { kind: "automatic" } as const,
+      otherBrowserExplicit: true,
+      expectedModel: undefined,
+    },
+    {
+      choice: { kind: "explicit", modelId: "model-original" } as const,
+      otherBrowserExplicit: false,
+      expectedModel: "model-original",
+    },
+  ])("preserves the original creation model semantics (%j)", async (scenario) => {
+    const created = chat({ id: "chat-shared-intent", title: "Shared conversation" });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [created],
+      messages: [],
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    if (scenario.otherBrowserExplicit) {
+      act(() => result.current.setSelectedModel("chat-live"));
+    }
+    expect(result.current.creationModelChoice).toEqual(
+      scenario.otherBrowserExplicit
+        ? { kind: "explicit", modelId: "chat-live" }
+        : { kind: "automatic" },
+    );
+    await act(async () => {
+      await result.current.openNewChat(
+        project("/repo"),
+        "Shared conversation",
+        "shared-creation",
+        scenario.choice,
+      );
+    });
+    const request = vi.mocked(createDesktopChat).mock.calls.at(-1)?.[0];
+    expect(request).toEqual({
+      projectPath: "/repo",
+      title: "Shared conversation",
+      creationRequestId: "shared-creation",
+      ...(scenario.expectedModel === undefined ? {} : { modelId: scenario.expectedModel }),
+    });
+  });
+
   it("omits modelId when a stale persisted selection resolved to an elected fallback", async () => {
     // Review finding on #3221: hydration used to store the RESOLVED fallback id, so a stale
     // persisted model laundered into a \"deliberate\" selection and the next create sent it as
@@ -6476,6 +6526,15 @@ describe("review model selection admission", () => {
     expect(result.current.error).toContain("selected model is temporarily unavailable");
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(regenerateDesktopChat).not.toHaveBeenCalled();
+    expect(createDesktopChat).not.toHaveBeenCalled();
+  });
+
+  it("captures a held human choice without making it eligible for a new legacy request", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })], [chat()]);
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.creationModelChoice).toEqual({ kind: "explicit", modelId: "chat-a" });
+    await act(() => result.current.openNewChat());
     expect(createDesktopChat).not.toHaveBeenCalled();
   });
 

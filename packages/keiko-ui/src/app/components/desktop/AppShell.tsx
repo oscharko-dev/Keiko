@@ -75,6 +75,11 @@ import {
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { secureRandomId } from "@/lib/secure-random";
 import { isSecretShapedString } from "./hooks/isSecretShapedString";
+import {
+  chatCreationModelConfig,
+  isPersistableChatCreationModelId,
+  type ChatCreationModelChoice,
+} from "./hooks/chatCreationModelChoice";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -136,6 +141,8 @@ function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): 
   const next = cloneCfg(cfg);
   delete next["projectPath"];
   delete next["selectionHandoffId"];
+  delete next["newChatModelSelection"];
+  delete next["newChatModelId"];
   const configuredProjectPath = validProjectPath(cfg["projectPath"]);
   const selectedProjectPath = validProjectPath(activeProjectPath);
   const projectPath = configuredProjectPath ?? selectedProjectPath;
@@ -147,11 +154,18 @@ function newChatCreationRequestId(): string {
     const id = secureRandomId("chat");
     if (!isSecretShapedString(id)) return id;
   }
-  const error = new TypeError("Chat creation identity allocation failed.");
+  return refuseChatCreation("Chat creation identity allocation failed.");
+}
+
+function refuseChatCreation(
+  message: string,
+  errorKind: "internal" | "unavailable" = "internal",
+): never {
+  const error = new TypeError(message);
   reportClientDiagnostic(error.message, {
     correlationId: newClientCorrelationId(),
     kind: "other",
-    errorKind: "internal",
+    errorKind,
     errorEvidence: clientErrorEvidence(error),
   });
   throw error;
@@ -162,14 +176,21 @@ export function prepareNewWindowCfg(
   cfg: Cfg,
   newChatRequestId?: string,
   activeProjectPath?: string,
+  creationModelChoice?: ChatCreationModelChoice,
 ): Cfg {
-  return type === "chat"
-    ? {
-        ...normalizedNewChatCfg(cfg, activeProjectPath),
-        chatId: undefined,
-        newChatRequestId: newChatRequestId ?? newChatCreationRequestId(),
-      }
-    : cfg;
+  if (type !== "chat") return cfg;
+  if (
+    creationModelChoice?.kind === "explicit" &&
+    !isPersistableChatCreationModelId(creationModelChoice.modelId)
+  ) {
+    refuseChatCreation("Chat creation model selection cannot be persisted.", "unavailable");
+  }
+  return {
+    ...normalizedNewChatCfg(cfg, activeProjectPath),
+    chatId: undefined,
+    newChatRequestId: newChatRequestId ?? newChatCreationRequestId(),
+    ...chatCreationModelConfig(creationModelChoice),
+  };
 }
 
 function preventGatewaySetupDismissal(event: SyntheticEvent<HTMLDialogElement>): void {
@@ -2836,6 +2857,7 @@ function AppShellInner(): ReactNode {
         windowCfg,
         undefined,
         session.activeProject?.path,
+        session.creationModelChoice,
       );
       const createdId = ws.api.add(current, targetWindowCfg);
       if (
@@ -2856,7 +2878,7 @@ function AppShellInner(): ReactNode {
         focusCreatedWindow(createdId);
       }
     },
-    [pending, session.activeProject?.path, ws.api],
+    [pending, session.activeProject?.path, session.creationModelChoice, ws.api],
   );
   const closeDialog = useCallback((): void => {
     setPending(null);

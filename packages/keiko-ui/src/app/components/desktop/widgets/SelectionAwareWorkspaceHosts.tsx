@@ -8,9 +8,14 @@ import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/
 import { updateChat } from "@/lib/api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
+import {
+  chatCreationModelChoiceOf,
+  type ChatCreationModelChoice,
+} from "../hooks/chatCreationModelChoice";
 
 import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { ErrorNoticeFromError } from "../ErrorNotice";
@@ -114,6 +119,7 @@ interface ChatCreationOwner {
   readonly kind: "window";
   readonly id: string;
   readonly requestId?: string | undefined;
+  readonly modelChoice?: ChatCreationModelChoice | undefined;
 }
 
 interface ChatCreationCoordinator {
@@ -246,6 +252,20 @@ function releaseSettledCreation(
   void result.then(releaseIfCurrent, releaseIfCurrent);
 }
 
+function requestOwnedChatCreation(
+  openNewChat: ChatSessionApi["openNewChat"],
+  owner: ChatCreationOwner,
+  project: ProjectWithAvailability | undefined,
+  title: string | undefined,
+): Promise<Chat | undefined> {
+  if (owner.modelChoice !== undefined) {
+    return openNewChat(project, title, owner.requestId, owner.modelChoice);
+  }
+  return owner.requestId === undefined
+    ? openNewChat(project, title)
+    : openNewChat(project, title, owner.requestId);
+}
+
 export function useChatCreationCoordinator(
   openNewChat: ChatSessionApi["openNewChat"],
   replaceChat: ChatSessionApi["replaceChat"],
@@ -257,10 +277,7 @@ export function useChatCreationCoordinator(
       const ownerKey = chatCreationOwnerKey(owner);
       let active = activeByOwnerRef.current.get(ownerKey);
       if (active === undefined) {
-        const promise =
-          owner.requestId === undefined
-            ? openNewChat(project, title)
-            : openNewChat(project, title, owner.requestId);
+        const promise = requestOwnedChatCreation(openNewChat, owner, project, title);
         const created: ActiveChatCreation = {
           correlationId: newClientCorrelationId(),
           desiredTitle: normalizedChatTitle(title),
@@ -297,6 +314,7 @@ interface ChatCreationControlArgs {
   readonly loading: boolean;
   readonly newChatRequestId: string | undefined;
   readonly creationRequestId: string;
+  readonly modelChoice: ChatCreationModelChoice | undefined;
   readonly retryRevision: number;
   readonly title: string | undefined;
   readonly updateCfg: WindowRenderContext["updateCfg"];
@@ -347,6 +365,7 @@ interface ChatCreationAttemptExecution extends Omit<
   "isCurrent" | "owner" | "requestKey"
 > {
   readonly creationRequestId: string;
+  readonly modelChoice: ChatCreationModelChoice | undefined;
   readonly isCurrent: (attempt: number) => boolean;
   readonly loading: boolean;
   readonly requestKey: string | undefined;
@@ -372,7 +391,12 @@ function executeChatCreationAttempt(execution: ChatCreationAttemptExecution): vo
   if (execution.loading || state.attemptedRequestKey === attemptKey) return;
   const attempt = state.sequence + 1;
   // Request identity and project own the operation; the attempt guards its render generation.
-  const owner = { kind: "window", id: requestKey, requestId: execution.creationRequestId } as const;
+  const owner = {
+    kind: "window",
+    id: requestKey,
+    requestId: execution.creationRequestId,
+    modelChoice: execution.modelChoice,
+  } as const;
   state.sequence = attempt;
   state.latestAttempt = attempt;
   state.attemptedRequestKey = attemptKey;
@@ -446,6 +470,9 @@ function applyChatCreationResult(
     projectPath: result.chat.projectPath,
     title: result.chat.title,
     newChatRequestId: undefined,
+    ...(execution.owner.modelChoice === undefined
+      ? {}
+      : { newChatModelSelection: undefined, newChatModelId: undefined }),
   });
 }
 
@@ -484,7 +511,7 @@ function visibleChatCreationError(
 
 function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
   const { activeProject, chatId, coordinator, loading, newChatRequestId, title, updateCfg } = args;
-  const { creationRequestId, retryRevision } = args;
+  const { creationRequestId, modelChoice, retryRevision } = args;
   const [error, setError] = useState<ChatCreationError | null>(null);
   const pending = chatId === undefined;
   const retryFailedCreation = error?.messageKey === "chat.creation.openFailed";
@@ -504,6 +531,7 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
       activeProject,
       coordinator,
       creationRequestId,
+      modelChoice,
       isCurrent: (attempt): boolean =>
         mountedRef.current &&
         currentRequestKeyRef.current === requestKey &&
@@ -520,6 +548,7 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
     activeProject,
     coordinator,
     creationRequestId,
+    modelChoice,
     loading,
     mountedRef,
     requestKey,
@@ -1303,6 +1332,7 @@ interface BoundChatConfig {
   readonly chatIdFingerprint: string | undefined;
   readonly memoryEnabled: boolean | undefined;
   readonly newChatRequestId: string | undefined;
+  readonly modelChoice: ChatCreationModelChoice | undefined;
   readonly projectPath: string | undefined;
   readonly projectPathPrivacy: "omit" | undefined;
   readonly title: string | undefined;
@@ -1315,6 +1345,7 @@ function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
     chatIdFingerprint: str(cfg, CHAT_ID_FINGERPRINT_CFG_KEY),
     memoryEnabled: bool(cfg, "memoryEnabled"),
     newChatRequestId: str(cfg, "newChatRequestId"),
+    modelChoice: chatCreationModelChoiceOf(cfg) ?? undefined,
     projectPath: str(cfg, "projectPath"),
     projectPathPrivacy,
     title: str(cfg, "title"),
@@ -1358,6 +1389,7 @@ function useBoundChatControls(
     loading: session.loading || configuredProjectMissing,
     newChatRequestId: configuration.newChatRequestId,
     creationRequestId: configuration.newChatRequestId ?? `window:${ctx.windowId}`,
+    modelChoice: configuration.modelChoice,
     retryRevision,
     title: configuration.title,
     updateCfg: ctx.updateCfg,
@@ -1388,6 +1420,22 @@ function boundChatWaiting(args: {
   );
 }
 
+function useChatCreationModelValidation(cfg: Record<string, unknown>): boolean {
+  const invalid = chatCreationModelChoiceOf(cfg) === null;
+  useEffect((): void => {
+    if (invalid) {
+      const error = new TypeError("Chat creation model selection failed.");
+      reportClientDiagnostic(error.message, {
+        correlationId: newClientCorrelationId(),
+        kind: "other",
+        errorKind: "unavailable",
+        errorEvidence: clientErrorEvidence(error),
+      });
+    }
+  }, [invalid]);
+  return !invalid;
+}
+
 export function ChatWindowSessionHost({
   cfg,
   ctx,
@@ -1396,6 +1444,7 @@ export function ChatWindowSessionHost({
   readonly ctx: WindowRenderContext;
 }): ReactNode {
   const session = useChatSession({ autoCreate: false });
+  const validModelChoice = useChatCreationModelValidation(cfg);
   const configuration = boundChatConfig(cfg);
   // A chat id the heuristic flags records its fingerprint in the commit that shows it, so
   // persistence never stores the redacted id alone.
@@ -1406,6 +1455,7 @@ export function ChatWindowSessionHost({
   const redacted = useRedactedChatChoice(cfg, session, ctx);
   const restoration = rebind.restored ?? redacted.restored;
   const decision = useChatChoiceDecision(cfg, { restoration, missing: rebind.missing }, ctx);
+  if (!validModelChoice) return <ChatHostAlert messageKey="chat.creation.openFailed" />;
   if (rebind.pending) return <ChatBindPending />;
   return (
     <BoundChatWindowSessionHost

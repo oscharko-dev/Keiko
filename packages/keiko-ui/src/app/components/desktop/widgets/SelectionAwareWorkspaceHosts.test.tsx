@@ -1150,6 +1150,92 @@ describe("ChatWindowSessionHost target missing", () => {
     ]);
   });
 
+  it.each([
+    [{ newChatModelSelection: "automatic" }, { kind: "automatic" }],
+    [
+      { newChatModelSelection: "explicit", newChatModelId: "model-original" },
+      { kind: "explicit", modelId: "model-original" },
+    ],
+  ])(
+    "forwards the captured creation model choice (%j)",
+    async (snapshot, choice): Promise<void> => {
+      const cfg = { newChatRequestId: "shared-creation", ...snapshot };
+      const saved: AppWindow = {
+        id: "window-1",
+        type: "chat",
+        cfg,
+        x: 0,
+        y: 0,
+        w: 320,
+        h: 240,
+        z: 1,
+        max: false,
+      };
+      const restored = parsePersistedWindows(
+        JSON.stringify(sanitizePersistedWindows([saved])),
+      )?.[0];
+      if (restored === undefined) throw new TypeError("The pending window was not restored.");
+      render(
+        <I18nProvider>
+          <ChatWindowSessionHost cfg={cfg} ctx={context()} />
+          <ChatWindowSessionHost cfg={restored.cfg} ctx={context()} />
+        </I18nProvider>,
+      );
+      await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledTimes(2));
+      for (const call of defaultOpenNewChat.mock.calls) {
+        expect(call).toEqual([undefined, undefined, "shared-creation", choice]);
+      }
+    },
+  );
+
+  it("refuses an incomplete explicit snapshot without falling back to a local model", async (): Promise<void> => {
+    vi.stubGlobal("reportError", vi.fn());
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ newChatRequestId: "shared-creation", newChatModelSelection: "explicit" }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(defaultOpenNewChat).not.toHaveBeenCalled();
+    expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+      "Chat creation model selection failed.",
+      expect.objectContaining({ errorKind: "unavailable", errorEvidence: expect.any(Object) }),
+    );
+  });
+
+  it.each([
+    { newChatModelSelection: "automatic" },
+    { newChatModelSelection: "explicit", newChatModelId: "model-original" },
+  ])(
+    "clears accepted pending identity and model metadata together (%j)",
+    async (snapshot): Promise<void> => {
+      const created = chatFixture("chat-accepted", "Shared conversation", 1);
+      defaultOpenNewChat.mockResolvedValueOnce(created);
+      const ctx = context();
+      render(
+        <I18nProvider>
+          <ChatWindowSessionHost
+            cfg={{ newChatRequestId: "shared-creation", ...snapshot }}
+            ctx={ctx}
+          />
+        </I18nProvider>,
+      );
+      await waitFor((): void =>
+        expect(ctx.updateCfg).toHaveBeenCalledWith({
+          chatId: created.id,
+          projectPath: created.projectPath,
+          title: created.title,
+          newChatRequestId: undefined,
+          newChatModelSelection: undefined,
+          newChatModelId: undefined,
+        }),
+      );
+    },
+  );
+
   it("keeps legacy unbound windows independent while retaining their stable window intent", async (): Promise<void> => {
     render(
       <I18nProvider>

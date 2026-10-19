@@ -112,6 +112,51 @@ describe("persistedChatProjectPath", (): void => {
 });
 
 describe("prepareNewWindowCfg", (): void => {
+  it.each([
+    [{ kind: "automatic" } as const, { newChatModelSelection: "automatic" }],
+    [
+      { kind: "explicit", modelId: "model-original" } as const,
+      { newChatModelSelection: "explicit", newChatModelId: "model-original" },
+    ],
+  ])("captures the original creation model choice (%j)", (choice, expected): void => {
+    const cfg = prepareNewWindowCfg("chat", {}, "shared-creation", "/repo", choice);
+    expect(cfg).toMatchObject(expected);
+    const saved = sanitizePersistedWindows([{ ...chatWindow("/repo"), cfg }]);
+    expect(saved[0]?.cfg).toMatchObject(expected);
+  });
+
+  it("refuses a secret-shaped explicit model snapshot before accepting a window", (): void => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    try {
+      expect(() =>
+        prepareNewWindowCfg("chat", {}, "shared-creation", "/repo", {
+          kind: "explicit",
+          modelId: `ghp_${"A".repeat(36)}`,
+        }),
+      ).toThrow(TypeError);
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Chat creation model selection cannot be persisted.",
+        expect.objectContaining({ errorKind: "unavailable", errorEvidence: expect.any(Object) }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("ghp_");
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("clears a prior explicit snapshot before accepting a fresh automatic choice", (): void => {
+    const cfg = prepareNewWindowCfg(
+      "chat",
+      { newChatModelSelection: "explicit", newChatModelId: "previous-model" },
+      "fresh-creation",
+      "/repo",
+      { kind: "automatic" },
+    );
+    expect(cfg["newChatModelSelection"]).toBe("automatic");
+    expect(cfg["newChatModelId"]).toBeUndefined();
+  });
+
   it("redraws a generated intent that the unchanged persistence heuristic rejects", (): void => {
     const draw = vi
       .spyOn(crypto, "randomUUID")
