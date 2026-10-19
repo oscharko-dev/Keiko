@@ -3910,6 +3910,17 @@ describe("direct whole-receiver observation qualification", () => {
   });
 });
 
+// Browser declarations belong to the actual Vitest proof context, not structural admission.
+async function objectValidatorSemanticFixture(variant = "valid") {
+  const own = createObjectValidatorFixture(variant);
+  await installSemanticFixtureTools(own);
+  const path = "packages/alpha/tsconfig.json";
+  const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+  config.compilerOptions.lib.push("DOM");
+  own.put(path, config);
+  return own;
+}
+
 describe("optional object validator responsibility (#3918)", () => {
   it("closes the opt-in without changing legacy observation options", () => {
     const record = objectValidatorRecord();
@@ -3994,8 +4005,7 @@ describe("optional object validator responsibility (#3918)", () => {
   it.skipIf(process.platform === "win32")(
     "refuses genuine semantic qualification for an unchecked raw view reaching its consumer",
     async () => {
-      const own = createObjectValidatorFixture("unchecked");
-      await installSemanticFixtureTools(own);
+      const own = await objectValidatorSemanticFixture("unchecked");
       const subject = await collectPolicySubject(own.root);
       const pending = assessPolicyResponsibilities(subject, own.policy);
       expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
@@ -4008,8 +4018,7 @@ describe("optional object validator responsibility (#3918)", () => {
   it.skipIf(process.platform === "win32")(
     "retains the root tag through genuine public proof completion",
     async () => {
-      const own = createObjectValidatorFixture();
-      await installSemanticFixtureTools(own);
+      const own = await objectValidatorSemanticFixture();
       const subject = await collectPolicySubject(own.root);
       const pending = assessPolicyResponsibilities(subject, own.policy);
       const slot = pending.assessments[0].slots[0];
