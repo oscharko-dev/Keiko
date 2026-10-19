@@ -978,8 +978,36 @@ export const CLIENT_STAGE_IDS = [
   "gateway profile refresh",
   "model selection availability",
   "markdown copy feedback",
+  "browser approval",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
+
+export const CLIENT_BROWSER_APPROVAL_OPERATIONS = [
+  "key-create",
+  "key-prepare",
+  "key-load",
+  "key-store",
+  "key-forget",
+  "proof-sign",
+  "session-restore",
+] as const;
+export const CLIENT_BROWSER_APPROVAL_OUTCOMES = [
+  "created",
+  "available",
+  "missing",
+  "stored",
+  "forgotten",
+  "signed",
+  "active",
+  "unavailable",
+  "failed",
+  "cancelled",
+] as const;
+
+export interface ClientBrowserApprovalEvidence {
+  readonly operation: (typeof CLIENT_BROWSER_APPROVAL_OPERATIONS)[number];
+  readonly outcome?: (typeof CLIENT_BROWSER_APPROVAL_OUTCOMES)[number] | undefined;
+}
 
 export const CLIENT_STAGE_PHASES = ["started", "settled"] as const;
 export type ClientStagePhase = (typeof CLIENT_STAGE_PHASES)[number];
@@ -1009,6 +1037,7 @@ export interface ClientStageStartedIngestRequest {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
 }
 
 export interface ClientSourcePreviewCounts {
@@ -1048,6 +1077,7 @@ export interface ClientStageSettledIngestRequest {
   readonly preview?: ClientSourcePreviewCounts | undefined;
   readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
   readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -1056,6 +1086,7 @@ export type ClientStageIngestRequest =
 
 const CLIENT_STAGE_ID_SET: ReadonlySet<string> = new Set(CLIENT_STAGE_IDS);
 const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "browserApproval",
   "kind",
   "stage",
   "phase",
@@ -1225,6 +1256,27 @@ function hasValidGatewayProfileStage(value: Record<string, unknown>): boolean {
     : isOneOf(evidence.catalogReread, ["requested", "skipped"]);
 }
 
+const BROWSER_APPROVAL_EVIDENCE_KEYS = new Set(["operation", "outcome"]);
+const BROWSER_APPROVAL_OPERATIONS: ReadonlySet<string> = new Set(
+  CLIENT_BROWSER_APPROVAL_OPERATIONS,
+);
+const BROWSER_APPROVAL_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_BROWSER_APPROVAL_OUTCOMES);
+
+function hasValidBrowserApprovalStage(value: Record<string, unknown>): boolean {
+  const evidence = value.browserApproval;
+  if (value.stage !== "browser approval") return evidence === undefined;
+  if (!isRecord(evidence)) return false;
+  if (Object.keys(evidence).some((key) => !BROWSER_APPROVAL_EVIDENCE_KEYS.has(key))) return false;
+  if (
+    typeof evidence.operation !== "string" ||
+    !BROWSER_APPROVAL_OPERATIONS.has(evidence.operation)
+  )
+    return false;
+  return value.phase === "started"
+    ? evidence.outcome === undefined
+    : typeof evidence.outcome === "string" && BROWSER_APPROVAL_OUTCOMES.has(evidence.outcome);
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
   return (
     hasValidStageDeletion(value) &&
@@ -1232,6 +1284,7 @@ function hasValidStageContext(value: Record<string, unknown>): boolean {
     hasValidSourcePreview(value) &&
     hasValidModelCatalogStage(value) &&
     hasValidGatewayProfileStage(value) &&
+    hasValidBrowserApprovalStage(value) &&
     isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
   );
 }

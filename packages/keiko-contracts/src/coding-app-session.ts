@@ -47,6 +47,13 @@ export {
   validateBrowserApprovalChallengeInput,
   validateBrowserApprovalProofInput,
   validateBrowserApprovalChallenge,
+  isBrowserApprovalRequestDescriptor,
+  isBrowserApprovalDescriptor,
+  validateBrowserApprovalRequestResult,
+  validateBrowserApprovalChallengeResult,
+  validateBrowserApprovalDecisionResult,
+  validateBrowserApprovalManagementResult,
+  validateBrowserApprovalProofResult,
 } from "./browser-approval.js";
 export type {
   BrowserApprovalPublicKey,
@@ -58,6 +65,8 @@ export type {
   BrowserApprovalRequestDescriptor,
   BrowserApprovalDescriptor,
   BrowserApprovalManagementSnapshot,
+  BrowserApprovalManagementResult,
+  BrowserApprovalDecisionResult,
   BrowserApprovalRequestResult,
   BrowserApprovalChallengeResult,
   BrowserApprovalProofResult,

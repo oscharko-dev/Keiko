@@ -4,7 +4,7 @@
   "qualificationSourceHead": "1df1384e51580eaeb5193cd9dbbe1a3590d635f8",
   "sourceManifestSha256": "2037e68727d86f61bbf62498d517dea5f0274ff44eb790231df6689f8c1a4e07",
   "sourceArchive": {
-    "classification": "Prospective source revision3 archived before any V6 task call; earlier revisions and all V5 bytes retained.",
+    "classification": "Prospective source revision 3 archived before any V6 task call; earlier revisions and all V5 bytes retained.",
     "manifestSha256": "2037e68727d86f61bbf62498d517dea5f0274ff44eb790231df6689f8c1a4e07",
     "archiveSha256": "1e50df2a1a57c075185910c5c427624bc3aea1bb6c73024990f57924fb280504",
     "archiveBytes": 9130363,
@@ -17,7 +17,7 @@
     "originalV5FilesUnchanged": 2093
   },
   "terminalArchive": {
-    "classification": "Immutable terminal failed V6 archive. One initial case, no feedback/furthercases/generatedexecution or benefit credit. Original frozen source archive remains separate unchanged.",
+    "classification": "Immutable terminal failed V6 archive. One initial case, no feedback/further cases/generated execution or benefit credit. Original frozen source archive remains separate unchanged.",
     "archiveSha256": "461322acf7b45a6c08282efc3e9eadb0d108f4eddbbfef12b5d13fd3a4d3d73b",
     "archiveBytes": 195922,
     "memberCount": 35,

@@ -11,8 +11,12 @@ import { BROWSER_APPROVAL_ROUTES } from "./browserApprovalRoutes.js";
 import {
   browserApprovalChallengeText,
   BROWSER_APPROVAL_REQUEST_TTL_MS,
+  validateBrowserApprovalRequestResult,
+  validateBrowserApprovalChallengeResult,
+  validateBrowserApprovalDecisionResult,
+  validateBrowserApprovalManagementResult,
+  validateBrowserApprovalProofResult,
   type BrowserApprovalChallengeResult,
-  type BrowserApprovalRequestResult,
   type BrowserApprovalProofResult,
   type BrowserApprovalManagementSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -88,7 +92,10 @@ async function approveBrowser(
     remember,
   });
   expect(requested.status).toBe(200);
-  const pending = (await requested.json()) as BrowserApprovalRequestResult;
+  const parsed = validateBrowserApprovalRequestResult(await requested.json());
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("Invalid browser request response");
+  const pending = parsed.value;
   if (pending.state !== "pending") throw new Error("Missing browser request");
   const approved = await post(
     server,
@@ -100,7 +107,9 @@ async function approveBrowser(
     },
     owner,
   );
-  expect(await approved.json()).toEqual({ state: "accepted" });
+  const decision: unknown = await approved.json();
+  expect(validateBrowserApprovalDecisionResult(decision).ok).toBe(true);
+  expect(decision).toEqual({ state: "accepted" });
   return proveFor(server, "complete", pending.request.requestId, pair.privateKey);
 }
 
@@ -111,16 +120,44 @@ async function proveFor(
   privateKey: KeyObject,
 ): Promise<Response> {
   const challenged = await post(server, "challenge", { purpose, subjectId });
-  const challenge = (await challenged.json()) as BrowserApprovalChallengeResult;
+  const parsed = validateBrowserApprovalChallengeResult(await challenged.json());
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("Invalid browser challenge response");
+  const challenge = parsed.value;
   if (challenge.state !== "challenge") throw new Error("Missing browser challenge");
   const signature = sign("sha256", Buffer.from(browserApprovalChallengeText(challenge.challenge)), {
     key: privateKey,
     dsaEncoding: "ieee-p1363",
   }).toString("base64url");
-  return post(server, "prove", { challengeId: challenge.challenge.challengeId, signature });
+  const response = await post(server, "prove", {
+    challengeId: challenge.challenge.challengeId,
+    signature,
+  });
+  expect(validateBrowserApprovalProofResult(await response.clone().json()).ok).toBe(true);
+  return response;
 }
 
 describe("browser approval on the real mounted BFF", () => {
+  it("emits canonical client management contracts for remembered and session-only grants", async () => {
+    const { server, owner } = await fixture();
+    await approveBrowser(server, owner, keyPair(), false);
+    await approveBrowser(server, owner, keyPair(), true);
+    const response = await fetch(`${server.baseUrl}${ROOT}`, {
+      headers: { cookie: owner },
+    });
+    const parsed = validateBrowserApprovalManagementResult(await response.json());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.state !== "active")
+      throw new Error("Missing management response");
+    expect(new Set(parsed.value.approvals.map((approval) => approval.remembered))).toEqual(
+      new Set([false, true]),
+    );
+    const approval = parsed.value.approvals[0];
+    if (approval === undefined) throw new Error("Missing fixture approval");
+    const revoked = await post(server, "revoke", approval.approvalId, owner);
+    expect(validateBrowserApprovalDecisionResult(await revoked.json()).ok).toBe(true);
+  });
+
   it("refuses renewal after a protected read first observes expiry and time is corrected", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation((): number => now);

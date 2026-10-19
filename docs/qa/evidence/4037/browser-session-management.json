@@ -74,7 +74,7 @@
         "log": "browser34-causal-final-unit-before.log",
         "sha256": "4c5e05e9d2e382361277a0e18e1c625a0c5ff50f78da664d027e07de20df1f77",
         "summary": [
-          "\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 15 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+          "⎯⎯⎯⎯⎯⎯ Failed Tests 15 ⎯⎯⎯⎯⎯⎯⎯",
           " Test Files  1 failed (1)",
           "      Tests  15 failed | 15 passed (30)"
         ]
@@ -86,7 +86,7 @@
         "log": "browser34-causal-final-http-before.log",
         "sha256": "84f7916b6b235e787cb79e133771cbcf415f38648a6e588e67e2f62a3d155972",
         "summary": [
-          "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+          "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
           " Test Files  1 failed (1)",
           "      Tests  1 failed | 1 passed | 9 skipped (11)"
         ]
@@ -122,7 +122,7 @@
     "suites": 45,
     "passed": 924,
     "failed": 0,
-    "scope": "All app-session/store suites, chat draft routes, browser contracts and Chat skill lab observations. Full affected run includes all11 HTTP controls.",
+    "scope": "All app-session/store suites, chat draft routes, browser contracts and Chat skill lab observations. Full affected run includes all 11 HTTP controls.",
     "boundaries": [
       "immediate and beyond five-minute visibility",
       "exact original completion deadline",
@@ -130,12 +130,12 @@
       "active operation and release",
       "rotation and revocation",
       "remember requested but not approved",
-      "bounded32 live approvals and early eviction capacity release",
+      "bounded 32 live approvals and early eviction capacity release",
       "service recomposition loses transient authority"
     ]
   },
   "independentControls": {
-    "classification": "Independent same actual service/registry/store P256 proof flows against published32 and current uncommitted candidate, actual migration45 SQLite in memory. Candidate copied/transpiled only in auditor scratch. No BFF/browser/process/model/native/shared build or repository changes. Recomposition is narrower than actual process/SSD acceptance. Provisional until exact final/published source join. No emitted cookies/keys/signatures/IDs.",
+    "classification": "Independent same actual service/registry/store P256 proof flows against published 32 and current uncommitted candidate, actual migration 45 SQLite in memory. Candidate copied/transpiled only in auditor scratch. No BFF/browser/process/model/native/shared build or repository changes. Recomposition is narrower than actual process/SSD acceptance. Provisional until exact final/published source join. No emitted cookies/keys/signatures/IDs.",
     "sourceStable": true,
     "receiptSha256": "756580a3dd7020ee93eab2a0c841a73e1a5d70f50534a3541461f4b1cce951b1",
     "sources": [
@@ -184,7 +184,7 @@
         "      Tests  97 passed (97)",
         " Test Files  11 passed (11)",
         "      Tests  148 passed (148)",
-        "check:activity-log PASS \u2014 7 checks over the full registered inventory in 75.7 s."
+        "check:activity-log PASS — 7 checks over the full registered inventory in 75.7 s."
       ]
     },
     {
@@ -195,7 +195,7 @@
     {
       "name": "browser34-knip-final.log",
       "sha256": "d777b059912352886420c73d426fd652dce01156e8402cd056c4d00b393f2799",
-      "summary": ["check:knip PASS \u2014 no unused files, exports, dependencies, or binaries."]
+      "summary": ["check:knip PASS — no unused files, exports, dependencies, or binaries."]
     }
   ],
   "retainedFailures": [
@@ -207,8 +207,8 @@
   "limitations": [
     "Requester/approver UI, IndexedDB, boot/recovery and real Chrome/Safari/Firefox journeys remain unfinished.",
     "Recomposition is not actual process restart, profile, state-volume or SSD continuity proof.",
-    "The existing shared bounded capacity admits at most32 live request records; an unauthenticated request cannot evict a live approval to bypass that bound.",
-    "Schema45 compatibility with older-binary updater rollback remains unqualified.",
-    "Both skill benefit matrices, native generation ownership, full Chat/search/source96 and final required checks/reviews/integration remain open."
+    "The existing shared bounded capacity admits at most 32 live request records; an unauthenticated request cannot evict a live approval to bypass that bound.",
+    "Schema 45 compatibility with older-binary updater rollback remains unqualified.",
+    "Both skill benefit matrices, native generation ownership, full Chat/search/source 96 and final required checks/reviews/integration remain open."
   ]
 }

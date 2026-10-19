@@ -2,6 +2,9 @@ import { createPublicKey, verify, webcrypto } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   BROWSER_APPROVAL_CHALLENGE_TTL_MS,
+  BROWSER_APPROVAL_MAX_RECORDS,
+  BROWSER_APPROVAL_REMEMBER_TTL_MS,
+  BROWSER_APPROVAL_REQUEST_TTL_MS,
   browserApprovalChallengeText,
   isBrowserApprovalPublicKey,
   validateBrowserApprovalChallenge,
@@ -9,6 +12,13 @@ import {
   validateBrowserApprovalDecisionInput,
   validateBrowserApprovalProofInput,
   validateBrowserApprovalRequestInput,
+  validateBrowserApprovalRequestResult,
+  validateBrowserApprovalChallengeResult,
+  validateBrowserApprovalDecisionResult,
+  validateBrowserApprovalManagementResult,
+  validateBrowserApprovalProofResult,
+  type BrowserApprovalDescriptor,
+  type BrowserApprovalRequestDescriptor,
   type BrowserApprovalChallenge,
 } from "./browser-approval.js";
 
@@ -26,6 +36,142 @@ function challenge(): BrowserApprovalChallenge {
     expiresAtMs: 1_000 + BROWSER_APPROVAL_CHALLENGE_TTL_MS,
   };
 }
+
+function requestDescriptor(index = 1): BrowserApprovalRequestDescriptor {
+  return {
+    requestId: `brq_${index.toString(16).padStart(32, "0")}`,
+    comparisonCode: "01234567",
+    requestedAtMs: 1_000,
+    expiresAtMs: 1_000 + BROWSER_APPROVAL_REQUEST_TTL_MS,
+    rememberRequested: false,
+    publicKeyFingerprint: "a".repeat(64),
+  };
+}
+
+function approvalDescriptor(index = 1): BrowserApprovalDescriptor {
+  return {
+    approvalId: `bra_${index.toString(16).padStart(32, "0")}`,
+    remembered: true,
+    approvedAtMs: 1_000,
+    expiresAtMs: 1_000 + BROWSER_APPROVAL_REMEMBER_TTL_MS,
+    lastUsedAtMs: 1_000,
+    publicKeyFingerprint: "a".repeat(64),
+  };
+}
+
+describe("browser approval response boundaries", () => {
+  it("accepts the explicit request, challenge, proof and decision states", () => {
+    expect(
+      validateBrowserApprovalRequestResult({ state: "pending", request: requestDescriptor() }).ok,
+    ).toBe(true);
+    expect(
+      validateBrowserApprovalChallengeResult({ state: "challenge", challenge: challenge() }).ok,
+    ).toBe(true);
+    expect(validateBrowserApprovalChallengeResult({ state: "pending" }).ok).toBe(true);
+    expect(validateBrowserApprovalProofResult({ state: "active" }).ok).toBe(true);
+    expect(
+      validateBrowserApprovalProofResult({ state: "active", approval: approvalDescriptor() }).ok,
+    ).toBe(true);
+    expect(validateBrowserApprovalDecisionResult({ state: "accepted" }).ok).toBe(true);
+  });
+
+  it("does not treat an unavailable acknowledgement as active authority", () => {
+    for (const validate of [
+      validateBrowserApprovalRequestResult,
+      validateBrowserApprovalChallengeResult,
+      validateBrowserApprovalProofResult,
+      validateBrowserApprovalDecisionResult,
+      validateBrowserApprovalManagementResult,
+    ]) {
+      expect(validate({ state: "unavailable" }).ok).toBe(true);
+      expect(validate({ state: "unavailable", approval: approvalDescriptor() }).ok).toBe(false);
+      for (const malformed of [null, [], "active", { state: "accepted", privateKey: {} }]) {
+        expect(validate(malformed).ok).toBe(false);
+      }
+    }
+  });
+
+  it.each([
+    { expiresAtMs: 1_000 },
+    { expiresAtMs: 1_001 + BROWSER_APPROVAL_REQUEST_TTL_MS },
+    { requestedAtMs: Number.NaN },
+    { comparisonCode: "1234567" },
+    { rememberRequested: "true" },
+    { publicKeyFingerprint: "not-a-fingerprint" },
+    { privateKey: { d: "synthetic-refused-key-material" } },
+  ])("refuses malformed request descriptors %j", (patch) => {
+    expect(
+      validateBrowserApprovalRequestResult({
+        state: "pending",
+        request: { ...requestDescriptor(), ...patch },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each([
+    { remembered: "true" },
+    { remembered: undefined },
+    { expiresAtMs: 1_001 + BROWSER_APPROVAL_REMEMBER_TTL_MS },
+    { lastUsedAtMs: Number.POSITIVE_INFINITY },
+    { lastUsedAtMs: 999 },
+    { lastUsedAtMs: 1_000 + BROWSER_APPROVAL_REMEMBER_TTL_MS },
+    { lastUsedAtMs: 1_001 + BROWSER_APPROVAL_REMEMBER_TTL_MS },
+    { privateKey: {} },
+  ])("refuses malformed proof descriptors %j", (patch) => {
+    expect(
+      validateBrowserApprovalProofResult({
+        state: "active",
+        approval: { ...approvalDescriptor(), ...patch },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("retains the exact valid last-use bounds independently of a browser clock", () => {
+    const approval = approvalDescriptor();
+    for (const lastUsedAtMs of [approval.approvedAtMs, approval.expiresAtMs - 1]) {
+      expect(
+        validateBrowserApprovalProofResult({
+          state: "active",
+          approval: { ...approval, lastUsedAtMs },
+        }).ok,
+      ).toBe(true);
+    }
+  });
+
+  it("bounds each existing management inventory and refuses duplicate identities", () => {
+    const requests = Array.from({ length: BROWSER_APPROVAL_MAX_RECORDS }, (_, index) =>
+      requestDescriptor(index + 1),
+    );
+    const approvals = Array.from({ length: BROWSER_APPROVAL_MAX_RECORDS * 2 }, (_, index) =>
+      approvalDescriptor(index + 1),
+    );
+    const snapshot = { state: "active", requests, approvals };
+    expect(validateBrowserApprovalManagementResult(snapshot).ok).toBe(true);
+    expect(
+      validateBrowserApprovalManagementResult({ ...snapshot, requests: [...requests, requests[0]] })
+        .ok,
+    ).toBe(false);
+    expect(
+      validateBrowserApprovalManagementResult({
+        ...snapshot,
+        approvals: [...approvals, approvals[0]],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateBrowserApprovalManagementResult({ ...snapshot, requests: [requests[0], requests[0]] })
+        .ok,
+    ).toBe(false);
+    expect(
+      validateBrowserApprovalManagementResult({
+        ...snapshot,
+        approvals: [approvals[0], approvals[0]],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateBrowserApprovalManagementResult({ ...snapshot, authority: "full-access" }).ok,
+    ).toBe(false);
+  });
+});
 
 describe("browser approval wire boundaries", () => {
   it("accepts only public canonical coordinates and explicit remember intent", () => {

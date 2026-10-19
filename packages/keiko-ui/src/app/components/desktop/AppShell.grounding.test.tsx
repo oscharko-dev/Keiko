@@ -393,6 +393,11 @@ vi.mock("./modals/Palette", (): { readonly Palette: () => ReactNode } => {
   return { Palette: (): ReactNode => <div role="dialog" aria-label="Palette" /> };
 });
 
+// This suite owns grounding mutation diagnostics; the browser notice has its own lifecycle suite.
+vi.mock("./browser/BrowserApprovalNotice", () => ({
+  BrowserApprovalNotice: (): ReactNode => null,
+}));
+
 vi.mock("./update/UpdateStartupNotice", (): { readonly UpdateStartupNotice: () => ReactNode } => {
   mocks.updateStartupNoticeModuleLoaded();
   return {

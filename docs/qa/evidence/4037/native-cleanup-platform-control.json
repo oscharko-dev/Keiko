@@ -24,8 +24,20 @@
     "logSha256": "23970027fde052167017facd8242608dd96be63ac7ce061f3934a05e644073c7"
   },
   "limitations": [
-    "Actual Windows qualification requires the corrected exact-head CI run. No Windows execution is claimed locally.",
+    "Corrected head 35 Windows CI passes all 68 controls without a skip. This is actual CI evidence, not local Windows execution or full updater acceptance.",
     "The prior cold-refusal timeouts and failures remain retained. Both macOS-x64 jobs on head33 pass; those later successes do not explain older timeouts.",
     "The separate Node26 timed-writer and development proxy CI failures remain under investigation."
-  ]
+  ],
+  "windowsFollowup": {
+    "sourceHead": "d74ff864574168d822b3e3bf6c1b1e96781efec3",
+    "runId": 39189733740,
+    "jobId": 117860066278,
+    "conclusion": "success",
+    "passed": 68,
+    "failed": 0,
+    "skipped": 0,
+    "sourceTestUnchanged": true,
+    "logSha256": "8d887aca2f23f8dc82cd259d3e166341175b2279ed59f2a810a74f933267ba30",
+    "scope": "Actual corrected Windows CI owner suite; not whole updater, generation ownership or final integrated-head qualification."
+  }
 }

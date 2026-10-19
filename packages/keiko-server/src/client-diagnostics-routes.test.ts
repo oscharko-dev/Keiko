@@ -3534,3 +3534,47 @@ it("persists a real profile read outcome and skipped catalog reread without inve
   expect(JSON.parse(line)).not.toHaveProperty("configuredModelCount");
   expect(clientDiagnosticEvents(sink)).toEqual([]);
 });
+
+it.each([
+  ["started", "key-store"],
+  ["settled", "key-store"],
+  ["started", "key-prepare"],
+  ["settled", "key-prepare"],
+] as const)(
+  "persists closed browser approval %s/%s evidence through the actual registered formatter",
+  async (phase, operation) => {
+    const sink = captureServerLog();
+    const outcome = operation === "key-prepare" ? "created" : "stored";
+    const body = {
+      kind: "stage",
+      stage: "browser approval",
+      phase,
+      ordinal: 1,
+      correlationId: "browser-store-123",
+      parentCorrelationId: "browser-approval-123",
+      ...(phase === "started"
+        ? { browserApproval: { operation } }
+        : { durationMs: 2, browserApproval: { operation, outcome } }),
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    const event = clientStageEvents(sink, `client.stage.${phase}`)[0];
+    const line = formatActivityLogProofLine(event ?? {});
+    if (phase === "started") expectActivityLogProof("client.stage.started.line", line);
+    else expectActivityLogProof("client.stage.settled.line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      level: "info",
+      stage: "browser-approval",
+      browserOperation: operation,
+      correlationId: body.correlationId,
+      parentCorrelationId: body.parentCorrelationId,
+      ...(phase === "started" ? {} : { durationMs: 2, browserOutcome: outcome }),
+    });
+    const invalid = {
+      ...body,
+      browserApproval: { ...body.browserApproval, privateKey: "PRIVATE_BROWSER_KEY_CANARY" },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(invalid)))).status).toBe(400);
+    expect(line.includes("PRIVATE_BROWSER_KEY_CANARY")).toBe(false);
+    expect(clientDiagnosticEvents(sink)).toEqual([]);
+  },
+);

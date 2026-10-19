@@ -170,12 +170,32 @@ Revocation acknowledges an actual durable row, approved decision or associated s
 and retires only matching completion/renewal challenges. The existing approval Activity Log records
 pending-request, session-only and remembered counts without identities, public points or bearers.
 
-The browser implementation must keep a session-only private key in memory and may remember an
-explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. That UI and
-the real Chrome/Safari/Firefox restart, profile and SSD journeys remain qualification requirements;
-server controls alone do not establish their acceptance. The UI must show remembered expiry and
-revocation, preserve an authenticated session if optional key persistence fails, and report that
-failure honestly. New remembered state is additive, private and tied to the existing installation,
+The browser keeps a session-only private key in its mounted request controller and remembers an
+explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. The desktop
+notice starts an explicit request; Settings → Security owns comparison, session-only or remembered
+approval, expiry, last-use display and revocation. Remembering defaults off, requires both human
+choices, and is reported successful only after the IndexedDB transaction commits. Request success
+alone is insufficient; abort, blocked storage and quota failure retain an honest unconfirmed result
+without raw-key fallback. Cancelling a controller aborts its wait and prevents late UI publication;
+it does not undo a decision already accepted by the server.
+
+A remembered request commits an opaque persistence intent in that same object store before it is
+dispatched. Saving a key checks that exact intent and writes the active key in one readwrite
+transaction. Local forgetting deletes the key and intent atomically, so a delayed completion or a
+superseded request cannot recreate forgotten persistence. Failed preparation leaves ordinary
+approved access usable but cannot claim remembered storage. Existing saved-key records remain
+load-compatible; no additional database, private-key export or server authority is introduced.
+
+Fresh protected management inspection verifies access after proof. A lost proof response may leave
+an already usable cookie; a later retry first inspects that session without extending the original
+completion deadline or minting another grant. Lost approval metadata cannot establish remembered
+persistence. Browser wall-clock precision does not decide whether a challenge is current: canonical
+relative lifetime and authority bindings are checked locally, while the server owns expiry and
+single use.
+
+The complete Chrome/Safari/Firefox restart, profile and SSD journeys remain qualification
+requirements; server or browser storage controls alone do not establish their acceptance. New
+remembered state is additive, private and tied to the existing installation,
 not to its directory path; moving protected state does not grant trust to unrelated installations
 or OS users. No release version is assigned by this implementation checkpoint.
 

@@ -143,6 +143,9 @@ function clientStagePostBody(
         correlationId: id,
         ...(parentId === undefined ? {} : { parentCorrelationId: parentId }),
         deletion: report.deletion,
+        ...(report.browserApproval === undefined
+          ? {}
+          : { browserApproval: report.browserApproval }),
       }
     : {
         kind: "stage",
@@ -159,6 +162,9 @@ function clientStagePostBody(
         correlationId: id,
         ...(parentId === undefined ? {} : { parentCorrelationId: parentId }),
         deletion: report.deletion,
+        ...(report.browserApproval === undefined
+          ? {}
+          : { browserApproval: report.browserApproval }),
       };
 }
 

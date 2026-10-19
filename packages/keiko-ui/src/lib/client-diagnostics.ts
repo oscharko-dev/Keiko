@@ -75,6 +75,7 @@ import {
   type ClientComposerCodeStage,
   type ClientGatewayProfileRefreshEvidence,
   type ClientChatHistoryDeletionCounts,
+  type ClientBrowserApprovalEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
 import {
@@ -101,7 +102,10 @@ export type ClientDiagnosticStageReport = (
       readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
       readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
     }
-) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
+) & {
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
+};
 
 // A restored window's binding outcome (#3557), in closed values only: never the reference itself.
 // `meta.correlationId` names the request whose answer decided it.

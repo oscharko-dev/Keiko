@@ -71,6 +71,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_BROWSER_APPROVAL_OPERATIONS,
+  CLIENT_BROWSER_APPROVAL_OUTCOMES,
   CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
@@ -595,6 +597,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "gateway-profile-refresh",
   "model-selection-availability",
   "markdown-copy-feedback",
+  "browser-approval",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -615,6 +618,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
   "markdown copy feedback": "markdown-copy-feedback",
+  "browser approval": "browser-approval",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -633,6 +637,12 @@ const CLIENT_STAGE_FIELDS = {
   requestedCount: { type: "integer", dataClass: "count", required: false },
   deletedCount: { type: "integer", dataClass: "count", required: false },
   failedCount: { type: "integer", dataClass: "count", required: false },
+  browserOperation: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: CLIENT_BROWSER_APPROVAL_OPERATIONS,
+  },
 } as const;
 
 const CLIENT_STAGE_STARTED_OPERATION = defineActivityLogOperation({
@@ -660,6 +670,12 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.logClientStageSettled",
   fields: {
     ...CLIENT_STAGE_FIELDS,
+    browserOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_BROWSER_APPROVAL_OUTCOMES,
+    },
     profileOutcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -2429,6 +2445,9 @@ function logClientStageStarted(
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
+        ...(request.browserApproval === undefined
+          ? {}
+          : { browserOperation: request.browserApproval.operation }),
         completeness: "complete",
         loss: "none",
       },
@@ -2491,6 +2510,14 @@ function logClientStageSettled(
         ...request.deletion,
         ...sourcePreviewActivityFields(request.preview),
         ...modelCatalogActivityFields(request.modelCatalog),
+        ...(request.browserApproval === undefined
+          ? {}
+          : {
+              browserOperation: request.browserApproval.operation,
+              ...(request.browserApproval.outcome === undefined
+                ? {}
+                : { browserOutcome: request.browserApproval.outcome }),
+            }),
         ...(request.gatewayProfile === undefined
           ? {}
           : {

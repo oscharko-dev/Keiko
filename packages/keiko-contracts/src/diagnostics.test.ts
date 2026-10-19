@@ -650,6 +650,7 @@ describe("isClientStageIngestRequest", () => {
           ...(stage === "chat history deletion"
             ? { deletion: { requestedCount: 1, deletedCount: 0, failedCount: 0 } }
             : {}),
+          ...(stage === "browser approval" ? { browserApproval: { operation: "key-load" } } : {}),
         }),
       ).toBe(true);
     }
@@ -2350,4 +2351,36 @@ it("accepts only stage-specific closed gateway profile outcomes", () => {
     expect(isClientStageIngestRequest({ ...report, gatewayProfile })).toBe(false);
   expect(isClientStageIngestRequest({ ...report, stage: "window chunk" })).toBe(false);
   expect(isClientStageIngestRequest({ ...report, phase: "started" })).toBe(false);
+});
+
+it("keeps browser approval lifecycle evidence closed and free of key or approval identities", () => {
+  const started = {
+    kind: "stage",
+    stage: "browser approval",
+    phase: "started",
+    ordinal: 1,
+    browserApproval: { operation: "key-load" },
+  };
+  const settled = {
+    ...started,
+    phase: "settled",
+    durationMs: 0,
+    browserApproval: { operation: "key-load", outcome: "available" },
+  };
+  expect(isClientStageIngestRequest(started)).toBe(true);
+  expect(isClientStageIngestRequest(settled)).toBe(true);
+  expect(isClientStageIngestRequest({ ...started, browserApproval: undefined })).toBe(false);
+  expect(
+    isClientStageIngestRequest({ ...settled, browserApproval: { operation: "key-load" } }),
+  ).toBe(false);
+  expect(isClientStageIngestRequest({ ...settled, phase: "started" })).toBe(false);
+  expect(isClientStageIngestRequest({ ...settled, stage: "window chunk" })).toBe(false);
+  for (const browserApproval of [
+    { operation: "private-key", outcome: "available" },
+    { operation: "key-load", outcome: "private contents" },
+    { operation: "key-load", outcome: "available", privateKey: {} },
+    { operation: "key-load", outcome: "available", approvalId: "private-identity" },
+  ]) {
+    expect(isClientStageIngestRequest({ ...settled, browserApproval })).toBe(false);
+  }
 });

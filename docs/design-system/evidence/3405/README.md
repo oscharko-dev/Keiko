@@ -119,3 +119,12 @@ including the optional-view load-failure fallback. Its three owning suites pass 
 complete UI coverage passes 10,697 cases with one existing skip. The original nine-case browser
 producer passes in 1.4 minutes and regenerates the same 17 artifacts, binding the same twelve UI
 sources and four harness inputs. This does not establish native package replacement or restart.
+
+The browser-approval integration for #4043 regenerated these updater artifacts again on
+2026-10-19 using the original nine-case producer and Node 24.18.0. All nine cases passed
+in 1.1 minutes after the final Sonar repairs, including the real-BFF outage and setup-only
+notification controls.
+All 17 artifacts were regenerated; 12 screenshot files changed bytes, while the three JSON
+records bind the current twelve UI sources and four harness inputs. The evidence freshness
+gate passes. This is updater presentation and declared BFF recovery evidence; native package
+replacement, process-generation ownership and SSD qualification remain separate obligations.

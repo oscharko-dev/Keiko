@@ -76,6 +76,14 @@ export interface BrowserApprovalManagementSnapshot {
   readonly approvals: readonly BrowserApprovalDescriptor[];
 }
 
+export type BrowserApprovalManagementResult =
+  | ({ readonly state: "active" } & BrowserApprovalManagementSnapshot)
+  | { readonly state: "unavailable" };
+
+export interface BrowserApprovalDecisionResult {
+  readonly state: "accepted" | "unavailable";
+}
+
 export type BrowserApprovalRequestResult =
   | { readonly state: "pending"; readonly request: BrowserApprovalRequestDescriptor }
   | { readonly state: "unavailable" };
@@ -87,6 +95,150 @@ export type BrowserApprovalChallengeResult =
 export type BrowserApprovalProofResult =
   | { readonly state: "active"; readonly approval?: BrowserApprovalDescriptor }
   | { readonly state: "unavailable" };
+
+function isTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasBoundedLifetime(
+  value: Record<string, unknown>,
+  issuedField: string,
+  maximumMs: number,
+): boolean {
+  const issued = value[issuedField];
+  const expires = value.expiresAtMs;
+  return isTime(issued) && isTime(expires) && expires > issued && expires - issued <= maximumMs;
+}
+
+function hasValidLastUse(value: Record<string, unknown>): boolean {
+  const used = value.lastUsedAtMs;
+  const approved = value.approvedAtMs;
+  const expires = value.expiresAtMs;
+  return isTime(used) && isTime(approved) && isTime(expires) && used >= approved && used < expires;
+}
+
+export function isBrowserApprovalRequestDescriptor(
+  value: unknown,
+): value is BrowserApprovalRequestDescriptor {
+  if (!isRecord(value)) return false;
+  const fields = [
+    "requestId",
+    "comparisonCode",
+    "requestedAtMs",
+    "expiresAtMs",
+    "rememberRequested",
+    "publicKeyFingerprint",
+  ];
+  return (
+    exactKeys(value, fields, "browserRequestDescriptor").length === 0 &&
+    isBrowserApprovalRequestId(value.requestId) &&
+    matches(value.comparisonCode, /^\d{8}$/u) &&
+    hasBoundedLifetime(value, "requestedAtMs", BROWSER_APPROVAL_REQUEST_TTL_MS) &&
+    typeof value.rememberRequested === "boolean" &&
+    matches(value.publicKeyFingerprint, /^[a-f0-9]{64}$/u)
+  );
+}
+
+export function isBrowserApprovalDescriptor(value: unknown): value is BrowserApprovalDescriptor {
+  if (!isRecord(value)) return false;
+  const fields = [
+    "approvalId",
+    "remembered",
+    "approvedAtMs",
+    "expiresAtMs",
+    "lastUsedAtMs",
+    "publicKeyFingerprint",
+  ];
+  return (
+    exactKeys(value, fields, "browserApprovalDescriptor").length === 0 &&
+    isBrowserApprovalId(value.approvalId) &&
+    typeof value.remembered === "boolean" &&
+    hasBoundedLifetime(value, "approvedAtMs", BROWSER_APPROVAL_REMEMBER_TTL_MS) &&
+    hasValidLastUse(value) &&
+    matches(value.publicKeyFingerprint, /^[a-f0-9]{64}$/u)
+  );
+}
+
+function isStateOnly(value: unknown, states: ReadonlySet<string>): boolean {
+  return (
+    isRecord(value) &&
+    exactKeys(value, ["state"], "browserApprovalResult").length === 0 &&
+    typeof value.state === "string" &&
+    states.has(value.state)
+  );
+}
+
+export function validateBrowserApprovalRequestResult(
+  value: unknown,
+): CodingWorkbenchValidationResult<BrowserApprovalRequestResult> {
+  if (isStateOnly(value, new Set(["unavailable"]))) return result(value, []);
+  if (!isRecord(value)) return invalid("browser request result must be an object");
+  const errors = exactKeys(value, ["state", "request"], "browserRequestResult");
+  if (value.state !== "pending" || !isBrowserApprovalRequestDescriptor(value.request))
+    errors.push("browser request result is invalid");
+  return result(value, errors);
+}
+
+export function validateBrowserApprovalChallengeResult(
+  value: unknown,
+): CodingWorkbenchValidationResult<BrowserApprovalChallengeResult> {
+  if (isStateOnly(value, new Set(["pending", "unavailable"]))) return result(value, []);
+  if (!isRecord(value)) return invalid("browser challenge result must be an object");
+  const errors = exactKeys(value, ["state", "challenge"], "browserChallengeResult");
+  if (value.state !== "challenge" || !validateBrowserApprovalChallenge(value.challenge).ok)
+    errors.push("browser challenge result is invalid");
+  return result(value, errors);
+}
+
+export function validateBrowserApprovalProofResult(
+  value: unknown,
+): CodingWorkbenchValidationResult<BrowserApprovalProofResult> {
+  if (isStateOnly(value, new Set(["unavailable"]))) return result(value, []);
+  if (!isRecord(value)) return invalid("browser proof result must be an object");
+  const errors = exactKeys(value, ["state", "approval"], "browserProofResult");
+  if (value.state !== "active") errors.push("browser proof result is invalid");
+  if (value.approval !== undefined && !isBrowserApprovalDescriptor(value.approval))
+    errors.push("browser proof approval is invalid");
+  return result(value, errors);
+}
+
+export function validateBrowserApprovalDecisionResult(
+  value: unknown,
+): CodingWorkbenchValidationResult<BrowserApprovalDecisionResult> {
+  return isStateOnly(value, new Set(["accepted", "unavailable"]))
+    ? result(value, [])
+    : invalid("browser decision result is invalid");
+}
+
+function hasValidRequests(value: unknown): value is BrowserApprovalRequestDescriptor[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= BROWSER_APPROVAL_MAX_RECORDS &&
+    value.every(isBrowserApprovalRequestDescriptor) &&
+    new Set(value.map((request) => request.requestId)).size === value.length
+  );
+}
+
+function hasValidApprovals(value: unknown): value is BrowserApprovalDescriptor[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= BROWSER_APPROVAL_MAX_RECORDS * 2 &&
+    value.every(isBrowserApprovalDescriptor) &&
+    new Set(value.map((approval) => approval.approvalId)).size === value.length
+  );
+}
+
+export function validateBrowserApprovalManagementResult(
+  value: unknown,
+): CodingWorkbenchValidationResult<BrowserApprovalManagementResult> {
+  if (isStateOnly(value, new Set(["unavailable"]))) return result(value, []);
+  if (!isRecord(value)) return invalid("browser management result must be an object");
+  const errors = exactKeys(value, ["state", "requests", "approvals"], "browserManagementResult");
+  if (value.state !== "active") errors.push("browser management state is invalid");
+  if (!hasValidRequests(value.requests)) errors.push("browser management requests are invalid");
+  if (!hasValidApprovals(value.approvals)) errors.push("browser management approvals are invalid");
+  return result(value, errors);
+}
 
 function matches(value: unknown, pattern: RegExp): value is string {
   return typeof value === "string" && pattern.test(value);

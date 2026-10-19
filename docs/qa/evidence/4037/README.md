@@ -1,5 +1,64 @@
 # Chat/Files qualification observations
 
+## Checkpoint 36: explicit browser connection and honest persistent trust
+
+The desktop now offers an explicit browser connection request. A connected browser compares its
+code in Settings → Security and approves one session or an explicitly requested remembered
+connection. Remembering defaults off. The same surface displays expiry and last use, revokes
+server approvals and separately forgets this profile's remembered connection. Neither an
+acknowledgement nor local key metadata establishes authentication: fresh protected inspection
+checks usable access. A lost proof response can recover an existing session after the original
+request deadline without issuing another challenge or grant, while persistence remains unconfirmed.
+
+The existing fifteen-second confirmation signal also bounds optional restoration. Cancellation
+prevents late proof dispatch and UI publication. Closed lifecycle evidence uses the existing
+diagnostic transport and Activity Log. Three missing static route literals are added without
+changing unknown-segment privacy or the exact declared-vocabulary tests.
+
+Actual Chromium and WebKit on macOS ARM64 and Firefox in isolated Linux ARM64 each retain a
+nonextractable key across browser process restart and independently verify its signature. A real
+transaction aborted after put success refuses the save and never records a stored outcome. These
+are storage-owner controls, not complete protected approval/draft/SSD journeys or native Safari
+acceptance. Earlier fixture/browser-start failures remain retained. The five affected server and
+contract suites pass 634 tests. The full UI follow-up passes 10774 tests with one existing skip,
+including nineteen deterministic storage lifetime controls. The unchanged original updater
+browser producer passes all nine cases and regenerates its existing evidence.
+`browser-approval-client.json` binds sources, failure-first observations and these scope limits.
+
+The first private storage harness read the wrong diagnostic metadata path. Its negative telemetry
+assertion was vacuous. The original harness and receipts remain retained; the corrected actual
+browser runs require a successful-commit positive control before the aborted-put negative. No
+historical telemetry credit is reassigned. The corrected Windows CI owner suite also passes all
+68 cases on head 35; native generation ownership and complete updater acceptance remain separate.
+
+A real two-page race also reproduces a delayed completion recreating a locally forgotten key.
+The same object store now commits a persistence intent before the public request and compares it
+inside the key-write transaction; forgetting removes both atomically. The identical original
+four-case browser harness changes from one failure/three healthy controls to four passes. The
+expanded current-source matrix passes nine cases in each of Chromium, WebKit and Firefox, including
+fresh/superseded intent and failed-forget rollback. A genuine engine structured-clone exception at
+the storage port is contained rather than escaping its asynchronous callback; a retained compiled
+owner has one failure/eight healthy controls, then the repaired owner has nine passes. The global
+error listener is calibrated with an actual scheduled throw. These remain storage-owner proofs
+with inert authority responses. Five separate Notice lifecycle tests preserve fresh protected
+inspection after self-revoke, repair and focus without weakening the existing grounding assertions.
+
+The frozen V7 Gemma feedback campaign also terminates unsuccessfully. Four cases were dispatched;
+seven observed phases satisfy their measurement contracts, but none passes the correct application
+and no mutation trial is eligible. The fourth case's feedback exhausts its output allocation;
+the declared stop rule leaves two cases undispatched. All 35 physical records remain retained,
+including the failed case's costs. The terminal archive and all frozen source/input identities
+remain unchanged. `react-feedback-v7.json` records this failed result without repaired outputs,
+recredit, held-out or skill-benefit claims. Both customer skills remain unaccepted. A separate prospective compatibility probe passes
+its plain Gateway control, then the served model path rejects the first strict JSON-schema
+request with HTTP 501. The third declared case is not dispatched under its stop rule. A
+`response_format` metadata entry is insufficient to enable schema support; no capability, skill
+or V7 input is changed. The failed local zero-dispatch harness attempt is retained separately.
+
+Native updater generation ownership and packaged update journeys, full browser and Chat/search
+criteria, the original source criteria, final required checks/reviews and authorized integration
+remain open.
+
 These are bounded body-free observations for #4037/#4040 and #4017–#4021. They do not close
 those issues or replace exact-head CI, native browser qualification, semantic review or the
 inherited 96-criterion ledger.
@@ -840,50 +899,50 @@ The source-witness review now has direct null/boolean/number/string/array-like c
 absence. The existing runtime already refuses those malformed values; its logic and model prompts
 are unchanged. No inference was used for this coverage repair.
 
-The later head31 macOS-x64 CI owner job passes all59 tests and observes refusal at3150 ms; its two-
+The later head 31 macOS-x64 CI owner job passes all59 tests and observes refusal at3150 ms; its two-
 process case takes6555 ms. This is subsequent successful evidence, not a reconstruction or diagnosis
 of head29's failed attempt. Its observation is retained with the original native diagnostic evidence.
 Browser UI/native journeys, genuine updater ownership/version/rollback/state/SSD, both skills,
-original96, final required checks and authorized integration remain open.
+original 96, final required checks and authorized integration remain open.
 
-The head31 coverage shard exposed two omitted derived inventories. Both exact local tests fail
+The head 31 coverage shard exposed two omitted derived inventories. Both exact local tests fail
 before repair (two failures/75 healthy). The existing support-code producer adds exactly the four
-new runtime modules. The existing count-only coverage refresh changes contracts241→242 and
-server824→827; every coverage percentage, line measurement, floor/ratchet and reference-environment
-field is unchanged. All77 controls then pass. No fresh Linux measurement or lowered threshold is
+new runtime modules. The existing count-only coverage refresh changes contracts 241→242 and
+server 824→827; every coverage percentage, line measurement, floor/ratchet and reference-environment
+field is unchanged. All 77 controls then pass. No fresh Linux measurement or lowered threshold is
 claimed. The first local expiry-registry gate also rejected unsorted obligation lists; sorting the
 existing requirements and regenerating repairs the metadata without removing an obligation.
 
-A separate same-head31 x64 job fails cold refusal with age5004 ms, no readiness, no exit,
-refusalObserved=false and stderrByteCount=0. The successful x64 job's3150 ms refusal does not explain
+A separate same-head 31 x64 job fails cold refusal with age5004 ms, no readiness, no exit,
+refusalObserved=false and stderrByteCount=0. The successful x64 job's 3150 ms refusal does not explain
 that failed attempt. The new evidence rules out already-emitted refusal for that particular timeout;
 cold initialization/acquisition remains under investigation before any phase-bound change.
 
 ## Checkpoint 33: preserve failure while observing the remaining cold horizon
 
-The same-head31 x64 failure now has a retained precise observation: at5004ms there was no
+The same-head 31 x64 failure now has a retained precise observation: at 5004 ms there was no
 readiness, process exit, parent-observed stderr or constant refusal. A successful x64 attempt is
 kept separately; it does not reconstruct this failure.
 
 Only an already failed cold-refusal control now observes the same owned exit promise through the
 remaining original monotonic spawn-relative ten-second cold horizon. It always rethrows the same
 five-second error, preserving its original snapshot separately from late observations. There is no
-second finish/stdin operation, new retry or acceptance extension. Exit1 is labelled exit-1 rather
+second finish/stdin operation, new retry or acceptance extension. Exit 1 is labelled exit-1 rather
 than refusal; the exact constant-line observation remains separate. Timers/rejections and an already
 expired horizon have explicit controls. Cleanup allows one second of TERM grace before KILL and
 reaping of that same owned fixture child.
 
 Eight actual-helper promise-port controls pass. An actual TERM-ignoring Node fixture fails against
 the existing parent cleanup owner and passes against the repair; either result forcibly reaps its
-same child in finally. All68 affected native owner tests pass on ARM64 with no skip. A private
+same child in finally. All 68 affected native owner tests pass on ARM64 with no skip. A private
 controlled six-second pre-main delay runs the actual unchanged host graph: its original failure at
-5003ms has no stderr/refusal/exit; constant refusal is then observed at6581ms and exit1 at6589ms. The
+5003 ms has no stderr/refusal/exit; constant refusal is then observed at 6581 ms and exit 1 at 6589 ms. The
 original error is still thrown. This proves diagnostic separation under an explicit altered launch
 condition, not the actual x64 cause or native updater acceptance. Earlier observations and failed
 attempts remain retained in `native-cold-refusal-observation.json`.
 
 Actual x64 follow-up, Linux/macOS generation ownership, packaged updates/restart/recovery/state/SSD,
-browser journeys, both skill matrices, original96 and final required checks/integration remain open.
+browser journeys, both skill matrices, original 96 and final required checks/integration remain open.
 
 ## Checkpoint 34: manage the actual lifetime of session-only browser approval
 
@@ -903,35 +962,35 @@ credential or authority is introduced.
 Identical final unit controls have fifteen failures and fifteen healthy results against the
 published parent owners, then thirty passes after the repair. Targeted actual mounted HTTP controls
 have one failure and one healthy result, then two passes; the other nine HTTP controls are filtered
-only in this causal comparison. The full affected run passes all924 tests across45 suites, including
+only in this causal comparison. The full affected run passes all 924 tests across 45 suites, including
 all eleven HTTP controls. The independent auditor's eighteen actual service/registry/store/P256
-controls have ten failures/eight healthy results against published32 and eighteen passes against
+controls have ten failures/eight healthy results against published 32 and eighteen passes against
 the candidate. `browser-session-management.json` binds current sources, observations and retained
 failures. None of these controls establishes native browser, OS restart, profile or SSD acceptance.
 
-Head33 also introduced a cross-platform test-assumption error: both Windows owner jobs pass67 of68
+Head 33 also introduced a cross-platform test-assumption error: both Windows owner jobs pass 67 of 68
 controls but the new cleanup fixture incorrectly expects ignored POSIX TERM behavior. Node terminates
 Windows children unconditionally for TERM. The same real fixture and bounded awaited cleanup now
 require TERM on Windows and actual KILL escalation on POSIX, checking the owned child's signalCode
-as well. All68 owner controls pass locally on ARM64 without skips; actual corrected Windows CI is
+as well. All 68 owner controls pass locally on ARM64 without skips; actual corrected Windows CI is
 still required. `native-cleanup-platform-control.json` retains the original failed job and scope.
-The separate Node26 timed-writer and development proxy CI failures remain under investigation.
+The separate Node 26 timed-writer and development proxy CI failures remain under investigation.
 
 The independently reviewed frozen Gemma V6 experiment has started. It remains known-fixture
 feedback characterization, with unchanged customer skills and all physical calls retained; it is
 not untouched held-out evidence or skill acceptance. Native generation ownership, packaged update
-journeys, browser UI and real browsers, both skill matrices, Chat/search/source96, final exact-head
+journeys, browser UI and real browsers, both skill matrices, Chat/search/source 96, final exact-head
 required checks, review settlement and authorized integration remain open.
 
 ## Checkpoint 35: observe the intended runtime stage and bound readiness requests
 
-The Node26 CI timed-writer test did not establish that an owned child or packet write existed
+The Node 26 CI timed-writer test did not establish that an owned child or packet write existed
 before expecting unreaped-process recovery. Its harness now forwards the existing manager clock;
-the original20ms write timer remains unchanged. The post-spawn control requires a captured child
+the original 20 ms write timer remains unchanged. The post-spawn control requires a captured child
 and writer entry before recovery-required. A separate exact pre-spawn deadline refuses without
 spawn, bytes or readiness and leaves the manager stopped. Identical stage controls have one failure
-and one healthy result before the harness correction, then two passes. All165 owning tests pass on
-both macOS and actual offline LinuxARM64 under Node26.8.1. Product runtime deadlines are unchanged.
+and one healthy result before the harness correction, then two passes. All 165 owning tests pass on
+both macOS and actual offline Linux ARM64 under Node 26.8.1. Product runtime deadlines are unchanged.
 
 The existing development readiness observer could wait indefinitely on stalled response headers
 or body, keeping an old-target observation in flight after the child port changed. Its existing
@@ -944,15 +1003,15 @@ controlled fixture observations, not a reconstruction of the historical CI proxy
 
 The auditor's actual owner-function controls have four failures/four healthy results before the
 change and eight passes afterward, with inert fetch/clock delivery. Both complete owning suites
-pass125 tests on macOS and Linux, including actual Next/BFF warmup and actual child-port reselection
+pass 125 tests on macOS and Linux, including actual Next/BFF warmup and actual child-port reselection
 and public proxy recovery. An initial Linux fixture cleanup failed because the source was read-only;
-the final run uses an exact1231-file UI copy in a writable isolated tmpfs, preserving main sources.
+the final run uses an exact 1231-file UI copy in a writable isolated tmpfs, preserving main sources.
 `readiness-and-runtime-stage.json` binds the exact controls, original CI logs and scope limits.
 
 The frozen Gemma V6 campaign stopped at its first initial measurement failure: one dispatched case,
 zero feedback, zero further cases and zero generated-test execution. All five physical calls remain
 retained: two task/citation attempts and three separately classified readiness calls. Actual task
-usage is12396 input/4096 output; gateway admission and material source/skill observations pass, but
+usage is 12396 input/4096 output; gateway admission and material source/skill observations pass, but
 the original saved-answer join refuses. It receives no execution, benefit or skill acceptance credit.
 
 Two measurement-schema mistakes were diagnosed offline: the stored evidence ID lives under
@@ -965,5 +1024,5 @@ shapes and returns nonzero on terminal measurement failures. Customer skills, ta
 prompts, grants, scoring and all frozen qualification product sources remain unchanged.
 
 Full exact-head CI, native generation ownership and packaged update/restart/recovery/state/SSD,
-browser UI and real browsers, both skill benefit/convention/held-out matrices, Chat/search/source96,
+browser UI and real browsers, both skill benefit/convention/held-out matrices, Chat/search/source 96,
 review settlement and authorized integration remain open.

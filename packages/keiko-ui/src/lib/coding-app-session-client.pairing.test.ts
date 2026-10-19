@@ -8,6 +8,13 @@ import {
   redeemCodingAppSessionPairingOnBoot,
 } from "./coding-app-session-client";
 
+// Isolate the pairing timeout owner; browser restoration has its own actual-client integration suite.
+vi.mock("./browser-approval-client", () => ({
+  createLocalBrowserApprovalClient: vi
+    .fn()
+    .mockReturnValue({ restore: vi.fn().mockResolvedValue(false) }),
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

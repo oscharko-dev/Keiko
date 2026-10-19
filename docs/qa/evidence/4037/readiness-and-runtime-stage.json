@@ -23,7 +23,7 @@
       "logSha256": "46d2620bec07680da877b47cb6f339198adc048475b6ff953264a35b82dbf681",
       "observed": "Expected runtime-reap-unproven but received start-timeout. The test did not establish whether an owned child or packet write existed."
     },
-    "repair": "Forward the existing manager clock port through the test harness. Keep the20ms packet timeout and require one actual owned spawn plus writer entry before recovery-required. The separate exact pre-spawn deadline refuses without spawn, bytes, readiness or retained child authority. Product runtime, authority checks and deadlines are unchanged.",
+    "repair": "Forward the existing manager clock port through the test harness. Keep the 20 ms packet timeout and require one actual owned spawn plus writer entry before recovery-required. The separate exact pre-spawn deadline refuses without spawn, bytes, readiness or retained child authority. Product runtime, authority checks and deadlines are unchanged.",
     "causal": {
       "classification": "Identical paired pre-spawn/post-spawn test controls with the original real-clock harness versus forwarding its existing owner clock port. Test-stage isolation only; product runtime unchanged. Original CI failure retained separately.",
       "testSha256": "b336fbfc500650f93c57fde0a5a1282d1290b3357bea32e9002015a5117f9e7e",
@@ -75,7 +75,7 @@
       "observed": "The replacement child port was selected, but the public proxy did not recover. Original fixture ignored child output; its exact cause remains unproven."
     },
     "failure": "The existing readiness observer has no finite header/body request lifetime. A stalled old endpoint can keep its readiness loop in flight after a target changes.",
-    "repair": "The existing API/UI readiness request owner attaches one5s AbortSignal spanning response headers and body consumption. Later loop iterations can observe the current target. Existing whole-journey readiness and restart bounds are unchanged.",
+    "repair": "The existing API/UI readiness request owner attaches one 5 s AbortSignal spanning response headers and body consumption. Later loop iterations can observe the current target. Existing whole-journey readiness and restart bounds are unchanged.",
     "realHttpCausal": {
       "beforeFailed": 2,
       "afterPassed": 2,
@@ -126,7 +126,7 @@
       "name": "dev-readiness35-before.log",
       "sha256": "3642e5dc739bfda4d0c498356ddfd82752d436586fae27a125490bbd9dc0bd01",
       "summary": [
-        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 2 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
         " Test Files  1 failed (1)",
         "      Tests  2 failed | 121 skipped (123)"
       ]
@@ -165,19 +165,19 @@
       "name": "checkpoint35-types.log",
       "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29",
       "summary": [
-        "package-graph: PASS \u2014 workspace references, package emits, and root package build graph are aligned."
+        "package-graph: PASS — workspace references, package emits, and root package build graph are aligned."
       ]
     }
   ],
   "retainedFailures": [
-    "Initial Linux readiness run kept source read-only, but the existing fixture unconditionally restores UI tsconfig in cleanup:123 tests passed and two cleanup failures were EROFS. Exact1231 tracked UI files were copied to a writable isolated tmpfs; both suites then pass125. Main UI source remains unchanged.",
+    "Initial Linux readiness run kept source read-only, but the existing fixture unconditionally restores UI tsconfig in cleanup: 123 tests passed and two cleanup failures were EROFS. Exact 1231 tracked UI files were copied to a writable isolated tmpfs; both suites then pass 125. Main UI source remains unchanged.",
     "The first scoped lint run rejected missing explicit timer/global lookups. Existing Node timer imports and globalThis.AbortSignal qualification repair those references; no rule was suppressed.",
     "The first private extracted-owner commissioning omitted its actual microphone-policy producer. That harness failure remains retained; final before/after runs invoke the same complete actual producer set."
   ],
   "limitations": [
     "No causal claim that the synthetic stall reproduces the historical CI proxy failure. A repeated exact-head CI failure must be read and reproduced before further changes.",
-    "LinuxARM64 is actual developer-container evidence, not hosted x64 or complete Node26/coverage-shard acceptance.",
+    "Linux ARM64 is actual developer-container evidence, not hosted x64 or complete Node 26/coverage-shard acceptance.",
     "Actual corrected Windows required CI, native generation ownership and packaged update/restart/recovery/state/SSD remain open.",
-    "Browser UI/native journeys, both skill matrices, full Chat/search/source96, final exact-head required checks/reviews and authorized integration remain open."
+    "Browser UI/native journeys, both skill matrices, full Chat/search/source 96, final exact-head required checks/reviews and authorized integration remain open."
   ]
 }

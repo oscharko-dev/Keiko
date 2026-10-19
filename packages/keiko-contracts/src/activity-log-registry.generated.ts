@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7b49d055cdb2d2ad6517f5cf47cb2d0a92d22d7fad04130bce897de5e9046cc9" as const;
+  "99a75157c82d7653a448b14287336eabd030661145755e82de4fcf3626892c11" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5029,6 +5029,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "browserOperation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "browserOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "canEdit",
               type: "boolean",
               dataClass: "closed-enum",
@@ -5154,6 +5166,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
+            {
+              name: "browserOperation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
             {
               name: "deletedCount",
               type: "integer",

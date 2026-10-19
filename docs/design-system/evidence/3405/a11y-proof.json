@@ -14,8 +14,8 @@
     "packages/keiko-ui/src/lib/api.ts": "869fd101570c2a2440cbb20530789f65f7c6a18a3b33f66e96cae19c0d13a263",
     "packages/keiko-ui/src/lib/i18n-messages.de.ts": "fbf21781319cd4908ee21c437f553e31af12c013315623beb91fe54e611422aa",
     "packages/keiko-ui/src/lib/i18n-messages.en.ts": "638ed6162d8336b6a25b0f484899ccd0c0f62cfb0e13b5c9633255969b4c7181",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "e6d7916bef9e2bea99beac10d5a0450d0ead70f48d73d63fe8635ef19df9bd76",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "f7eccf28fea194dbbd71a61787ef396086ec99ef777016de0d564aad1eb3b635",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "e683f997542eacb998f43faf73e6a4da6a3a964b26301c54732423a2ef649a31",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "7c61f1a5be8a3efdf25a103910f5ea7bc82c76bb371d13ca0df172fac32f5b79",
     "packages/keiko-ui/src/lib/optional-widget-i18n.ts": "48a5b89217f4e144af6b385199e1803cde0389649d363c9268e30120a02e3b46"
   },
   "harnessProvenanceSha256": {

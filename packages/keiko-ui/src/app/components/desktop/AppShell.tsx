@@ -280,6 +280,11 @@ const Palette = dynamic(() => import("./modals/Palette").then((mod) => mod.Palet
 // Issue #1207 (ADR-0042 D3.6) — the startup update notice renders nothing until its own preflight
 // resolves, and it is gated on a workspace that has already loaded, so neither it nor the release
 // copy catalog it carries belongs in the initial desktop paint.
+const BrowserApprovalNotice = dynamic(
+  () => import("./browser/BrowserApprovalNotice").then((module) => module.BrowserApprovalNotice),
+  { ssr: false },
+);
+
 const UpdateStartupNotice = dynamic(
   () => import("./update/UpdateStartupNotice").then((mod) => mod.UpdateStartupNotice),
   { ssr: false, loading: () => null },
@@ -2971,6 +2976,7 @@ function AppShellInner(): ReactNode {
                       onSplitFront={ws.api.splitFront}
                       onCascade={ws.api.cascade}
                     />
+                    <BrowserApprovalNotice />
                     <div className="mid">
                       {needsGatewaySetup ? null : (
                         <LeftRail
