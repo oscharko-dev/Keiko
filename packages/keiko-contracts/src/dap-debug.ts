@@ -930,7 +930,12 @@ export function parseEvaluateWatchRequest(value: unknown): DebugParseResult<Eval
   );
 }
 
-function utf8Prefix(value: string, maxBytes: number): { value: string; bytes: number } {
+interface DebugTextPrefix {
+  readonly value: string;
+  readonly bytes: number;
+}
+
+function utf8Prefix(value: string, maxBytes: number): DebugTextPrefix {
   let prefix = "";
   let bytes = 0;
   for (const codePoint of value) {
