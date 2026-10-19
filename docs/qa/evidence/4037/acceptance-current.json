@@ -377,5 +377,6 @@
     "verifiedAt": "2026-10-19T06:45:26.405438+00:00",
     "classification": "Source-body provenance refresh; six acceptance criteria remain unchanged and unchecked."
   },
-  "checkpoint40BoundedEvidence": "browser-recovery-and-readiness.json; no complete acceptance disposition or issue checkmark changed"
+  "checkpoint40BoundedEvidence": "browser-recovery-and-readiness.json; no complete acceptance disposition or issue checkmark changed",
+  "checkpoint41BoundedEvidence": "complete-manifests-and-basic-skills.json; failed calibration retained, source-completeness repair and stricter measurement admission only; no complete acceptance disposition or issue checkmark changed"
 }

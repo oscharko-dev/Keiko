@@ -1150,3 +1150,34 @@ a pass. `browser-recovery-and-readiness.json` binds the actual sources and scope
 Issue 4043's source-body provenance is refreshed; its six unchanged criteria remain unchecked.
 Native browser/profile/SSD journeys, the separate footer-interception reproduction, installed
 updates, both skill matrices, original 96 source qualification and final integration remain open.
+
+## Checkpoint 41: retain bounded complete build manifests
+
+The first simple, matched native Gemma calibration retains four complete React attempts. Three
+fail the actual disabled-control interaction (AAA selected/control and GWT control). GWT selected
+collects zero tests with one collection error because the Vitest describe import is missing.
+The first Java attempt observes its complete service/interface and actual build dependency versions, but the
+physical build excerpt omits two opening project/namespace lines. The frozen all-material-lines
+contract refuses that answer before execution and stops the campaign with nineteen cases undispatched.
+The terminal archive retains all attempts. These results establish neither skill benefit nor a
+model capability boundary.
+
+The existing complete-document predicate now includes canonical manifests recognized by the existing
+ecosystem registry. The canonical guarded reader returns the complete current redacted snapshot only
+when it fits both unchanged byte grants. Explicit selections, certified windows and ordinary source
+windows retain their geometry. Six ecosystem controls have five failures and one healthy result
+before the repair. All 119 tests in six affected suites pass afterward, including the byte ceiling
+and existing body-free completion-log usage. No file-specific rule, prompt or model knob is added.
+ADR-0022 records the same bounded behavior.
+
+The auditor also reproduced a prospective measurement admission gap: a syntactically valid but
+incomplete React report could be labelled observed. A separate caller version uses the existing
+private disposition owner and the existing terminal-end-reason boundary. Eleven controls pass,
+including incomplete-report refusal, completed compiler failure, actual complete failed runs,
+healthy/mutation reports and inconsistent status/hash/end-reason negatives. The initial additional
+end-reason failure remains retained. Java compiler completion is separately measured before strict
+Surefire verification. No historical campaign receives new credit.
+
+`complete-manifests-and-basic-skills.json` binds these scoped observations. The compact published
+skills remain unchanged and unqualified. A new frozen native campaign must prove the repaired
+source path; all broader acceptance and merge obligations remain open.

@@ -527,8 +527,9 @@ matching, including technical aliases and ordinary context.
 The existing persistent natural-language matching revision invalidates older scores. After actual
 excerpt assembly and final prompt fitting, an unobserved compound hint lowers selection confidence
 without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
-Ordinary natural-language document excerpts include the complete decoded, redacted document when
-it fits both the existing window grant and remaining total bytes. This uses the canonical reader's
+Ordinary natural-language document excerpts and canonical build manifests recognized by the existing
+ecosystem registry include the complete decoded, redacted source when it fits both the existing
+window grant and remaining total bytes. This uses the canonical reader's
 current snapshot and actual full-file range. Explicit selected-file or line-range requests,
 coverage-certified windows and source-code excerpts retain their requested geometry; a larger
 document retains the existing bounded anchor windows.

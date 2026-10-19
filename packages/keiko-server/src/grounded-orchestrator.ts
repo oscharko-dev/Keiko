@@ -8058,7 +8058,7 @@ function preferCompleteDocumentExcerpt(
   )
     return false;
   const bucket = candidateBucketForPath(scopePath);
-  return bucket === "docs" || bucket === "overview-doc";
+  return bucket === "docs" || bucket === "overview-doc" || bucket === "canonical-metadata";
 }
 
 function readPathExcerptResult(
