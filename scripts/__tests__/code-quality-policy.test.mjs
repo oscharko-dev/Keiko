@@ -374,7 +374,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       expect(record.id).toBe(`git-${kind.toLowerCase()}-public-parser`);
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);
@@ -417,7 +420,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       };
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+      ]);
       expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
       expect(record.transform).toEqual(selector);
       expect(record.output).toEqual(selector);

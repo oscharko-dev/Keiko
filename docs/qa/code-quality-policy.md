@@ -1184,3 +1184,24 @@ and exact restoration passed the same checks. The scoped tooling run passed874 c
 five unchanged Linux-only fallback cases skipped on macOS; the existing new-code ruler covered all
 52 new line/condition units. These are source-bound cohort results, not a complete integrated
 repository qualification or a replacement for current-head CI.
+
+### Existing seven Git parser raw-type checks (#3918)
+
+The existing status, diff, history, summary, remotes, sync-preview and sync-execute public-parser
+records additionally declare `anti-slop/no-runtime-typeof`. All prior identities, unknown-parameter
+obligations, role/consumer bindings, proof selectors, registry count and active scopes are retained.
+No dictionary declaration is added: the bounded default family comparison derived six additional
+`typeof` coordinates and zero dictionary coordinates. The original sixteen stored unknown slots
+remain deeply identical. All six additions match fresh native coordinates in the four unchanged
+production owners; nineteen other raw `typeof` and forty-three dictionary observations remain
+unaccounted by this family. Source/proof files, public types, exports and runtime behavior are unchanged.
+
+The canonical summary boolean-guard counterfactual fails its public eager ordered-reasons assertion
+at the malformed `available` field while source and healthy controls pass. The sync object-guard
+counterfactual fails public preview/execute null-first primitive refusals while source and healthy
+controls pass. Exact restoration precedes identical first positive controls. A reporter postcheck
+that expected untruncated reason text was corrected using the actual assertion coordinate and
+four-versus-five reason counts; it caused no negative replay or test relaxation. These controls
+and the structural pending family assessment do not replace fresh integrated semantic qualification
+or activate a rule scope. The remaining `Readonly<Record<...>>` and dynamic-array provenance limits
+are not bypassed by this metadata change.

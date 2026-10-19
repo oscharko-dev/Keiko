@@ -652,7 +652,7 @@
       "id": "git-status-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
@@ -708,7 +708,7 @@
       "id": "git-diff-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
@@ -752,7 +752,7 @@
       "id": "git-history-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-history.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-history",
@@ -796,7 +796,7 @@
       "id": "git-summary-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
@@ -840,7 +840,7 @@
       "id": "git-remotes-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
@@ -884,7 +884,7 @@
       "id": "git-sync-preview-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
@@ -928,7 +928,7 @@
       "id": "git-sync-execute-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
