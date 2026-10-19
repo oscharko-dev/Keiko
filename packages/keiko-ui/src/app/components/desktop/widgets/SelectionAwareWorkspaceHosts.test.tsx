@@ -1120,6 +1120,36 @@ describe("ChatWindowSessionHost target missing", () => {
     ]);
   });
 
+  it("forwards the same creation intent after another browser restores the shared window", async (): Promise<void> => {
+    const pending: AppWindow = {
+      id: "shared-chat-window",
+      type: "chat",
+      x: 10,
+      y: 20,
+      w: 320,
+      h: 240,
+      z: 1,
+      max: false,
+      zoom: 1,
+      cfg: { title: "Shared conversation", newChatRequestId: "shared-creation" },
+    };
+    const restored = parsePersistedWindows(JSON.stringify(sanitizePersistedWindows([pending])));
+    expect(restored).toHaveLength(1);
+    const restoredWindow = restored?.[0];
+    if (restoredWindow === undefined) throw new TypeError("The pending window was not restored.");
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={pending.cfg} ctx={context({ windowId: pending.id })} />
+        <ChatWindowSessionHost cfg={restoredWindow.cfg} ctx={context({ windowId: pending.id })} />
+      </I18nProvider>,
+    );
+    await waitFor((): void => expect(defaultOpenNewChat).toHaveBeenCalledTimes(2));
+    expect(defaultOpenNewChat.mock.calls.map((call) => call[2])).toEqual([
+      "shared-creation",
+      "shared-creation",
+    ]);
+  });
+
   it("keeps legacy unbound windows independent while retaining their stable window intent", async (): Promise<void> => {
     render(
       <I18nProvider>

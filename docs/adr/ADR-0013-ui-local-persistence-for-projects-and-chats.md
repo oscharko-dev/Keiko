@@ -334,6 +334,13 @@ title, requested model choice and branch. An omitted model is distinct from ever
 the model originally elected for that automatic request belongs to the accepted chat result.
 A replay recovers that result before current model admission, even if the default changed or is
 now unavailable. Genuinely new creation retains its original model admission guards.
+Pending Chat windows retain the same bounded, opaque creation request through browser-local and
+shared workspace serialization. Independently connected browsers therefore replay the same intent
+instead of substituting a window fallback. Persistence applies the canonical request-id grammar
+and the unchanged secret-shape heuristic. The browser generates a fresh secure id outside that
+heuristic, using at most 32 draws; exhaustion reports a body-free diagnostic before a window is
+created. An accepted chat binding removes the pending request. Legacy unbound windows retain
+their existing stable window identity; this reference grants no session or source authority.
 A `BEGIN IMMEDIATE` transaction inserts the conversation and
 intent together, or returns the existing conversation without reverting subsequent edits.
 Conflicting parameters and closed or deleted targets are refused. The nullable chat reference

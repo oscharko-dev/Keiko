@@ -88,6 +88,9 @@ windows.
    and deletion retains a tombstone rather than resurrecting a conversation. This identity grants
    no browser session, project access or draft authority. The existing Activity Log records only
    the closed creation decision, completeness and loss state under the request correlation.
+   Pending window snapshots preserve the same closed, secret-checked creation reference across
+   independently connected browsers. Generating a persistable reference uses bounded secure
+   draws; exhaustion fails before window creation and records a body-free client diagnostic.
    Unsent text is additionally saved per `chatId` in the existing private UiStore (schema 44),
    through authenticated draft reads and revision-checked writes. Reload restores only that
    conversation's text; a conversation switch does not erase another conversation's saved draft.

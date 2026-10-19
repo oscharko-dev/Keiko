@@ -5,6 +5,7 @@ import {
   isGitHubOwnerAndRepo,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { CLIENT_BINDING_WINDOW_REF_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { isDesktopChatCreationRequestId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -103,6 +104,7 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // was introduced to remove.
   chat: [
     "chatId",
+    "newChatRequestId",
     CHAT_ID_FINGERPRINT_CFG_KEY,
     CHAT_ID_CHOSEN_CFG_KEY,
     "memoryEnabled",
@@ -181,6 +183,10 @@ function sanitizeSetMarker(value: unknown): AppWindow["cfg"][string] {
   return value === true ? true : undefined;
 }
 
+function sanitizeChatCreationRequestId(value: unknown): AppWindow["cfg"][string] {
+  return isDesktopChatCreationRequestId(value) && !isSecretShapedString(value) ? value : undefined;
+}
+
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
@@ -191,6 +197,7 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
   [`chat:${CHAT_ID_FINGERPRINT_CFG_KEY}`]: sanitizeSha256Digest,
   [`chat:${CHAT_ID_CHOSEN_CFG_KEY}`]: sanitizeSetMarker,
+  "chat:newChatRequestId": sanitizeChatCreationRequestId,
 };
 
 function isFiniteNumber(value: unknown): value is number {

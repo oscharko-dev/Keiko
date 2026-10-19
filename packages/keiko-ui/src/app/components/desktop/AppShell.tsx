@@ -73,6 +73,8 @@ import {
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { secureRandomId } from "@/lib/secure-random";
+import { isSecretShapedString } from "./hooks/isSecretShapedString";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -140,17 +142,32 @@ function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): 
   return projectPath === undefined ? next : { ...next, projectPath };
 }
 
+function newChatCreationRequestId(): string {
+  for (let draw = 0; draw < 32; draw += 1) {
+    const id = secureRandomId("chat");
+    if (!isSecretShapedString(id)) return id;
+  }
+  const error = new TypeError("Chat creation identity allocation failed.");
+  reportClientDiagnostic(error.message, {
+    correlationId: newClientCorrelationId(),
+    kind: "other",
+    errorKind: "internal",
+    errorEvidence: clientErrorEvidence(error),
+  });
+  throw error;
+}
+
 export function prepareNewWindowCfg(
   type: WindowType,
   cfg: Cfg,
-  newChatRequestId = crypto.randomUUID(),
+  newChatRequestId?: string,
   activeProjectPath?: string,
 ): Cfg {
   return type === "chat"
     ? {
         ...normalizedNewChatCfg(cfg, activeProjectPath),
         chatId: undefined,
-        newChatRequestId,
+        newChatRequestId: newChatRequestId ?? newChatCreationRequestId(),
       }
     : cfg;
 }

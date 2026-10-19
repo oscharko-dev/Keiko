@@ -1,5 +1,26 @@
 # Chat/Files qualification observations
 
+## Checkpoint 55: retain a pending Chat creation identity across browsers
+
+One visible New chat action on published54 created two conversations, then displayed
+“Chat not found”. The existing workspace serializer omitted the pending request identity, so the
+restored browser substituted a different legacy window identity. The serializer now retains the
+same bounded, secret-checked reference. The existing secure random producer permits at most32
+draws outside the unchanged heuristic and reports exhaustion before a window is accepted.
+
+The same production serializer/mounted-host controls fail before and pass after repair. Final
+verification passes331 targeted UI tests,129 actual store/handler tests and10824 full UI tests
+across562 suites, with one existing skip. Strict root/UI typing, full UI lint, actual301-asset
+build, i18n/editor checks, real Sonar and all7 ActivityLog/architecture checks pass. Independent
+exact-function controls improve from13/20 to20/20 on matching product sources.
+
+The actual two accepted rows also expose automatic versus explicit model election across browsers.
+That separate snapshot repair and actual fixed-source UI replay remain open. This checkpoint does
+not claim full browser, retrieval, updater, skill or final-head acceptance. The original failed UI
+run, all intermediate failures and terminal cleanup remain retained. See
+[`chat-creation-window-replay.json`](chat-creation-window-replay.json) for command/source bindings
+and explicit remaining work.
+
 ## Checkpoint 37: positive owned-child retirement and a precise scanner disposition
 
 The macOS supervisor previously ignored the result of waiting for its owned root after a monitor
