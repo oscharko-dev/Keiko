@@ -1280,3 +1280,43 @@ checkpoint42 receipt receive spacing corrections only; measured counts, hashes, 
 classifications remain unchanged. Native skill measurements continue independently; this repair
 changes none of their frozen inputs. Broader search, browser, skill and installed updater acceptance,
 required final checks and successful integration remain open.
+
+## Checkpoint 45: keep new window controls inside the available work area
+
+Generic add, tool toggle and explicit Editor open now share current viewport sizing and existing
+registry minima. Fresh local frames remain automatically adaptable until their geometry or ownership
+changes. Actual persisted, sibling and server snapshot application retires that transient provenance,
+including equal geometry with different ordering. Local focus/configuration, own server PUT
+acknowledgements and ignored storage echoes preserve it. Saved/manual floating recovery, maximized
+restore geometry, persistence shape and source authority stay unchanged. ADR-0123 is amended in place.
+
+The unchanged real Chromium dictation flow first fails because the footer intercepts its control.
+The initial add-only repair passes 222 unit tests but still fails the actual flow; two added tool/editor
+controls then expose the bypasses. The shared three-route repair passes that flow. A controlled late
+inventory case subsequently exposes a 77-pixel overflow. Twelve identical allocation/hook controls
+produce six failures and six healthy controls on exact published parent 44, then twelve passes on
+candidate v2. The independent reviewer then finds a candidate regression at equal-geometry remote
+snapshot adoption. Two storage/server controls fail with ten healthy controls, including a healthy
+own-PUT-acknowledgement control; the explicit provenance repair passes all twelve. An unpublished
+hook-scope integration error was rejected by local UI typing, lint and tests before correction; its
+source and failed output remain retained.
+
+Final affected verification passes 1,478 tests in 63 hook suites, 250 actual diagnostic-HTTP tests
+and the complete UI coverage run: 10,802 passes and one existing skip in 562 suites. Six actual
+Chromium journeys pass together, including both notice timings and the original coding/dictation
+failures. The saved-layout grounding-parity fixture uses the visible Full screen/Restore controls
+and additionally proves exact restoration of its original geometry; its original source, citation,
+persistence and provider assertions remain intact. Fitting and actual provenance retirement use the
+existing registered body-free client activity port.
+
+The independent reviewer passes eleven unchanged controls and thirteen extended controls, including
+own storage echo and own PUT acknowledgement followed by a real higher-revision server adoption.
+The complete affected workspace browser gate passes all seven cases. Two fixture corrections retain
+its actual preconditions: private chat reads use the existing validated launcher pairing path, and
+the tooltip case uses a genuinely overlong synthetic model id with an explicit measured-overflow
+assertion. The previous id was fully visible. Authorization and tooltip guards remain unchanged.
+The complete Activity Log gate passes seven of seven checks.
+
+`window-allocation-and-provenance.json` binds this scoped change. It does not qualify native browser
+approval, installed updates, skill benefit, all search journeys or final integration. Both native
+updater findings and all broader acceptance obligations remain open.

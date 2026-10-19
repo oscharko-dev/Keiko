@@ -1093,22 +1093,51 @@ async function expectGroundingParityUi(page: Page, chat: GroundingParityChat): P
   ).toHaveCount(1);
 }
 
-async function sendTypedGroundingTurn(page: Page, chat: GroundingParityChat): Promise<void> {
+interface ParityFrameGeometry {
+  readonly width: string;
+  readonly height: string;
+  readonly transform: string;
+}
+
+async function parityFrameGeometry(frame: Locator): Promise<ParityFrameGeometry> {
+  return frame.evaluate((element) => {
+    const style = (element as HTMLElement).style;
+    return { width: style.width, height: style.height, transform: style.transform };
+  });
+}
+
+async function openExpandedParityChat(
+  page: Page,
+  chat: GroundingParityChat,
+): Promise<{ readonly frame: Locator; readonly previous: ParityFrameGeometry }> {
   await seedGroundingParityChat(page, chat);
   await page.goto("/");
-  const chatWindow = page.getByRole("region", { name: `Chat — ${chat.title}` });
-  await expect(chatWindow).toBeVisible();
+  const frame = page.getByRole("region", { name: `Chat — ${chat.title}` });
+  await expect(frame).toBeVisible();
+  const previous = await parityFrameGeometry(frame);
+  // Saved floating geometry remains intentional. Use the visible recovery control before
+  // operating a bottom-docked composer in the smaller work area, then verify exact restoration.
+  await frame.getByRole("button", { name: /^Full screen /u }).click();
+  await expect(frame.getByRole("button", { name: /^Restore /u })).toBeVisible();
+  return { frame, previous };
+}
+
+async function restoreParityChat(frame: Locator, previous: ParityFrameGeometry): Promise<void> {
+  await frame.getByRole("button", { name: /^Restore /u }).click();
+  await expect.poll(() => parityFrameGeometry(frame)).toEqual(previous);
+}
+
+async function sendTypedGroundingTurn(page: Page, chat: GroundingParityChat): Promise<void> {
+  const { frame: chatWindow, previous } = await openExpandedParityChat(page, chat);
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await composer.fill(GROUNDING_PARITY_TRANSCRIPT);
   await chatWindow.getByRole("button", { name: "Send message" }).click();
   await expectGroundingParityUi(page, chat);
+  await restoreParityChat(chatWindow, previous);
 }
 
 async function sendVoiceGroundingTurn(page: Page, chat: GroundingParityChat): Promise<void> {
-  await seedGroundingParityChat(page, chat);
-  await page.goto("/");
-  const chatWindow = page.getByRole("region", { name: `Chat — ${chat.title}` });
-  await expect(chatWindow).toBeVisible();
+  const { frame: chatWindow, previous } = await openExpandedParityChat(page, chat);
   const dialogSwitch = chatWindow.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
@@ -1117,6 +1146,7 @@ async function sendVoiceGroundingTurn(page: Page, chat: GroundingParityChat): Pr
   await expect.poll(() => providerNativeOutputEvents(page)).toBe(3);
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+  await restoreParityChat(chatWindow, previous);
 }
 
 function expectGroundedPayloadScope(payload: unknown, chat: GroundingParityChat): void {

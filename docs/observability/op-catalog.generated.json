@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "89ffdacf03283b90b3aa0ccdbed7ad170191e5dd182e97f6085fe8264126d341",
+    "catalogDigest": "f18e03c6a0f3e463cd2018885fb6fba0e92f16ada7d09e97302718389dd551ae",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3358,6 +3358,7 @@
               "cursor-collision",
               "workspace-scroll-ready",
               "workspace-viewport-fitted",
+              "workspace-window-sizing-retired",
               "workspace-layout-locked",
               "workspace-layout-unlocked",
               "literal-input-preserved",

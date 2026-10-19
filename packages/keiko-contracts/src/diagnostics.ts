@@ -407,6 +407,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "cursor-collision",
   "workspace-scroll-ready",
   "workspace-viewport-fitted",
+  "workspace-window-sizing-retired",
   "workspace-layout-locked",
   "workspace-layout-unlocked",
   "literal-input-preserved",

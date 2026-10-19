@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 
 let fixtureRoot: string | null = null;
 
@@ -128,6 +129,69 @@ test("footer window palette clears the right rail and wins hit-testing at its ed
   }
 
   await expectGatewaySetupClearsRailReserve(page);
+});
+
+async function expectWorkbenchInsideCanvas(page: Page): Promise<void> {
+  const frame = page.locator(".window").filter({
+    has: page.locator('section[aria-label="Coding Workbench"][data-state]'),
+  });
+  await expect(frame).toHaveCount(1);
+  await expect
+    .poll(async () => {
+      const [windowBox, canvasBox] = await Promise.all([
+        frame.boundingBox(),
+        page.locator("main.workspace").boundingBox(),
+      ]);
+      if (windowBox === null || canvasBox === null) throw new Error("Expected workspace geometry");
+      return windowBox.y + windowBox.height - (canvasBox.y + canvasBox.height);
+    })
+    .toBeLessThanOrEqual(1);
+}
+
+test("workspace allocation @smoke — existing browser notice leaves new tool controls reachable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const fixture = await installLiveCodingWorkbenchRuntime(page);
+  await page.route("**/api/coding-workbench/app-session/browser", (route) =>
+    route.fulfill({ json: { state: "unavailable" } }),
+  );
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Connect browser", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  await expect(fixture.workbench).toBeVisible();
+  await expectWorkbenchInsideCanvas(page);
+  await page.getByLabel("Task instructions").fill("Inspect the current project");
+  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
+  await expect(fixture.workbench).toHaveAttribute("data-state", "awaiting-approval");
+});
+
+test("workspace allocation @smoke — late browser notice leaves fresh tool controls reachable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const fixture = await installLiveCodingWorkbenchRuntime(page);
+  let release = (): void => undefined;
+  const inventoryGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/coding-workbench/app-session/browser", async (route) => {
+    await inventoryGate;
+    await route.fulfill({ json: { state: "unavailable" } });
+  });
+  try {
+    await fixture.open();
+    await expect(page.getByRole("button", { name: "Connect browser", exact: true })).toBeHidden();
+    await expectWorkbenchInsideCanvas(page);
+    release();
+    await expect(page.getByRole("button", { name: "Connect browser", exact: true })).toBeVisible();
+    await expectWorkbenchInsideCanvas(page);
+    await page.getByLabel("Task instructions").fill("Inspect the current project");
+    await page.getByRole("button", { name: "Start coding run", exact: true }).click();
+    await expect(fixture.workbench).toHaveAttribute("data-state", "awaiting-approval");
+  } finally {
+    release();
+  }
 });
 
 test.afterEach(() => {

@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded window-allocation and late work-area sizing repair; no complete browser, updater, skill, search or epic acceptance",
+  "sourceParent": "cd3fc165b9347eae9ccb45b3d6f55bc85d043eeb",
+  "sourceFreeze": {
+    "artifact": "checkpoint45-source-freeze-v5.json",
+    "sha256": "035a632d23bf26cce9c0ad0e12821b8efbdb905d59736a296a0b5e0603e27bb7"
+  },
+  "repair": {
+    "owner": "Existing workspace allocation, resize observation and persisted snapshot owners",
+    "initialSizing": "Generic add, tool toggle and explicit Editor open share current world-viewport sizing and existing type minima. Original default dimensions remain when they fit.",
+    "freshLocalSizing": "Only fresh local allocation callbacks enroll transient geometry. Unchanged local frames may shrink or move when the work area shrinks. Configuration and focus preserve eligibility.",
+    "manualAndRemoteOwnership": "Manual geometry, maximize, minimize and closure relinquish automatic sizing. Actual persisted/sibling/server snapshot application explicitly retires provenance even with identical ids and geometry. Own server PUT acknowledgements and skipped identical storage echoes do not.",
+    "preserved": [
+      "ordinary floating title-bar recovery",
+      "saved floating geometry",
+      "maximized restore geometry",
+      "source and authority bindings",
+      "application minimum sizes",
+      "persistence schema"
+    ],
+    "logging": "Existing client diagnostic port and registered composer activity. workspace-viewport-fitted records fitting; workspace-window-sizing-retired records actual nonempty provenance retirement. No window ids, configuration, paths or content."
+  },
+  "causalControls": {
+    "initialAndLateSizingBeforeProvenanceCorrection": {
+      "receipt": {
+        "artifact": "checkpoint45-causal.json",
+        "sha256": "4ae51f55b1d598faaa6e2f4024a3e2521b9f2006fc5e8bdb392754de6b33f9a1"
+      },
+      "sourceFreeze": {
+        "artifact": "checkpoint45-source-freeze-v2.json",
+        "sha256": "33f893e2d217b341694d94bb1e661fbc2f8e43cb3c6ccb388250090d7589d80c"
+      },
+      "parentFailed": 6,
+      "parentHealthy": 6,
+      "candidatePassed": 12,
+      "classification": "Identical actual controls on exact published parent 44 and superseded candidate v2. The subsequent provenance repair is separate, and all these behaviors remain covered in the final affected runs."
+    },
+    "initialOnlyIncompleteRepair": {
+      "testsPassed": 222,
+      "browserStillFailed": true,
+      "unitLog": {
+        "artifact": "checkpoint45-allocation-after.log",
+        "sha256": "16e8be63345a522b4754721b0b526ae1133edfbcc187d2892592036b5f395c46"
+      },
+      "browserLog": {
+        "artifact": "checkpoint45-footer-browser-after-initial.log",
+        "sha256": "1849b90aed69a15a59629db1d76ec9663504943765b4b6f806b4e7fe1223967f"
+      },
+      "trace": {
+        "artifact": "checkpoint45-footer-after-initial-artifacts/trace.zip",
+        "sha256": "6922669f3a874db1b2ff5d8c56515695eaf8fd53137d81f6d3c9fb0cca79e5b0"
+      }
+    },
+    "addedToolAndEditorControls": {
+      "beforeFailed": 2,
+      "beforeHealthy": 4,
+      "log": {
+        "artifact": "checkpoint45-all-routes-before.log",
+        "sha256": "095f0af696dc9dd42ec6a88b15c95881c8bbb72519ab7f2f361c23e0afdc1cb9"
+      }
+    },
+    "lateInventoryBefore": {
+      "failed": 1,
+      "healthy": 1,
+      "observedBottomOverflowPixels": 77,
+      "log": {
+        "artifact": "checkpoint45-late-notice-before.log",
+        "sha256": "886a84071a62bf18519a43306f71d9bb90a3b0610571b903fe3ddb90c40bb5ac"
+      },
+      "trace": {
+        "artifact": "checkpoint45-late-notice-before-artifacts/trace.zip",
+        "sha256": "aca5ffbeab8fb9d3e712be0491da0ac3f128242d10a30dcc453c76700ac6c04e"
+      }
+    },
+    "remoteProvenanceBefore": {
+      "failed": 2,
+      "healthy": 10,
+      "log": {
+        "artifact": "checkpoint45-provenance-all-before.log",
+        "sha256": "b309636e8fd696b0dd032d7c6383e65338dd46faa72412e64441f4daeb235328"
+      }
+    },
+    "remoteProvenanceAfter": {
+      "passed": 12,
+      "log": {
+        "artifact": "checkpoint45-provenance-fixed-focused.log",
+        "sha256": "c074822384fd41157bbc0a50be3ce2edf3ef7c5650218bd0c8247e52dcc8365e"
+      }
+    },
+    "unpublishedIntegrationError": {
+      "artifact": "checkpoint45-provenance-misbound-hook.json",
+      "sha256": "a1e37cf0bbf3299c95ac0d5cecd50d494e155e7d7364aebf8b671437e7d78f0a"
+    }
+  },
+  "actualBrowser": {
+    "engine": "Playwright Chromium; actual product layout with declared synthetic backend/media boundaries, not native Safari/Chrome trust or installed update qualification",
+    "originalUnchangedDictationBefore": {
+      "failed": 1,
+      "reason": "Footer intercepts the visible dictation control",
+      "log": {
+        "artifact": "checkpoint45-footer-browser-before.log",
+        "sha256": "173e5467d326ee96e233b963b23ccf226f8d42845672ac977d40f8c307327433"
+      },
+      "trace": {
+        "artifact": "checkpoint45-footer-before-artifacts/trace.zip",
+        "sha256": "92d2d90a458f756f77d8073796a1ac5d3eb30b5c00343efdeb7984d8a1af4087"
+      }
+    },
+    "finalTargeted": {
+      "passed": 6,
+      "log": {
+        "artifact": "checkpoint45-final-browser-six.log",
+        "sha256": "6c83b165ca9f530a1146e1a354c2b58a3dfa561c71528c307dd49bdd1477e15e"
+      },
+      "cases": [
+        "existing browser notice before allocation",
+        "late browser notice after fresh allocation",
+        "server-bound coding start",
+        "coding stop, recovery and retry",
+        "typed and voice persisted grounding parity",
+        "coding dictation uses STT only"
+      ]
+    },
+    "savedParityFixture": "The existing saved floating frame keeps its original geometry. The journey uses the real visible Full screen/Restore controls and verifies exact geometry restoration; all original source, citation, persistence, payload and provider assertions remain unchanged.",
+    "savedParityBefore": {
+      "failed": 1,
+      "log": {
+        "artifact": "checkpoint45-browser-six-after.log",
+        "sha256": "b17674b9ccf1a279cc39bf2e41a1a953393866f0d113dc04fed88a1c2794e909"
+      },
+      "trace": {
+        "artifact": "checkpoint45-saved-parity-before-artifacts/trace.zip",
+        "sha256": "05a193271c5e762a2e1d6cd17598a4bd09e8a45946047bcb435d2bf1e7837f1f"
+      }
+    },
+    "savedParityAfter": {
+      "passed": 1,
+      "log": {
+        "artifact": "checkpoint45-saved-parity-after.log",
+        "sha256": "b7ccadfc55261d3e7af947cada2e11c624c5ef5a5a4a35392ebec55874d2734c"
+      }
+    },
+    "completeAffectedWorkspaceGate": {
+      "passed": 7,
+      "log": {
+        "artifact": "checkpoint45-workspace-browser-refactored.log",
+        "sha256": "96110588265265e1f2611cbc550246366a0f5fcaf369a90a4f7d1a938cb97032"
+      },
+      "originalFailed": 2,
+      "originalPassed": 5,
+      "originalLog": {
+        "artifact": "checkpoint45-workspace-browser.log",
+        "sha256": "a5b524a3d11cf5e246704ac0d5de133e8089daba21289a536d1a17f3bd6c2074"
+      },
+      "fixtureCorrections": "Dropdown fixtures now use the existing real validated launcher pairing path before private draft/skill access. The tooltip case uses a genuinely overlong synthetic model id and asserts measured text overflow before hover; its previous id had zero overflow. No product authorization or tooltip guard is relaxed.",
+      "authenticatedPickerIntermediate": {
+        "artifact": "checkpoint45-picker-auth-after.log",
+        "sha256": "f7c64b87812c46f54988f98c0e94c95e112031535b7e337036beaf1defcb24d7"
+      },
+      "overflowPreconditionBefore": {
+        "artifact": "checkpoint45-tooltip-precondition-before.log",
+        "sha256": "75ddd018e90b7a2e40fd5d05b473c2792d3befd20ff70f0227f2c5964d5790fd"
+      },
+      "initialHttpObservation": {
+        "artifact": "checkpoint45-workspace-initial-http.json",
+        "sha256": "cbcce79901d45edd83af5c9f326e4070732846f77b51c5b6fdedc27d216aa21e"
+      },
+      "previousFinalLog": {
+        "artifact": "checkpoint45-workspace-browser-final.log",
+        "sha256": "960b21c7b696e1ca53807470d8b09e92efdeb0a9bf66078221632cce8a4de0ff"
+      }
+    }
+  },
+  "affectedVerification": {
+    "hooks": {
+      "suitesPassed": 63,
+      "testsPassed": 1478,
+      "log": {
+        "artifact": "checkpoint45-provenance-hooks-fixed.log",
+        "sha256": "050dca77668a1039722b498f8618a3f815209cdad60a3f464c41aede716cdee5"
+      }
+    },
+    "registeredDiagnosticHttp": {
+      "testsPassed": 250,
+      "log": {
+        "artifact": "checkpoint45-provenance-http.log",
+        "sha256": "074d2cf6c10cf69a3523742d9936cc44313019db75dd34bc0248ad5701580ab5"
+      }
+    },
+    "completeUiCoverage": {
+      "suitesPassed": 562,
+      "testsPassed": 10802,
+      "testsSkipped": 1,
+      "log": {
+        "artifact": "checkpoint45-coverage-final-refactored.log",
+        "sha256": "6e5d0353a2ef57462df056e9d9a614eac6037e941008fe88bc5644091f7a92b1"
+      },
+      "newSizingOwner": {
+        "lines": {
+          "total": 31,
+          "covered": 28,
+          "skipped": 0,
+          "pct": 90.32
+        },
+        "functions": {
+          "total": 10,
+          "covered": 10,
+          "skipped": 0,
+          "pct": 100
+        },
+        "statements": {
+          "total": 36,
+          "covered": 33,
+          "skipped": 0,
+          "pct": 91.66
+        },
+        "branches": {
+          "total": 23,
+          "covered": 21,
+          "skipped": 0,
+          "pct": 91.3
+        }
+      }
+    },
+    "strictRootTypecheck": {
+      "artifact": "checkpoint45-provenance-typecheck.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    "strictUiTypecheck": {
+      "artifact": "checkpoint45-ui-typecheck-final-refactored.log",
+      "sha256": "bec09a74b9b71b5348d1fe72720400ca5afb55d241d0fcca59f0b7046c31fd4e"
+    },
+    "completeUiLint": {
+      "artifact": "checkpoint45-ui-lint-final-refactored.log",
+      "sha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382"
+    },
+    "scopedRootLint": {
+      "artifact": "checkpoint45-lint-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "completeActivityLog": {
+      "checksPassed": 7,
+      "log": {
+        "artifact": "checkpoint45-final-activity.log",
+        "sha256": "c0d33ad252b45edda4ffbda3ff22bd12c1787113f73b24330d582f985fa7b97c"
+      }
+    },
+    "previousCompleteUiCoverage": {
+      "suitesPassed": 562,
+      "testsPassed": 10802,
+      "testsSkipped": 1,
+      "log": {
+        "artifact": "checkpoint45-final-ui-coverage.log",
+        "sha256": "e2fd7e60a9cea3a7277f34a4d0315695e7540b005c14f1783a1b59112cd1bd7d"
+      },
+      "newSizingOwner": {
+        "lines": {
+          "total": 31,
+          "covered": 28,
+          "skipped": 0,
+          "pct": 90.32
+        },
+        "functions": {
+          "total": 10,
+          "covered": 10,
+          "skipped": 0,
+          "pct": 100
+        },
+        "statements": {
+          "total": 36,
+          "covered": 33,
+          "skipped": 0,
+          "pct": 91.66
+        },
+        "branches": {
+          "total": 23,
+          "covered": 21,
+          "skipped": 0,
+          "pct": 91.3
+        }
+      }
+    }
+  },
+  "limits": [
+    "No full acceptance disposition or issue checkbox changed.",
+    "Saved/manual layouts retain their ordinary recovery semantics; this does not promise every arbitrary saved frame fits every viewport.",
+    "Final local publication checks and independent review are separately recorded before delivery.",
+    "Both native updater ownership P1 findings, installed-version transitions and broader browser/search/skill acceptance remain open."
+  ],
+  "independentOwnershipReview": {
+    "receipt": {
+      "artifact": "ui45-provenance-v3-independent.json",
+      "sha256": "4d7d1fee7f7ec418cc0f0e9840078536ae8f82bbcb6daf187f926d162191a643"
+    },
+    "parentRemoteControlsPassed": 2,
+    "candidateV1Passed": 10,
+    "candidateV1Failed": 1,
+    "unchangedCandidateV3ControlsPassed": 11,
+    "extendedCandidateV3ControlsPassed": 13,
+    "scope": "Actual hook, sibling snapshot, own storage echo, own PUT acknowledgement and higher-revision server transfer; scoped candidate correction only."
+  },
+  "finalSourceRefactor": {
+    "classification": "Behavior-preserving extraction of the existing mapping from the ResizeObserver callback after two actual Sonar S2004 findings; no guard suppressed or changed",
+    "originalFailedSonar": {
+      "artifact": "checkpoint45-sonar-final.log",
+      "sha256": "bad7d96c41756e19ae26a77ede66ba01f4fff84eda7282c17146a8607239ea82"
+    },
+    "independentReviewScope": "The retained v3 independent controls cover the pre-extraction ownership correction; final v5 checks are separately bound."
+  }
+}

@@ -299,6 +299,7 @@ describe("POST /api/diagnostics/client", () => {
 
   it.each([
     "workspace-viewport-fitted",
+    "workspace-window-sizing-retired",
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",
     "scope-refusal-skipped-draft",
