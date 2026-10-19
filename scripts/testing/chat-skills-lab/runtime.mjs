@@ -439,23 +439,36 @@ async function canonicalCompactionPrompts() {
   return new Set([SUMMARY_SYSTEM_PROMPT, PROMPT_COMPACTION_SYSTEM]);
 }
 
-export async function startRuntime(
-  dir,
-  { contextWindow = 131072, skillBody = "", source = "", sourceWitnesses } = {},
-) {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const provider = await localProvider(contextWindow),
-    physical = [],
-    state = createChaosState(),
-    compactionPrompts = await canonicalCompactionPrompts();
-  let scope = { id: "setup", question: "", skillBody, source, sourceWitnesses, compactionPrompts };
+function createObservedProxy(provider, state, physical, getScope) {
   const proxy = createChaosProxy({
     upstream: provider.upstream,
     state,
     log: () => undefined,
-    logError: () => physical.push({ caseId: scope.id, error: "proxy-upstream-failed" }),
+    logError: () => physical.push({ caseId: getScope().id, error: "proxy-upstream-failed" }),
   });
-  observeProxy(proxy, physical, () => scope);
+  observeProxy(proxy, physical, getScope);
+  return proxy;
+}
+
+export async function startRuntime(
+  dir,
+  {
+    contextWindow = 131072,
+    skillBody = "",
+    source = "",
+    sourceWitnesses,
+    physicalRecorder = [],
+  } = {},
+) {
+  if (!Array.isArray(physicalRecorder))
+    throw new TypeError("caller-owned-physical-recorder-required");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const physical = physicalRecorder;
+  const provider = await localProvider(contextWindow),
+    state = createChaosState(),
+    compactionPrompts = await canonicalCompactionPrompts();
+  let scope = { id: "setup", question: "", skillBody, source, sourceWitnesses, compactionPrompts };
+  const proxy = createObservedProxy(provider, state, physical, () => scope);
   await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
   const { project, env, bff, close } = await startObservedBff(
     realpathSync(dir),
@@ -486,4 +499,26 @@ export async function startRuntime(
     },
     close,
   };
+}
+
+export async function finalizeRuntime(runtime, save) {
+  const results = [];
+  for (const operation of [() => runtime?.drain(), () => runtime?.close()]) {
+    const [result] = await Promise.allSettled([Promise.resolve().then(operation)]);
+    results.push(result);
+  }
+  const failures = results
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  const completedStatus = runtime ? "completed" : "not-started";
+  const finalization = {
+    status: failures.length > 0 ? "failed" : completedStatus,
+    drain: runtime ? results[0].status : "not-started",
+    close: runtime ? results[1].status : "not-started",
+  };
+  const [saved] = await Promise.allSettled([Promise.resolve().then(() => save(finalization))]);
+  if (saved.status === "rejected") failures.push(saved.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(failures, "qualification-finalization-failed", { cause: failures[0] });
 }

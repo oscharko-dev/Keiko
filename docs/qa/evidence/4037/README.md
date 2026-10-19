@@ -1373,3 +1373,24 @@ unexecuted until the fresh BFF/source baseline is assembled and frozen. Original
 skills, scoring, provider/transport and token grants are unchanged. Initial clock/probe fixture
 commissioning failures remain retained. `lab-runtime-lifecycle.json` binds the scoped evidence;
 no skill, native shipping or epic acceptance is granted.
+
+## Checkpoint 49 — retain failed lab finalization and build the native oracle
+
+The public lab CLI now always attempts its existing private evidence save after drain or close
+refuses, retains combined operation/save errors and saves failed cleanup with exitCode1. Its
+caller-owned physical recorder survives a constructor refusal. The same actual caller controls
+retain two failures/two healthy before and four passes after; two actual contained HTTP
+constructor controls lose observations before and retain them after. Seven affected suites
+pass 82 tests, including synchronous/save-error boundaries and unchanged lifecycle controls.
+
+`npm run check:native:linux` now performs the existing package build before native qualification;
+`npm run check:native:linux -- --kernel` forwards the requested kernel scope. Direct Bash runs
+in a read-only qualification container require an explicitly prebuilt checkout. Two actual
+entry-command ordering/failure controls fail before and pass after; the unchanged real compiled
+server encoder is used in the separately retained full native compiler/analyzer/kernel run.
+
+The fresh source48 environment also passes a separate predeclared readiness-only setup and single
+restart: two complete successful physical readiness calls, no failures, stable source hashes and
+zero test-generation tasks. This is not a skill benefit or held-out result.
+`lab-finalization-and-native-prerequisite.json` binds these scoped proofs; no acceptance
+disposition or issue checkbox changes.
