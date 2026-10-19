@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "classification": "Qualification-test diagnostics only. Does not diagnose or fix the macOS-x64 cold-refusal failure, change product runtime, or satisfy native updater acceptance.",
+  "parentHead": "882424ba75d826fc76f386d606fcee3fa19924e4",
+  "source": {
+    "path": "native/opencode-service-host/entry.test.mjs",
+    "sha256": "7dcffe5503265d0801c8ff34879e83ecb2dadbfb7329e3e30b8ffe85a61f3509"
+  },
+  "originalFailure": {
+    "head": "14946692661e27f55863e18c0e0d0a7e64c19fb5",
+    "job": "https://github.com/oscharko-dev/Keiko/actions/runs/39178676087/job/117827258909",
+    "errorClass": "fixed-entry-cold-refusal-timeout",
+    "ageMs": 5003,
+    "readinessObserved": false,
+    "processExited": false,
+    "refusalObserved": "not measured by the original fixture",
+    "conclusion": "The original log cannot distinguish cold initialization from an already refused process retaining handles."
+  },
+  "change": "The existing timeout cause additionally records constant-refusal observation, stderr byte count, first stderr elapsed time and refusal elapsed time. The successful targeted cold-refusal case emits the same body-free observations. No stderr, packet, config, endpoint or native error body is added to the cause.",
+  "originalBoundsUnchanged": {
+    "coldReadyMs": 10000,
+    "eofAndRefusalExitMs": 5000
+  },
+  "causal": {
+    "classification": "Real existing test output collector and timeout cause; synthetic owned Node children classify pending/refused/other stderr. Not native x64 cause or native update acceptance.",
+    "beforeSourceSha256": "a0bf84f91ab013772cf902ec65c438f9e0dbd413cd609d4440f61957f5b39008",
+    "afterSourceSha256": "7dcffe5503265d0801c8ff34879e83ecb2dadbfb7329e3e30b8ffe85a61f3509",
+    "identicalDiagnosticTestBlockSha256": "bffc823c35a2c612ec7d328b47bbe22d520d4a1ed2f0de46e1dc61b81e1f9a06",
+    "beforeExitCode": 1,
+    "afterExitCode": 0,
+    "restored": true
+  },
+  "diagnosticControls": {
+    "beforeFailed": 3,
+    "beforePassed": 0,
+    "afterPassed": 3,
+    "method": "Real existing collector/timeoutError with three fixture-owned actual Node children: no stderr, constant refusal while alive, unrelated synthetic stderr while alive. All close on owned stdin EOF."
+  },
+  "targetedOwnerAfter": {
+    "testsPassed": 4,
+    "coldCaseDurationMs": 1161.899875,
+    "refusalObserved": true,
+    "stderrByteCount": 19,
+    "firstStderrAtMs": 553,
+    "refusalAtMs": 553
+  },
+  "fullAffectedOwner": {
+    "command": "npm run test:opencode-service-host",
+    "platform": "darwin-arm64",
+    "passed": 59,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 15649.241083,
+    "coldRefusalAtMs": 547
+  },
+  "logs": [
+    {
+      "name": "native31-final-before.log",
+      "sha256": "f93264f279b05dbdd3c822fd8e9fc124899bf2c86562ae1cad47b0e7fbdf70e8"
+    },
+    {
+      "name": "native31-final-after.log",
+      "sha256": "e13d6e623aa9e92b76bc7b049b9502df77b8c375f5faa8ed46058d44296b67bc"
+    },
+    {
+      "name": "native31-full-owner.log",
+      "sha256": "5076dd6c8f31ab66afb097f71b1da042540bac570fc96c562ad775a76fb69b37"
+    }
+  ],
+  "limitations": [
+    "Synthetic diagnostic controls do not run the native application graph.",
+    "The full affected native suite runs actual original host/route/guard owners on ARM64; it does not qualify x64.",
+    "The original failed x64 attempt remains retained. Exact-head x64 evidence and cause analysis are still required.",
+    "No timeout increase, skipped assertion, process-generation ownership change or release-impact waiver is introduced."
+  ]
+}

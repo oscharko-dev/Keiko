@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import {
   mkdtempSync,
   mkdirSync,
@@ -126,6 +127,8 @@ function start(own, args = [], environment = {}, cwd = own.input.workspace) {
   });
   let stdout = "";
   let stderr = "";
+  let firstStderrAtMs;
+  let refusalAtMs;
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (data) => {
@@ -133,13 +136,27 @@ function start(own, args = [], environment = {}, cwd = own.input.workspace) {
   });
   child.stderr.on("data", (data) => {
     stderr += data;
+    firstStderrAtMs ??= Math.round(performance.now() - startedAt);
+    if (stderr.split("\n").includes("host-entry-refused"))
+      refusalAtMs ??= Math.round(performance.now() - startedAt);
   });
   child.stdin.on("error", () => undefined);
   const exited = new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr }));
   });
-  return { child, exited, startedAt, output: () => stdout };
+  return {
+    child,
+    exited,
+    startedAt,
+    output: () => stdout,
+    observation: () => ({
+      refusalObserved: refusalAtMs !== undefined,
+      stderrByteCount: Buffer.byteLength(stderr),
+      ...(firstStderrAtMs === undefined ? {} : { firstStderrAtMs }),
+      ...(refusalAtMs === undefined ? {} : { refusalAtMs }),
+    }),
+  };
 }
 
 function timeoutError(owned, phase) {
@@ -151,6 +168,7 @@ function timeoutError(owned, phase) {
         .split("\n")
         .some((line) => line.startsWith('{"url":')),
       processExited: owned.child.exitCode !== null || owned.child.signalCode !== null,
+      ...owned.observation(),
     },
   });
 }
@@ -192,6 +210,35 @@ async function disposeChild(owned) {
 
 function authenticated(input) {
   return { authorization: `Basic ${Buffer.from(`opencode:${input.password}`).toString("base64")}` };
+}
+
+for (const probe of [
+  { name: "pending", line: "", refusal: false },
+  { name: "refused", line: "host-entry-refused\n", refusal: true },
+  { name: "other-stderr", line: "SYNTHETIC_PRIVATE_STDERR_CANARY\n", refusal: false },
+]) {
+  test(`timeout diagnostics classify ${probe.name} without stderr content`, async () => {
+    const own = fixture();
+    writeFileSync(
+      join(own.root, "host.mjs"),
+      `process.stdin.resume(); process.stderr.write(${JSON.stringify(probe.line)}); process.stdout.write("fixture-ready\\n"); process.stdin.once("end", () => { process.exitCode = 0; });`,
+    );
+    const owned = start(own);
+    try {
+      await once(probe.line === "" ? owned.child.stdout : owned.child.stderr, "data", {
+        signal: AbortSignal.timeout(1000),
+      });
+      const error = timeoutError(owned, "diagnostic-probe");
+      assert.equal(error.cause.refusalObserved, probe.refusal);
+      assert.equal(error.cause.stderrByteCount, Buffer.byteLength(probe.line));
+      assert.equal(error.cause.processExited, false);
+      if (probe.line !== "")
+        assert.equal(JSON.stringify(error.cause).includes(probe.line.trim()), false);
+    } finally {
+      await finish(owned);
+      own.cleanup();
+    }
+  });
 }
 
 test("the fixed host entry serves original auth/routes/SSE and closes its socket on stdin EOF", async () => {
@@ -316,7 +363,7 @@ test("EOF during native graph acquisition publishes no stale ready endpoint", as
   }
 });
 
-test("a fragmented bounded packet boots once and an old native database cannot resume", async () => {
+test("a fragmented bounded packet boots once and an old native database cannot resume", async (t) => {
   const own = fixture();
   const owned = start(own);
   const children = [owned];
@@ -332,6 +379,7 @@ test("a fragmented bounded packet boots once and an old native database cannot r
     children.push(reused);
     reused.child.stdin.write(JSON.stringify(own.input) + "\n");
     const result = await finish(reused, "cold-refusal");
+    t.diagnostic(JSON.stringify({ phase: "cold-refusal", ...reused.observation() }));
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "host-entry-refused\n");

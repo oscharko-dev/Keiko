@@ -794,3 +794,21 @@ expiry at 5,003 ms without readiness or process exit. The unchanged targeted ARM
 1.89 seconds, which does not qualify x64 or diagnose its cause. Its cold import/refusal versus EOF
 phase ordering remains under investigation. Full native updater, model benefit, historical96,
 exact-head CI/review and authorized merge holds remain open.
+
+## Checkpoint 31: distinguish cold initialization from refusal without process exit
+
+The failed x64 job's old timeout cause records only no readiness and a still-live process. It does
+not establish whether the constant refusal had already been emitted. The existing test collector
+now reports refusal observation, stderr byte count and relative first-stderr/refusal times in that
+same body-free timeout cause; successful cold-refusal controls emit these observations too. Packet,
+config, endpoint and native stderr bodies are not added. The original ten-second cold-ready and
+five-second exit limits and all semantic assertions stay unchanged.
+
+Three fixture-owned real Node children exercise the actual collector and timeout producer for no
+stderr, constant refusal while alive and unrelated stderr while alive. Identical diagnostic cases
+fail three times before the change and pass three times afterward, without publishing their text.
+The actual fragmented-packet/old-database owner also passes: refusal appears at 553 ms in the
+targeted run. All 59 affected native owner tests pass on ARM64, with no skip; the full-run refusal
+appears at 547 ms. `native-cold-refusal-observation.json` binds those exact observations and logs.
+This is measurement repair, not an explanation or fix of the x64 failure. Native generation
+ownership and packaged update/restart/rollback/SSD acceptance remain open.
