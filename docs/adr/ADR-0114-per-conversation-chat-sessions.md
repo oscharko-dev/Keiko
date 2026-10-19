@@ -66,8 +66,10 @@ windows.
    Retries retain the accepted identity; an explicit new conversation receives a new identity.
    Legacy unbound windows use their stable window identity. Changed creation parameters conflict,
    while an omitted model remains an automatic choice independent of later default election.
-   Recovery returns the originally accepted conversation before current model admission; genuinely
-   new requests still require the unchanged model guards. An explicit model remains part of the intent,
+   Recovery returns the originally accepted conversation before current model admission. After an
+   asynchronous readiness join, it rechecks durable acceptance and parameter conflicts before new
+   model admission; a concurrent acceptance does not become a new request. Genuinely new requests
+   still require the unchanged model guards. An explicit model remains part of the intent,
    and deletion retains a tombstone rather than resurrecting a conversation. This identity grants
    no browser session, project access or draft authority. The existing Activity Log records only
    the closed creation decision, completeness and loss state under the request correlation.

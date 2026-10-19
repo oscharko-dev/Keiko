@@ -80,8 +80,8 @@
       "title": "Remember trusted browsers for local Keiko access",
       "url": "https://github.com/oscharko-dev/Keiko/issues/4043",
       "state": "OPEN",
-      "bodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
-      "updatedAt": "2026-10-18T13:35:33Z"
+      "bodySha256": "dd99afe4dc8bd3b4a692cb01e09f81eafa2dba1c9bf5b7202507234f9b774ddc",
+      "updatedAt": "2026-10-19T06:05:44Z"
     },
     {
       "number": 4047,
@@ -369,5 +369,13 @@
   "boundedEvidence": "docs/qa/evidence/4037/README.md",
   "closureRule": "Check acceptance only against actual completed evidence; close issues only after separately authorized and verified integration.",
   "checkpoint38BoundedEvidence": "chat-creation-idempotency.json; no complete acceptance disposition or issue checkmark changed",
-  "checkpoint39BoundedEvidence": "private-verification-diagnostics.json; no complete acceptance disposition or issue checkmark changed"
+  "checkpoint39BoundedEvidence": "private-verification-diagnostics.json; no complete acceptance disposition or issue checkmark changed",
+  "checkpoint40SourceProvenanceRefresh": {
+    "issue": 4043,
+    "previousBodySha256": "ca94cc059297d03f4b9f9535bb41e9bb55cf7cf137eef820f53d29298285e389",
+    "currentBodySha256": "dd99afe4dc8bd3b4a692cb01e09f81eafa2dba1c9bf5b7202507234f9b774ddc",
+    "verifiedAt": "2026-10-19T06:45:26.405438+00:00",
+    "classification": "Source-body provenance refresh; six acceptance criteria remain unchanged and unchecked."
+  },
+  "checkpoint40BoundedEvidence": "browser-recovery-and-readiness.json; no complete acceptance disposition or issue checkmark changed"
 }

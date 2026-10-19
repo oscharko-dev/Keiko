@@ -2988,6 +2988,8 @@ export async function handleCreateDesktopChat(
         ctx.correlationId,
       )
     : awaitInitializedConversationReadiness(deps, explicitModelId, ctx.correlationId));
+  const acceptedWhileWaiting = replayDesktopChat(ctx, deps, body, explicitModelId);
+  if (acceptedWhileWaiting !== undefined) return acceptedWhileWaiting;
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(

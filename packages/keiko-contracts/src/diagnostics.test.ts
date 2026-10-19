@@ -1455,12 +1455,16 @@ describe("capture diagnostic vocabulary", () => {
 
 describe("client module and markdown identity boundaries", () => {
   const base = { message: "diagnostic", clientTs: "2026-09-19T00:00:00.000Z" };
-  it.each(["git-sync", "git-history", "git-read", "widget-locale"])(
-    "accepts the closed module %s",
-    (moduleLoadFailure) => {
-      expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure })).toBe(true);
-    },
-  );
+  it.each([
+    "git-sync",
+    "git-history",
+    "git-read",
+    "widget-locale",
+    "browser-approval",
+    "update-startup",
+  ])("accepts the closed module %s", (moduleLoadFailure) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure })).toBe(true);
+  });
   it("accepts the known module and a short provider message identity", () => {
     expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "git-sync" })).toBe(true);
     expect(

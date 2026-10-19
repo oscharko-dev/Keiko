@@ -10,7 +10,15 @@ import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
-import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "./index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -238,6 +246,93 @@ function customModelConfig(
   };
 }
 
+function heldReadinessProbe(): { readonly fetch: typeof fetch; readonly release: () => void } {
+  let finish: ((response: Response) => void) | undefined;
+  let first = true;
+  const answer = (): Response =>
+    new Response(
+      JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      { headers: { "content-type": "application/json" } },
+    );
+  return {
+    fetch: vi.fn(() => {
+      if (!first) return Promise.resolve(answer());
+      first = false;
+      return new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+    }),
+    release: (): void => {
+      finish?.(answer());
+    },
+  };
+}
+
+async function pendingCreationRace(input: {
+  readonly automatic: boolean;
+  readonly accepted: boolean;
+  readonly conflict: boolean;
+}): Promise<{
+  readonly status: number;
+  readonly chatCount: number;
+  readonly selectedModel?: string;
+}> {
+  const runtime = buildUiHandlerDeps({
+    configPath: undefined,
+    env: {},
+    uiDbPath: join(tmp, "concurrent-creation.db"),
+    evidenceDir: join(tmp, "concurrent-evidence"),
+  });
+  const request = fetch;
+  const probe = heldReadinessProbe();
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  vi.stubGlobal("fetch", probe.fetch);
+  try {
+    runtime.store.createProject(projectDir, "Concurrent creation");
+    runtime.gatewayConfig?.set(customModelConfig(CHAT_MODEL), true, "corr-creation-initialization");
+    await restartWithDeps(runtime);
+    const pending = request(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        projectPath: projectDir,
+        title: input.conflict ? "Conflicting creation" : "Accepted creation",
+        creationRequestId: "creation-pending-initialization",
+        ...(input.automatic ? {} : { modelId: CHAT_MODEL }),
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(sink.events.some((event) => event.op === "gateway.readiness.automatic.joined")).toBe(
+        true,
+      );
+    });
+    if (input.accepted) persistConcurrentCreation(runtime, input.automatic);
+    runtime.gatewayConfig?.set(customModelConfig("replacement-chat-model"), true);
+    probe.release();
+    const response = await pending;
+    const body = (await response.json()) as { chat?: { selectedModel: string } };
+    return {
+      status: response.status,
+      chatCount: runtime.store.listChats(projectDir).length,
+      ...(body.chat === undefined ? {} : { selectedModel: body.chat.selectedModel }),
+    };
+  } finally {
+    probe.release();
+    await restartWithDeps(deps());
+    await runtime.dispose?.();
+    vi.unstubAllGlobals();
+    resetServerLogger();
+  }
+}
+
+function persistConcurrentCreation(runtime: UiHandlerDeps, automatic: boolean): void {
+  runtime.store.createChat(projectDir, "Accepted creation", CHAT_MODEL, {
+    creationRequestId: "creation-pending-initialization",
+    automaticModelSelection: automatic,
+  });
+}
+
 function makeMemoryId(value: string): MemoryId {
   return value as MemoryId;
 }
@@ -454,6 +549,18 @@ describe("desktop chat routes", () => {
       await invalid.text();
     },
   );
+
+  it.each([
+    { automatic: false, accepted: true, conflict: false, status: 201 },
+    { automatic: true, accepted: true, conflict: false, status: 201 },
+    { automatic: false, accepted: true, conflict: true, status: 409 },
+    { automatic: false, accepted: false, conflict: false, status: 400 },
+  ])("rechecks a durable creation after a real readiness join: %j", async (input) => {
+    const result = await pendingCreationRace(input);
+    expect(result.status).toBe(input.status);
+    expect(result.chatCount).toBe(input.accepted ? 1 : 0);
+    if (input.status === 201) expect(result.selectedModel).toBe(CHAT_MODEL);
+  });
 
   it.each([true, false])(
     "recovers accepted creation while new admission has no readiness observation (automatic=%s)",

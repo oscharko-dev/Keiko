@@ -285,6 +285,8 @@ describe("clientDiagnosticFailureFacts", () => {
     [{ moduleLoadFailure: "git-sync" }, ["module:git-sync"]],
     [{ moduleLoadFailure: "git-read" }, ["module:git-read"]],
     [{ moduleLoadFailure: "widget-locale" }, ["module:widget-locale"]],
+    [{ moduleLoadFailure: "browser-approval" }, ["module:browser-approval"]],
+    [{ moduleLoadFailure: "update-startup" }, ["module:update-startup"]],
     [{ failureStage: "files source preview" }, ["stage:files-source-preview"]],
   ] as const)("retains only the canonical closed context for %j", (meta, context) => {
     expect(clientDiagnosticFailureFacts(meta)).toEqual({ errorKind: "unknown", context });

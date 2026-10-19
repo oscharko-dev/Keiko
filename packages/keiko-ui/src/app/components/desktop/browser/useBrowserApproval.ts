@@ -13,7 +13,7 @@ import {
 } from "@/lib/browser-approval-client";
 
 type ActiveCompletion = Extract<BrowserApprovalCompletion, { state: "active" }>;
-export type BrowserApprovalView =
+type BrowserApprovalView =
   | { readonly phase: "idle" | "working" | "unavailable" | "expired" }
   | { readonly phase: "pending" | "failed"; readonly request: BrowserApprovalRequestDescriptor }
   | ({ readonly phase: "active" } & Omit<ActiveCompletion, "state">);
@@ -59,12 +59,13 @@ async function pollAttempt(
       await waitForPoll(signal);
     }
   } catch (error) {
+    if (signal.aborted) return;
     reportClientDiagnostic("Browser approval polling stopped.", {
       correlationId: current.attempt.correlationId,
       errorKind: bffRequestErrorKind(error),
       errorEvidence: clientErrorEvidence(error),
     });
-    if (!signal.aborted) publish({ phase: "failed", request: current.attempt.request });
+    publish({ phase: "failed", request: current.attempt.request });
   }
 }
 
@@ -117,11 +118,12 @@ export function useBrowserApproval(): BrowserApprovalController {
       setView({ phase: "pending", request: pending.request });
       await pollAttempt(client.current, current, controller.signal, setView);
     } catch (error) {
+      if (controller.signal.aborted) return;
       reportClientDiagnostic("Browser approval request could not complete.", {
         errorKind: bffRequestErrorKind(error),
         errorEvidence: clientErrorEvidence(error),
       });
-      if (!controller.signal.aborted) setView({ phase: "unavailable" });
+      setView({ phase: "unavailable" });
     }
   }, []);
   const retry = useCallback(async (): Promise<void> => {

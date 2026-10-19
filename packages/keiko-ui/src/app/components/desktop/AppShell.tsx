@@ -277,16 +277,37 @@ const Palette = dynamic(() => import("./modals/Palette").then((mod) => mod.Palet
   loading: () => null,
 });
 
+function unavailableStartupNotice(
+  error: unknown,
+  moduleLoadFailure: "browser-approval" | "update-startup",
+): () => null {
+  reportClientDiagnostic("Startup notice module could not load.", {
+    kind: "other",
+    errorKind: "unavailable",
+    correlationId: newClientCorrelationId(),
+    moduleLoadFailure,
+    errorEvidence: clientErrorEvidence(error),
+  });
+  return (): null => null;
+}
+
+// Optional startup notices retain their diagnostic without removing an already mounted desktop.
+export const BrowserApprovalNotice = dynamic(
+  () =>
+    import("./browser/BrowserApprovalNotice")
+      .then((module) => module.BrowserApprovalNotice)
+      .catch((error: unknown) => unavailableStartupNotice(error, "browser-approval")),
+  { ssr: false, loading: () => null },
+);
+
 // Issue #1207 (ADR-0042 D3.6) — the startup update notice renders nothing until its own preflight
 // resolves, and it is gated on a workspace that has already loaded, so neither it nor the release
 // copy catalog it carries belongs in the initial desktop paint.
-const BrowserApprovalNotice = dynamic(
-  () => import("./browser/BrowserApprovalNotice").then((module) => module.BrowserApprovalNotice),
-  { ssr: false },
-);
-
-const UpdateStartupNotice = dynamic(
-  () => import("./update/UpdateStartupNotice").then((mod) => mod.UpdateStartupNotice),
+export const UpdateStartupNotice = dynamic(
+  () =>
+    import("./update/UpdateStartupNotice")
+      .then((mod) => mod.UpdateStartupNotice)
+      .catch((error: unknown) => unavailableStartupNotice(error, "update-startup")),
   { ssr: false, loading: () => null },
 );
 

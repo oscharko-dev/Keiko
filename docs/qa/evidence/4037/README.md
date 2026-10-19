@@ -1120,3 +1120,33 @@ are dispatched and zero model calls occur. The historical V7 verdict receives no
 
 `private-verification-diagnostics.json` binds sources and observations. Both skill benefit and
 convention matrices, fresh tasks and all broader product acceptance obligations remain open.
+
+## Checkpoint 40: preserve the desktop and recover concurrent creation
+
+The browser approval controller now distinguishes its own cancelled work from a transport failure.
+Unmounting or superseding its request cannot emit a false global failure or publish stale state.
+Genuine request/poll failures and an unowned error named AbortError retain their diagnostics.
+Failed browser/update startup chunks now report their closed module identity without removing an
+already mounted desktop. Healthy notices retain their original props and actions. The existing
+support-context owner reads the same closed module vocabulary lazily, preserving incident context
+without an eager read through the existing contract import cycle.
+
+The final nine actual React/Next App Router/provider-frame controls have four failures and five
+healthy results on the parent owners, then nine passes. Only two original internal dynamic
+components are exported for the parent control; this is not a complete native desktop journey.
+Four actual mounted HTTP/initialized-readiness controls have two failures and two healthy results
+on the exact parent handler, then four passes after its two-line durable replay recheck.
+Concurrent acceptance uses the actual UiStore while the real readiness owner is awaiting a
+controlled provider response. A retired explicit model no longer masks an accepted creation or
+its parameter conflict; fresh model admission remains unchanged. Existing creation Activity Log
+evidence records those decisions. ADR-0114 documents the recheck after the asynchronous join.
+
+The full affected server/contract run passes 443 tests. The corrected diagnostic/support contract
+run passes 404 tests, and all 33 owning UI diagnostic controls pass. The final full UI run passes
+all 562 suites and 10787 tests, with one existing skipped test. The initial full-run context-loss
+failures and the rejected eager-cycle candidate remain retained. No failure is reclassified as
+a pass. `browser-recovery-and-readiness.json` binds the actual sources and scoped observations.
+
+Issue 4043's source-body provenance is refreshed; its six unchanged criteria remain unchecked.
+Native browser/profile/SSD journeys, the separate footer-interception reproduction, installed
+updates, both skill matrices, original 96 source qualification and final integration remain open.

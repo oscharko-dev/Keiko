@@ -3347,7 +3347,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["git-sync", "git-history", "git-read", "widget-locale"],
+        values: [
+          "git-sync",
+          "git-history",
+          "git-read",
+          "widget-locale",
+          "browser-approval",
+          "update-startup",
+        ],
       },
       renderFailure: {
         type: "string",
