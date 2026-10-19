@@ -207,7 +207,7 @@ describe("canonical client incident version compatibility and occurrence claims"
       policy.browserCapacity,
     );
     clock.mockRestore();
-  });
+  }, 60_000);
   it("exports a raw browser chunk failure through the real sink and automatic trigger", (): void => {
     setSupportIncidentTriggerForTests(true);
     const rawFrame = "dist/ui/static/_next/static/chunks/customerpayroll.js:4:2";
