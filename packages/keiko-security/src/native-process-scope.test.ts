@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { performance } from "node:perf_hooks";
-import { createNativeProcessScope } from "./native-process-scope.js";
+let createNativeProcessScope: typeof import("./native-process-scope.js").createNativeProcessScope;
 
 const state = vi.hoisted(() => ({
   frames: [] as Buffer[],
   reads: 0,
   writes: 0,
+  requests: [] as Buffer[],
   closes: 0,
   socket: true,
   ids: [] as number[],
+  namespaceReads: 0,
+  stats: 0,
+  mainThread: true,
 }));
 const originalPlatform = process.platform;
 
@@ -16,8 +20,11 @@ vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
   return {
     ...actual,
-    fstatSync: (fd: number): unknown =>
-      fd === 7 ? { isSocket: () => state.socket } : actual.fstatSync(fd),
+    fstatSync: (fd: number): unknown => {
+      if (fd !== 7) return actual.fstatSync(fd);
+      state.stats += 1;
+      return { isSocket: () => state.socket };
+    },
     readSync: (fd: number, bytes: Buffer): number => {
       if (fd !== 7) throw new Error("unexpected descriptor");
       state.reads += 1;
@@ -29,6 +36,7 @@ vi.mock("node:fs", async (original) => {
     writeSync: (fd: number, bytes: Buffer): number => {
       if (fd !== 7) throw new Error("unexpected descriptor");
       state.writes += 1;
+      state.requests.push(Buffer.from(bytes));
       return bytes.length;
     },
     closeSync: (fd: number): void => {
@@ -40,7 +48,17 @@ vi.mock("node:fs", async (original) => {
 
 vi.mock("./process-scope.js", async (original) => ({
   ...(await original<typeof import("./process-scope.js")>()),
-  readProcessNamespaceIds: (): readonly number[] => state.ids,
+  readProcessNamespaceIds: (): readonly number[] => {
+    state.namespaceReads += 1;
+    return state.ids;
+  },
+}));
+
+vi.mock("node:worker_threads", async (original) => ({
+  ...(await original<typeof import("node:worker_threads")>()),
+  get isMainThread(): boolean {
+    return state.mainThread;
+  },
 }));
 
 function frame(kind: number, pid: number, value: number): Buffer {
@@ -54,14 +72,20 @@ function frame(kind: number, pid: number, value: number): Buffer {
   return bytes;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   state.frames = [];
   state.reads = 0;
   state.writes = 0;
+  state.requests = [];
   state.closes = 0;
   state.socket = true;
   state.ids = [4321, process.pid];
+  state.namespaceReads = 0;
+  state.stats = 0;
+  state.mainThread = true;
+  ({ createNativeProcessScope } = await import("./native-process-scope.js"));
 });
 afterEach(() => {
   Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
@@ -69,6 +93,32 @@ afterEach(() => {
 });
 
 describe("native process coordinate consumer", () => {
+  it("refuses Worker initialization before observing or touching the shared descriptor", () => {
+    state.mainThread = false;
+    state.frames.push(frame(1, 4321, 5432));
+    expect(() => createNativeProcessScope()).toThrow();
+    expect([state.namespaceReads, state.stats, state.reads, state.closes]).toEqual([0, 0, 0, 0]);
+    state.mainThread = true;
+    expect(createNativeProcessScope().observation?.()).toBe("ready");
+  });
+
+  it("refuses a second decoder without consuming or closing the selected port", () => {
+    state.frames.push(frame(1, 4321, 5432), frame(3, 6789, 1));
+    const port = createNativeProcessScope();
+    expect(() => createNativeProcessScope()).toThrow();
+    expect([state.namespaceReads, state.stats, state.reads, state.closes]).toEqual([1, 1, 1, 0]);
+    expect(port.probe(6789)).toBe("alive");
+    expect(port.observation?.()).toBe("ready");
+  });
+
+  it("never retries the one-shot identity after a malformed first initialization", () => {
+    state.frames.push(frame(3, 4321, 5432));
+    expect(() => createNativeProcessScope()).toThrow();
+    state.frames.push(frame(1, 4321, 5432));
+    expect(() => createNativeProcessScope()).toThrow();
+    expect([state.namespaceReads, state.stats, state.reads, state.closes]).toEqual([1, 1, 1, 1]);
+  });
+
   it("refuses an ordinary process before reading or closing the reserved descriptor", () => {
     state.ids = [process.pid];
     expect(() => createNativeProcessScope()).toThrow();
@@ -87,7 +137,7 @@ describe("native process coordinate consumer", () => {
       state.frames.push(frame(1, 4321, 5432));
       const port = createNativeProcessScope(),
         metadata = Buffer.alloc(44);
-      frame(5, 9, 1).copy(metadata);
+      frame(7, 9, 1).copy(metadata);
       metadata.writeUInt32LE(32, 8);
       metadata.writeUInt32LE(uid, 20);
       metadata.writeUInt32LE(0o40755, 24);
@@ -104,7 +154,7 @@ describe("native process coordinate consumer", () => {
       state.frames.push(frame(1, 4321, 5432));
       const port = createNativeProcessScope(),
         metadata = Buffer.alloc(44);
-      frame(5, 9, fault === "unknown" ? 2 : fault === "status" ? 0 : 1).copy(metadata);
+      frame(7, 9, fault === "unknown" ? 2 : fault === "status" ? 0 : 1).copy(metadata);
       metadata.writeUInt32LE(32, 8);
       metadata.writeUInt32LE(0o40755, 24);
       metadata.writeBigUInt64LE(fault === "dev" ? 999n : 123n, 28);
@@ -184,4 +234,107 @@ describe("native process coordinate consumer", () => {
     expect(port.probe(6789)).toBe("unknown");
     expect(state.closes).toBe(1);
   });
+});
+
+function metadataFrame(status: number, dev = 123n, ino = 456n, mode = 0o40755n): Buffer {
+  const bytes = Buffer.alloc(44);
+  frame(7, 9, status).copy(bytes);
+  bytes.writeUInt32LE(32, 8);
+  if (status === 1) {
+    bytes.writeUInt32LE(1000, 20);
+    bytes.writeUInt32LE(Number(mode), 24);
+    bytes.writeBigUInt64LE(dev, 28);
+    bytes.writeBigUInt64LE(ino, 36);
+  }
+  return bytes;
+}
+
+function corruptMetadata(metadata: Buffer, fault: string): void {
+  if (fault === "dev") metadata.writeBigUInt64LE(999n, 28);
+  if (fault === "ino") metadata.writeBigUInt64LE(999n, 36);
+  if (fault === "mode") metadata.writeUInt32LE(0o40777, 24);
+  if (fault === "status") metadata.writeUInt32LE(4, 16);
+  if (fault === "target") metadata.writeUInt32LE(10, 12);
+  if (fault === "kind") metadata.writeUInt16LE(5, 6);
+  if (fault === "reserved-unavailable") metadata.writeUInt32LE(2, 16);
+  if (fault === "reserved-stale") metadata.writeUInt32LE(3, 16);
+}
+
+describe("held file identity precondition", () => {
+  it("sends lossless u64 identity in the closed conditional request", () => {
+    state.frames.push(
+      frame(1, 4321, 5432),
+      metadataFrame(1, 0x20000000000001n, 0xffffffffffffffffn, 0o100600n),
+    );
+    const port = createNativeProcessScope();
+    expect(port.fileOwnerUid?.(9, 0x20000000000001n, 0xffffffffffffffffn, 0o100600n)).toBe(1000n);
+    expect(state.requests[0]?.toString("hex")).toBe(
+      "4b5049310100060018000000090000000100000000002000ffffffffffffffff80810000",
+    );
+  });
+
+  it.each([2, 3])("retains a healthy channel after a closed %s refusal", (status) => {
+    state.frames.push(
+      frame(1, 4321, 5432),
+      metadataFrame(status),
+      metadataFrame(1),
+      frame(3, 6789, 1),
+    );
+    const port = createNativeProcessScope();
+    expect(port.fileOwnerUid?.(9, 99n, 88n, 0o100600n)).toBeUndefined();
+    expect(port.observation?.()).toBe("ready");
+    expect(port.fileOwnerUid?.(9, 123n, 456n, 0o40755n)).toBe(1000n);
+    expect(port.probe(6789)).toBe("alive");
+    expect(state.closes).toBe(0);
+  });
+
+  it.each([
+    "dev",
+    "ino",
+    "mode",
+    "status",
+    "target",
+    "kind",
+    "reserved-unavailable",
+    "reserved-stale",
+    "late",
+  ])("retires an invalid %s reply without accepting a delayed follow-up", (fault) => {
+    state.frames.push(frame(1, 4321, 5432));
+    const port = createNativeProcessScope(),
+      metadata = metadataFrame(1);
+    corruptMetadata(metadata, fault);
+    state.frames.push(metadata, metadataFrame(1));
+    if (fault === "late")
+      vi.spyOn(performance, "now")
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(0)
+        .mockReturnValue(6000);
+    expect(port.fileOwnerUid?.(9, 123n, 456n, 0o40755n)).toBeUndefined();
+    expect(port.observation?.()).toBe("unavailable");
+    expect(port.fileOwnerUid?.(9, 123n, 456n, 0o40755n)).toBeUndefined();
+    expect(state.writes).toBe(1);
+    expect(state.closes).toBe(1);
+  });
+
+  it.each([
+    [-1, 123n, 456n, 0o40755n],
+    [0x80000000, 123n, 456n, 0o40755n],
+    [1.5, 123n, 456n, 0o40755n],
+    [9, -1n, 456n, 0o40755n],
+    [9, 0x10000000000000000n, 456n, 0o40755n],
+    [9, 123n, -1n, 0o40755n],
+    [9, 123n, 0x10000000000000000n, 0o40755n],
+    [9, 123n, 456n, -1n],
+    [9, 123n, 456n, 0x100000000n],
+  ] as const)(
+    "refuses an out-of-range local tuple %s/%s/%s/%s before I/O",
+    (descriptor, dev, ino, mode) => {
+      state.frames.push(frame(1, 4321, 5432));
+      const port = createNativeProcessScope();
+      expect(port.fileOwnerUid?.(descriptor, dev, ino, mode)).toBeUndefined();
+      expect(port.observation?.()).toBe("ready");
+      expect(state.writes).toBe(0);
+      expect(state.closes).toBe(0);
+    },
+  );
 });

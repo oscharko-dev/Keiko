@@ -1,5 +1,6 @@
 import { closeSync, fstatSync, readSync, writeSync } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
 import {
   isProcessId,
   readProcessNamespaceIds,
@@ -9,6 +10,13 @@ import {
 
 const PROCESS_SCOPE_DESCRIPTOR = 7;
 const PROCESS_SCOPE_BOUND_MS = 5000;
+let initializationAttempted = false;
+
+function claimNativeDecoder(): void {
+  if (!isMainThread || initializationAttempted || process.platform !== "linux")
+    throw new Error("native process scope unavailable");
+  initializationAttempted = true;
+}
 
 function packet(kind: number, pid: number): Buffer {
   const bytes = Buffer.alloc(16);
@@ -55,22 +63,21 @@ function retire(state: NativePortState): void {
 
 function exchange(
   state: NativePortState,
-  kind: number,
+  request: Buffer,
   resultKind: number,
-  target: number,
   payloadBytes = 8,
 ): Buffer | undefined {
   if (!state.usable) return undefined;
   const deadline = performance.now() + PROCESS_SCOPE_BOUND_MS;
   try {
-    const request = packet(kind, target);
     if (
       writeSync(PROCESS_SCOPE_DESCRIPTOR, request) !== request.length ||
       performance.now() >= deadline
     )
       throw new Error("native process scope request refused");
     const bytes = response(resultKind, deadline, payloadBytes);
-    if (bytes.readUInt32LE(12) !== target) throw new Error("native process scope result refused");
+    if (bytes.readUInt32LE(12) !== request.readUInt32LE(12))
+      throw new Error("native process scope result refused");
     return bytes;
   } catch {
     retire(state);
@@ -81,7 +88,7 @@ function exchange(
 function nativeProbe(state: NativePortState): ProcessScopePort["probe"] {
   return (target): ProcessLiveness => {
     if (!isProcessId(target)) return "unknown";
-    const bytes = exchange(state, 2, 3, target),
+    const bytes = exchange(state, packet(2, target), 3),
       value = bytes?.readUInt32LE(16);
     if (value === undefined || value === 3) return "unknown";
     if (value === 1 || value === 2) return value === 1 ? "alive" : "dead";
@@ -90,14 +97,43 @@ function nativeProbe(state: NativePortState): ProcessScopePort["probe"] {
   };
 }
 
+function unsigned(value: bigint, maximum: bigint): boolean {
+  return value >= 0n && value <= maximum;
+}
+
+function fileOwnerRequest(
+  descriptor: number,
+  dev: bigint,
+  ino: bigint,
+  mode: bigint,
+): Buffer | undefined {
+  if (
+    !Number.isInteger(descriptor) ||
+    descriptor < 0 ||
+    descriptor > 0x7fffffff ||
+    !unsigned(dev, 0xffffffffffffffffn) ||
+    !unsigned(ino, 0xffffffffffffffffn) ||
+    !unsigned(mode, 0xffffffffn)
+  )
+    return undefined;
+  const bytes = Buffer.alloc(36);
+  packet(6, descriptor).copy(bytes);
+  bytes.writeUInt32LE(24, 8);
+  bytes.writeBigUInt64LE(dev, 16);
+  bytes.writeBigUInt64LE(ino, 24);
+  bytes.writeUInt32LE(Number(mode), 32);
+  return bytes;
+}
+
 function fileOwnerUid(state: NativePortState): NonNullable<ProcessScopePort["fileOwnerUid"]> {
   return (descriptor, dev, ino, mode): bigint | undefined => {
-    if (!Number.isInteger(descriptor) || descriptor < 0 || descriptor > 0x7fffffff)
-      return undefined;
-    const bytes = exchange(state, 4, 5, descriptor, 32);
+    const request = fileOwnerRequest(descriptor, dev, ino, mode);
+    if (request === undefined) return undefined;
+    const bytes = exchange(state, request, 7, 32);
     if (bytes === undefined) return undefined;
     const status = bytes.readUInt32LE(16);
-    if (status === 2) return undefined;
+    if ((status === 2 || status === 3) && bytes.subarray(20).every((value) => value === 0))
+      return undefined;
     if (
       status !== 1 ||
       bytes.readBigUInt64LE(28) !== dev ||
@@ -113,7 +149,7 @@ function fileOwnerUid(state: NativePortState): NonNullable<ProcessScopePort["fil
 
 /** Only the selected native launcher hands this root-only, kernel-bounded descriptor to the BFF. */
 export function createNativeProcessScope(): ProcessScopePort {
-  if (process.platform !== "linux") throw new Error("native process scope unavailable");
+  claimNativeDecoder();
   const ids = readProcessNamespaceIds();
   if (ids.length < 2 || !fstatSync(PROCESS_SCOPE_DESCRIPTOR).isSocket())
     throw new Error("native process scope unavailable");

@@ -347,7 +347,16 @@ its outer process coordinate before constructing any durable writer or lock. Liv
 use the outer owner's kernel process references; only a positively missing or terminal reference
 establishes death. Unknown observations retain ownership. File-owner requests duplicate an
 already-open root descriptor through the held root pidfd and return metadata only. The consumer
-joins device, inode and mode before applying the existing root/self ownership policy. All
+joins device, inode and mode before applying the existing root/self ownership policy. The main
+thread claims the one-shot decoder before observing the shared port; Workers and repeated factory
+calls cannot consume its identity or close its descriptor. A failed first initialization cannot
+be retried. Conditional file-owner requests carry the expected unsigned 64-bit device and inode
+and unsigned 32-bit mode. The owner compares them against one stat of the duplicated, held object
+before returning its UID. This is a held-object precondition, not an atomic comparison against a
+caller's mutable descriptor slot. A stale identity or unavailable target returns no metadata and
+preserves the healthy channel. The conditional result has its own closed message kind; clients
+never retry through the older unconditional request. Malformed, mismatched successful, or delayed
+results still retire the port, including a refusal containing nonzero reserved metadata. All
 nonlocal ownership requires this observation, including when an unmapped UID looks identical to
 the caller's UID. No UID mapping, ptrace capability or filesystem permission is widened. Failed
 or expired requests permanently retire that lookup port; they never revive from a delayed reply

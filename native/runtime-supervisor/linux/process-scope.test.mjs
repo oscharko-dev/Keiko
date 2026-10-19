@@ -101,7 +101,7 @@ async function finishRoot(child, mode, reader, output, exited) {
     ? "NODE-REFUSED\n"
     : mode === "foreign"
       ? "REFUSED\n"
-      : mode === "valid"
+      : mode === "valid" || mode === "stale"
         ? "SCOPE\n"
         : "NODE-SCOPE\n";
   assert.equal((await readBytes(output, expected.length)).toString(), expected);
@@ -189,6 +189,13 @@ try {
     "expired",
     "late-probe",
     "late-send",
+    "conditional-short",
+    "conditional-long",
+    "conditional-length",
+    "conditional-fd",
+    "conditional-rights",
+    "conditional-foreign",
+    "conditional-expired",
   ]) {
     await test(`outer process scope receiver: ${mode}`, async () => {
       const result = await execute(receiver, [mode], { timeout: 5000, shell: false });
@@ -198,6 +205,8 @@ try {
   }
   await test("namespaced app joins its outer identity and actual outer-process liveness", async () =>
     qualify(launcher, helper, root, "valid"));
+  await test("a reused descriptor refuses stale ownership and preserves the same healthy channel", async () =>
+    qualify(launcher, helper, root, "stale"));
   await test("a foreign lookup is refused while the owned app stays alive", async () =>
     qualify(launcher, helper, root, "foreign"));
   await test("real Node BFF binds before its first durable Activity Log record", async () =>

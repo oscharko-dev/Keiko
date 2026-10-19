@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <stdio.h>
 
 static void read_packet(unsigned char bytes[20], uint16_t kind) {
   assert(recv(7, bytes, 20, MSG_TRUNC) == 20);
@@ -22,6 +23,45 @@ static void probe(pid_t pid, uint32_t expected) {
   read_packet(response, 3);
   assert(read_u32(response + 12) == (uint32_t)pid);
   assert(read_u32(response + 16) == expected);
+}
+
+static void conditional_owner(int descriptor, const struct stat *expected, uint32_t status) {
+  unsigned char request[36] = {'K','P','I','1',1,0,6,0,24,0,0,0}, metadata[44];
+  write_u32(request + 12, (uint32_t)descriptor);
+  write_u32(request + 32, (uint32_t)expected->st_mode);
+  for (size_t i = 0; i < 8; ++i) {
+    request[16 + i] = (unsigned char)((uint64_t)expected->st_dev >> (8u * i));
+    request[24 + i] = (unsigned char)((uint64_t)expected->st_ino >> (8u * i));
+  }
+  assert(send(7, request, sizeof(request), MSG_NOSIGNAL) == sizeof(request));
+  assert(recv(7, metadata, sizeof(metadata), MSG_TRUNC) == sizeof(metadata));
+  assert(memcmp(metadata, "KPI1", 4) == 0 && read_u16(metadata + 4) == 1 &&
+    read_u16(metadata + 6) == 7 && read_u32(metadata + 8) == 32 &&
+    read_u32(metadata + 12) == (uint32_t)descriptor && read_u32(metadata + 16) == status);
+  if (status == 3) {
+    for (size_t i = 20; i < sizeof(metadata); ++i) assert(metadata[i] == 0);
+    return;
+  }
+  assert(status == 1 && read_u32(metadata + 20) == (uint32_t)geteuid());
+  assert(read_u32(metadata + 24) == (uint32_t)expected->st_mode);
+  for (size_t i = 0; i < 8; ++i) {
+    assert(metadata[28 + i] == request[16 + i]);
+    assert(metadata[36 + i] == request[24 + i]);
+  }
+}
+
+static void verify_reused_descriptor(pid_t outer) {
+  FILE *first = tmpfile(), *second = tmpfile();
+  assert(first != NULL && second != NULL);
+  int descriptor = fileno(first), replacement = fileno(second);
+  struct stat old_identity, new_identity;
+  assert(fstat(descriptor, &old_identity) == 0 && fstat(replacement, &new_identity) == 0);
+  assert(old_identity.st_dev != new_identity.st_dev || old_identity.st_ino != new_identity.st_ino);
+  assert(fclose(first) == 0 && dup2(replacement, descriptor) == descriptor);
+  conditional_owner(descriptor, &old_identity, 3);
+  conditional_owner(descriptor, &new_identity, 1);
+  probe(outer, 1);
+  assert(close(descriptor) == 0 && fclose(second) == 0);
 }
 
 int main(int argc, char **argv) {
@@ -71,7 +111,8 @@ int main(int argc, char **argv) {
     assert(write_exact(STDOUT_FILENO, "REFUSED\n", 8));
     for (;;) pause();
   }
-  assert(strcmp(argv[1], "valid") == 0);
+  if (strcmp(argv[1], "stale") == 0) verify_reused_descriptor(outer);
+  else assert(strcmp(argv[1], "valid") == 0);
   assert(write_exact(STDOUT_FILENO, "SCOPE\n", 6));
   close(7);
   for (;;) pause();

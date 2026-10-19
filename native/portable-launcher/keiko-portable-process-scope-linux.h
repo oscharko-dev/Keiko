@@ -39,19 +39,38 @@ static void keiko_scope_u64(unsigned char *bytes, uint64_t value) {
   for (size_t i = 0; i < 8; ++i) bytes[i] = (unsigned char)(value >> (8u * i));
 }
 
-static int keiko_scope_file_owner(keiko_runtime_owner *owner, uint32_t descriptor,
+static uint64_t keiko_scope_read_u64(const unsigned char *bytes) {
+  uint64_t value = 0;
+  for (size_t i = 0; i < 8; ++i) value |= (uint64_t)bytes[i] << (8u * i);
+  return value;
+}
+
+static int keiko_scope_file_matches(const struct stat *file, const unsigned char *request) {
+  return (uint64_t)file->st_dev == keiko_scope_read_u64(request + 16) &&
+         (uint64_t)file->st_ino == keiko_scope_read_u64(request + 24) &&
+         (uint32_t)file->st_mode == read_u32(request + 32);
+}
+
+static int keiko_scope_file_owner(keiko_runtime_owner *owner, const unsigned char *request,
                                    uint64_t deadline) {
   unsigned char bytes[44] = {'K','P','I','1',1,0,5,0,32,0,0,0};
+  uint32_t descriptor = read_u32(request + 12);
+  int conditional = read_u16(request + 6) == 6;
+  if (conditional) write_u16(bytes + 6, 7);
   write_u32(bytes + 12, descriptor); write_u32(bytes + 16, 2);
   if (!keiko_tree_before_deadline(deadline)) return 0;
   int held = (int)syscall(SYS_pidfd_getfd, owner->root_handle, (int)descriptor, 0u);
   struct stat file;
   if (held >= 0) {
     if (fstat(held, &file) == 0) {
-      write_u32(bytes + 16, 1); write_u32(bytes + 20, (uint32_t)file.st_uid);
-      write_u32(bytes + 24, (uint32_t)file.st_mode);
-      keiko_scope_u64(bytes + 28, (uint64_t)file.st_dev);
-      keiko_scope_u64(bytes + 36, (uint64_t)file.st_ino);
+      if (conditional && !keiko_scope_file_matches(&file, request)) {
+        write_u32(bytes + 16, 3);
+      } else {
+        write_u32(bytes + 16, 1); write_u32(bytes + 20, (uint32_t)file.st_uid);
+        write_u32(bytes + 24, (uint32_t)file.st_mode);
+        keiko_scope_u64(bytes + 28, (uint64_t)file.st_dev);
+        keiko_scope_u64(bytes + 36, (uint64_t)file.st_ino);
+      }
     }
     if (close(held) != 0) return 0;
   }
@@ -96,7 +115,7 @@ static int keiko_scope_peer(struct msghdr *message, pid_t root) {
 }
 
 static int keiko_scope_serve(keiko_runtime_owner *owner, uint64_t deadline) {
-  unsigned char bytes[16];
+  unsigned char bytes[36];
   union { struct cmsghdr alignment;
     char bytes[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * 8)]; } control = {0};
   struct iovec payload = {bytes, sizeof(bytes)};
@@ -106,14 +125,16 @@ static int keiko_scope_serve(keiko_runtime_owner *owner, uint64_t deadline) {
   int peer = count >= 0 ? keiko_scope_peer(&message, owner->root) : 0;
   if (count == 0) { keiko_owner_close(&owner->scope); return 1; }
   struct pollfd held = {owner->root_handle, POLLIN, 0};
-  if (count != sizeof(bytes) || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 ||
+  if (count < 16 || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 ||
       !peer || poll(&held, 1, 0) != 0 ||
       memcmp(bytes, "KPI1", 4) != 0 || read_u16(bytes + 4) != 1 ||
-      (read_u16(bytes + 6) != 2 && read_u16(bytes + 6) != 4) || read_u32(bytes + 8) != 4 ||
+      (read_u16(bytes + 6) != 2 && read_u16(bytes + 6) != 4 && read_u16(bytes + 6) != 6) ||
+      count != (read_u16(bytes + 6) == 6 ? 36 : 16) ||
+      read_u32(bytes + 8) != (read_u16(bytes + 6) == 6 ? 24u : 4u) ||
       (read_u16(bytes + 6) == 2 && read_u32(bytes + 12) == 0) || read_u32(bytes + 12) > INT32_MAX ||
       !keiko_tree_before_deadline(deadline)) return 0;
-  if (read_u16(bytes + 6) == 4)
-    return keiko_scope_file_owner(owner, read_u32(bytes + 12), deadline);
+  if (read_u16(bytes + 6) == 4 || read_u16(bytes + 6) == 6)
+    return keiko_scope_file_owner(owner, bytes, deadline);
   uint32_t pid = read_u32(bytes + 12), state = keiko_scope_liveness((pid_t)pid);
   return keiko_tree_before_deadline(deadline) &&
          keiko_scope_send(owner->scope, 3, pid, state, deadline);

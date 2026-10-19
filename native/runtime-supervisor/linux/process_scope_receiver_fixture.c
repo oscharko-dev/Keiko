@@ -63,14 +63,17 @@ static int descriptor_count(void) {
   return count;
 }
 
-static void request_packet(int socket, const unsigned char bytes[17]) {
+static void request_packet(int socket, const unsigned char bytes[37]) {
   int rights[12];
   union { struct cmsghdr alignment; char bytes[CMSG_SPACE(sizeof(rights))]; } ancillary = {0};
-  struct iovec payload = {(void *)bytes, strcmp(mode, "short") == 0 ? 15u :
-    strcmp(mode, "oversized") == 0 ? 17u : 16u};
+  size_t size = strncmp(mode, "conditional-", 12) == 0 ? 36u : 16u;
+  if (strcmp(mode, "short") == 0 || strcmp(mode, "conditional-short") == 0) --size;
+  if (strcmp(mode, "oversized") == 0 || strcmp(mode, "conditional-long") == 0) ++size;
+  struct iovec payload = {(void *)bytes, size};
   struct msghdr message = {.msg_iov = &payload, .msg_iovlen = 1};
-  if (strcmp(mode, "rights") == 0 || strcmp(mode, "truncated-rights") == 0) {
-    size_t count = strcmp(mode, "rights") == 0 ? 1u : 12u;
+  if (strcmp(mode, "rights") == 0 || strcmp(mode, "truncated-rights") == 0 ||
+      strcmp(mode, "conditional-rights") == 0) {
+    size_t count = strcmp(mode, "truncated-rights") == 0 ? 12u : 1u;
     for (size_t i = 0; i < count; ++i) rights[i] = socket;
     message.msg_control = ancillary.bytes;
     message.msg_controllen = CMSG_SPACE(sizeof(int) * count);
@@ -91,8 +94,15 @@ int main(int argc, char **argv) {
     .root_handle = (int)syscall(SYS_pidfd_open, getpid(), 0u)};
   assert(owner.root_handle >= 0);
   int before = descriptor_count();
-  unsigned char bytes[17] = {'K','P','I','1',1,0,2,0,4,0,0,0,0,0,0,0,0};
+  unsigned char bytes[37] = {'K','P','I','1',1,0,2,0,4,0,0,0};
   write_u32(bytes + 12, (uint32_t)getpid());
+  if (strncmp(mode, "conditional-", 12) == 0) {
+    write_u16(bytes + 6, 6); write_u32(bytes + 8, 24);
+  }
+  if (strcmp(mode, "conditional-length") == 0) bytes[8] = 4;
+  if (strcmp(mode, "conditional-fd") == 0) write_u32(bytes + 12, UINT32_MAX);
+  if (strcmp(mode, "conditional-foreign") == 0) owner.root = getpid() + 1;
+  if (strcmp(mode, "conditional-expired") == 0) clock_offset = 10000u;
   if (strcmp(mode, "magic") == 0) bytes[0] = 'X';
   if (strcmp(mode, "version") == 0) bytes[4] = 2;
   if (strcmp(mode, "kind") == 0) bytes[6] = 1;

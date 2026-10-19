@@ -1582,3 +1582,28 @@ The diagnostic provider deadline is 300,000 ms, separate from native-quality eva
 uncertainty, optional semantic/whole-folder dispositions, complete browser/retrieval/skill journeys
 and installed updater transitions still require their own qualification. Historical failed journeys,
 frozen skill outcomes and acceptance ledgers are unchanged.
+
+## Checkpoint 59 — one root decoder and held file identity
+
+The Linux app root now claims its one-shot decoder before touching the shared port. A Worker or a
+second initializer cannot consume or close it, and a malformed first identity cannot be retried.
+Conditional file-owner requests carry exact device/inode/mode values. The owner compares these
+against one stat of the held duplicate before returning a UID. A stale descriptor slot returns no
+metadata while preserving subsequent correct metadata and liveness on the same healthy channel.
+This proves a held-object precondition, not an atomic comparison against a mutable caller slot.
+Malformed, mismatched successful and delayed replies retain permanent channel retirement; there
+is no older-protocol retry or ownership exception.
+
+Failure-first controls retain three decoder lifetime failures, ten conditional-client failures and
+one real forced close/dup2 failure. The final decoder passes 50 controls. Full Linux ARM compiler,
+analyzer and kernel lanes pass under UID 1000 and UID 65534, including 33 scope controls per UID
+and actual BFF/Worker decoder exclusion. Independent CPU controls pass 86/86; an independent
+held-kernel fixture passes 207 requests per UID with no descriptor leak and fails source58.
+The full security and CLI suites pass 923 and 1,421 tests, with four existing skips. Root typing,
+whole-repository/UI lint, actual Sonar and all seven Activity Log checks pass separately.
+
+`native-file-owner-preconditions.json` binds source and causal receipts. A separate prospective
+support-Worker control has a passing main-thread report and a failing Worker positive-record
+assertion; its adaptation is the next bounded change. Initial/detached and successor ownership,
+real installed version transitions, both native P1 findings and all broader acceptance remain open.
+No issue checkbox or frozen quality result changes.

@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { setInterval, clearInterval } from "node:timers";
+import { Worker } from "node:worker_threads";
+import { once } from "node:events";
 import {
   currentProcessId,
   currentProcessScopeKind,
@@ -20,6 +22,7 @@ import {
   fileDescriptorOwnerUid,
 } from "../../../packages/keiko-security/dist/process-scope.js";
 import { openSafeArtifactFile } from "../../../packages/keiko-security/dist/fs-hardening.js";
+import { createNativeProcessScope } from "../../../packages/keiko-security/dist/native-process-scope.js";
 import { runUiCli, startProcessHeartbeat } from "../../../packages/keiko-cli/dist/ui.js";
 import { createFileServerLogSink } from "../../../packages/keiko-activity-log/dist/server-log.js";
 
@@ -82,7 +85,7 @@ function awaitStartupRecord(outer) {
     clearInterval(poll);
     assert.fail("startup record absent");
   }, 5000);
-  const poll = setInterval(() => {
+  const poll = setInterval(async () => {
     const event = records().find((record) => record.op === "process.started");
     if (event === undefined) return;
     assert.equal(event.pid, outer);
@@ -90,10 +93,32 @@ function awaitStartupRecord(outer) {
     assert.equal(event.processScopeState, "ready");
     clearInterval(poll);
     clearTimeout(deadline);
+    await verifyDecoderLifetime(outer);
     reported = true;
     process.stdout.write("NODE-SCOPE\n");
     if (mode === "timeout") void verifyOwnerTimeout();
   }, 10);
+}
+
+async function verifyDecoderLifetime(outer) {
+  assert.throws(() => createNativeProcessScope());
+  assert.equal(processLiveness(outer), "alive");
+  const worker = new Worker(new URL("./process_scope_decoder_worker_fixture.mjs", import.meta.url));
+  let deadline;
+  try {
+    const result = await Promise.race([
+      once(worker, "message"),
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error("Worker decoder refusal absent")), 5000);
+      }),
+    ]);
+    assert.deepEqual(result, ["refused"]);
+    assert.equal(processLiveness(outer), "alive");
+    assert.equal(currentProcessScopeObservation(), "ready");
+  } finally {
+    clearTimeout(deadline);
+    await worker.terminate();
+  }
 }
 
 async function verifyOwnerTimeout() {
