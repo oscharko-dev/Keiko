@@ -126,7 +126,7 @@ export interface UiStore {
   readonly browserApprovals?: BrowserApprovalStore | undefined;
   readonly codingHistory?: CodingHistoryStore | undefined;
   readonly listProjects: () => readonly Project[];
-  readonly createProject: (path: string, name?: string) => Project;
+  readonly createProject: (path: string, name?: string, correlationId?: string) => Project;
   readonly reconnectProject: (path: string) => Project;
   readonly updateProject: (path: string, patch: UpdateProjectPatch) => Project;
   readonly deleteProject: (path: string) => void;

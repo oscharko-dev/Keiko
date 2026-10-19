@@ -232,7 +232,20 @@ for a registered root, and the trust surfaces list registered roots. Registratio
 grant; the repository stays restricted until the operator decides. The first explicit browser
 selection of a newly registered folder supplies its initial grant through the trust service.
 Reopening an existing canonical project, including through a path alias, preserves its current
-trust decision; revocation or invalidation requires a new explicit Trust command. A project
+trust decision; revocation or invalidation requires a new explicit Trust command. Ordinary project
+registration and Chat resolve aliases through the same read-only manifest membership check,
+preserving the original registered project path. Both an existing requested path and the mapped
+stored path must still resolve to their recorded root reference. A missing or retargeted stored alias
+returns `PROJECT_IDENTITY_CHANGED` before any project or manifest mutation and requires explicit
+reconnect. The existing workspace-root denial event records the closed refusal and correlation;
+ordinary path coherence grants no trust and does not impose governed object-identity requirements.
+Projects intentionally left pre-manifest by V15 retain their exact existing lexical project identity
+for ordinary Chat, even when another registered project reaches the same physical root. This does
+not backfill membership, redirect existing conversation history, or enable governed operations.
+Explicit project registration retains its existing canonical mapping and single-project backfill;
+explicit reconnect retains its existing conflict and membership rules. Neither path widens V15's
+single-most-recent migration.
+A project
 selection explicitly attested by a trusted launcher remains a local-human selection path through
 the same trust service. An ambient process working directory may
 seed the preferred project, but carries no grant; restoring a stored project row or opening an

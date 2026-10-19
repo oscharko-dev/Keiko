@@ -1,5 +1,6 @@
 import { raceAbort } from "./abort-race.js";
 import { logChatCreationIntent } from "./store/chatCreationIntents.js";
+import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import {
   gitDescriptionSkillRefusal,
@@ -404,14 +405,34 @@ function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): st
   return validateProjectPath(process.cwd(), { mustExist: true });
 }
 
-function ensureProject(deps: UiHandlerDeps, path: string): Project {
+function pickRegisteredProjectPath(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): string {
+  try {
+    return resolveRegisteredWorkspaceProjectPath(deps.store, pickProjectPath(body, deps), {
+      preserveLegacyProjectIdentity: true,
+    });
+  } catch (error) {
+    if (error instanceof UiStoreError && error.code === "PROJECT_IDENTITY_CHANGED")
+      logChatCreationIntent("refused", correlationId, "project-identity-changed");
+    throw error;
+  }
+}
+
+function ensureProject(
+  deps: UiHandlerDeps,
+  path: string,
+  correlationId: string | undefined,
+): Project {
   const existing = deps.store.listProjects().find((project) => project.path === path);
   if (existing !== undefined) {
     deps.store.updateProject(path, {});
     return existing;
   }
   const name = basename(path) || "Local workspace";
-  return deps.store.createProject(path, name);
+  return deps.store.createProject(path, name, correlationId);
 }
 
 function findChat(deps: UiHandlerDeps, projectPath: string, chatId: string): Chat | undefined {
@@ -3010,8 +3031,8 @@ function persistDesktopChat(
   modelId: string,
 ): RouteResult {
   try {
-    const projectPath = pickProjectPath(body, deps);
-    const project = ensureProject(deps, projectPath);
+    const projectPath = pickRegisteredProjectPath(body, deps, ctx.correlationId);
+    const project = ensureProject(deps, projectPath, ctx.correlationId);
     const title = desktopChatCreationTitle(body);
     const chat = deps.store.createChat(project.path, title, modelId, {
       correlationId: ctx.correlationId,
@@ -3048,7 +3069,7 @@ function replayDesktopChat(
 ): RouteResult | undefined {
   if (typeof body.creationRequestId !== "string") return undefined;
   try {
-    const projectPath = pickProjectPath(body, deps);
+    const projectPath = pickRegisteredProjectPath(body, deps, ctx.correlationId);
     const chat = deps.store.replayChatCreation({
       requestId: body.creationRequestId,
       projectPath,

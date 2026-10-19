@@ -477,7 +477,7 @@ export async function handleCreateProject(
     // transaction (`createProjectRecord`). A successful response therefore exposes a current
     // membership projection; consumers never synthesize or assume membership client-side.
     const registeredPaths = new Set(deps.store.listProjects().map((project) => project.path));
-    const project = deps.store.createProject(normalizedPath, name);
+    const project = deps.store.createProject(normalizedPath, name, ctx.correlationId);
     // The first explicit folder selection grants trust; reopening an existing canonical project
     // preserves its trust decision, including revocation and invalidation. The store resolves aliases
     // to that same registered path. The trust service resolves

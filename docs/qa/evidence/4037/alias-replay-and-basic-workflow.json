@@ -1,0 +1,254 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded alias replay identity repair and terminal known basic workflow; not full epic, skill or updater acceptance",
+  "sourceParent": "b9a82dfcfce8e08856958def77db8c86df5bb64b",
+  "sourceFreeze": {
+    "artifact": "checkpoint42-source-freeze-v6.json",
+    "sha256": "eab748e26b1e747e76c6ed69494c8fa9237215a82b7f28b261aa08fa22d105d7"
+  },
+  "aliasRepair": {
+    "owner": "One existing workspace identity module resolves read-only registered membership for both Chat replay/persistence and transactional project registration; original project.path remains authoritative only while both paths match their recorded root reference",
+    "candidateHandlerSha256": "90c14929444db864158a7a04181580edd22f7a1cef07b2f26d3ba5e0a6105efb",
+    "testSha256": "91c4ce723c0b61c231753b1d879fdcccec7b27e8f99652d900ef5874fb71e931",
+    "causal": {
+      "artifact": "checkpoint42-v4-causal.json",
+      "sha256": "7007579bb113865a4063fe69a95320c3b7d01730b8052d76d2f5bdea9d0da196"
+    },
+    "before": {
+      "failed": 22,
+      "healthy": 11,
+      "filteredOtherTests": 77,
+      "log": {
+        "artifact": "checkpoint42-v4-causal-parent41.log",
+        "sha256": "77d803eff44a05f1e99a6466ab8340572d94e367e402bf2b477984ac7998966b"
+      }
+    },
+    "after": {
+      "passed": 33,
+      "filteredOtherTests": 77,
+      "log": {
+        "artifact": "checkpoint42-v4-causal-after.log",
+        "sha256": "95559fafe707432282b99324f4778ec15dbb74fa163644c8f71758d37f373ca7"
+      }
+    },
+    "boundaries": [
+      "Original canonical and originally aliased registered paths remain unchanged while coherent.",
+      "Accepted replay and 409 parameter conflict precede current model admission, including actual initialized-readiness joins.",
+      "Fresh denied aliases create no project or chat; accepted creation preserves the configured name.",
+      "Retargeted stored aliases are refused through both canonical and alias requests, whether their new target is registered or unregistered. Missing stored aliases are refused through the still-existing canonical root.",
+      "Direct project registration shares the same coherence check and preserves all project and manifest rows on refusal.",
+      "PROJECT_IDENTITY_CHANGED is a fixed body-free 409. Existing chat.creation.intent and workspace.root.denied carry closed refusal reasons and correlation, never paths.",
+      "No new store, root identity formula, governed authority, browser session or model admission bypass.",
+      "V15 still migrates only the most-recent legacy project. Ordinary Chat retains exact existing pre-manifest project.path without membership/trust/backfill, including collision with another registered physical root. Explicit registration/reconnect retain their distinct prior mapping and migration behavior."
+    ],
+    "candidateResolverSha256": "613089394918071f6ce75a9087f88f47f1f1d3382911db2c9febed38913250d9",
+    "candidateStoreSha256": "328a56b4f20ac4d30885350e137158d174fe3d5444ef2dfaf86a38a1c079a3a9",
+    "intermediateCompatibilityRegression": {
+      "failed": 6,
+      "healthy": 27,
+      "published": false,
+      "log": {
+        "artifact": "checkpoint42-v4-causal-intermediate-v3.log",
+        "sha256": "507a0b4b9892cc0a4dbe2ad91b43db2056426e4a3879f62f2860c92cd92cb652"
+      },
+      "classification": "Six new failures on legitimate legacy states in intermediatev3; nine added controls were healthy in parent41 and remain healthy in finalv4."
+    },
+    "functional": {
+      "suitesPassed": 8,
+      "testsPassed": 397,
+      "log": {
+        "artifact": "checkpoint42-v6-affected-tests.log",
+        "sha256": "ea03c24ab34292c92bd9ba1925aaf569ee1ed250da8cad37aa2922b6279d1b15"
+      }
+    },
+    "independent": {
+      "artifact": {
+        "artifact": "browser42-v4-legacy-and-stale-independent.json",
+        "sha256": "041db2749ca3611ddeb6d040bafc9abd17b328d959038f22fbc67ddd5207d584"
+      },
+      "emissionJoin": {
+        "artifact": "browser42-v4-critical-emission-independent.json",
+        "sha256": "6e6c01ecc1795e693ce0e2c8732429667c40bb2c4fedd65976fd983d1ad7058c"
+      },
+      "controls": 11,
+      "parentFailures": 4,
+      "parentHealthy": 7,
+      "candidatePassed": 11,
+      "scope": "Actual store/handler, actual V15 migration; no mounted/native/global acceptance and no network/model calls."
+    },
+    "testFormatLineage": {
+      "artifact": "checkpoint42-test-format-lineage.json",
+      "sha256": "893028135a165092e2bb0e3a4cb8aab765ba7d0c1a917312f35cc60b5e5b6473"
+    },
+    "activityLog": {
+      "checksPassed": 7,
+      "log": {
+        "artifact": "checkpoint42-v5-activity.log",
+        "sha256": "686cbb2ed23aea4b64b907cd11e9536a806c21efb77717d72c2601e940a1300e"
+      },
+      "scope": "Complete registered inventory; canonical catalog regenerated after final production source-location shift."
+    }
+  },
+  "basicWorkflow": {
+    "sourceHead": "b9a82dfcfce8e08856958def77db8c86df5bb64b",
+    "terminalReceipt": {
+      "classification": "Terminal known bounded workflow retained; four measured clean Java baselines with frozen strict3of4assertion credit; React initialfailure and feedbacksource refusal; no regrading or feedbackexecution credit",
+      "sourceHead": "b9a82dfcfce8e08856958def77db8c86df5bb64b",
+      "sourceStableAtTerminal": true,
+      "frozenInputs": 12099,
+      "dispatchedCases": 5,
+      "undispatchedCases": 19,
+      "physicalCalls": 17,
+      "conversationCalls": 6,
+      "readinessCalls": 11,
+      "archiveSha256": "0ed481d336a2c4ce5d3dcf5da84d5151327e6435f132a2ec001c9ff3f8481e05",
+      "bytes": 1041295,
+      "sourceFreezeSha256": "550e07697cd12ea39060e5f0baca15c11c37717f7cf3369471f489c30aa511c1"
+    },
+    "protocol": {
+      "artifact": "protocol-basic-v2.json",
+      "sha256": "5bdc1806e7766ab10e4ca02ebfff9703983ec0b996ebcf424f5588e80835b4a2"
+    },
+    "cases": [
+      {
+        "id": "java-basic-v2-aaa-control-1",
+        "selected": false,
+        "profile": "aaa",
+        "status": "completed-bounded-workflow-semantic-review-pending",
+        "phases": [
+          {
+            "phase": "initial",
+            "measurementContract": true,
+            "inputCharged": 2277,
+            "outputCharged": 1465,
+            "correctSubjectEligible": true,
+            "executionDisposition": "observed",
+            "tests": 4,
+            "passed": null,
+            "mutantTrialsDispatched": 4,
+            "strictAssertionDetections": 3
+          }
+        ]
+      },
+      {
+        "id": "java-basic-v2-aaa-skill-1",
+        "selected": true,
+        "profile": "aaa",
+        "status": "completed-bounded-workflow-semantic-review-pending",
+        "phases": [
+          {
+            "phase": "initial",
+            "measurementContract": true,
+            "inputCharged": 3324,
+            "outputCharged": 1680,
+            "correctSubjectEligible": true,
+            "executionDisposition": "observed",
+            "tests": 4,
+            "passed": null,
+            "mutantTrialsDispatched": 4,
+            "strictAssertionDetections": 3
+          }
+        ]
+      },
+      {
+        "id": "java-basic-v2-gwt-skill-1",
+        "selected": true,
+        "profile": "gwt",
+        "status": "completed-bounded-workflow-semantic-review-pending",
+        "phases": [
+          {
+            "phase": "initial",
+            "measurementContract": true,
+            "inputCharged": 3328,
+            "outputCharged": 1800,
+            "correctSubjectEligible": true,
+            "executionDisposition": "observed",
+            "tests": 4,
+            "passed": null,
+            "mutantTrialsDispatched": 4,
+            "strictAssertionDetections": 3
+          }
+        ]
+      },
+      {
+        "id": "java-basic-v2-gwt-control-1",
+        "selected": false,
+        "profile": "gwt",
+        "status": "completed-bounded-workflow-semantic-review-pending",
+        "phases": [
+          {
+            "phase": "initial",
+            "measurementContract": true,
+            "inputCharged": 2279,
+            "outputCharged": 1767,
+            "correctSubjectEligible": true,
+            "executionDisposition": "observed",
+            "tests": 4,
+            "passed": null,
+            "mutantTrialsDispatched": 4,
+            "strictAssertionDetections": 3
+          }
+        ]
+      },
+      {
+        "id": "react-basic-v2-aaa-control-1",
+        "selected": false,
+        "profile": "aaa",
+        "status": "failed",
+        "phases": [
+          {
+            "phase": "initial",
+            "measurementContract": true,
+            "inputCharged": 2324,
+            "outputCharged": 3409,
+            "correctSubjectEligible": false,
+            "executionDisposition": "observed",
+            "tests": 4,
+            "passed": 3,
+            "mutantTrialsDispatched": 0,
+            "strictAssertionDetections": 0
+          },
+          {
+            "phase": "feedback",
+            "measurementContract": false,
+            "inputCharged": 3461,
+            "outputCharged": 3455,
+            "correctSubjectEligible": false,
+            "executionDisposition": "source-contract-refused",
+            "tests": null,
+            "passed": null,
+            "mutantTrialsDispatched": 0,
+            "strictAssertionDetections": 0
+          }
+        ]
+      }
+    ],
+    "semantics": "All four Java correct-subject baselines pass four tests each. Frozen assertion-only score stays three of four per output. Independent review of all four outputs joins the additional argument mutation to precise strict-Mockito PotentialStubbingProblem diagnostics under the unchanged-argument requirement. This is causally observed contract-fault detection, distinct from executed-assertion credit. No arbitrary error credit, score change or claim of skill benefit.",
+    "react": "Initial control compiles but fails actual disabled-pointer interaction. The one genuine feedback phase remains inside the same cumulative grant but current package.json is omitted; source contract correctly refuses execution and dependent credit. Component/config/setup remain current and complete.",
+    "selectionEvidence": {
+      "initialDominantIntent": "project-metadata",
+      "initialMetadataInjection": "intent",
+      "initialSelectedFiles": 5,
+      "feedbackDominantIntent": "diagnostic-search",
+      "feedbackMetadataInjection": "none",
+      "feedbackSelectedFiles": 3,
+      "discoveryComplete": true,
+      "observedMissingPackageMaterialLines": 26,
+      "budgetOmission": false
+    },
+    "limits": [
+      "Known calibration is not untouched held-out acceptance.",
+      "No skill, model-specific knob, application fixture, original grant or grading floor changed.",
+      "No feedback output is executed or credited after current-source refusal.",
+      "A source-selection repair must pass deterministic offline controls before another model dispatch."
+    ],
+    "frozenInputsArchive": {
+      "artifact": "skill-basic-v2-frozen-inputs.tar.gz",
+      "sha256": "64fd49e247c8d4624495f49a839622db56ca2d76f0618c6cb712336f2ba064b3",
+      "files": 12099,
+      "bytes": 33603706
+    },
+    "conventions": "Both known AAA Java outputs conform lexically. Both known GWT outputs retain upper-case letters inside method-name segments, violating the requested lower snake_case convention despite present Given/When/Then sections. The stage remains unaccepted; no convention-feedback retry was part of the frozen protocol."
+  },
+  "remaining": "Existing healthy/retargeted stored-alias explicit reconnect remains a separately reproduced pre-existing defect, not qualified by canonical legacy reconnect controls. Both skills, full browser/profile/SSD and source/chat qualification, installed platform updates, final exact-head hosted checks/reviews and authorized dev integration remain open. No issue checkbox changed."
+}

@@ -11,7 +11,7 @@ import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 
 import { DatabaseSync } from "node:sqlite";
 import { createCodingHistoryStore } from "./codingHistory.js";
-import { existsSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -125,7 +125,8 @@ import {
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
-import { deriveWorkspaceRootRef } from "../workspace-root-identity.js";
+import { resolveRegisteredWorkspaceProjectPath } from "../workspace-root-identity.js";
+import { recordWorkspaceRootDenied } from "../workspace-root-denial-log.js";
 import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
@@ -134,7 +135,7 @@ import {
   readGitHubIssueReaderAuthorization as sqlReadGitHubIssueReaderAuthorization,
   updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
 } from "./github-issue-reader-authorization.js";
-import { invalidRequest } from "./errors.js";
+import { invalidRequest, UiStoreError } from "./errors.js";
 
 const STORE_OPENED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -337,19 +338,39 @@ function createProjectRecord(
   options: ResolvedFactoryOptions,
   path: string,
   name?: string,
+  correlationId?: string,
 ): Project {
   const normalized = validateProjectPath(path, { mustExist: true });
   const now = options.now();
-  return withImmediateTransaction(db, () => {
-    const rootRef = deriveWorkspaceRootRef(realpathSync.native(normalized));
-    const membership = sqlFindWorkspaceManifestRecordByRoot(db, rootRef);
-    const registeredPath =
-      membership?.rootProjects.find((root) => root.rootRef === rootRef)?.projectPath ?? normalized;
-    const resolvedName = deriveProjectName(name, registeredPath);
-    const project = sqlUpsertProject(db, registeredPath, resolvedName, name !== undefined, now);
-    ensureProjectWorkspaceManifest(db, project.path, project.name, now);
-    return project;
-  });
+  try {
+    return withImmediateTransaction(db, () => {
+      const registeredPath = resolveRegisteredWorkspaceProjectPath(
+        {
+          listProjects: () => sqlListProjects(db),
+          findWorkspaceManifestRecordByRoot: (rootRef) =>
+            sqlFindWorkspaceManifestRecordByRoot(db, rootRef),
+          findWorkspaceManifestRecordByProject: (projectPath) =>
+            sqlFindWorkspaceManifestRecordByProject(db, projectPath),
+        },
+        normalized,
+      );
+      const resolvedName = deriveProjectName(name, registeredPath);
+      const project = sqlUpsertProject(db, registeredPath, resolvedName, name !== undefined, now);
+      ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+      return project;
+    });
+  } catch (error) {
+    if (error instanceof UiStoreError && error.code === "PROJECT_IDENTITY_CHANGED")
+      recordWorkspaceRootDenied(
+        {
+          reason: "ordinary-root-identity",
+          failureKind: error.code,
+          errorKind: "permission-denied",
+        },
+        { correlationId },
+      );
+    throw error;
+  }
 }
 
 function reconnectProjectRecord(
@@ -700,8 +721,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     markdownSkills: createMarkdownSkillStore(db, options.now),
     browserApprovals: createBrowserApprovalStore(db),
     listProjects: () => sqlListProjects(db),
-    createProject: (path: string, name?: string): Project =>
-      createProjectRecord(db, options, path, name),
+    createProject: (path: string, name?: string, correlationId?: string): Project =>
+      createProjectRecord(db, options, path, name, correlationId),
     reconnectProject: (path: string): Project => reconnectProjectRecord(db, options, path),
     updateProject: (path: string, patch: UpdateProjectPatch): Project =>
       updateProjectRecord(db, options, path, patch),

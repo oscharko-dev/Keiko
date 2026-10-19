@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "dcf36b46a2f197c6c87ccfdd97361cf916270e4c366fa063ee5289779ab399cf",
+    "catalogDigest": "ead748aa3caec5bd333c420b6e42c85f1b0af2db344450717e98689db14659cc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1489,6 +1489,12 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["created", "reused", "refused", "failed"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["project-identity-changed"]
           }
         },
         "causal": "correlation",
@@ -1498,7 +1504,7 @@
         "proofIds": ["chat.creation.intent.decision"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/store/chatCreationIntents.ts:15",
-        "emitterSites": ["packages/keiko-server/src/store/chatCreationIntents.ts:45"]
+        "emitterSites": ["packages/keiko-server/src/store/chatCreationIntents.ts:52"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33687,8 +33693,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:139",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:948"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:140",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:969"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37677,6 +37683,7 @@
             "values": [
               "denied-locus",
               "ordinary-root-unavailable",
+              "ordinary-root-identity",
               "credential-shaped-root",
               "managed-root-session-authority-missing",
               "managed-authority-unavailable",
@@ -37717,8 +37724,8 @@
         "failureClasses": ["workspace-root-denial"],
         "proofIds": ["workspace.root.denied.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/workspace-root-denial-log.ts:37",
-        "emitterSites": ["packages/keiko-server/src/workspace-root-denial-log.ts:115"]
+        "registrationSite": "packages/keiko-server/src/workspace-root-denial-log.ts:38",
+        "emitterSites": ["packages/keiko-server/src/workspace-root-denial-log.ts:117"]
       }
     ],
     "exemptionSchema": {
@@ -49912,6 +49919,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
@@ -91798,7 +91811,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1710",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1731",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92242,7 +92255,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2059",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2080",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92303,7 +92316,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1405",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1426",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -94936,7 +94949,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:142",
+      "site": "packages/keiko-server/src/store/db.ts:143",
       "package": "keiko-server"
     },
     {
@@ -95463,7 +95476,7 @@
     {
       "op": "workspace.root.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/workspace-root-denial-log.ts:40",
+      "site": "packages/keiko-server/src/workspace-root-denial-log.ts:41",
       "package": "keiko-server"
     },
     {

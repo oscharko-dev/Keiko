@@ -1,10 +1,11 @@
 // Desktop canvas chat routes: real UI chat persistence with an injected ModelPort, keeping provider
 // credentials behind the existing gateway seam and avoiding network calls in tests.
 
-import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
@@ -21,7 +22,13 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import {
+  buildUiStoreOverDatabase,
+  createInMemoryUiStore,
+  runMigrations,
+  type UiStore,
+} from "./store/index.js";
+import { migrateLegacyProjectManifests } from "./store/workspaceManifests.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
@@ -272,6 +279,7 @@ async function pendingCreationRace(input: {
   readonly automatic: boolean;
   readonly accepted: boolean;
   readonly conflict: boolean;
+  readonly projectPath?: string;
 }): Promise<{
   readonly status: number;
   readonly chatCount: number;
@@ -296,7 +304,7 @@ async function pendingCreationRace(input: {
       method: "POST",
       headers: POST_JSON_HEADERS,
       body: JSON.stringify({
-        projectPath: projectDir,
+        projectPath: input.projectPath ?? projectDir,
         title: input.conflict ? "Conflicting creation" : "Accepted creation",
         creationRequestId: "creation-pending-initialization",
         ...(input.automatic ? {} : { modelId: CHAT_MODEL }),
@@ -324,6 +332,20 @@ async function pendingCreationRace(input: {
     vi.unstubAllGlobals();
     resetServerLogger();
   }
+}
+
+function creationAlias(target: string, name: string): string {
+  const alias = join(tmp, name);
+  symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+  return alias;
+}
+
+async function postDesktopCreation(body: object): Promise<Response> {
+  return fetch(`${base()}/api/desktop/chats`, {
+    method: "POST",
+    headers: POST_JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
 }
 
 function persistConcurrentCreation(runtime: UiHandlerDeps, automatic: boolean): void {
@@ -383,6 +405,41 @@ async function restartWithDeps(handlerDeps: UiHandlerDeps): Promise<void> {
     });
   });
   await startServer(handlerDeps);
+}
+
+function legacyProjectStore(older: string): UiStore {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO projects(path,name,favorite,created_at,last_opened_at) VALUES(?,?,0,?,?)",
+    );
+    insert.run(older, "Older project", 1, 1);
+    insert.run(projectDir, "Recent project", 2, 2);
+    migrateLegacyProjectManifests(db);
+    return buildUiStoreOverDatabase(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+async function useLegacyProjects(aliased: boolean): Promise<string> {
+  const older = join(tmp, "legacy-project");
+  if (aliased) symlinkSync(projectDir, older, process.platform === "win32" ? "junction" : "dir");
+  else mkdirSync(older);
+  const previous = store;
+  store = legacyProjectStore(older);
+  try {
+    await restartWithDeps(deps());
+  } finally {
+    previous.close();
+  }
+  expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
+  expect(store.findWorkspaceManifestRecordByProject(older)).toBeUndefined();
+  expect(store.findWorkspaceManifestRecordByProject(projectDir)).toBeDefined();
+  return older;
 }
 
 async function startServer(handlerDeps: UiHandlerDeps): Promise<void> {
@@ -549,6 +606,363 @@ describe("desktop chat routes", () => {
       await invalid.text();
     },
   );
+
+  describe("aliased creation replay", () => {
+    let creationLog: ReturnType<typeof createBufferedServerLogSink>;
+    beforeEach(() => {
+      creationLog = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: creationLog, level: "info" }));
+    });
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    it.each([
+      { aliased: false, replay: false },
+      { aliased: false, replay: true },
+      { aliased: true, replay: false },
+      { aliased: true, replay: true },
+    ])("preserves ordinary legacy project identity after the actual migration: %j", async (row) => {
+      const older = await useLegacyProjects(row.aliased);
+      const manifests = store.listWorkspaceManifestRecords();
+      const body = {
+        projectPath: older,
+        title: "Legacy chat",
+        modelId: CHAT_MODEL,
+        creationRequestId: "legacy-creation",
+      };
+      const accepted = row.replay
+        ? store.createChat(older, body.title, CHAT_MODEL, {
+            creationRequestId: body.creationRequestId,
+            automaticModelSelection: false,
+          })
+        : undefined;
+      if (row.replay)
+        await restartWithDeps(
+          deps(fakeModel("unused"), { config: customModelConfig("replacement") }),
+        );
+      const response = await postDesktopCreation(body);
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({
+        project: { path: older, name: "Older project" },
+        chat: { projectPath: older, ...(accepted === undefined ? {} : { id: accepted.id }) },
+      });
+      expect(store.listChats(older)).toHaveLength(1);
+      expect(store.listChats(projectDir)).toHaveLength(0);
+      expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+      expect(store.findWorkspaceManifestRecordByProject(older)).toBeUndefined();
+    });
+
+    it("preserves ordinary Chat on the most-recent migrated project", async () => {
+      await useLegacyProjects(false);
+      const response = await postDesktopCreation({ projectPath: projectDir, modelId: CHAT_MODEL });
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ chat: { projectPath: projectDir } });
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
+    });
+
+    it.each([false, true])(
+      "preserves explicit legacy project registration behavior (aliased=%s)",
+      async (aliased) => {
+        const older = await useLegacyProjects(aliased);
+        const response = await fetch(`${base()}/api/projects`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({ path: older }),
+        });
+        expect(response.status).toBe(201);
+        expect(await response.json()).toMatchObject({
+          project: { path: aliased ? projectDir : older },
+        });
+        expect(store.listWorkspaceManifestRecords()).toHaveLength(aliased ? 1 : 2);
+        expect(store.findWorkspaceManifestRecordByProject(older) === undefined).toBe(aliased);
+      },
+    );
+
+    it.each([false, true])(
+      "preserves explicit legacy reconnect behavior (aliased=%s)",
+      async (aliased) => {
+        const older = await useLegacyProjects(aliased);
+        const projects = store.listProjects();
+        const manifests = store.listWorkspaceManifestRecords();
+        if (aliased) {
+          expect(() => store.reconnectProject(older)).toThrow(
+            expect.objectContaining({ code: "PROJECT_EXISTS", status: 409 }),
+          );
+          expect(store.listProjects()).toEqual(projects);
+          expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+        } else {
+          expect(store.reconnectProject(older).path).toBe(older);
+          expect(store.listWorkspaceManifestRecords()).toHaveLength(2);
+          expect(store.findWorkspaceManifestRecordByProject(older)).toBeDefined();
+        }
+      },
+    );
+
+    it.each([
+      { retired: false, conflict: false, status: 201 },
+      { retired: true, conflict: false, status: 201 },
+      { retired: true, conflict: true, status: 409 },
+    ])("preserves the registered identity across model admission: %j", async (input) => {
+      const alias = creationAlias(projectDir, "project-alias");
+      const body = {
+        projectPath: alias,
+        title: "Accepted",
+        modelId: CHAT_MODEL,
+        creationRequestId: "alias-creation",
+      };
+      const first = await postDesktopCreation(body);
+      expect(first.status).toBe(201);
+      const accepted = (await first.json()) as { chat: { id: string } };
+      if (input.retired)
+        await restartWithDeps(
+          deps(fakeModel("unused"), {
+            config: customModelConfig("replacement"),
+            configPresent: true,
+          }),
+        );
+      const replay = await postDesktopCreation({
+        ...body,
+        title: input.conflict ? "Conflicting" : body.title,
+      });
+      expect(replay.status).toBe(input.status);
+      if (input.status === 201)
+        expect(await replay.json()).toMatchObject({
+          project: { path: projectDir, name: "repo" },
+          chat: { id: accepted.chat.id },
+        });
+      else await replay.text();
+      expect(store.listProjects()).toHaveLength(1);
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(store.listChats(alias)).toHaveLength(0);
+      expect(
+        creationLog.events.filter((event) => event.op === "chat.creation.intent").at(-1)?.extra,
+      ).toMatchObject({
+        outcome: input.conflict ? "refused" : "reused",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(creationLog.lines().join("\n")).not.toContain(alias);
+    });
+
+    it.each([false, true])(
+      "retains an originally aliased stored project path (secondAlias=%s)",
+      async (secondAlias) => {
+        const root = join(tmp, "founding-root");
+        mkdirSync(root);
+        const original = creationAlias(root, "founding-alias");
+        const requested = secondAlias ? creationAlias(root, "second-alias") : root;
+        const registered = store.createProject(original, "Founding identity");
+        const body = {
+          projectPath: original,
+          modelId: CHAT_MODEL,
+          creationRequestId: "original-alias-creation",
+        };
+        const first = await postDesktopCreation(body);
+        expect(first.status).toBe(201);
+        const accepted = (await first.json()) as { chat: { id: string } };
+        await restartWithDeps(
+          deps(fakeModel("unused"), {
+            config: customModelConfig("replacement"),
+            configPresent: true,
+          }),
+        );
+        const replay = await postDesktopCreation({ ...body, projectPath: requested });
+        expect(replay.status).toBe(201);
+        expect(await replay.json()).toMatchObject({
+          project: { path: registered.path, name: "Founding identity" },
+          chat: { id: accepted.chat.id, projectPath: registered.path },
+        });
+        expect(registered.path).toBe(original);
+        expect(store.listProjects()).toHaveLength(2);
+        expect(store.listChats(original)).toHaveLength(1);
+        expect(store.listChats(requested)).toHaveLength(0);
+      },
+    );
+
+    it("does not register a fresh alias before model admission", async () => {
+      const root = join(tmp, "fresh-root");
+      mkdirSync(root);
+      const alias = creationAlias(root, "fresh-alias");
+      const projects = store.listProjects();
+      await restartWithDeps(
+        deps(fakeModel("unused"), {
+          config: customModelConfig("replacement"),
+          configPresent: true,
+        }),
+      );
+      const response = await postDesktopCreation({
+        projectPath: alias,
+        modelId: CHAT_MODEL,
+        creationRequestId: "fresh-alias-creation",
+      });
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(store.listProjects()).toEqual(projects);
+      expect(store.listChats(root)).toHaveLength(0);
+      expect(store.listChats(alias)).toHaveLength(0);
+    });
+
+    it("does not recover an accepted intent through an unrelated alias target", async () => {
+      const root = join(tmp, "unrelated-root");
+      mkdirSync(root);
+      const alias = creationAlias(projectDir, "retargeted-alias");
+      const body = {
+        projectPath: alias,
+        modelId: CHAT_MODEL,
+        creationRequestId: "retargeted-creation",
+      };
+      const first = await postDesktopCreation(body);
+      expect(first.status).toBe(201);
+      await first.text();
+      rmSync(alias);
+      symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+      await restartWithDeps(
+        deps(fakeModel("unused"), {
+          config: customModelConfig("replacement"),
+          configPresent: true,
+        }),
+      );
+      const response = await postDesktopCreation(body);
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(store.listProjects()).toHaveLength(1);
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(store.listChats(root)).toHaveLength(0);
+    });
+
+    it.each(
+      [false, true].flatMap((accepted) =>
+        ["retargeted", "registered-target", "missing"].flatMap((state) =>
+          (state === "missing" ? [false] : [false, true]).map((requestAlias) => ({
+            accepted,
+            state,
+            requestAlias,
+          })),
+        ),
+      ),
+    )(
+      "rejects a stale registered project alias without mutation: %j",
+      async ({ accepted, state, requestAlias }) => {
+        const root = join(tmp, "original-physical-root");
+        const replacement = join(tmp, "different-physical-root");
+        mkdirSync(root);
+        mkdirSync(replacement);
+        const alias = creationAlias(root, "stored-project-alias");
+        store.createProject(alias, "Preserved identity");
+        if (state === "registered-target") store.createProject(replacement, "Other identity");
+        const body = {
+          projectPath: alias,
+          modelId: CHAT_MODEL,
+          creationRequestId: "stale-stored-alias",
+        };
+        if (accepted) {
+          const first = await postDesktopCreation(body);
+          expect(first.status).toBe(201);
+          await first.text();
+          await restartWithDeps(
+            deps(fakeModel("unused"), {
+              config: customModelConfig("replacement"),
+              configPresent: true,
+            }),
+          );
+        }
+        rmSync(alias);
+        if (state !== "missing")
+          symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+        const projects = store.listProjects();
+        const create = vi.spyOn(store, "createProject");
+        const update = vi.spyOn(store, "updateProject");
+        const response = await postDesktopCreation({
+          ...body,
+          projectPath: requestAlias ? alias : root,
+        });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({
+          error: { code: "PROJECT_IDENTITY_CHANGED" },
+        });
+        expect(() => realpathSync(root)).not.toThrow();
+        expect(store.listProjects()).toEqual(projects);
+        expect(create).not.toHaveBeenCalled();
+        expect(update).not.toHaveBeenCalled();
+        expect(store.listChats(alias)).toHaveLength(accepted ? 1 : 0);
+        expect(store.listChats(root)).toHaveLength(0);
+        expect(store.listChats(replacement)).toHaveLength(0);
+        expect(
+          creationLog.events.filter((event) => event.op === "chat.creation.intent").at(-1)?.extra,
+        ).toMatchObject({
+          outcome: "refused",
+          reason: "project-identity-changed",
+          completeness: "complete",
+          loss: "none",
+        });
+        expect(creationLog.lines().join("\n")).not.toContain(alias);
+      },
+    );
+
+    it.each([
+      { state: "retargeted", requestAlias: false },
+      { state: "retargeted", requestAlias: true },
+      { state: "registered-target", requestAlias: false },
+      { state: "registered-target", requestAlias: true },
+      { state: "missing", requestAlias: false },
+    ])(
+      "rejects stale registry aliases through project registration: %j",
+      async ({ state, requestAlias }) => {
+        const root = join(tmp, "registration-original");
+        const replacement = join(tmp, "registration-unrelated");
+        mkdirSync(root);
+        mkdirSync(replacement);
+        const alias = creationAlias(root, "registration-stored-alias");
+        store.createProject(alias, "Original registration");
+        if (state === "registered-target") store.createProject(replacement, "Other registration");
+        rmSync(alias);
+        if (state !== "missing")
+          symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+        const projects = store.listProjects();
+        const manifests = store.listWorkspaceManifestRecords();
+        const response = await fetch(`${base()}/api/projects`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({
+            path: requestAlias ? alias : root,
+            name: "Unaccepted registration",
+          }),
+        });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({
+          error: { code: "PROJECT_IDENTITY_CHANGED" },
+        });
+        expect(store.listProjects()).toEqual(projects);
+        expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+        expect(store.listChats(alias)).toHaveLength(0);
+        expect(store.listChats(root)).toHaveLength(0);
+        expect(
+          creationLog.events.filter((event) => event.op === "workspace.root.denied").at(-1)?.extra,
+        ).toMatchObject({
+          reason: "ordinary-root-identity",
+          failureKind: "PROJECT_IDENTITY_CHANGED",
+        });
+        expect(creationLog.lines().join("\n")).not.toContain(alias);
+      },
+    );
+
+    it.each([false, true])(
+      "rechecks registered alias identity after actual readiness joins (conflict=%s)",
+      async (conflict) => {
+        const alias = creationAlias(projectDir, "waiting-alias");
+        const result = await pendingCreationRace({
+          automatic: false,
+          accepted: true,
+          conflict,
+          projectPath: alias,
+        });
+        expect(result.status).toBe(conflict ? 409 : 201);
+        expect(result.chatCount).toBe(1);
+      },
+    );
+  });
 
   it.each([
     { automatic: false, accepted: true, conflict: false, status: 201 },

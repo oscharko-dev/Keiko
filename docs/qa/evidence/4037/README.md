@@ -1181,3 +1181,53 @@ Surefire verification. No historical campaign receives new credit.
 `complete-manifests-and-basic-skills.json` binds these scoped observations. The compact published
 skills remain unchanged and unqualified. A new frozen native campaign must prove the repaired
 source path; all broader acceptance and merge obligations remain open.
+
+## Checkpoint 42: preserve registered project identity through aliases
+
+Chat creation/replay and transactional project registration now share one read-only resolver in
+the existing workspace identity module. It retains the original registered project path only while
+both an existing requested path and its mapped stored path match the recorded root reference.
+Retargeted aliases fail closed through canonical and alias requests, including registered and
+unregistered replacement roots. Missing stored aliases fail closed through the still-existing
+canonical root. The fixed `PROJECT_IDENTITY_CHANGED` response precedes project/manifest mutation.
+Accepted creation preserves the configured name; recovery and parameter conflicts precede current
+model admission at both readiness boundaries. Existing creation-intent and workspace-root denial
+logging carry closed reasons and correlation without paths. No new store, identity formula, browser
+authority or admission bypass is introduced.
+
+Ordinary Chat also preserves the exact existing identity of older projects intentionally left
+pre-manifest by the actual V15 single-most-recent migration. This includes an old alias sharing
+a directory with another registered M11 project: its existing conversation must not move to the
+other project's history. This compatibility branch adds no membership, trust or bulk migration.
+Explicit project registration and reconnect retain their distinct existing behavior.
+
+The identical final 33 mounted controls produce 22 failures and 11 healthy controls with the three
+logic owners restored to exact parent 41 bytes. The intermediate unpublished v3 incorrectly rejects
+six legitimate legacy cases, with 27 healthy controls. Final v4 passes all 33. Nine added legacy
+controls were healthy in the parent; their failures are retained as an intermediary regression,
+not reclassified as unsafe parent admissions. ADR-0114 and ADR-0147 are updated in place.
+
+All 397 tests in eight affected suites pass after the final strict typecheck and package build.
+The auditor separately reproduced an existing stored-alias explicit reconnect defect: ordinary
+canonical legacy reconnect controls do not qualify that aliased path. It remains open and requires
+its own owning-layer repair and causal controls; no global alias denial or trust gate is relaxed.
+
+The terminal known basic v2 workflow retains five dispatched cases and nineteen undispatched.
+All four Java correct-subject baselines pass their four tests. The frozen executed-assertion score
+remains three of four mutants per output. Independent review of all four outputs confirms that
+the additional changed-argument mutant produces a precise strict-Mockito contract mismatch. That
+is observed contract-fault detection, not an infrastructure failure or evidence of a missed defect;
+it does not rewrite the predeclared assertion-only score or establish skill benefit. Both known
+AAA outputs conform lexically. Both known GWT outputs violate lower snake_case inside their method
+name segments, so their present Given/When/Then sections do not establish convention compliance.
+
+The first React control compiles but fails the actual disabled-pointer interaction. Its one genuine
+feedback phase stays inside the original cumulative grant. Current component, Vitest configuration
+and setup remain complete, but the package manifest is absent, so dependent execution is refused.
+Actual activity evidence shows diagnostic routing with no metadata injection; discovery completes
+without byte/read/deadline omission. This is a current-source selection failure, not a measured
+model repair failure. All attempts remain retained, and all 12,099 frozen input files are separately archived and hash-verified. No prompt hint or source-gate
+relaxation is used; deterministic selection controls precede any further model dispatch.
+
+`alias-replay-and-basic-workflow.json` binds the scoped observations. Both skills and all broader
+acceptance, installed updater and final integration obligations remain open.

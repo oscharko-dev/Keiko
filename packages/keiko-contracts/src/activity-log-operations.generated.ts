@@ -1418,6 +1418,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["created", "reused", "refused", "failed"],
       },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["project-identity-changed"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -36128,6 +36134,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "denied-locus",
           "ordinary-root-unavailable",
+          "ordinary-root-identity",
           "credential-shaped-root",
           "managed-root-session-authority-missing",
           "managed-authority-unavailable",

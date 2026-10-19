@@ -26,6 +26,12 @@ const CHAT_CREATION_INTENT = defineActivityLogOperation({
       required: true,
       values: ["created", "reused", "refused", "failed"],
     },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["project-identity-changed"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -40,12 +46,18 @@ const CHAT_CREATION_INTENT = defineActivityLogOperation({
 export function logChatCreationIntent(
   outcome: "created" | "reused" | "refused" | "failed",
   correlationId: string | undefined,
+  reason?: "project-identity-changed",
 ): void {
   processServerLogSink().write(
     activityLogEvent(
       CHAT_CREATION_INTENT,
       { correlationId: correlationIdOrUnknown(correlationId) },
-      { outcome, completeness: "complete", loss: "none" },
+      {
+        outcome,
+        ...(reason === undefined ? {} : { reason }),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }

@@ -4,6 +4,10 @@
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import type { WorkspaceRootIdentityDigest, WorkspaceRootRef } from "@oscharko-dev/keiko-contracts";
+import type { UiStore } from "./store/types.js";
+import { projectIdentityChanged } from "./store/errors.js";
+import { validateProjectPath } from "./store/validation.js";
+import { isExpectedWorkspaceRootFailure } from "./workspace-root-denial-log.js";
 
 const REFERENCE_HEX_CHARS = 40;
 
@@ -115,4 +119,61 @@ export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentit
     mode: legacyStat.mode,
     ownerUid: legacyStat.uid,
   });
+}
+
+type ProjectIdentityIndex = Pick<
+  UiStore,
+  "listProjects" | "findWorkspaceManifestRecordByRoot" | "findWorkspaceManifestRecordByProject"
+>;
+
+function currentProjectRootReference(path: string): WorkspaceRootRef | undefined {
+  try {
+    return deriveWorkspaceRootRef(realpathSync.native(path));
+  } catch (error) {
+    if (!isExpectedWorkspaceRootFailure(error)) throw error;
+    return undefined;
+  }
+}
+
+function currentRegisteredProjectPath(
+  index: ProjectIdentityIndex,
+  requestedPath: string,
+  rootRef: WorkspaceRootRef,
+): string {
+  const membership = index.findWorkspaceManifestRecordByRoot(rootRef);
+  const registeredPath =
+    membership === undefined
+      ? requestedPath
+      : membership.rootProjects.find((root) => root.rootRef === rootRef)?.projectPath;
+  if (registeredPath === undefined || currentProjectRootReference(registeredPath) !== rootRef)
+    throw projectIdentityChanged();
+  return registeredPath;
+}
+
+/** Read-only registered project identity; this grants no governed workspace authority. */
+export function resolveRegisteredWorkspaceProjectPath(
+  index: ProjectIdentityIndex,
+  path: string,
+  options: { readonly preserveLegacyProjectIdentity?: boolean } = {},
+): string {
+  const requestedPath = validateProjectPath(path, { mustExist: true });
+  const rootRef = currentProjectRootReference(requestedPath);
+  if (rootRef === undefined) throw projectIdentityChanged();
+  const recorded = index.findWorkspaceManifestRecordByProject(requestedPath);
+  // V15 intentionally migrates only the most-recent project. Ordinary Chat retains an older
+  // project's lexical conversation identity without adding membership or governed authority.
+  if (
+    recorded === undefined &&
+    options.preserveLegacyProjectIdentity === true &&
+    index.listProjects().some((project) => project.path === requestedPath)
+  )
+    return requestedPath;
+  if (
+    recorded !== undefined &&
+    !recorded.rootProjects.some(
+      (root) => root.projectPath === requestedPath && root.rootRef === rootRef,
+    )
+  )
+    throw projectIdentityChanged();
+  return currentRegisteredProjectPath(index, requestedPath, rootRef);
 }

@@ -66,6 +66,21 @@ windows.
    Retries retain the accepted identity; an explicit new conversation receives a new identity.
    Legacy unbound windows use their stable window identity. Changed creation parameters conflict,
    while an omitted model remains an automatic choice independent of later default election.
+   Project aliases resolve through the existing read-only workspace root/manifest index to the
+   original registered project path before durable replay and accepted persistence. Filesystem
+   canonical spelling alone does not replace that stored project identity. A denied fresh request
+   does not register or update a project. Existing project names survive alias-based creation.
+   A registered requested path and its mapped stored path must still resolve to their recorded root
+   reference. Chat and project registration share this read-only check. Missing or retargeted stored
+   aliases fail closed with `PROJECT_IDENTITY_CHANGED` before replay or project mutation and require
+   explicit reconnect; they cannot redirect a new conversation to another physical root. This coherence
+   check grants no governed root authority and does not require a durable-object identity for
+   ordinary model-only chat. Existing creation-intent and workspace-root denial events record closed
+   refusal reasons under the request correlation.
+   V15 intentionally leaves older projects without workspace membership. Ordinary Chat preserves
+   their exact existing lexical project identity, including when another registered root reaches
+   the same directory; it neither redirects their history nor creates membership or trust. Explicit
+   project registration retains its existing canonical registration and metadata migration behavior.
    Recovery returns the originally accepted conversation before current model admission. After an
    asynchronous readiness join, it rechecks durable acceptance and parameter conflicts before new
    model admission; a concurrent acceptance does not become a new request. Genuinely new requests
