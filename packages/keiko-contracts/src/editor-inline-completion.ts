@@ -281,10 +281,12 @@ function collectTelemetryErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
-function telemetryMetric(
-  value: Record<string, unknown>,
-  field: string,
-): { readonly metric: number; readonly supplied: boolean } {
+interface CapturedTelemetryMetric {
+  readonly metric: number;
+  readonly supplied: boolean;
+}
+
+function telemetryMetric(value: Record<string, unknown>, field: string): CapturedTelemetryMetric {
   const metric = value[field];
   return { metric: isNonNegativeInteger(metric) ? metric : 0, supplied: metric !== undefined };
 }
