@@ -1658,3 +1658,17 @@ matcher, full Linux/macOS native gates and 231 independent byte controls. The un
 matrix passes under both Linux UIDs. Existing regular-file/link/symlink/identity/size/deadline
 guards remain. Windows runtime, installed update, old-release migration and whole app-owner
 acceptance remain explicitly open.
+
+## Malformed remediation owner PIDs
+
+`remediation-lease-pid-domain.json` records the shared positive bounded PID admission, actual
+compiled-manager failure/repair and fresh-versus-aged malformed-record regression. The unchanged
+public-manager controls now pass; the affected family passes106 tests across9 suites. The
+independent exact-source matrix improves from45/53 to53/53 with real scratch publication and
+controlled liveness/clock. Fresh publication and valid live/unknown owners remain protected.
+
+Whole typing, changed-owner lint, real Sonar, error observability, ADR indexing and all seven
+complete Activity Log/architecture/negative/release checks pass. Concurrent reclaim/release and
+foreign process incarnation are separate open requirements. No acceptance ledger or frozen
+model-quality outcome changes. The previous PID-record proof additionally links its independent
+final3 comparison-deadline follow-up without rewriting its historical subset results.

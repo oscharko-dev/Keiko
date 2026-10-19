@@ -287,6 +287,12 @@ guards remain. The original monotonic deadline includes read completion and clea
 that resumes after expiry cannot accept a late valid record. Linux qualification executes the
 existing portable coordinator component suite as well as its compiler and requested kernel scope.
 
+Persisted remediation leases use the same positive, bounded kernel-PID domain as process probes.
+Zero, negative and out-of-domain integers are malformed records, rather than unknown live owners.
+Fresh malformed publication remains protected by its file-age grace; aged malformed records are
+quarantined before a replacement lease is published. Valid live or unobserved owners remain held.
+This record classification does not establish exclusive reclaim or foreign-process incarnation.
+
 On macOS, a monitor's zero-live reply is necessary but does not replace successful reaping of the
 supervisor's exact owned root. The supervisor checks the returned child identity and terminal
 status under one monotonic five-second wait deadline, including interruptions and the final

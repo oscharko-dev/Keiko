@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "classification": "Malformed remediation owner PID classification; bounded repair, not exclusive reclaim or installed updater acceptance",
+  "sourceParent": "e643462ba638b23201116287dc7e9f5a009b26b9",
+  "sourceFreeze": {
+    "artifact": "checkpoint63-source-freeze-v1.json",
+    "sha256": "7aff602ad57d677b244cd6f7eeb5df090a078f90b625e629b45c054f12ef2456"
+  },
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "6cb06cc1a7c6132286b99545bb4349f7c36fc0abf4f2521d4f2e70d0132d675d"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "294eb4384fe9f8590f0a99692a4a4c4a5662d21a53a4c5509928985ed7afce35"
+    },
+    {
+      "path": "docs/qa/evidence/4037/native-coordinator-pid-records.json",
+      "sha256": "a7cae67723ca79cab9eb20c0ddb53184477ec9264be4d60d1392faf5fe6a19e0"
+    },
+    {
+      "path": "packages/keiko-server/src/update-local-state.test.ts",
+      "sha256": "29ab6f12fc2d28006126142f965cb6e77792df7dc79f58d7f6c1f239c5646a11"
+    },
+    {
+      "path": "packages/keiko-server/src/update-local-state.ts",
+      "sha256": "3ecb8a58ad2a982dd409775da6132d1fd30957380c0063c8118ab229af5398a0"
+    }
+  ],
+  "pdca": {
+    "plan": {
+      "compiledPublicManagerBefore": {
+        "artifact": "checkpoint62-remediation-invalid-pid-red-v1.json",
+        "sha256": "ebc02e0621a75ad63c81e92c84d638a9a347c36b9e81ceed7a84511acbb4b1b8"
+      },
+      "regressionBefore": {
+        "artifact": "checkpoint63-invalid-lease-pid-red-v1.log",
+        "sha256": "5e9a5fc8735b061a97c7978b73a951c9c6ac1a3a38e8bf9d408c602c88780850"
+      },
+      "scope": "Actual compiled public manager and default process liveness retain two invalid-PID failures and two protected controls. Separately, eight fixed fresh/aged regression cases reproduce four aged-record failures with47 healthy cases."
+    },
+    "do": [
+      "Reuse the security owner's existing positive31-bit kernel PID validator while parsing persisted remediation leases; remove the now-unnecessary PID cast.",
+      "Invalid integer owner PIDs follow the existing malformed-record file-age grace and quarantine path. Fresh publication, valid live/unknown owners and process-instance rules remain unchanged.",
+      "Existing caller-owned remediation Activity Log and diagnostics remain authoritative. No new operation, liveness fallback, stale threshold or prompt is introduced."
+    ],
+    "check": {
+      "compiledPublicManagerAfter": {
+        "artifact": "checkpoint63-v1-compiled-invalid-pid.json",
+        "sha256": "25819a87d244de039d1b21d6089c61449adc0d820ad65a3c754a3b5dcd84b31f"
+      },
+      "regressionAfter": {
+        "artifact": "checkpoint63-invalid-lease-pid-green-v1.log",
+        "sha256": "833cc05897fa4221c25d1da21ab05277881f2b2e39cd4869ebf4d6f92c5c5610"
+      },
+      "familyTests": {
+        "passed": 106,
+        "suites": 9
+      },
+      "independent": {
+        "receipt": {
+          "artifact": "independent-checkpoint63/lease63-candidate1-independent.json",
+          "sha256": "ca7762a25a6875fd525f94d2a34c990c04eb5dc4a2ea9c278dd5d4ae2d01e050"
+        },
+        "before": {
+          "correct": 45,
+          "total": 53
+        },
+        "after": {
+          "correct": 53,
+          "total": 53
+        },
+        "scope": "Exact extracted complete lease declarations with real scratch rename/link filesystem primitives; controlled clock/liveness/identities, including exact grace boundaries, invalid types and valid PID boundaries. Not concurrent full-manager or remediation execution proof."
+      },
+      "localChecks": [
+        {
+          "artifact": "checkpoint63-v1-typecheck.json",
+          "sha256": "2bc5dcb490825bcb8e5ba6468b545ea79bfb031373bb98d29c4b7d163e9fc5bb"
+        },
+        {
+          "artifact": "checkpoint63-v1-changed-lint.json",
+          "sha256": "2ffe76223d52e2bb4f9b43d0c0ac2cb4293f421d986957ab0e04c384680e46ac"
+        },
+        {
+          "artifact": "checkpoint63-v1-updater-tests.json",
+          "sha256": "84f3762b186fc5491d1fd06ad5e0b36debe23e520a55e1754d6d149d819824e9"
+        },
+        {
+          "artifact": "checkpoint63-v1-sonar.json",
+          "sha256": "451575fcfb232f8386d4954d86ff86493eb63e2047dc3645390e4b471acae67d"
+        },
+        {
+          "artifact": "checkpoint63-v1-error-observability.json",
+          "sha256": "9dd1dc96db7b7155b0bb010a6080998f49398b1786e8dc19d259ef0999615f85"
+        },
+        {
+          "artifact": "checkpoint63-v1-adr-index.json",
+          "sha256": "c7d05b42c4565370d2afa79e4bae39172e84470ea6721d16a76a442c6a15e994"
+        },
+        {
+          "artifact": "checkpoint63-v1-activity-log.json",
+          "sha256": "67df8d88dd5bcebf7cf519502078d9a481ef191eeceb80efd64cb06dc25f804d"
+        }
+      ]
+    },
+    "act": {
+      "remaining": [
+        "Concurrent exclusive reclaim and release, including suspended contenders and displaced canonical records.",
+        "Initial/detached and successor/rollback app ownership, authenticated coordinator lifetime and Linux recovery protocol.",
+        "Real packaged distinct and consecutive updates, restart/cancel/recovery and SSD state continuity.",
+        "Full visible UI, retrieval/context, both skills, browser matrix, acceptance reconciliation and final delivery."
+      ],
+      "allAcceptanceComplete": false,
+      "acceptanceLedgersChanged": false
+    }
+  },
+  "limits": [
+    "The PID domain correction does not establish foreign process incarnation, cross-process exclusivity or whole-generation reaping.",
+    "No frozen Gemma task, skill, oracle, budget or outcome changes.",
+    "Historical checkpoint62 PID-byte and physical deadline receipts retain their original source and scope; its independent final3 follow-up is now additionally linked."
+  ]
+}

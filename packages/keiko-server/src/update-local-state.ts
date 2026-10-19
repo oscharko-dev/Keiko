@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
+import {
+  currentProcessId,
+  isProcessAlive,
+  isProcessId,
+} from "@oscharko-dev/keiko-security/process-scope";
 import {
   closeSync,
   chmodSync,
@@ -429,13 +433,14 @@ function remediationLeasePath(stateDir: string, actionId: string): string {
 function parseRemediationLease(value: unknown): RemediationLeaseRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  return Number.isInteger(record.pid) &&
+  return typeof record.pid === "number" &&
+    isProcessId(record.pid) &&
     typeof record.token === "string" &&
     typeof record.acquiredAt === "string" &&
     isOptionalProcessIdentity(record.processIdentity) &&
     Number.isFinite(Date.parse(record.acquiredAt))
     ? {
-        pid: record.pid as number,
+        pid: record.pid,
         token: record.token,
         acquiredAt: record.acquiredAt,
         ...processIdentityField(record.processIdentity),

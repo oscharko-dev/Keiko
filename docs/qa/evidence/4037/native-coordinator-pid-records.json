@@ -81,7 +81,12 @@
           "sha256": "3cbba80bca4d1343d19d7ee6fe0c4d75629b93542b5c031e2f52d239e212e811"
         },
         "byteCases": 231,
-        "scope": "Exact source subset with real host files and controlled read-completion clock. Before230/231, after231/231; symlink/hardlink/FIFO/preexpired guards and same-legacy-file late read retain their independent boundaries. No full launcher, physical suspension, Windows or installed credit."
+        "scope": "Exact source subset with real host files and controlled read-completion clock. Before230/231, after231/231; symlink/hardlink/FIFO/preexpired guards and same-legacy-file late read retain their independent boundaries. No full launcher, physical suspension, Windows or installed credit.",
+        "finalPredicateFollowup": {
+          "artifact": "independent-checkpoint62/pid62-final3-independent-join.json",
+          "sha256": "5e4fd274ea5ca51b98d865133bc21582136a672b7915add4e16588ff0f40ff3f",
+          "scope": "Separate final3 subset join: identical231 grammar cases for signed61/frozen2/final3; real host files plus controlled read/compare completion. Final3 alone refuses delayed comparison. This supplements, and does not relabel, physical suspension/full native lanes."
+        }
       },
       "localChecks": [
         {
