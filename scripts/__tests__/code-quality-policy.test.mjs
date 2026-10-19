@@ -982,6 +982,18 @@ describe("acceptance and auxiliary public parser obligations (#3918)", () => {
   it("pins five exact public parameter-zero roots without optional grants", () => {
     const records = policy.responsibilities.slice(54, 59);
     expect(records).toHaveLength(5);
+    expect(records.map(({ id }) => id)).toEqual([
+      "code-task-acceptance-contribution-public-parser",
+      "code-task-qualification-flow-public-parser",
+      "code-task-qualification-manifest-public-parser",
+      "auxiliary-capability-request-public-parser",
+      "auxiliary-capability-outcome-public-parser",
+    ]);
+    const dictionaryIds = new Set([
+      "code-task-acceptance-contribution-public-parser",
+      "code-task-qualification-flow-public-parser",
+      "code-task-qualification-manifest-public-parser",
+    ]);
     expect(records.map(({ input }) => input.exportName)).toEqual([
       "validateCodeTaskAcceptanceContribution",
       "validateCodeTaskQualificationFlowArtifact",
@@ -992,7 +1004,11 @@ describe("acceptance and auxiliary public parser obligations (#3918)", () => {
     for (const record of records) {
       expect(record.kind).toBe("public-parser");
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual(
+        dictionaryIds.has(record.id)
+          ? ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"]
+          : ["anti-slop/no-unknown-parameters"],
+      );
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);

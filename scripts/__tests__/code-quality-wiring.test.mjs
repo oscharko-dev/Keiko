@@ -1358,13 +1358,21 @@ describe("diagnostics ingress route responsibility wiring (#3918)", () => {
         record.id === "client-diagnostic-ingress-route-validator" ||
         record.id === "client-binding-ingress-route-validator",
     );
+    expect(records.map(({ id }) => id)).toEqual([
+      "client-diagnostic-ingress-route-validator",
+      "client-binding-ingress-route-validator",
+    ]);
     expect(records.map((record) => record.transform.exportName)).toEqual([
       "isClientDiagnosticIngestRequest",
       "isClientBindingIngestRequest",
     ]);
     for (const record of records) {
       expect(record.kind).toBe("validator");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual(
+        record.id === "client-binding-ingress-route-validator"
+          ? ["anti-slop/no-unknown-parameters", "anti-slop/no-known-value-widening"]
+          : ["anti-slop/no-unknown-parameters"],
+      );
       expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
       expect(record.output).toEqual(record.transform);
       expect(record.consumer).toEqual({
