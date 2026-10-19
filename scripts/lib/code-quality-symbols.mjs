@@ -2630,6 +2630,21 @@ function rawOperationSlot(state, node, rule, kind, origin) {
   };
 }
 
+function rawTypeofOperand(context, expression, origin) {
+  const type = context.checker.getTypeAtLocation(expression);
+  if ((type.flags & ts.TypeFlags.Unknown) !== 0) return true;
+  if (origin.length === 0) return false;
+  const top = context.checker.getNonNullableType(context.checker.getUnknownType());
+  const members = type.isUnion() ? type.types : [type];
+  return (
+    members.some((member) => member === top) &&
+    members.every(
+      (member) =>
+        member === top || (member.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0,
+    )
+  );
+}
+
 function rawTypeofSlots(state) {
   return state.nodes
     .filter(
@@ -2641,8 +2656,7 @@ function rawTypeofSlots(state) {
     )
     .flatMap((node) => {
       const origin = rawOrigin(state, node.expression);
-      const facts = typeFacts(state.context.checker.getTypeAtLocation(node.expression));
-      return origin && facts.kind === "unknown"
+      return origin && rawTypeofOperand(state.context, node.expression, origin)
         ? [rawOperationSlot(state, node, "anti-slop/no-runtime-typeof", "typeof", origin)]
         : [];
     });

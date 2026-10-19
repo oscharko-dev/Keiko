@@ -4029,3 +4029,27 @@ describe("optional object validator responsibility (#3918)", () => {
     },
   );
 });
+
+describe("optional raw typeof responsibility slots (#3918)", () => {
+  it("retains original roles and requires only the same declared raw boundary", async () => {
+    const own = createRawHelperEnforcementFixture("optional-typeof");
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const assessment = report.assessments[0];
+    expect(assessment.structural).toBe("ready");
+    expect(assessment.semantic).toBe("pending");
+    expect(assessment.consumerBinding.bound).toBe(true);
+    expect(assessment.roles.input.signatures[0].parameters[0].type.kind).toBe("unknown");
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const start = source.indexOf("function fields(");
+    const end = source.indexOf("export function validate(");
+    const slots = assessment.slots.filter(
+      (slot) => slot.rule === "anti-slop/no-runtime-typeof" && slot.start > start && slot.end < end,
+    );
+    expect(slots.map((slot) => slot.start)).toEqual(
+      ["direct", "optional", "nullish", "not-null", "alias", "primitive-guard"].map((marker) =>
+        source.indexOf("typeof", source.indexOf(`/* ${marker} */`)),
+      ),
+    );
+  });
+});

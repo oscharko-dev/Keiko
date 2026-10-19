@@ -3416,3 +3416,26 @@ describe("owned optional object validator facts (#3918)", () => {
     );
   });
 });
+
+describe("optional raw typeof operands (#3918)", () => {
+  it("adds only intrinsic nullish residues while retaining domain and erasure refusals", async () => {
+    const own = createRawHelperEnforcementFixture("optional-typeof");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const start = source.indexOf("function fields(");
+    const end = source.indexOf("export function validate(");
+    const slots = own.resolver
+      .rawCheckingSlots(identity, 0)
+      .filter(
+        (slot) =>
+          slot.rule === "anti-slop/no-runtime-typeof" && slot.start > start && slot.end < end,
+      );
+    const markers = ["direct", "optional", "nullish", "not-null", "alias", "primitive-guard"];
+    expect(slots.map((slot) => slot.start)).toEqual(
+      markers.map((marker) => source.indexOf("typeof", source.indexOf(`/* ${marker} */`))),
+    );
+    own.resolver.assertCurrent();
+  });
+});

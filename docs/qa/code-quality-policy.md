@@ -261,8 +261,12 @@ Unrelated trusted callers, exports/reexports, return/container/callback escapes,
 functions, deferred classes and self/mutual cycles withdraw the helper adaptation or leave facts
 incomplete. Extra unknown parameters and other APIs remain checked.
 
-Within this closure, `no-runtime-typeof` adapts only an exact operand whose checker type remains
-unknown and whose raw origin is retained. A partially narrowed or typed operand remains enforced.
+Within this closure, `no-runtime-typeof` adapts only an exact raw-origin operand whose checker type
+is unknown. A nonempty raw member origin may additionally retain the compiler's intrinsic
+non-nullable-unknown residue, optionally unioned only with null or undefined. Raw parameter
+refinements remain enforced. Primitive, named-domain and merely structurally empty object types remain enforced;
+receiver/index provenance alone does not establish eligibility. Existing erasure and helper guards
+remain unchanged.
 `no-known-value-widening` adapts only an exact informative argument recheck against an actual
 checker-bound type-predicate parameter in the same qualified closure, while retaining informative
 local types. It never adapts variable/property/assignment/return erasure or assertions. A structural

@@ -468,6 +468,7 @@ function rawHelperSource(variant) {
   const source = directRawHelperSource();
   const variants = {
     wrapper: () => rawWrapperSource(),
+    "optional-typeof": () => optionalTypeofRawSource(),
     captured: () => capturedRawSource(),
     "typed-capture": () => capturedRawSource("typed"),
     "unchecked-capture": () => capturedRawSource("unchecked"),
@@ -498,6 +499,46 @@ function rawHelperSource(variant) {
     unicode: () => "/* λ boundary */\n" + source.replaceAll("finite", "πεπερασμένο"),
   };
   return variants[variant]?.() ?? rawHelperVariant(source, variant);
+}
+
+function optionalTypeofRawSource() {
+  return [
+    "interface Domain { value: string }",
+    "interface EmptyDomain {}",
+    "type EmptyAlias = {}; type CanonicalTop = NonNullable<unknown>;",
+    "type GenericTop<T> = NonNullable<T>; type IntersectionTop = unknown & {};",
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null; }',
+    'function domain(input: unknown): input is Domain { return typeof input === "object" && input !== null && "value" in input; }',
+    "function emptyDomain(input: unknown): input is EmptyDomain { return input !== null && input !== undefined; }",
+    "function emptyAlias(input: unknown): input is EmptyAlias { return input !== null && input !== undefined; }",
+    "function fields(input: Record<string, unknown>): boolean {",
+    '  let valid = /* direct */ typeof input.direct === "number";',
+    '  if (input.optional !== undefined) valid = (/* optional */ typeof input.optional === "number") && valid;',
+    '  if (input.nullish != null) valid = (/* nullish */ typeof input.nullish === "number") && valid;',
+    '  if (input.notNull !== null) valid = (/* not-null */ typeof input.notNull === "number") && valid;',
+    '  if (input.nullOnly === null) valid = (/* null-only */ typeof input.nullOnly === "object") && valid;',
+    '  if (input.undefinedOnly === undefined) valid = (/* undefined-only */ typeof input.undefinedOnly === "undefined") && valid;',
+    '  const alias = input.alias; if (alias !== undefined) valid = (/* alias */ typeof alias === "number") && valid;',
+    '  if (/* primitive-guard */ typeof input.primitive === "string" && input.primitive != null) valid = (/* primitive-domain */ typeof input.primitive === "string") && valid;',
+    '  if (domain(input.domain) && input.domain != null) valid = (/* named-domain */ typeof input.domain === "object") && valid;',
+    '  if (emptyDomain(input.empty) && input.empty != null) valid = (/* empty-domain */ typeof input.empty === "object") && valid;',
+    '  if (emptyAlias(input.emptyAlias) && input.emptyAlias != null) valid = (/* empty-alias */ typeof input.emptyAlias === "object") && valid;',
+    '  if (domain(input.known)) { const erased: NonNullable<unknown> = input.known; valid = (/* top-erasure */ typeof erased === "object") && valid; }',
+    '  if (domain(input.known)) { const erased: CanonicalTop = input.known; valid = (/* top-alias-erasure */ typeof erased === "object") && valid; }',
+    '  if (domain(input.known)) { const erased: GenericTop<unknown> = input.known; valid = (/* generic-erasure */ typeof erased === "object") && valid; }',
+    '  if (domain(input.known)) { const erased: IntersectionTop = input.known; valid = (/* intersection-erasure */ typeof erased === "object") && valid; }',
+    '  const erased: unknown = input.erased; if (erased !== undefined) valid = (/* unknown-erasure */ typeof erased === "number") && valid;',
+    '  const { destructured } = input; if (destructured !== undefined) valid = (/* destructured */ typeof destructured === "number") && valid;',
+    '  valid = (/* cast */ typeof (input.casted as unknown) === "number") && valid;',
+    "  const callback = (): string => /* callback */ typeof input.callback; void callback;",
+    "  return valid;",
+    "}",
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } {",
+    "  if (!record(input) || !fields(input)) return { ok: false }; return { ok: true, value: 0 };",
+    "}",
+    'export function consume(input: number): number { const result = validate({ direct: input }); if (!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "",
+  ].join("\n");
 }
 
 function capturedRawSource(variant = "raw") {
