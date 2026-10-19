@@ -558,10 +558,16 @@ function joinedObjectSlots(result, policy, assessments, roots, rule, resolver) {
 
 function joinedSlots(policy, assessments, resolver, roots, rule) {
   try {
-    const result = resolver.collectiveRawCheckingSlots(roots, rule);
-    return rule === "anti-slop/no-object-parameters"
-      ? joinedObjectSlots(result, policy, assessments, roots, rule, resolver)
-      : result;
+    if (rule === "anti-slop/no-object-parameters")
+      return joinedObjectSlots(
+        resolver.collectiveJsonByteMeasurement(roots),
+        policy,
+        assessments,
+        roots,
+        rule,
+        resolver,
+      );
+    return resolver.collectiveRawCheckingSlots(roots, rule);
   } catch (error) {
     const capacity = collectiveHelperBudgetDetails(error);
     if (!capacity) throw error;

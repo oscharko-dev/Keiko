@@ -757,8 +757,7 @@ function answerAdmission(state, strict) {
     !count ||
     !builtinMember(state, count.initializer, "length", strict) ||
     !sameParameter(state, count.initializer.expression, 0) ||
-    !admitted ||
-    admitted.initializer.kind !== ts.SyntaxKind.TrueKeyword
+    admitted?.initializer.kind !== ts.SyntaxKind.TrueKeyword
   )
     return false;
   return (

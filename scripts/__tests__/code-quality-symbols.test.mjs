@@ -3088,10 +3088,7 @@ async function jsonByteMeasurementFixture(variant = "direct") {
 describe("exact numeric JSON byte object form (#3918)", () => {
   it("recognizes only the two closed measurement annotations across all three real incoming roots", async () => {
     const own = await jsonByteMeasurementFixture();
-    const result = own.resolver.collectiveRawCheckingSlots(
-      own.rawRoots,
-      "anti-slop/no-object-parameters",
-    );
+    const result = own.resolver.collectiveJsonByteMeasurement(own.rawRoots);
     expect(result.status).toBe("recognized");
     expect(result.form).toBe("json-utf8-byte-measurement");
     expect(result.slots).toHaveLength(2);
@@ -3201,10 +3198,7 @@ describe("numeric object closed-form refusals (#3918)", () => {
     "duplicate",
   ])("refuses unsupported numeric form: %s", async (variant) => {
     const own = await jsonByteMeasurementFixture(variant);
-    const result = own.resolver.collectiveRawCheckingSlots(
-      own.rawRoots,
-      "anti-slop/no-object-parameters",
-    );
+    const result = own.resolver.collectiveJsonByteMeasurement(own.rawRoots);
     expect(result).toEqual({
       form: "json-utf8-byte-measurement",
       status: "withheld",
@@ -3214,10 +3208,7 @@ describe("numeric object closed-form refusals (#3918)", () => {
   });
   it("does not grant an unrelated object annotation beside the closed two-slot form", async () => {
     const own = await jsonByteMeasurementFixture("unrelated-object");
-    const result = own.resolver.collectiveRawCheckingSlots(
-      own.rawRoots,
-      "anti-slop/no-object-parameters",
-    );
+    const result = own.resolver.collectiveJsonByteMeasurement(own.rawRoots);
     expect(result.status).toBe("recognized");
     expect(result.slots).toHaveLength(2);
     expect(
@@ -3228,5 +3219,60 @@ describe("numeric object closed-form refusals (#3918)", () => {
         ).includes("serializedBytes"),
       ),
     ).toBe(true);
+  });
+});
+
+describe("separate collective slot result contracts (#3918)", () => {
+  it("returns closed withheld numeric descriptors for empty and nonraw roots", async () => {
+    const own = await collectiveSymbolFixture("domain");
+    const domain = own.resolver.resolveProofExport({
+      ...own.records[0].input,
+      exportName: "domain",
+    }).identities[0];
+    const withheld = {
+      form: "json-utf8-byte-measurement",
+      status: "withheld",
+      reason: "unsupported-json-byte-form",
+      slots: [],
+    };
+    expect(own.resolver.collectiveJsonByteMeasurement([])).toEqual(withheld);
+    expect(
+      own.resolver.collectiveJsonByteMeasurement([
+        { identity: domain, index: 0, recordId: "domain" },
+      ]),
+    ).toEqual(withheld);
+  });
+
+  it("propagates actual numeric collective capacity errors", async () => {
+    const own = await collectiveSymbolFixture();
+    expect(() =>
+      own.resolver.collectiveJsonByteMeasurement(Array(65).fill(own.rawRoots[0])),
+    ).toThrow("symbol-alias-budget");
+  });
+
+  it("propagates actual numeric collective cycles", async () => {
+    const cycle = await collectiveSymbolFixture("cycle");
+    expect(() => cycle.resolver.collectiveJsonByteMeasurement(cycle.rawRoots)).toThrow(
+      "unsupported-raw-helper-cycle",
+    );
+  });
+
+  it("propagates actual numeric source currentness errors", async () => {
+    const changed = await collectiveSymbolFixture();
+    const path = join(changed.root, "packages/alpha/src/owner.ts");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => changed.resolver.collectiveJsonByteMeasurement(changed.rawRoots)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+
+  it("keeps the legacy object-rule operation array-valued for empty and supported roots", async () => {
+    const own = await jsonByteMeasurementFixture();
+    expect(own.resolver.collectiveRawCheckingSlots([], "anti-slop/no-object-parameters")).toEqual(
+      [],
+    );
+    expect(
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-object-parameters"),
+    ).toEqual([]);
   });
 });

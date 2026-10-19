@@ -2847,17 +2847,19 @@ function collectiveStateSlots(state) {
   ];
 }
 
-function collectiveRawCheckingSlots(compiler, requests, rule) {
+function collectiveRawFacts(compiler, requests) {
   compiler.assertCurrent();
-  if (requests.length === 0) return [];
   if (requests.length > compiler.state.limits.aliases)
     throw collectiveHelperBudgetError(compiler.state.limits.aliases, requests.length);
   const { states, roots } = collectiveRawGraph(compiler, requests);
-  if (roots.size === 0) return [];
   const first = states.get(roots.keys().next().value);
-  const qualified = qualifiedRawStates(first, states, new Set(roots.keys()));
-  if (rule === "anti-slop/no-object-parameters")
-    return numericObjectSlots(compiler, requests, { states, roots, qualified });
+  const qualified =
+    roots.size === 0 ? new Set() : qualifiedRawStates(first, states, new Set(roots.keys()));
+  return { states, roots, qualified };
+}
+
+function collectiveRawCheckingSlots(compiler, requests, rule) {
+  const { states, roots, qualified } = collectiveRawFacts(compiler, requests);
   const slots = [];
   const dependencies = new Map();
   for (const state of states.values()) {
@@ -2877,6 +2879,10 @@ function collectiveRawCheckingSlots(compiler, requests, rule) {
   }
   compiler.assertCurrent();
   return slots;
+}
+
+function collectiveJsonByteMeasurement(compiler, requests) {
+  return numericObjectSlots(compiler, requests, collectiveRawFacts(compiler, requests));
 }
 
 function numericObjectSlots(compiler, requests, graph) {
@@ -3384,6 +3390,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
       return structuredClone(rawSlots.get(key));
     },
     collectiveRawCheckingSlots: (roots, rule) => collectiveRawCheckingSlots(compiler, roots, rule),
+    collectiveJsonByteMeasurement: (roots) => collectiveJsonByteMeasurement(compiler, roots),
     consumerCalls: (identity, producer, expectedOwner) =>
       consumerCalls(compiler, identity, producer, expectedOwner),
     expressionFactsAt: (request) => expressionFactsAt(compiler, request),

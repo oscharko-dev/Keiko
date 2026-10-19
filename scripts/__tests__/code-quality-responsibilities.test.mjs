@@ -8,6 +8,7 @@ import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
 import {
   assessPolicyResponsibilities,
+  adaptResponsibilityDiagnostics,
   resolveRoles,
 } from "../lib/code-quality-responsibilities.mjs";
 import {
@@ -3229,13 +3230,13 @@ function expectWithheldCapacity(assessment) {
   );
 }
 
-async function interceptCollectiveAttempt(intercept) {
+async function interceptCollectiveAttempt(intercept, operation = "collectiveRawCheckingSlots") {
   const symbols = await import("../lib/code-quality-symbols.mjs");
   const original = symbols.createSymbolResolver;
   vi.spyOn(symbols, "createSymbolResolver").mockImplementation((...args) => {
     const resolver = original(...args);
-    const collect = resolver.collectiveRawCheckingSlots;
-    resolver.collectiveRawCheckingSlots = (...call) => intercept(collect, call);
+    const collect = resolver[operation];
+    resolver[operation] = (...call) => intercept(collect, call);
     return resolver;
   });
 }
@@ -3616,6 +3617,17 @@ describe("numeric object unsupported form reporting (#3918)", () => {
     expect(report.assessments.map((record) => record.slots)).toEqual(
       before.assessments.map((record) => record.slots),
     );
+    // A constructed object coordinate remains active after the real unsupported assessment.
+    const finding = {
+      path: report.assessments[0].roles.input.identities[0].producer.path,
+      rule: "anti-slop/no-object-parameters",
+      line: 1,
+      column: 1,
+    };
+    expect(adaptResponsibilityDiagnostics({ violations: [finding] }, report)).toMatchObject({
+      adaptations: [],
+      violations: [finding],
+    });
     for (const record of report.assessments) {
       expect(record.objectForms).toEqual([
         {
@@ -3651,10 +3663,11 @@ describe("numeric object unsupported form reporting (#3918)", () => {
     expect(report.assessments[0].objectForms[0].requestedResponsibilityIds).toEqual([
       "fixture-first",
     ]);
-    await interceptCollectiveAttempt((_collect, [, rule]) => {
-      expect(rule).toBe("anti-slop/no-object-parameters");
+    await interceptCollectiveAttempt((_collect, [numericRoots]) => {
+      expect(numericRoots).toHaveLength(1);
+      expect(numericRoots[0].recordId).toBe("fixture-first");
       throw new TypeError("unexpected-numeric-form-failure");
-    });
+    }, "collectiveJsonByteMeasurement");
     expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(
       "unexpected-numeric-form-failure",
     );
@@ -3664,7 +3677,7 @@ describe("numeric object unsupported form reporting (#3918)", () => {
       const path = join(own.root, "packages/alpha/src/owner.ts");
       writeFileSync(path, readFileSync(path, "utf8") + "\n");
       return result;
-    });
+    }, "collectiveJsonByteMeasurement");
     expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(
       "symbol-subject-changed",
     );
