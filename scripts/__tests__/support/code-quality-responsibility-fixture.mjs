@@ -1,4 +1,4 @@
-import { readFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { pathToFileURL, URL } from "node:url";
 import { join } from "node:path";
 import {
@@ -1633,4 +1633,72 @@ export function createObjectValidatorFixture(variant = "valid") {
     own.put("scripts/code-quality-policy.json", policy);
     Object.assign(own, { record, policy });
   });
+}
+
+export async function installResponsibilityFixtureTools(own) {
+  const { symlinkSync } = await import("node:fs");
+  const tools = new URL("../../../", import.meta.url);
+  mkdirSync(join(own.root, "node_modules/.bin"));
+  for (const name of ["vitest", "typescript"])
+    symlinkSync(
+      new URL(`node_modules/${name}`, tools),
+      join(own.root, "node_modules", name),
+      "junction",
+    );
+  symlinkSync(
+    new URL("node_modules/.bin/vitest", tools),
+    join(own.root, "node_modules/.bin/vitest"),
+  );
+  own.put("package-lock.json", readFileSync(new URL("package-lock.json", tools), "utf8"));
+}
+
+export async function installSemanticFixtureBuild(own, args) {
+  const { nativeCompilerExecutable } = await import("../../lib/code-quality-provenance.mjs");
+  own.put(
+    "scripts/semantic-fixture-build.mjs",
+    `import { execFileSync } from "node:child_process";
+execFileSync(${JSON.stringify(nativeCompilerExecutable())}, ${JSON.stringify(args)}, {
+  cwd: process.cwd(), timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
+});`,
+  );
+  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+  manifest.scripts = { "build:packages": "node scripts/semantic-fixture-build.mjs" };
+  own.put("package.json", manifest);
+}
+
+export function embeddedSemanticOptions() {
+  return { mode: "enforce", scope: "repository", json: true, qualifyResponsibilities: true };
+}
+
+export async function createCollectiveSemanticFixture(variant, roots) {
+  const own = createCollectiveParserFixture(variant, [
+    "anti-slop/no-runtime-typeof",
+    "anti-slop/no-unsafe-dictionary-type",
+  ]);
+  roots.push(own.root);
+  await installResponsibilityFixtureTools(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  // Actual Vitest declarations require browser globals even for this Node-only runtime proof.
+  config.compilerOptions.lib.push("DOM");
+  own.put("packages/alpha/tsconfig.json", config);
+  const path = own.records[0].proofs[0];
+  const wrappers = readFileSync(join(own.root, path), "utf8");
+  own.put(
+    path,
+    wrappers +
+      '\nimport { it, expect } from "vitest";\n' +
+      ["first", "second"]
+        .map(
+          (name) => `
+it("${name} healthy", () => { expect(public${name}({ value: 3 })).toEqual({ ok: true, value: 3 }); });
+it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toBe(false); });
+`,
+        )
+        .join("\n"),
+  );
+  if (variant === "missing-assertion")
+    own.records[1].proofAssertions[1].testName = "absent assertion";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
+  return own;
 }
