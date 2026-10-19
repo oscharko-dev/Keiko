@@ -361,9 +361,8 @@ test("@smoke file scope exposes a full unbroken path without horizontal overflow
   await page.goto("/");
   const { files, chatWindow, pill } = scopeViews(page);
   await expect(pill).toHaveText(/Folder:|Ordner:/u);
-  await expect(chatWindow.getByTestId("grounding-help")).toContainText(
-    "The model has no file tools",
-  );
+  await expect(chatWindow.getByTestId("grounding-help")).toHaveCount(0);
+  await expect(chatWindow.getByText("Sources", { exact: true })).toBeVisible();
   await expectScope(request, fixture.root, fixture.chat.id, "workspace-root", []);
   await files.locator('.tr-dir-enter[data-path="docs"]').click();
   await expectScope(request, fixture.root, fixture.chat.id, "directory", ["docs"]);
