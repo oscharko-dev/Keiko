@@ -291,6 +291,23 @@ expired or unavailable monotonic clock before spawning and checks expiry after w
 These checks do not establish immutable generation membership or replace Endpoint Security
 qualification.
 
+The Linux native generation implementation uses an atomically held `clone3` PID handle for a
+new user/PID namespace init; the outer owner remains outside that generation. The init verifies
+unchanged non-root ids, drops capabilities, sets no-new-privileges, and verifies non-dumpability
+before creating the runtime root. Its private lease and nonblocking reap loop remain responsive
+while descendants detach or create nested namespaces. The zero-live derivation requires the exact
+owned init's terminal wait under the original monotonic bound; pidfd readiness alone is insufficient.
+Readiness, credential intake, start acknowledgement and terminal waits recheck their bounds after
+system-call completion. Consumed children remain consumed even when a late result is refused.
+
+The shared POSIX codec stays inside the existing attested macOS source tree, preserving installed
+candidate-validator compatibility while both implementations use one bounded codec. Source presence,
+protocol controls and isolated kernel mechanics do not enable a portable update capability. Linux
+admission still requires the initial outer owner, authenticated per-attempt coordinator and successor
+ownership, consistent host process identities, complete shipped source/receipt bindings and actual
+installed-version qualification. Existing sandbox namespace/egress requirements remain binding;
+there is no host-policy or unconfined production fallback.
+
 A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
 identity. It must attest the original tree and registration, then prove its own PID, version and
 loopback binding before readiness opens. POSIX and Windows resume admission use the plan's `startAt` deadline

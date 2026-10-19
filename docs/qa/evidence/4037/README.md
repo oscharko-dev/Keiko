@@ -1333,3 +1333,24 @@ The same six actual producer/parser/store controls show three failures and three
 before the correction, then six passes. All 1,323 tests in the 36 affected Activity Log suites pass.
 `activity-log-writer-identity.json` binds the exact source and scoped evidence. This correction
 does not qualify native updater ownership, model/skill benefit or broader customer journeys.
+
+## Checkpoint 47 — Linux generation kernel backend
+
+The unshipped Linux KRP1 implementation atomically holds a user/PID-namespace init and retains
+a separate outer owner. Its trusted init verifies non-root ids, dropped capabilities, no-new-privileges
+and non-dumpability, then polls its private lease while reaping. Credentials bind startup identities;
+an on-time owned terminal init wait supports the kernel zero-live result. The POSIX codec and
+existing correct argument/environment marshalling are shared inside the already attested macOS
+source tree, preserving installed candidate-validator compatibility.
+
+On the declared ARM64 namespace-enabled fixture, all eight actual kernel cases pass with five
+independently held process references. Normal completion requires immediate terminal observation
+after KRS; the stopped-init case refuses early proof. A private producer with its wait disabled
+fails that same control. Six decoder refusals and nine actual-function deadline controls pass.
+The identical deadline controls retain five failures/four healthy cases before the repair. Full
+macOS compiler/analyzer/boundary checks pass. The x64 translated kernel attempt returns ENOSYS
+and remains unqualified. No stage, CLI/BFF handoff or native update admission is enabled here.
+
+`linux-generation-kernel-backend.json` binds these scoped controls and their limits. Initial and
+successor ownership, host PID consumers, real installed updates and broader platform acceptance
+remain open. No skill or epic acceptance changes.

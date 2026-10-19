@@ -246,6 +246,66 @@
         "native-static-analysis",
         "system-extension-boundary"
       ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_protocol.h",
+      "language": "c",
+      "platforms": ["macos", "linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/keiko_runtime_supervisor.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/qualification_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/qualification_observer.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/coordinator_encoder_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/deadline_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
     }
   ]
 }

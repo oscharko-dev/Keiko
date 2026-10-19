@@ -76,7 +76,7 @@ describe("actual runner error and lifecycle observations", () => {
     expect(report.qualification.unhandledErrors).toBe(2);
     expect(Buffer.byteLength(diagnostics.text)).toBeLessThanOrEqual(8192);
     expect(diagnostics.text).toContain("TypeError");
-    expect(diagnostics.text).not.toContain("�");
+    expect(diagnostics.text).not.toContain("\uFFFD");
     expect(diagnostics.text).not.toContain("Later diagnostic");
     expect(diagnostics).toMatchObject({
       errorCount: 2,

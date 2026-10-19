@@ -298,7 +298,15 @@
     "candidateV1Failed": 1,
     "unchangedCandidateV3ControlsPassed": 11,
     "extendedCandidateV3ControlsPassed": 13,
-    "scope": "Actual hook, sibling snapshot, own storage echo, own PUT acknowledgement and higher-revision server transfer; scoped candidate correction only."
+    "scope": "Actual hook, sibling snapshot, own storage echo, own PUT acknowledgement and higher-revision server transfer; scoped candidate correction only.",
+    "finalV5": {
+      "receipt": {
+        "artifact": "ui45-provenance-v5-independent.json",
+        "sha256": "f1cc2e7ccc259d6fdea45db5608ec01dc262488391b2c0db5c112689db521b01"
+      },
+      "passed": 13,
+      "frozenSourcesJoined": 15
+    }
   },
   "finalSourceRefactor": {
     "classification": "Behavior-preserving extraction of the existing mapping from the ResizeObserver callback after two actual Sonar S2004 findings; no guard suppressed or changed",
@@ -306,6 +314,10 @@
       "artifact": "checkpoint45-sonar-final.log",
       "sha256": "bad7d96c41756e19ae26a77ede66ba01f4fff84eda7282c17146a8607239ea82"
     },
-    "independentReviewScope": "The retained v3 independent controls cover the pre-extraction ownership correction; final v5 checks are separately bound."
+    "independentReviewScope": "The retained v3 correction is preserved; the same thirteen independent controls also pass on final v5 with all fifteen source hashes joined."
+  },
+  "publicationValidation": {
+    "artifact": "checkpoint45-local-validation.json",
+    "sha256": "6e9a2cfd5e5fed1f37bc42dc67b3600e5cb9b8edd720e39fedb5660febb4f835"
   }
 }

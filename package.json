@@ -210,6 +210,7 @@
     "check:zizmor-anchors": "node scripts/check-zizmor-anchors.mjs",
     "list:workflow-consumers": "node scripts/list-workflow-consumers.mjs",
     "check:workflow-branch-parity": "node scripts/check-workflow-branch-parity.mjs",
+    "check:native:linux": "bash scripts/check-linux-native-quality.sh",
     "check:native:macos": "./scripts/check-macos-native-quality.sh",
     "check:native:windows": "pwsh -NoProfile -NonInteractive -File scripts/check-windows-native-quality.ps1",
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src \"packages/*/src\" && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs && node scripts/check-vector-index-architecture.mjs && npm run check:governed-tool-contract && npm run check:tool-catalog-conformance && npm run check:tool-catalog-performance",
