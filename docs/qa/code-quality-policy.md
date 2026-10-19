@@ -1315,3 +1315,18 @@ proofs; declaration alone is not coverage. Exported readers and predicates, resu
 external callers, unsupported references and non-boolean dictionary helpers gain no authority.
 `no-runtime-typeof` is not declared by this metadata slice: checks on `ownField(...)` results are
 outside the existing raw-origin grammar and remain observations requiring separate disposition.
+
+### Optional owned object validators
+
+A validator may opt into `rawObjectInput: true` only for its single exact public `object` input and
+`anti-slop/no-object-parameters`, with an explicit optional named result owned by the producer.
+The producer roles retain the same canonical identity and the real production consumer remains
+bound. The tagged root slot requires completed selected public proofs before either adaptation
+path can accept it. Legacy validators and observation options retain their existing behavior.
+
+The public structural registration reader owns this optional-view boundary: a complete attachment
+retains its identity while malformed or unreadable structure is refused. The real mandatory-event
+consumer guards absence and catches unreadable attachment access. A structural view does not grant
+canonical registration or persistence authority; the physical writer still revalidates separately.
+This option grants neither private helper parameters nor call-result origins, descriptor transport,
+or shared raw carriers. It is a proved boundary responsibility, not an implementation-body theorem.

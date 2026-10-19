@@ -24,6 +24,7 @@ import {
   activityLogWriterState,
   createServerLogger,
   getServerLogger,
+  isMandatoryActivityLogEvent,
   nullServerLogger,
   resetServerLogger,
   setServerLogger,
@@ -609,4 +610,38 @@ describe("Support logger raw metadata preservation", () => {
       expect(activityLogLossCounters()["schema-rejected"]).toBe(1);
     });
   }
+});
+
+describe("Support optional registration mandatory consumer", () => {
+  function carrier(registration: object): object {
+    const event = {};
+    Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: registration });
+    return event;
+  }
+
+  it("public: refuses malformed loss registration before mandatory classification", () => {
+    const operation = activityLogOperationSchema("activity-log.loss");
+    if (operation === undefined) throw new TypeError("registered loss operation required");
+    const mandatory = publicActivityLogOwner.isMandatoryActivityLogEvent;
+    expect(mandatory(carrier(operation))).toBe(true);
+    expect(mandatory(carrier({ ...operation }))).toBe(true);
+    expect(mandatory(carrier({ ...operation, owner: 42 }))).toBe(false);
+    const unreadableOwner = { ...operation };
+    Object.defineProperty(unreadableOwner, "owner", {
+      get(): never {
+        throw new TypeError("fixture owner unreadable");
+      },
+    });
+    expect(mandatory(carrier(unreadableOwner))).toBe(false);
+    const failure = new TypeError("fixture attachment unreadable");
+    const attachment = {};
+    Object.defineProperty(attachment, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      get(): never {
+        throw failure;
+      },
+    });
+    expect(() => activityLogEventRegistration(attachment)).toThrow(failure);
+    expect(mandatory(attachment)).toBe(false);
+    expect(isMandatoryActivityLogEvent(carrier(operation))).toBe(true);
+  });
 });

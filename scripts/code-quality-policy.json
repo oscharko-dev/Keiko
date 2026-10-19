@@ -6278,6 +6278,65 @@
           "testName": "POST /api/diagnostics/client binding evidence refuses a target fingerprint on a missing binding"
         }
       ]
+    },
+    {
+      "id": "support-public-structural-registration-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rawObjectInput": true,
+      "rules": ["anti-slop/no-object-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "activityLogEventRegistration",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "activityLogEventRegistration"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "activityLogEventRegistration"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-activity-log/src/index.ts",
+        "specifier": "./server-logger.js",
+        "exportName": "isMandatoryActivityLogEvent",
+        "owner": "@oscharko-dev/keiko-activity-log"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/observability.test.ts",
+        "packages/keiko-activity-log/src/server-logger.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: preserves healthy original and complete cloned registration identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: refuses an empty public registration while preserving private mismatch"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support registration structural field variants public: refuses an unreadable registration field"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support optional registration mandatory consumer public: refuses malformed loss registration before mandatory classification"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves healthy metadata, correlation and real formatter admission"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves malformed raw metadata and the existing final mismatch"
+        }
+      ]
     }
   ]
 }
