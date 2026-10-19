@@ -858,3 +858,29 @@ A separate same-head31 x64 job fails cold refusal with age5004 ms, no readiness,
 refusalObserved=false and stderrByteCount=0. The successful x64 job's3150 ms refusal does not explain
 that failed attempt. The new evidence rules out already-emitted refusal for that particular timeout;
 cold initialization/acquisition remains under investigation before any phase-bound change.
+
+## Checkpoint 33: preserve failure while observing the remaining cold horizon
+
+The same-head31 x64 failure now has a retained precise observation: at5004ms there was no
+readiness, process exit, parent-observed stderr or constant refusal. A successful x64 attempt is
+kept separately; it does not reconstruct this failure.
+
+Only an already failed cold-refusal control now observes the same owned exit promise through the
+remaining original monotonic spawn-relative ten-second cold horizon. It always rethrows the same
+five-second error, preserving its original snapshot separately from late observations. There is no
+second finish/stdin operation, new retry or acceptance extension. Exit1 is labelled exit-1 rather
+than refusal; the exact constant-line observation remains separate. Timers/rejections and an already
+expired horizon have explicit controls. Cleanup allows one second of TERM grace before KILL and
+reaping of that same owned fixture child.
+
+Eight actual-helper promise-port controls pass. An actual TERM-ignoring Node fixture fails against
+the existing parent cleanup owner and passes against the repair; either result forcibly reaps its
+same child in finally. All68 affected native owner tests pass on ARM64 with no skip. A private
+controlled six-second pre-main delay runs the actual unchanged host graph: its original failure at
+5003ms has no stderr/refusal/exit; constant refusal is then observed at6581ms and exit1 at6589ms. The
+original error is still thrown. This proves diagnostic separation under an explicit altered launch
+condition, not the actual x64 cause or native updater acceptance. Earlier observations and failed
+attempts remain retained in `native-cold-refusal-observation.json`.
+
+Actual x64 follow-up, Linux/macOS generation ownership, packaged updates/restart/recovery/state/SSD,
+browser journeys, both skill matrices, original96 and final required checks/integration remain open.

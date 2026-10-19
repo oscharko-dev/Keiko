@@ -203,14 +203,170 @@ async function finish(owned, phase = "eof") {
   }
 }
 
+function classifyObservedExit({ code, signal }) {
+  if (signal !== null) return "signalled";
+  if (code === 1) return "exit-1";
+  return code === 0 ? "clean-exit" : "other-exit";
+}
+
+async function observeRemainingColdHorizon(owned) {
+  const ended = owned.exited.then(classifyObservedExit, () => "observation-failed");
+  const remaining = Math.max(0, owned.startedAt + 10000 - performance.now());
+  if (remaining === 0) return "deadline";
+  let timer;
+  try {
+    return await Promise.race([
+      ended,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve("deadline"), remaining);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function finishColdRefusal(owned, t, finishImpl = finish) {
+  try {
+    return await finishImpl(owned, "cold-refusal");
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "fixed-entry-cold-refusal-timeout")
+      throw error;
+    const disposition = await observeRemainingColdHorizon(owned);
+    t.diagnostic(
+      JSON.stringify({
+        phase: "cold-refusal-after-timeout",
+        originalTimeout: error.cause,
+        observedAtHorizon: timeoutError(owned, "cold-observation").cause,
+        disposition,
+      }),
+    );
+    throw error;
+  }
+}
+
 async function disposeChild(owned) {
   if (owned.child.exitCode === null && owned.child.signalCode === null) owned.child.kill();
+  let timer;
+  try {
+    await Promise.race([
+      owned.exited,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 1000);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (owned.child.exitCode === null && owned.child.signalCode === null) owned.child.kill("SIGKILL");
   await owned.exited;
 }
+
+function probeExitPromise(probe, child) {
+  if (probe.pending) return new Promise(() => undefined);
+  if (probe.rejected) return Promise.reject(new Error("synthetic-private-exit-body"));
+  return Promise.resolve(probe.result).then((result) => {
+    Object.assign(child, { exitCode: result.code, signalCode: result.signal });
+    return { ...result, stderr: "synthetic-private-exit-body" };
+  });
+}
+
+function probeStartTime(probe) {
+  if (probe.expired) return performance.now() - 10001;
+  return performance.now() - (probe.pending ? 9999 : 0);
+}
+
+for (const probe of [
+  { name: "late exit 1", result: { code: 1, signal: null }, expected: "exit-1" },
+  { name: "late clean exit", result: { code: 0, signal: null }, expected: "clean-exit" },
+  { name: "late signal", result: { code: null, signal: "SIGTERM" }, expected: "signalled" },
+  { name: "late other exit", result: { code: 2, signal: null }, expected: "other-exit" },
+  { name: "rejected exit observation", rejected: true, expected: "observation-failed" },
+  { name: "pending exit", pending: true, expected: "deadline" },
+  { name: "already expired horizon", rejected: true, expired: true, expected: "deadline" },
+]) {
+  test(`cold-refusal late observation preserves the original failure for ${probe.name}`, async () => {
+    const original = new Error("fixed-entry-cold-refusal-timeout", {
+      cause: Object.freeze({ ageMs: 5000, refusalObserved: false, stderrByteCount: 0 }),
+    });
+    const child = { exitCode: null, signalCode: null };
+    const owned = {
+      child,
+      exited: probeExitPromise(probe, child),
+      startedAt: probeStartTime(probe),
+      output: () => "",
+      observation: () => ({ refusalObserved: false, stderrByteCount: 0 }),
+    };
+    const diagnostics = [];
+    let finishCount = 0;
+    const keepAlive = setTimeout(() => undefined, 1000);
+    try {
+      await assert.rejects(
+        finishColdRefusal(
+          owned,
+          { diagnostic: (value) => diagnostics.push(JSON.parse(value)) },
+          async () => {
+            finishCount += 1;
+            throw original;
+          },
+        ),
+        (error) => error === original,
+      );
+      assert.equal(finishCount, 1);
+      assert.equal(diagnostics.length, 1);
+      assert.equal(diagnostics[0].disposition, probe.expected);
+      assert.deepEqual(diagnostics[0].originalTimeout, original.cause);
+      assert.equal(JSON.stringify(diagnostics).includes("synthetic-private-exit-body"), false);
+    } finally {
+      clearTimeout(keepAlive);
+    }
+  });
+}
+
+test("cold-refusal late observation preserves ordinary results and unrelated errors", async () => {
+  const result = { code: 1, signal: null };
+  const sink = { diagnostic: () => assert.fail("Unexpected diagnostic") };
+  assert.equal(await finishColdRefusal({}, sink, async () => result), result);
+  const original = new Error("synthetic-unrelated-failure");
+  await assert.rejects(
+    finishColdRefusal({}, sink, async () => {
+      throw original;
+    }),
+    (error) => error === original,
+  );
+});
 
 function authenticated(input) {
   return { authorization: `Basic ${Buffer.from(`opencode:${input.password}`).toString("base64")}` };
 }
+
+test("owned-child cleanup reaps a fixture that ignores graceful termination", async () => {
+  const own = fixture();
+  writeFileSync(
+    join(own.root, "host.mjs"),
+    'process.on("SIGTERM", () => undefined); process.stdin.resume(); process.stdout.write("fixture-ready\\n");',
+  );
+  const owned = start(own);
+  let timer;
+  try {
+    await once(owned.child.stdout, "data", { signal: AbortSignal.timeout(1000) });
+    await Promise.race([
+      disposeChild(owned),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("owned-child-cleanup-not-bounded")), 3000);
+      }),
+    ]);
+    assert.equal((await owned.exited).signal, "SIGKILL");
+  } finally {
+    clearTimeout(timer);
+    if (owned.child.exitCode === null && owned.child.signalCode === null)
+      owned.child.kill("SIGKILL");
+    await owned.exited;
+    own.cleanup();
+  }
+});
 
 for (const probe of [
   { name: "pending", line: "", refusal: false },
@@ -378,7 +534,7 @@ test("a fragmented bounded packet boots once and an old native database cannot r
     const reused = start(own);
     children.push(reused);
     reused.child.stdin.write(JSON.stringify(own.input) + "\n");
-    const result = await finish(reused, "cold-refusal");
+    const result = await finishColdRefusal(reused, t);
     t.diagnostic(JSON.stringify({ phase: "cold-refusal", ...reused.observation() }));
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
