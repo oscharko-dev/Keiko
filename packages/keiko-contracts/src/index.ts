@@ -3096,6 +3096,7 @@ export type {
   ExpectedCheck,
   PatchScope,
   WorkflowHandoffRequest,
+  WorkflowHandoffAdmissionResult,
   UserApprovalTokenInput,
   PatchScopeViolationKind,
   PatchScopeViolation,
@@ -3109,6 +3110,7 @@ export type {
   WORKFLOW_KINDS,
   validatePatchScope,
   validateWorkflowHandoffRequest,
+  parseWorkflowHandoffRequest,
   isApprovalTokenShape,
   checkPatchAgainstScope,
 } from "./workflow-handoff.js";

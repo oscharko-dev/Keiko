@@ -128,6 +128,10 @@ export interface ProposedPatchEntry {
 export type ValidationResult =
   { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
+export type WorkflowHandoffAdmissionResult =
+  | { readonly ok: true; readonly value: WorkflowHandoffRequest }
+  | { readonly ok: false; readonly reasons: readonly string[] };
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 const APPROVAL_TOKEN_RE = /^[0-9a-f]{64}$/;
 const CONTEXT_PACK_ID_RE = /^(pl-[0-9a-f]{16}|p-[0-9a-f]{64})$/;
@@ -166,14 +170,11 @@ function hasIntersection(a: readonly string[], b: readonly string[]): boolean {
   return false;
 }
 
-function pushIf(reasons: string[], condition: boolean, reason: string): void {
+function pushIf(reasons: string[], condition: boolean, reason: string): boolean {
   if (condition) {
     reasons.push(reason);
   }
-}
-
-function buildResult(reasons: readonly string[]): ValidationResult {
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  return !condition;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -217,7 +218,9 @@ function validateScopePathArray(
   reasons: string[],
 ): readonly string[] | undefined {
   const parsed: string[] = [];
-  for (const value of values) {
+  let index = 0;
+  while (index < values.length) {
+    const value = values[index];
     if (typeof value !== "string" || !isNonEmptyTrimmed(value)) {
       reasons.push(`patchScope.${field} contains empty entry`);
       return undefined;
@@ -227,48 +230,54 @@ function validateScopePathArray(
       return undefined;
     }
     parsed.push(value);
+    index += 1;
   }
   return parsed;
 }
 
-function validatePatchScopeLimits(limits: unknown, reasons: string[]): void {
+function validatePatchScopeLimits(limits: unknown, reasons: string[]): limits is PatchScopeLimits {
   if (!isRecord(limits)) {
     reasons.push("patchScope.limits must be an object");
-    return;
+    return false;
   }
-  pushIf(
+  const fileCount = pushIf(
     reasons,
     !isFiniteNonNegativeInteger(limits.maxFileCount),
     "patchScope.limits.maxFileCount invalid",
   );
-  pushIf(
+  const patchBytes = pushIf(
     reasons,
     !isFiniteNonNegativeInteger(limits.maxPatchBytes),
     "patchScope.limits.maxPatchBytes invalid",
   );
-  pushIf(
+  const newFiles = pushIf(
     reasons,
     !isFiniteNonNegativeInteger(limits.maxNewFiles),
     "patchScope.limits.maxNewFiles invalid",
   );
-  pushIf(
+  const elapsed = pushIf(
     reasons,
     !isFiniteNonNegativeInteger(limits.elapsedMsMax),
     "patchScope.limits.elapsedMsMax invalid",
   );
+  return fileCount && patchBytes && newFiles && elapsed;
 }
 
-function validateExpectedChecks(checks: readonly unknown[], reasons: string[]): void {
+function validateExpectedChecks(checks: readonly unknown[], reasons: string[]): boolean {
   if (checks.length === 0) {
     reasons.push("patchScope.expectedChecks empty");
-    return;
+    return false;
   }
-  for (const check of checks) {
+  let index = 0;
+  while (index < checks.length) {
+    const check = checks[index];
     if (!isExpectedCheck(check)) {
       reasons.push("patchScope.expectedChecks contains invalid value");
-      return;
+      return false;
     }
+    index += 1;
   }
+  return true;
 }
 
 function validateEvidenceAtomIds(
@@ -280,30 +289,38 @@ function validateEvidenceAtomIds(
     return undefined;
   }
   const parsed: string[] = [];
-  for (const id of ids) {
+  let index = 0;
+  while (index < ids.length) {
+    const id = ids[index];
     if (typeof id !== "string" || !isNonEmptyTrimmed(id)) {
       reasons.push("patchScope.evidenceAtomIds contains empty entry");
       return undefined;
     }
     parsed.push(id);
+    index += 1;
   }
   if (hasDuplicates(parsed)) {
     reasons.push("patchScope.evidenceAtomIds contains duplicates");
+    return undefined;
   }
   return parsed;
 }
 
-function validateUnknowns(unknowns: readonly unknown[], reasons: string[]): void {
-  for (const entry of unknowns) {
+function validateUnknowns(unknowns: readonly unknown[], reasons: string[]): boolean {
+  let index = 0;
+  while (index < unknowns.length) {
+    const entry = unknowns[index];
     if (typeof entry !== "string") {
       reasons.push("patchScope.unknowns contains non-string entry");
-      return;
+      return false;
     }
     if (!isNonEmptyTrimmed(entry)) {
       reasons.push("patchScope.unknowns contains empty entry");
-      return;
+      return false;
     }
+    index += 1;
   }
+  return true;
 }
 
 interface PatchScopeArrays {
@@ -324,94 +341,144 @@ function readPatchScopeArrays(scope: Record<string, unknown>, reasons: string[])
   };
 }
 
-function validatePatchScopePaths(arrays: PatchScopeArrays, reasons: string[]): void {
+function validatePatchScopePaths(arrays: PatchScopeArrays, reasons: string[]): boolean {
   const editablePaths = arrays.editablePaths
     ? validateScopePathArray(arrays.editablePaths, "editablePaths", reasons)
     : undefined;
   const readOnlyPaths = arrays.readOnlyPaths
     ? validateScopePathArray(arrays.readOnlyPaths, "readOnlyPaths", reasons)
     : undefined;
+  let editable = editablePaths !== undefined;
+  let readOnly = readOnlyPaths !== undefined;
+  let disjoint = true;
   if (editablePaths) {
-    pushIf(reasons, hasDuplicates(editablePaths), "patchScope.editablePaths contains duplicates");
+    editable = pushIf(
+      reasons,
+      hasDuplicates(editablePaths),
+      "patchScope.editablePaths contains duplicates",
+    );
   }
   if (readOnlyPaths) {
-    pushIf(reasons, hasDuplicates(readOnlyPaths), "patchScope.readOnlyPaths contains duplicates");
+    readOnly = pushIf(
+      reasons,
+      hasDuplicates(readOnlyPaths),
+      "patchScope.readOnlyPaths contains duplicates",
+    );
   }
   if (editablePaths && readOnlyPaths) {
-    pushIf(
+    disjoint = pushIf(
       reasons,
       hasIntersection(editablePaths, readOnlyPaths),
       "patchScope.editablePaths overlaps readOnlyPaths",
     );
   }
+  return editable && readOnly && disjoint;
 }
 
-function validatePatchScopeArrays(arrays: PatchScopeArrays, reasons: string[]): void {
-  validatePatchScopePaths(arrays, reasons);
+function validatePatchScopeArrays(arrays: PatchScopeArrays, reasons: string[]): boolean {
+  const paths = validatePatchScopePaths(arrays, reasons);
+  let evidence = false;
+  let checks = false;
+  let unknowns = false;
   if (arrays.evidenceAtomIds) {
-    validateEvidenceAtomIds(arrays.evidenceAtomIds, reasons);
+    evidence = validateEvidenceAtomIds(arrays.evidenceAtomIds, reasons) !== undefined;
   }
   if (arrays.expectedChecks) {
-    validateExpectedChecks(arrays.expectedChecks, reasons);
+    checks = validateExpectedChecks(arrays.expectedChecks, reasons);
   }
   if (arrays.unknowns) {
-    validateUnknowns(arrays.unknowns, reasons);
+    unknowns = validateUnknowns(arrays.unknowns, reasons);
   }
+  return paths && evidence && checks && unknowns;
 }
 
-export function validatePatchScope(scope: unknown): ValidationResult {
-  const reasons: string[] = [];
+function admitsPatchScope(scope: unknown, reasons: string[]): scope is PatchScope {
   if (!isRecord(scope)) {
-    return { ok: false, reasons: ["patchScope must be an object"] };
+    reasons.push("patchScope must be an object");
+    return false;
   }
-  pushIf(
+  const schema = pushIf(
     reasons,
     schemaMismatch(scope.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
     "patchScope.schemaVersion mismatch",
   );
-  validatePatchScopeArrays(readPatchScopeArrays(scope, reasons), reasons);
-  validatePatchScopeLimits(scope.limits, reasons);
-  return buildResult(reasons);
+  const arrays = validatePatchScopeArrays(readPatchScopeArrays(scope, reasons), reasons);
+  const limits = validatePatchScopeLimits(scope.limits, reasons);
+  return schema && arrays && limits;
+}
+
+export function validatePatchScope(scope: unknown): ValidationResult {
+  const reasons: string[] = [];
+  const admitted = admitsPatchScope(scope, reasons);
+  return admitted ? { ok: true } : { ok: false, reasons };
 }
 
 // ─── WorkflowHandoffRequest validation ────────────────────────────────────────
-export function validateWorkflowHandoffRequest(request: unknown): ValidationResult {
-  const reasons: string[] = [];
-  if (!isRecord(request)) {
-    return { ok: false, reasons: ["request must be an object"] };
-  }
-  pushIf(
-    reasons,
-    schemaMismatch(request.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
-    "request.schemaVersion mismatch",
-  );
+function validateContextPackStableId(request: Record<string, unknown>, reasons: string[]): boolean {
   if (
     typeof request.contextPackStableId !== "string" ||
     !isNonEmptyTrimmed(request.contextPackStableId)
   ) {
     reasons.push("request.contextPackStableId empty");
-  } else if (!CONTEXT_PACK_ID_RE.test(request.contextPackStableId)) {
-    reasons.push("request.contextPackStableId malformed");
+    return false;
   }
-  pushIf(reasons, !isWorkflowKind(request.workflowKind), "request.workflowKind invalid");
-  pushIf(
+  if (!CONTEXT_PACK_ID_RE.test(request.contextPackStableId)) {
+    reasons.push("request.contextPackStableId malformed");
+    return false;
+  }
+  return true;
+}
+
+function admitsWorkflowHandoffRequest(
+  request: unknown,
+  reasons: string[],
+): request is WorkflowHandoffRequest {
+  if (!isRecord(request)) {
+    reasons.push("request must be an object");
+    return false;
+  }
+  const schema = pushIf(
+    reasons,
+    schemaMismatch(request.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
+    "request.schemaVersion mismatch",
+  );
+  const contextPack = validateContextPackStableId(request, reasons);
+  const kind = pushIf(
+    reasons,
+    !isWorkflowKind(request.workflowKind),
+    "request.workflowKind invalid",
+  );
+  const requestedAt = pushIf(
     reasons,
     !isFiniteNonNegativeInteger(request.requestedAtMs),
     "request.requestedAtMs invalid",
   );
-  pushIf(
+  const token = pushIf(
     reasons,
     typeof request.userApprovalToken !== "string" ||
       !isApprovalTokenShape(request.userApprovalToken),
     "request.userApprovalToken malformed",
   );
-  const scopeResult = validatePatchScope(request.patchScope);
-  if (!scopeResult.ok) {
-    for (const reason of scopeResult.reasons) {
+  const scopeReasons: string[] = [];
+  const scope = admitsPatchScope(request.patchScope, scopeReasons);
+  if (!scope) {
+    for (const reason of scopeReasons) {
       reasons.push(`request.${reason}`);
     }
   }
-  return buildResult(reasons);
+  return schema && contextPack && kind && requestedAt && token && scope;
+}
+
+export function validateWorkflowHandoffRequest(request: unknown): ValidationResult {
+  const reasons: string[] = [];
+  const admitted = admitsWorkflowHandoffRequest(request, reasons);
+  return admitted ? { ok: true } : { ok: false, reasons };
+}
+
+export function parseWorkflowHandoffRequest(request: unknown): WorkflowHandoffAdmissionResult {
+  const reasons: string[] = [];
+  if (!admitsWorkflowHandoffRequest(request, reasons)) return { ok: false, reasons };
+  return { ok: true, value: request };
 }
 
 // ─── checkPatchAgainstScope ───────────────────────────────────────────────────

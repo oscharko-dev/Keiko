@@ -2,7 +2,7 @@
 // known-good fixture so failures point precisely at the broken invariant. Fixture factories
 // mirror the #178 connected-context.test.ts style.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_PATCH_SCOPE_LIMITS,
   EXPECTED_CHECKS,
@@ -12,6 +12,7 @@ import {
   isApprovalTokenShape,
   validatePatchScope,
   validateWorkflowHandoffRequest,
+  parseWorkflowHandoffRequest,
 } from "./workflow-handoff.js";
 import type {
   ExpectedCheck,
@@ -22,8 +23,19 @@ import type {
   UserApprovalTokenInput,
   ValidationResult,
   WorkflowHandoffRequest,
+  WorkflowHandoffAdmissionResult,
   WorkflowKind,
 } from "./workflow-handoff.js";
+
+import {
+  parseWorkflowHandoffRequest as parsePublicWorkflowHandoffRequest,
+  validateWorkflowHandoffRequest as validatePublicWorkflowHandoffRequest,
+  type WorkflowHandoffAdmissionResult as PublicWorkflowHandoffAdmissionResult,
+  type WorkflowHandoffRequest as PublicWorkflowHandoffRequest,
+  type PatchScope as PublicPatchScope,
+  type PatchScopeLimits as PublicPatchScopeLimits,
+  type ExpectedCheck as PublicExpectedCheck,
+} from "@oscharko-dev/keiko-contracts/runtime/workflow-handoff";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 const VALID_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -793,4 +805,254 @@ describe("UserApprovalTokenInput", () => {
     expect(hashable.workflowKind).toBe("unit-test-generation");
     expect(hashable.limits.maxFileCount).toBe(DEFAULT_PATCH_SCOPE_LIMITS.maxFileCount);
   });
+});
+
+// ─── Canonical handoff admission (source/public preservation) ─────────────────
+const handoffAdmissions = {
+  source: parseWorkflowHandoffRequest,
+  public: parsePublicWorkflowHandoffRequest,
+};
+
+function observeHandoffFields(value: object, prefix: string, reads: string[]): object {
+  const observed = {};
+  for (const field of Object.keys(value)) {
+    Object.defineProperty(observed, field, {
+      enumerable: true,
+      get(): unknown {
+        reads.push(`${prefix}.${field}`);
+        return Reflect.get(value, field);
+      },
+    });
+  }
+  return observed;
+}
+
+function observedHandoffRequest(reads: string[], malformed: boolean): unknown {
+  const limits = observeHandoffFields(
+    malformed
+      ? { maxFileCount: -1, maxPatchBytes: 1.5, maxNewFiles: Infinity, elapsedMsMax: -1 }
+      : DEFAULT_PATCH_SCOPE_LIMITS,
+    "limits",
+    reads,
+  );
+  const scope = observeHandoffFields(
+    {
+      ...happyPatchScope(),
+      ...(malformed
+        ? {
+            schemaVersion: "2",
+            editablePaths: ["../escape"],
+            evidenceAtomIds: [],
+            expectedChecks: [],
+            unknowns: [42],
+          }
+        : {}),
+      limits,
+    },
+    "patchScope",
+    reads,
+  );
+  return observeHandoffFields({ ...happyHandoffRequest(), patchScope: scope }, "request", reads);
+}
+
+const HANDOFF_ADMISSION_READS: readonly string[] = [
+  "request.schemaVersion",
+  "request.contextPackStableId",
+  "request.contextPackStableId",
+  "request.contextPackStableId",
+  "request.workflowKind",
+  "request.requestedAtMs",
+  "request.userApprovalToken",
+  "request.userApprovalToken",
+  "request.patchScope",
+  "patchScope.schemaVersion",
+  "patchScope.editablePaths",
+  "patchScope.readOnlyPaths",
+  "patchScope.evidenceAtomIds",
+  "patchScope.expectedChecks",
+  "patchScope.unknowns",
+  "patchScope.limits",
+  "limits.maxFileCount",
+  "limits.maxPatchBytes",
+  "limits.maxNewFiles",
+  "limits.elapsedMsMax",
+];
+
+const HANDOFF_ADMISSION_REASONS: readonly string[] = [
+  "request.patchScope.schemaVersion mismatch",
+  "request.patchScope.editablePaths contains invalid path",
+  "request.patchScope.evidenceAtomIds empty",
+  "request.patchScope.expectedChecks empty",
+  "request.patchScope.unknowns contains non-string entry",
+  "request.patchScope.limits.maxFileCount invalid",
+  "request.patchScope.limits.maxPatchBytes invalid",
+  "request.patchScope.limits.maxNewFiles invalid",
+  "request.patchScope.limits.elapsedMsMax invalid",
+];
+
+export function parsePublicHandoffWitness(input: unknown): PublicWorkflowHandoffAdmissionResult {
+  const result = parsePublicWorkflowHandoffRequest(input);
+  return result;
+}
+
+for (const [surface, parse] of Object.entries(handoffAdmissions)) {
+  describe(`${surface} WorkflowHandoff admission`, () => {
+    it("returns the original request and nested identities without normalizing optional presence", () => {
+      const input = happyHandoffRequest();
+      Object.defineProperty(input, "fixtureOptional", { value: undefined });
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy handoff must be admitted");
+      expect(result.value).toBe(input);
+      expect(result.value.patchScope).toBe(input.patchScope);
+      expect(result.value.patchScope.limits).toBe(input.patchScope.limits);
+      expect(result.value.patchScope.editablePaths).toBe(input.patchScope.editablePaths);
+      expect(Object.hasOwn(result.value, "fixtureOptional")).toBe(true);
+      expect(validateWorkflowHandoffRequest(input)).toEqual({ ok: true });
+      expect(validatePublicWorkflowHandoffRequest(input)).toEqual({ ok: true });
+    });
+
+    it("retains eager read phases and ordered diagnostics after an earlier scope refusal", () => {
+      const reads: string[] = [];
+      expect(parse(observedHandoffRequest(reads, true))).toEqual({
+        ok: false,
+        reasons: HANDOFF_ADMISSION_REASONS,
+      });
+      expect(reads).toEqual(HANDOFF_ADMISSION_READS);
+      for (const validate of [
+        validateWorkflowHandoffRequest,
+        validatePublicWorkflowHandoffRequest,
+      ]) {
+        const legacyReads: string[] = [];
+        expect(validate(observedHandoffRequest(legacyReads, true))).toEqual({
+          ok: false,
+          reasons: HANDOFF_ADMISSION_REASONS,
+        });
+        expect(legacyReads).toEqual(HANDOFF_ADMISSION_READS);
+      }
+    });
+
+    it("admits healthy observed inputs without a second pass and does not authenticate a shaped token", () => {
+      const reads: string[] = [];
+      const input = observedHandoffRequest(reads, false);
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy observed handoff must be admitted");
+      expect(result.value).toBe(input);
+      expect(reads).toEqual(HANDOFF_ADMISSION_READS);
+      const forged = { ...happyHandoffRequest(), userApprovalToken: "a".repeat(64) };
+      expect(parse(forged)).toEqual({ ok: true, value: forged });
+    });
+
+    it("refuses raw malformed inputs with the unchanged legacy diagnostics", () => {
+      const cases: readonly unknown[] = [
+        null,
+        [],
+        {},
+        { ...happyHandoffRequest(), userApprovalToken: "not-a-token" },
+        { ...happyHandoffRequest(), workflowKind: "unregistered-workflow" },
+        {
+          ...happyHandoffRequest(),
+          patchScope: { ...happyPatchScope(), expectedChecks: ["unsafe"] },
+        },
+        {
+          ...happyHandoffRequest(),
+          patchScope: { ...happyPatchScope(), evidenceAtomIds: ["same", "same"] },
+        },
+        {
+          ...happyHandoffRequest(),
+          patchScope: { ...happyPatchScope(), editablePaths: ["src/index.ts", "src/index.ts"] },
+        },
+        {
+          ...happyHandoffRequest(),
+          patchScope: { ...happyPatchScope(), readOnlyPaths: ["src/index.ts"] },
+        },
+        { ...happyHandoffRequest(), patchScope: { ...happyPatchScope(), unknowns: [""] } },
+      ];
+      for (const input of cases) {
+        const legacy = validateWorkflowHandoffRequest(input);
+        expect(legacy.ok).toBe(false);
+        expect(parse(input)).toEqual(legacy);
+      }
+    });
+  });
+}
+
+it("retains independent source and public handoff admission result declarations", () => {
+  expectTypeOf<Parameters<typeof parseWorkflowHandoffRequest>[0]>().toEqualTypeOf<unknown>();
+  expectTypeOf<Parameters<typeof parsePublicWorkflowHandoffRequest>[0]>().toEqualTypeOf<unknown>();
+  expectTypeOf<
+    ReturnType<typeof parseWorkflowHandoffRequest>
+  >().toEqualTypeOf<WorkflowHandoffAdmissionResult>();
+  expectTypeOf<
+    ReturnType<typeof parsePublicWorkflowHandoffRequest>
+  >().toEqualTypeOf<PublicWorkflowHandoffAdmissionResult>();
+  expectTypeOf<
+    ReturnType<typeof parsePublicHandoffWitness>
+  >().toEqualTypeOf<PublicWorkflowHandoffAdmissionResult>();
+  expectTypeOf<ReturnType<typeof parseWorkflowHandoffRequest>>().not.toBeAny();
+  expectTypeOf<ReturnType<typeof parsePublicWorkflowHandoffRequest>>().not.toBeAny();
+  expectTypeOf<
+    Extract<WorkflowHandoffAdmissionResult, { ok: true }>["value"]
+  >().toEqualTypeOf<WorkflowHandoffRequest>();
+  expectTypeOf<
+    Extract<PublicWorkflowHandoffAdmissionResult, { ok: true }>["value"]
+  >().toEqualTypeOf<PublicWorkflowHandoffRequest>();
+  expectTypeOf<Extract<WorkflowHandoffAdmissionResult, { ok: false }>>().toEqualTypeOf<{
+    readonly ok: false;
+    readonly reasons: readonly string[];
+  }>();
+  expectTypeOf<Extract<PublicWorkflowHandoffAdmissionResult, { ok: false }>>().toEqualTypeOf<{
+    readonly ok: false;
+    readonly reasons: readonly string[];
+  }>();
+});
+
+it("retains strict nested source and public scope declarations after admission", () => {
+  type SourceScope = Extract<WorkflowHandoffAdmissionResult, { ok: true }>["value"]["patchScope"];
+  type PublicScope = Extract<
+    PublicWorkflowHandoffAdmissionResult,
+    { ok: true }
+  >["value"]["patchScope"];
+  expectTypeOf<SourceScope>().toEqualTypeOf<PatchScope>();
+  expectTypeOf<PublicScope>().toEqualTypeOf<PublicPatchScope>();
+  expectTypeOf<SourceScope>().not.toBeAny();
+  expectTypeOf<PublicScope>().not.toBeAny();
+  expectTypeOf<SourceScope["editablePaths"]>().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<PublicScope["editablePaths"]>().toEqualTypeOf<readonly string[]>();
+  expectTypeOf<SourceScope["expectedChecks"]>().toEqualTypeOf<readonly ExpectedCheck[]>();
+  expectTypeOf<PublicScope["expectedChecks"]>().toEqualTypeOf<readonly PublicExpectedCheck[]>();
+  expectTypeOf<SourceScope["limits"]>().toEqualTypeOf<PatchScopeLimits>();
+  expectTypeOf<PublicScope["limits"]>().toEqualTypeOf<PublicPatchScopeLimits>();
+  expectTypeOf<SourceScope["limits"]["maxPatchBytes"]>().toEqualTypeOf<number>();
+  expectTypeOf<PublicScope["limits"]["maxPatchBytes"]>().toEqualTypeOf<number>();
+  expectTypeOf<SourceScope["limits"]["maxPatchBytes"]>().not.toBeAny();
+  expectTypeOf<PublicScope["limits"]["maxPatchBytes"]>().not.toBeAny();
+});
+
+it.each([
+  ["editablePaths", "src/index.ts", "patchScope.editablePaths contains empty entry"],
+  ["readOnlyPaths", "docs/readme.md", "patchScope.readOnlyPaths contains empty entry"],
+  ["evidenceAtomIds", "atom-1", "patchScope.evidenceAtomIds contains empty entry"],
+  ["expectedChecks", "verify", "patchScope.expectedChecks contains invalid value"],
+  ["unknowns", "unresolved-symbol", "patchScope.unknowns contains non-string entry"],
+])("refuses hidden physical %s members despite a caller iterator", (field, admitted, reason) => {
+  const hidden: unknown[] = [42];
+  Object.defineProperty(hidden, Symbol.iterator, {
+    value: function* (): Generator<string, void, unknown> {
+      yield admitted;
+    },
+  });
+  const input = {
+    ...happyHandoffRequest(),
+    patchScope: { ...happyPatchScope(), [field]: hidden },
+  };
+  for (const parse of Object.values(handoffAdmissions)) {
+    expect.soft(parse(input)).toEqual({ ok: false, reasons: [`request.${reason}`] });
+  }
+  expect.soft(validateWorkflowHandoffRequest(input)).toEqual({
+    ok: false,
+    reasons: [`request.${reason}`],
+  });
+  expect.soft(validatePatchScope(input.patchScope)).toEqual({ ok: false, reasons: [reason] });
 });
