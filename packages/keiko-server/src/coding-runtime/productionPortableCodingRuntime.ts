@@ -16,6 +16,12 @@ import {
 import { dirname, join } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { processServerLogSink } from "../process-log-sink.js";
 import type {
   LongLivedRuntimeQualification,
   RuntimeQualificationComponentDigest,
@@ -126,6 +132,7 @@ export interface PortableOpenCodeDiscoveryInput {
   readonly installRoot?: string | undefined;
   readonly attestation?: PortableRuntimeAttestationPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   /** Test seam for the lane-downgrade probe; production spawns the real platform verifier. */
   readonly commandRunner?: PortableRuntimeCommandRunner | undefined;
 }
@@ -175,7 +182,10 @@ export function discoverQualifiedPortableOpenCode(
 ): QualifiedPortableOpenCodeRuntime | undefined {
   try {
     const candidate = portableRuntimeCandidate(input);
-    return candidate === undefined ? undefined : qualifiedRuntime(candidate, input.attestation);
+    if (candidate === undefined) return undefined;
+    const runtime = qualifiedRuntime(candidate, input.attestation);
+    if (runtime !== undefined) recordNativeLinuxHelper(input, candidate, runtime);
+    return runtime;
   } catch (error) {
     emitServerDiagnostic(
       input.diagnostics,
@@ -189,6 +199,49 @@ export function discoverQualifiedPortableOpenCode(
     );
     return undefined;
   }
+}
+
+const NATIVE_LINUX_HELPER_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "portable.runtime.native-helper-bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionPortableCodingRuntime.recordNativeLinuxHelper",
+  fields: {
+    target: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: ["linux-x64"],
+    },
+    helperSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["portable-native-helper-binding"],
+  proofIds: ["portable.runtime.native-helper-bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function recordNativeLinuxHelper(
+  input: PortableOpenCodeDiscoveryInput,
+  candidate: PortableRuntimeCandidate,
+  runtime: QualifiedPortableOpenCodeRuntime,
+): void {
+  if (
+    runtime.target !== "linux-x64" ||
+    !runtime.nativeHelperPath.endsWith("/runtime/native/keiko-runtime-supervisor")
+  )
+    return;
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_LINUX_HELPER_BOUND_OPERATION,
+      { correlationId: randomUUID() },
+      { target: "linux-x64", helperSha256: candidate.supervisorSha256 },
+    ),
+  );
 }
 
 function portableRuntimeCandidate(
@@ -422,6 +475,7 @@ function qualifiedRuntime(
       candidate.resourceRoot,
       candidate.target,
       "keiko-runtime-supervisor",
+      candidate.activation,
     ),
     platformAssurance: candidate.platformAssurance,
   };
@@ -1034,7 +1088,7 @@ function boundHelperDigest(
   const matches = helpers.map(record).filter((helper) => helper?.name === name);
   if (matches.length !== 1) return undefined;
   const helper = matches[0];
-  const expectedPath = helperRelativePath(target, name);
+  const expectedPath = helperRelativePath(target, name, helper);
   const expectedDigest = stringField(helper, "shippedSha256", DIGEST);
   const expectedSize = helper?.sizeBytes;
   if (
@@ -1067,15 +1121,23 @@ function helperPath(
   root: string,
   target: UpdatePortableTarget,
   name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
+  activation: Record<string, unknown>,
 ): string {
-  return safeRealFile(join(root, ...helperRelativePath(target, name).split("/")));
+  const helpers = Array.isArray(activation.nativeHelpers) ? activation.nativeHelpers : [];
+  const helper = helpers.map(record).find((entry) => entry?.name === name);
+  return safeRealFile(join(root, ...helperRelativePath(target, name, helper).split("/")));
 }
 
 function helperRelativePath(
   target: UpdatePortableTarget,
   name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
+  helper: Record<string, unknown> | undefined,
 ): string {
-  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
+  if (
+    target === "linux-x64" &&
+    name === "keiko-runtime-supervisor" &&
+    helper?.executablePath === "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+  ) {
     return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
   }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;

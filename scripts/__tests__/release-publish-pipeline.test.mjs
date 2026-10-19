@@ -242,9 +242,6 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
-  if (target.nodePlatform === "linux" && name === "keiko-runtime-supervisor") {
-    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-  }
   return `runtime/native/${name}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -261,14 +258,14 @@ function portableNativeHelper(target, name) {
     executablePath: nativeHelperExecutablePath(target, name),
     protocol: {
       schemaVersion: 1,
-      requestMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRP1") : "KSR1",
-      responseMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRS1") : "KSS1",
+      requestMagic: supervisor ? "KRP1" : "KSR1",
+      responseMagic: supervisor ? "KRS1" : "KSS1",
     },
     source: {
       commitSha: HEAD_SHA,
       path: supervisor
         ? target.nodePlatform === "linux"
-          ? "packages/keiko-sandbox/src"
+          ? "native/runtime-supervisor"
           : `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
         : "native/secure-workspace-read",
       treeSha256: digestFor(`${name}\n`),

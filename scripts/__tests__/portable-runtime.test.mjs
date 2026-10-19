@@ -721,9 +721,8 @@ function setManifestTarget(candidate, platformTarget) {
     helper.signing.notarizationVerified = target.nodePlatform === "darwin";
     if (helper.name === "keiko-runtime-supervisor") {
       if (target.nodePlatform === "linux") {
-        helper.executablePath = "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-        helper.protocol = { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
-        helper.source.path = "packages/keiko-sandbox/src";
+        helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+        helper.source.path = "native/runtime-supervisor";
       } else {
         helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
         helper.source.path = `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`;
@@ -1337,6 +1336,36 @@ describe("portable native helper manifest", () => {
     const candidate = manifest();
     candidate.nativeHelpers[1] = candidate.nativeHelpers[0];
     expect(validatePortableManifest(candidate)).toContain("nativeHelpers[1].name: must be unique");
+  });
+
+  it("accepts the native Linux owner with its complete shared source tree binding", () => {
+    const candidate = assemblerCandidate(portableTarget("linux-x64"), false);
+    const helper = candidate.nativeHelpers.find(
+      (entry) => entry.name === "keiko-runtime-supervisor",
+    );
+    helper.executablePath = "runtime/native/keiko-runtime-supervisor";
+    helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+    helper.source.path = "native/runtime-supervisor";
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toEqual([]);
+  });
+
+  it("keeps the exact legacy Linux identity parseable but refuses mixed native identities", () => {
+    const candidate = assemblerCandidate(portableTarget("linux-x64"), false);
+    const helper = candidate.nativeHelpers.find(
+      (entry) => entry.name === "keiko-runtime-supervisor",
+    );
+    helper.executablePath = "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+    helper.protocol = { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
+    helper.source.path = "packages/keiko-sandbox/src";
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    expect(validatePortableCandidateManifest(candidate)).toContain(
+      "nativeHelpers[1]: new Linux artifacts must bind the native runtime supervisor",
+    );
+    helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).not.toEqual([]);
   });
 
   it("accepts exactly the secure-read and release supervisor helpers for a new artifact", () => {
@@ -3397,6 +3426,41 @@ describe("stage-portable-runtime prerelease guard", () => {
 });
 
 describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
+  it(
+    "stages the native Linux supervisor and retains the packaged namespace gateway",
+    async () => {
+      const dir = tempDir();
+      const nodeArchive = createNodeArchiveFixture(dir, "linux-x64");
+      const sidecarSpec = createSidecarFixture(dir, "linux-x64");
+      const outDir = join(dir, "out");
+      const stage = await assembleStageForTest("linux-x64", nodeArchive, outDir, dir, [
+        sidecarSpec,
+      ]);
+      const root = join(outDir, "linux-x64");
+      const helper = stage.manifest.nativeHelpers.find(
+        (entry) => entry.name === "keiko-runtime-supervisor",
+      );
+      expect(helper).toMatchObject({
+        executablePath: "runtime/native/keiko-runtime-supervisor",
+        protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+        source: {
+          path: "native/runtime-supervisor",
+          treeSha256: hashDirectoryTree("native/runtime-supervisor"),
+        },
+      });
+      const payload = join(root, "payload", "Keiko");
+      expect(await sha256File(join(payload, helper.executablePath))).toBe(helper.shippedSha256);
+      expect(
+        existsSync(join(payload, "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js")),
+      ).toBe(true);
+      const sbom = JSON.parse(readFileSync(join(root, "evidence", "sbom.cdx.json"), "utf8"));
+      expect(
+        sbom.components.find((entry) => entry.name === "keiko-runtime-supervisor").hashes,
+      ).toContainEqual({ alg: "SHA-256", content: helper.shippedSha256 });
+    },
+    STAGE_COMMAND_TIMEOUT_MS,
+  );
+
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");

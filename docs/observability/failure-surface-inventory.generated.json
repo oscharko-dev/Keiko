@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f18e03c6a0f3e463cd2018885fb6fba0e92f16ada7d09e97302718389dd551ae"
+    "catalogDigest": "40137d62b51516bff7c71efb76454f1787f1ccf9662be2c5682c8c612b2855de"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 546,
-    "proofCount": 558,
-    "resolvedProofCount": 558,
-    "failureClassCount": 349,
+    "operationCount": 547,
+    "proofCount": 559,
+    "resolvedProofCount": 559,
+    "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -377,6 +377,7 @@
         "git.ci-repair.budget",
         "git.verified-commit.authority",
         "harness.context.compacted",
+        "portable.runtime.native-helper-bound",
         "pr-description.workbench.egress.denied",
         "runtime.confinement.failed",
         "runtime.confinement.spawned",
@@ -977,6 +978,7 @@
     "native-file-dialog-projection": ["ui.dependency-failure"],
     "native-runtime-invalid": ["memory-knowledge.dependency-failure"],
     "native-runtime-unavailable": ["memory-knowledge.dependency-failure"],
+    "portable-native-helper-binding": ["tools-workflows.dependency-failure"],
     "portable-normal-startup-recovery": ["runtime-packages.dependency-failure"],
     "portable-release-trust": ["runtime-packages.dependency-failure"],
     "portable-tree-attestation": ["runtime-packages.dependency-failure"],
@@ -2197,6 +2199,9 @@
     ],
     "portable.normal-startup-recovery.required.reason": [
       "packages/keiko-server/src/update-portable-normal-startup.test.ts"
+    ],
+    "portable.runtime.native-helper-bound.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts"
     ],
     "portable.windows-alert.spawn-failed.emitted-line": [
       "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"

@@ -896,6 +896,9 @@ function validateNativeHelper(manifest, helper, index, names, failures, options)
     return;
   }
   const identity = validateNativeHelperIdentity(manifest, helper, path, names, failures);
+  if (options.requireNativeHelpers === true && identity.contract?.legacy === true) {
+    push(failures, path, "new Linux artifacts must bind the native runtime supervisor");
+  }
   validateNativeHelperProtocol(helper, identity.contract, path, failures);
   validateNativeHelperSource(helper, identity.contract, path, failures, options);
   validateNativeHelperBinding(
@@ -981,7 +984,7 @@ function validateNativeHelperIdentity(manifest, helper, path, names, failures) {
   names.add(name);
   const targetName = stringAt(helper, "platformTarget", path, failures);
   const target = portableTargetByName(targetName);
-  const contract = nativeHelperContract(name, target);
+  const contract = nativeHelperContract(name, target, helper);
   if (contract === undefined) {
     push(failures, `${path}.name`, "is unsupported");
   } else {
@@ -1005,7 +1008,7 @@ function validateNativeHelperIdentity(manifest, helper, path, names, failures) {
   return { contract, target, targetName };
 }
 
-function nativeHelperContract(name, target) {
+function nativeHelperContract(name, target, helper) {
   if (target === undefined) return undefined;
   const suffix = target.nodePlatform === "win32" ? ".exe" : "";
   if (name === "keiko-secure-workspace-read") {
@@ -1017,24 +1020,34 @@ function nativeHelperContract(name, target) {
       sourcePath: "native/secure-workspace-read",
     };
   }
-  if (name === "keiko-runtime-supervisor") {
-    const linux = target.nodePlatform === "linux";
-    const sourcePlatform = target.nodePlatform === "win32" ? "windows" : "macos";
-    return {
-      bomName: name,
-      executablePath: linux
-        ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
-        : `runtime/native/${name}${suffix}`,
-      kind: "runtime-process-supervisor",
-      protocol: linux
-        ? { requestMagic: "none", responseMagic: "none" }
-        : { requestMagic: "KRP1", responseMagic: "KRS1" },
-      sourcePath: linux
-        ? "packages/keiko-sandbox/src"
-        : `native/runtime-supervisor/${sourcePlatform}`,
-    };
-  }
+  if (name === "keiko-runtime-supervisor") return supervisorContract(name, target, helper, suffix);
   return undefined;
+}
+
+function supervisorContract(name, target, helper, suffix) {
+  const linux = target.nodePlatform === "linux";
+  const legacy =
+    linux &&
+    helper.executablePath === "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  return {
+    bomName: name,
+    executablePath: legacy
+      ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+      : `runtime/native/${name}${suffix}`,
+    kind: "runtime-process-supervisor",
+    protocol: legacy
+      ? { requestMagic: "none", responseMagic: "none" }
+      : { requestMagic: "KRP1", responseMagic: "KRS1" },
+    sourcePath: supervisorSourcePath(target, legacy),
+    legacy,
+  };
+}
+
+function supervisorSourcePath(target, legacy) {
+  if (legacy) return "packages/keiko-sandbox/src";
+  if (target.nodePlatform === "linux") return "native/runtime-supervisor";
+  const platform = target.nodePlatform === "win32" ? "windows" : "macos";
+  return `native/runtime-supervisor/${platform}`;
 }
 
 function validateNativeHelperProtocol(helper, contract, path, failures) {

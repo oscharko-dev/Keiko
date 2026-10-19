@@ -6989,6 +6989,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "portable-native-helper-binding",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["portable.runtime.native-helper-bound"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["portable.runtime.native-helper-bound"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["portable.runtime.native-helper-bound"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["portable.runtime.native-helper-bound"],
+    requiredEvidenceClasses: ["completeness-state", "digest", "loss-state", "safe-platform-class"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "portable-normal-startup-recovery",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

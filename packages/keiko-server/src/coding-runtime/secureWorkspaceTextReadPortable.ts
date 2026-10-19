@@ -207,18 +207,22 @@ function validSupervisorIdentity(
   if (helper === undefined || !exactKeys(helper, HELPER_KEYS)) return false;
   const protocol = record(helper.protocol);
   const source = record(helper.source);
+  const legacyLinux =
+    target.artifactTarget === "linux-x64" &&
+    helper.executablePath === "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
   return (
-    supervisorIdentityMatches(helper, target) &&
-    supervisorProtocolMatches(protocol, target) &&
-    supervisorSourceMatches(source, target)
+    supervisorIdentityMatches(helper, target, legacyLinux) &&
+    supervisorProtocolMatches(protocol, legacyLinux) &&
+    supervisorSourceMatches(source, target, legacyLinux)
   );
 }
 
 function supervisorIdentityMatches(
   helper: Record<string, unknown>,
   target: TargetContract,
+  legacyLinux: boolean,
 ): boolean {
-  const executablePath = supervisorExecutablePath(target);
+  const executablePath = supervisorExecutablePath(target, legacyLinux);
   return (
     helper.kind === "runtime-process-supervisor" &&
     helper.platformTarget === target.manifestTarget &&
@@ -227,8 +231,8 @@ function supervisorIdentityMatches(
   );
 }
 
-function supervisorExecutablePath(target: TargetContract): string {
-  if (target.artifactTarget === "linux-x64") {
+function supervisorExecutablePath(target: TargetContract, legacyLinux: boolean): string {
+  if (legacyLinux) {
     return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
   }
   const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
@@ -237,9 +241,9 @@ function supervisorExecutablePath(target: TargetContract): string {
 
 function supervisorProtocolMatches(
   protocol: Record<string, unknown> | undefined,
-  target: TargetContract,
+  legacyLinux: boolean,
 ): boolean {
-  if (target.artifactTarget === "linux-x64") {
+  if (legacyLinux) {
     return (
       protocol?.schemaVersion === 1 &&
       protocol.requestMagic === "none" &&
@@ -256,10 +260,10 @@ function supervisorProtocolMatches(
 function supervisorSourceMatches(
   source: Record<string, unknown> | undefined,
   target: TargetContract,
+  legacyLinux: boolean,
 ): boolean {
-  if (target.artifactTarget === "linux-x64") {
-    return source?.path === "packages/keiko-sandbox/src";
-  }
+  if (legacyLinux) return source?.path === "packages/keiko-sandbox/src";
+  if (target.artifactTarget === "linux-x64") return source?.path === "native/runtime-supervisor";
   const platform = target.artifactTarget === "win32-x64" ? "windows" : "macos";
   return source?.path === `native/runtime-supervisor/${platform}`;
 }

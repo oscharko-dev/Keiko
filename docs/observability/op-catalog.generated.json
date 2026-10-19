@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f18e03c6a0f3e463cd2018885fb6fba0e92f16ada7d09e97302718389dd551ae",
+    "catalogDigest": "40137d62b51516bff7c71efb76454f1787f1ccf9662be2c5682c8c612b2855de",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -26830,6 +26830,48 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "portable.runtime.native-helper-bound",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-runtime.productionPortableCodingRuntime.recordNativeLinuxHelper",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "target": {
+            "type": "string",
+            "dataClass": "safe-platform-class",
+            "required": true,
+            "values": ["linux-x64"]
+          },
+          "helperSha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "process-lifecycle",
+        "failureClasses": ["portable-native-helper-binding"],
+        "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:204",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:239"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "portable.windows-alert.spawn-failed",
         "category": "diagnostic",
         "owner": "keiko-cli",
@@ -44992,6 +45034,32 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "portable-native-helper-binding",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["portable.runtime.native-helper-bound"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["portable.runtime.native-helper-bound"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["portable.runtime.native-helper-bound"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["portable.runtime.native-helper-bound"],
+        "requiredEvidenceClasses": [
+          "completeness-state",
+          "digest",
+          "loss-state",
+          "safe-platform-class"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "portable-normal-startup-recovery",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -47576,8 +47644,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 349,
-      "completeClassCount": 349,
+      "supportedClassCount": 350,
+      "completeClassCount": 350,
       "completeness": "complete",
       "classes": [
         {
@@ -79542,6 +79610,67 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "portable-native-helper-binding",
+          "requirementContract": "portable-native-helper-binding",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["portable.runtime.native-helper-bound"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "portable.runtime.native-helper-bound",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["portable.runtime.native-helper-bound"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "portable.runtime.native-helper-bound",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "process-lifecycle",
+              "safeContextFields": [
+                {
+                  "name": "helperSha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "target",
+                  "type": "string",
+                  "dataClass": "safe-platform-class",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "completeness-state",
+                "digest",
+                "loss-state",
+                "safe-platform-class"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "portable-normal-startup-recovery",
           "requirementContract": "portable-normal-startup-recovery",
           "productSurfaces": ["keiko-server"],
@@ -93355,7 +93484,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:184",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:194",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -94570,6 +94699,12 @@
       "op": "portable.normal-startup-recovery.required",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/update-portable-normal-startup.ts:97",
+      "package": "keiko-server"
+    },
+    {
+      "op": "portable.runtime.native-helper-bound",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:207",
       "package": "keiko-server"
     },
     {
@@ -95956,6 +96091,7 @@
     "native-file-dialog.selection.projected",
     "portable.normal-startup-recovery.completed",
     "portable.normal-startup-recovery.required",
+    "portable.runtime.native-helper-bound",
     "portable.windows-alert.spawn-failed",
     "portable.windows-authenticode.system-binary-refused",
     "pr-description.apply.blocked",

@@ -1394,3 +1394,39 @@ restart: two complete successful physical readiness calls, no failures, stable s
 zero test-generation tasks. This is not a skill benefit or held-out result.
 `lab-finalization-and-native-prerequisite.json` binds these scoped proofs; no acceptance
 disposition or issue checkbox changes.
+
+## Checkpoint 50 — bind the native Linux helper throughout packaging
+
+The existing Linux x64 builder now produces a hardened ELF supervisor. Staging, closed helper
+metadata, SBOM, qualification receipt and runtime discovery bind that actual native path and the
+complete source tree containing its shared codec. Historical exact JavaScript/none-protocol
+identities remain readable; new artifacts cannot use them, and mixed identities fail closed.
+Linux Coding keeps its existing namespace/egress gateway. A body-free existing Activity Log
+port records the admitted native binding and digest with a persisted-line proof.
+
+Three builder controls fail before and all eight builder tests pass after. The same final two
+binding and three manifest/actual-stage controls fail on published49; eight affected suites pass
+818 tests on candidatev1. Sonar then required a source-path helper extraction in one script;
+all other 19 inputs remain identical. The final three actual manifest/stage controls and an
+unchanged 57-case replay pass on v2. Independent v1 pure tuple controls retain 53 passes/four
+failures before and 57 passes after. The actual retained x64 ELF passes protection checks, independently parsed
+by the auditor; translated userland does not qualify the x64 kernel. All seven Activity Log gate
+steps and the actual assembled package surface pass. Initial fixture-setup failures remain retained.
+
+`linux-native-package-binding.json` binds these observations. Initial/successor outer ownership,
+Linux native-copy admission, installed-version transitions and both original native P1 findings
+remain open. The separate frozen skill campaign is unchanged; neither skill is accepted here.
+
+## Frozen basic v5 comparison — bounded terminal failure
+
+The fresh 24-case known-calibration comparison on clean source48 stopped at case8 under its
+original rule: seven completed workflows, one failed React control and sixteen undispatched
+cases. Its 12,203 declared input files remain unchanged. Thirty-nine physical requests are
+retained (14 task and 25 readiness). The failed case has complete, valid terminal observations
+and no failed/unjoined/incomplete transport record. Its feedback exhausts the unchanged remaining
+1,872 output-token grant; the Activity Log independently records outputExhausted. That failure
+remains in the ledger, and the campaign is not a completed balanced comparison.
+
+`basic-skill-v5-terminal.json` joins the input and credential-excluding terminal archives. No
+case is repeated or regraded and no budget is enlarged. No skill benefit, higher capability
+level, held-out acceptance or global model limit is inferred from this incomplete comparison.

@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f18e03c6a0f3e463cd2018885fb6fba0e92f16ada7d09e97302718389dd551ae" as const;
+  "40137d62b51516bff7c71efb76454f1787f1ccf9662be2c5682c8c612b2855de" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 349,
-  completeClassCount: 349,
+  supportedClassCount: 350,
+  completeClassCount: 350,
   completeness: "complete",
   classes: [
     {
@@ -31626,6 +31626,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "portable-native-helper-binding",
+      requirementContract: "portable-native-helper-binding",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["portable.runtime.native-helper-bound"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "portable.runtime.native-helper-bound",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["portable.runtime.native-helper-bound"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "portable.runtime.native-helper-bound",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "process-lifecycle",
+          safeContextFields: [
+            {
+              name: "helperSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "target",
+              type: "string",
+              dataClass: "safe-platform-class",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "digest", "loss-state", "safe-platform-class"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["portable.runtime.native-helper-bound.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "portable-normal-startup-recovery",
       requirementContract: "portable-normal-startup-recovery",
       productSurfaces: ["keiko-server"],
@@ -42412,6 +42468,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "native-file-dialog.selection.projected": "ui",
     "portable.normal-startup-recovery.completed": "runtime-packages",
     "portable.normal-startup-recovery.required": "runtime-packages",
+    "portable.runtime.native-helper-bound": "tools-workflows",
     "portable.windows-alert.spawn-failed": "lifecycle-crash",
     "portable.windows-authenticode.system-binary-refused": "runtime-packages",
     "pr-description.apply.blocked": "editor-delivery",

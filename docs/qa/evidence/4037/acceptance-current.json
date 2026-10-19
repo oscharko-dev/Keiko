@@ -386,5 +386,7 @@
   "checkpoint46BoundedEvidence": "activity-log-writer-identity.json; PID-bound shared writer policy and same-process orphan identity; no complete acceptance disposition or issue checkbox change",
   "checkpoint47BoundedEvidence": "linux-generation-kernel-backend.json; unshipped kernel lifetime mechanics and shared codec only; no complete acceptance disposition or issue checkbox change",
   "checkpoint48BoundedEvidence": "lab-runtime-lifecycle.json; shared existing measurement-process/error ownership repair only; no skill-benefit, full acceptance disposition or issue checkbox change",
-  "checkpoint49BoundedEvidence": "lab-finalization-and-native-prerequisite.json; public qualification evidence/finalization retention and native gate build prerequisite only; no skill-benefit, complete acceptance disposition or issue checkbox change"
+  "checkpoint49BoundedEvidence": "lab-finalization-and-native-prerequisite.json; public qualification evidence/finalization retention and native gate build prerequisite only; no skill-benefit, complete acceptance disposition or issue checkbox change",
+  "checkpoint50BoundedEvidence": "linux-native-package-binding.json; native Linux build/package/receipt identity closure and preserved gateway confinement only; no updater admission, full acceptance disposition or issue checkbox change",
+  "basicSkillV5TerminalEvidence": "basic-skill-v5-terminal.json; seven completed/one failed/sixteen undispatched under unchanged original grants, failed attempt and terminal inputs retained; no complete comparison, skill benefit or acceptance"
 }

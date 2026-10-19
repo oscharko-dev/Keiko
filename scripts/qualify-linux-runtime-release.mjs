@@ -86,10 +86,7 @@ function helperByName(activation, name) {
     : [];
   if (matches.length !== 1) fail("activation helper set is invalid");
   const helper = matches[0];
-  const expectedPath =
-    name === "keiko-runtime-supervisor"
-      ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
-      : "runtime/native/keiko-secure-workspace-read";
+  const expectedPath = `runtime/native/${name}`;
   if (
     helper?.platformTarget !== TARGET ||
     helper.executablePath !== expectedPath ||

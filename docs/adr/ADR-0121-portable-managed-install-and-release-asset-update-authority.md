@@ -302,7 +302,14 @@ system-call completion. Consumed children remain consumed even when a late resul
 
 The shared POSIX codec stays inside the existing attested macOS source tree, preserving installed
 candidate-validator compatibility while both implementations use one bounded codec. Source presence,
-protocol controls and isolated kernel mechanics do not enable a portable update capability. Linux
+protocol controls and isolated kernel mechanics do not enable a portable update capability. Newly
+produced Linux x64 packages compile a hardened ELF supervisor at the same native helper path as
+other POSIX targets. Their KRP1/KRS1 identity hashes the complete native supervisor source tree,
+including the shared codec. Existing exact JavaScript/none-protocol identities remain readable as
+legacy metadata; newly produced artifacts cannot use them. Runtime discovery binds the selected
+helper bytes and records the native binding on the existing Activity Log. Linux Coding continues
+to use its existing namespace/egress gateway; its qualification receipt binds the native helper's
+identity but does not qualify updater generation ownership. Linux updater
 admission still requires the initial outer owner, authenticated per-attempt coordinator and successor
 ownership, consistent host process identities, complete shipped source/receipt bindings and actual
 installed-version qualification. Existing sandbox namespace/egress requirements remain binding;
