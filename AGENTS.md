@@ -1150,61 +1150,15 @@ missing evidence under Rule 1, then fix the behaviour.
 
 ## 9. Traps specific to this repo (learn these once)
 
-These cost real time when rediscovered. They are all real and current.
+Repository lessons now live in [Experience.md](Experience.md). Before changing UI styling,
+performance evidence, package exports, workflow branch lists or coverage gates, read the matching
+entry there. In particular, the assembled package-surface check prunes the live dependency tree:
+read its ordering warning before running it. The applicable constraints are unchanged.
 
-- **`packages/keiko-ui/**/globals.css` is behind a SHA-pinned visual-proof gate (#1300).** Editing
-  it to add component or state styling trips a byte-exact hash check and a cross-mode axe/visual
-  proof, turning CI red. Style components with **component-scoped classes** (e.g. `.cmp-*`), not
-  by extending global CSS. See [`docs/design-system/`](docs/design-system/).
-- **Editor perf evidence does not need an in-flight regeneration — except for toolchain edits.**
-  The pull-request gate validates evidence integrity + budgets only (ADR-0139 D10), and since
-  ADR-0156 D2 it asks the toolchain-freshness question only of a diff that actually touches
-  `D12_MEASUREMENT_TOOLCHAIN_PATHS`. Regenerate in-flight (`npm run perf:evidence:regen`) only when
-  your change edits that list — changing the ruler requires re-measuring with it. Real per-PR perf
-  protection lives in the deterministic bundle gates (`check:editor-release-evidence`,
-  `check:editor-bundle-size`).
-- **The D12 reference environment is a developer machine, not CI (ADR-0156 D6).** The budgets are
-  absolute numbers calibrated on the pinned container at linux/arm64 with >=14 logical cores, which
-  is where every committed evidence document was measured. A hosted runner has 4 cores and measures
-  the same scenario at roughly twice the cost, so it cannot produce a passing document — the
-  scheduled `nightly-perf-evidence` lane therefore **detects drift and does not measure**, and files
-  a tracking issue when the committed evidence stops binding `dev`. If you see a 2x "regression",
-  check the provenance hardware in the document before believing it: comparing a local document
-  against a hosted run is comparing two machine classes. See
-  [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md).
-- **New package exports drift `check:package-surface`.** Adding a public export changes the
-  packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
-  surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes
-  build-only and host-native artifacts, and then runs the fail-closed surface checker.
-- **`check:package-surface:assembled` prunes the LIVE `node_modules`, not a staged copy.** Its
-  `prune:package-build-artifacts` and `prune:package-native-optionals` steps run against the real
-  checkout: they delete `node_modules/@napi-rs/canvas` and `canvas-*` (root, and the same under
-  every `packages/*/node_modules`), and remove `packages/<name>/node_modules` entirely for every one
-  of the ~23 workspaces listed in the root `package.json`'s `bundleDependencies`. Nothing later in
-  the aggregate restores them. Run `npm test` afterward in the same checkout and
-  `scripts/__tests__/registry-install-smoke-security.test.mjs`'s dependency-closure test fails —
-  `@napi-rs/canvas` missing from the tree it walks — a false regression with nothing to do with your
-  change. Run the assembled surface check LAST, after `npm test`, or restore first with
-  `npm install`.
-- **A new long-lived integration branch (`feat/…`) must be added in THREE places in
-  `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
-  the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
-  miss the third and CI runs but the gate still rejects the merge. Add the same branch to CodeQL's
-  `push:` and `pull_request:` lists and Dependency Review's `pull_request:` list. Verify the
-  three-workflow branch-list comparison with `npm run check:workflow-branch-parity`; it is the
-  repository-owned replacement for the audit's `awk`/`diff` check and fails on any missing or
-  extra branch.
-- **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
-  with per-file floors across all four metrics. Lowering coverage fails the gate; if you add code,
-  add tests. There is exactly ONE per-file floor store and ONE evaluation
-  (`npm run check:coverage:quality`) — do not add a `coverage.thresholds` block to a vitest config
-  to gate a file, and do not write the literal `85` into a coverage gate (import
-  `KEIKO_REPOSITORY_GATE_CONTRACT.newCodeCoverageMinimum`). Which ruler answers which question is
-  the one table in [`docs/qa/coverage-truth-model.md`](docs/qa/coverage-truth-model.md); the
-  reasoning is [ADR-0158](docs/adr/ADR-0158-one-coverage-ruler-per-question.md).
-- **Some agent harnesses run sub-agents in an isolated worktree at clean `HEAD`.** If you delegate
-  edits, confirm they landed on _this_ working tree and not a throwaway checkout before you report
-  the change as made.
+Keep new lessons evidence-backed and scoped; prefer executable regression protection to growing
+this always-loaded contract. Reviewers use the existing
+[review standards](docs/qa/review-standards.md), already consumed by CodeRabbit, rather than a
+second root review-policy file.
 
 ---
 
