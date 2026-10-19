@@ -6229,7 +6229,7 @@
       "id": "client-binding-ingress-route-validator",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "validator",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-known-value-widening"],
       "input": {
         "consumerPath": "packages/keiko-server/src/client-diagnostics-routes.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/diagnostics",

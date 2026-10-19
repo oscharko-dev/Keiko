@@ -2563,6 +2563,7 @@ it("binding ingress responsibility refuses malformed closed offers through publi
     { ...offer, candidateCount: -1 },
     { ...offer, candidateCount: CLIENT_BINDING_CANDIDATES_MAX + 1 },
     { ...offer, disambiguatedCount: 3 },
+    { ...offer, disambiguatedCount: -1 },
     { ...offer, relatedCorrelationIds: [0] },
     { ...offer, outcome: "target-missing" },
     { ...offer, privatePath: "not-admitted" },
