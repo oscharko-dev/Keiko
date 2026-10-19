@@ -10,9 +10,11 @@ import {
 import { BROWSER_APPROVAL_ROUTES } from "./browserApprovalRoutes.js";
 import {
   browserApprovalChallengeText,
+  BROWSER_APPROVAL_REQUEST_TTL_MS,
   type BrowserApprovalChallengeResult,
   type BrowserApprovalRequestResult,
   type BrowserApprovalProofResult,
+  type BrowserApprovalManagementSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
   createFakeSessionPairingPort,
@@ -78,11 +80,12 @@ async function approveBrowser(
   server: AppSessionTestServer,
   owner: string,
   pair = keyPair(),
+  remember = true,
 ): Promise<Response> {
   const jwk = pair.publicKey.export({ format: "jwk" });
   const requested = await post(server, "request", {
     publicKey: { x: jwk.x, y: jwk.y },
-    remember: true,
+    remember,
   });
   expect(requested.status).toBe(200);
   const pending = (await requested.json()) as BrowserApprovalRequestResult;
@@ -93,7 +96,7 @@ async function approveBrowser(
     {
       requestId: pending.request.requestId,
       comparisonCode: pending.request.comparisonCode,
-      remember: true,
+      remember,
     },
     owner,
   );
@@ -150,6 +153,8 @@ describe("browser approval on the real mounted BFF", () => {
   });
   it("records only registered body-free approval lifecycle evidence", async () => {
     const { server, owner } = await fixture();
+    await approveBrowser(server, owner);
+    await approveBrowser(server, owner, keyPair(), false);
     const route = BROWSER_APPROVAL_ROUTES.find((entry) => entry.method === "GET");
     if (route === undefined) throw new Error("Missing inspection route");
     const events: ServerLogEvent[] = [];
@@ -180,11 +185,40 @@ describe("browser approval on the real mounted BFF", () => {
     expect(events[0]?.extra).toEqual({
       action: "inspect",
       outcome: "accepted",
-      sessionCount: 1,
+      sessionCount: 3,
+      pendingRequestCount: 0,
+      sessionApprovalCount: 1,
+      rememberedApprovalCount: 1,
       completeness: "complete",
       loss: "none",
     });
     expect(JSON.stringify(events)).not.toContain(owner);
+  });
+  it("manages and revokes actual session-only draft access after the request window closes", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation((): number => now);
+    const { server, owner } = await fixture();
+    const response = await approveBrowser(server, owner, keyPair(), false);
+    const cookie = extractSessionCookie(response);
+    if (cookie === undefined) throw new Error("Missing session-only cookie");
+    const project = server.deps.store.createProject(process.cwd());
+    const chat = server.deps.store.createChat(
+      project.path,
+      "Session-only fixture",
+      "fixture-model",
+    );
+    const draft = `${server.baseUrl}/api/chats/${chat.id}/draft`;
+    now += BROWSER_APPROVAL_REQUEST_TTL_MS + 1;
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(200);
+    const inspected = await fetch(`${server.baseUrl}${ROOT}`, { headers: { cookie: owner } });
+    const management = (await inspected.json()) as BrowserApprovalManagementSnapshot;
+    expect(management.approvals).toHaveLength(1);
+    const approval = management.approvals.at(0);
+    if (approval === undefined) throw new Error("Missing session-only management record");
+    expect(approval.remembered).toBe(false);
+    const revoked = await post(server, "revoke", approval.approvalId, owner);
+    expect(await revoked.json()).toEqual({ state: "accepted" });
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(404);
   });
   it("saves authenticated drafts after approval and refuses the same cookie after revocation", async () => {
     const { server, owner } = await fixture();

@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_APPROVAL_CHALLENGE_TTL_MS,
   BROWSER_APPROVAL_MAX_RECORDS,
@@ -13,12 +13,14 @@ import {
 import { createInMemoryUiStore } from "../store/index.js";
 import { createBrowserApprovalService, type BrowserApprovalService } from "./browserApproval.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
+import { APP_SESSION_COOKIE_MAX_AGE_SECONDS } from "./sessionCookie.js";
 
 const ORIGIN = "http://127.0.0.1:1983";
 const stores: ReturnType<typeof createInMemoryUiStore>[] = [];
 
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
+  vi.restoreAllMocks();
 });
 
 function keyPair(): {
@@ -111,6 +113,236 @@ function approve(
     remember,
   });
 }
+
+function sessionOnlyApproval(
+  f: ReturnType<typeof fixture>,
+  rememberRequested = false,
+): {
+  readonly descriptor: BrowserApprovalRequestDescriptor;
+  readonly key: ReturnType<typeof keyPair>;
+  readonly completion: Extract<ReturnType<BrowserApprovalService["prove"]>, { state: "active" }>;
+  readonly approvalId: string;
+} {
+  const key = keyPair();
+  const descriptor = request(f.service, key.publicKey, rememberRequested);
+  expect(approve(f.service, f.ownerCookie, descriptor)).toBe(true);
+  const mint = vi.spyOn(f.registry, "mintForApproval");
+  const completion = f.service.prove(
+    proof(challenge(f.service, descriptor.requestId), key.privateKey),
+    ORIGIN,
+  );
+  const binding = mint.mock.calls.at(-1)?.[1];
+  if (completion.state !== "active" || binding === undefined)
+    throw new Error("Missing session-only approval");
+  return { key, descriptor, completion, approvalId: binding.approvalId };
+}
+
+describe("session-only browser approval management", () => {
+  it.each([0, BROWSER_APPROVAL_REQUEST_TTL_MS, BROWSER_APPROVAL_REQUEST_TTL_MS + 1])(
+    "retains a live session-only approval without persisting trust after %i ms",
+    (elapsed) => {
+      const f = fixture();
+      const approved = sessionOnlyApproval(f);
+      f.setTime(approved.descriptor.requestedAtMs + elapsed);
+      expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeDefined();
+      expect(f.service.snapshot(f.ownerCookie)?.approvals).toEqual([
+        expect.objectContaining({
+          approvalId: approved.approvalId,
+          remembered: false,
+          publicKeyFingerprint: approved.descriptor.publicKeyFingerprint,
+          approvedAtMs: approved.descriptor.requestedAtMs,
+          expiresAtMs:
+            approved.descriptor.requestedAtMs + APP_SESSION_COOKIE_MAX_AGE_SECONDS * 1_000,
+        }),
+      ]);
+      expect(f.store.list()).toEqual([]);
+    },
+  );
+
+  it.each([0, BROWSER_APPROVAL_REQUEST_TTL_MS + 1])(
+    "acknowledges actual session-only revocation after %i ms",
+    (elapsed) => {
+      const f = fixture();
+      const approved = sessionOnlyApproval(f);
+      f.setTime(approved.descriptor.requestedAtMs + elapsed);
+      expect(f.service.revoke(f.ownerCookie, approved.approvalId)).toBe(true);
+      expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeUndefined();
+      expect(f.service.snapshot(f.ownerCookie)?.approvals).toEqual([]);
+      expect(f.service.revoke(f.ownerCookie, approved.approvalId)).toBe(false);
+      expect(f.store.list()).toEqual([]);
+    },
+  );
+
+  it("retains the original completion window while its live approval remains manageable", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f);
+    f.setTime(approved.descriptor.expiresAtMs - 1);
+    const signed = proof(
+      challenge(f.service, approved.descriptor.requestId),
+      approved.key.privateKey,
+    );
+    f.setTime(approved.descriptor.expiresAtMs);
+    expect(f.service.prove(signed, ORIGIN)).toEqual({ state: "unavailable" });
+    expect(
+      f.service.challenge(
+        { purpose: "complete", subjectId: approved.descriptor.requestId },
+        ORIGIN,
+      ),
+    ).toEqual({ state: "unavailable" });
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeDefined();
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toHaveLength(1);
+  });
+
+  it("keeps rotated session-only access visible without extending the original grant", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f);
+    f.setTime(approved.descriptor.requestedAtMs + 1_000);
+    const rotated = f.service.prove(
+      proof(challenge(f.service, approved.descriptor.requestId), approved.key.privateKey),
+      ORIGIN,
+    );
+    if (rotated.state !== "active") throw new Error("Missing rotated session");
+    f.setTime(approved.descriptor.expiresAtMs + 1);
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeUndefined();
+    expect(f.registry.inspect(rotated.mint.cookieToken)).toBeDefined();
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toHaveLength(1);
+    expect(f.service.revoke(f.ownerCookie, approved.approvalId)).toBe(true);
+    expect(f.registry.inspect(rotated.mint.cookieToken)).toBeUndefined();
+    expect(f.registry.sessionCount()).toBe(1);
+  });
+
+  it("exposes and revokes an approved session-only decision before key completion", () => {
+    const f = fixture();
+    const key = keyPair();
+    const descriptor = request(f.service, key.publicKey);
+    expect(approve(f.service, f.ownerCookie, descriptor)).toBe(true);
+    const signed = proof(challenge(f.service, descriptor.requestId), key.privateKey);
+    const approval = f.service.snapshot(f.ownerCookie)?.approvals.at(0);
+    expect(approval).toBeDefined();
+    if (approval === undefined) throw new Error("Missing approved session-only decision");
+    expect(f.service.revoke(f.ownerCookie, approval.approvalId)).toBe(true);
+    expect(f.service.prove(signed, ORIGIN)).toEqual({ state: "unavailable" });
+    expect(f.registry.sessionCount()).toBe(1);
+    expect(f.store.list()).toEqual([]);
+  });
+
+  it("does not revive session-only approval after a process restart", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f);
+    const restarted = f.restart();
+    expect(restarted.snapshot(approved.completion.mint.cookieToken)).toBeUndefined();
+    expect(
+      restarted.challenge({ purpose: "renew", subjectId: approved.approvalId }, ORIGIN),
+    ).toEqual({ state: "unavailable" });
+    expect(f.store.list()).toEqual([]);
+  });
+
+  it("uses the approver's session-only choice when remembering was requested", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f, true);
+    f.setTime(approved.descriptor.expiresAtMs + 1);
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toEqual([
+      expect.objectContaining({ approvalId: approved.approvalId, remembered: false }),
+    ]);
+    expect(f.store.list()).toEqual([]);
+  });
+
+  it("does not let management polling refresh another browser's inactivity", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f);
+    const before = f.registry.inspect(approved.completion.mint.cookieToken);
+    f.setTime(approved.descriptor.expiresAtMs + 1);
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toHaveLength(1);
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)?.lastSeenAtMs).toBe(
+      before?.lastSeenAtMs,
+    );
+    f.setTime(approved.descriptor.requestedAtMs + 30 * 60_000);
+    const replacement = f.registry.mint("replacement launcher");
+    expect(f.service.snapshot(replacement.cookieToken)?.approvals).toEqual([]);
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeUndefined();
+  });
+
+  it("does not restore a revoked session when an older active operation releases", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f);
+    const release = f.registry.beginOperation(approved.completion.mint.cookieToken);
+    f.setTime(approved.descriptor.expiresAtMs + 1);
+    expect(f.service.revoke(f.ownerCookie, approved.approvalId)).toBe(true);
+    release?.();
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeUndefined();
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toEqual([]);
+    expect(f.registry.sessionCount()).toBe(1);
+  });
+
+  it("bounds pending requests without evicting live session-only management records", () => {
+    const f = fixture();
+    const live = Array.from({ length: BROWSER_APPROVAL_MAX_RECORDS - 1 }, () =>
+      sessionOnlyApproval(f),
+    );
+    const key = keyPair();
+    request(f.service, key.publicKey);
+    expect(f.service.request({ publicKey: key.publicKey, remember: false }, ORIGIN)).toEqual({
+      state: "unavailable",
+    });
+    f.setTime(1_000_000 + BROWSER_APPROVAL_REQUEST_TTL_MS + 1);
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toHaveLength(live.length);
+    request(f.service, key.publicKey);
+    expect(f.service.request({ publicKey: key.publicKey, remember: false }, ORIGIN)).toEqual({
+      state: "unavailable",
+    });
+    for (const approved of live)
+      expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeDefined();
+    f.setTime(1_000_000 + 30 * 60_000);
+    const replacement = f.registry.mint("replacement launcher");
+    expect(f.service.snapshot(replacement.cookieToken)?.approvals).toEqual([]);
+    expect(f.service.request({ publicKey: key.publicKey, remember: false }, ORIGIN).state).toBe(
+      "pending",
+    );
+    expect(f.store.list()).toEqual([]);
+  });
+
+  it("releases an evicted session's management capacity before the request window ends", () => {
+    const f = fixture();
+    const live = Array.from({ length: BROWSER_APPROVAL_MAX_RECORDS - 1 }, () =>
+      sessionOnlyApproval(f),
+    );
+    const key = keyPair();
+    request(f.service, key.publicKey);
+    f.setTime(1_000_001);
+    expect(f.registry.verify(f.ownerCookie)).toBeDefined();
+    f.registry.mint("independent launcher");
+    const evicted = live.at(0);
+    if (evicted === undefined) throw new Error("Missing eviction fixture");
+    expect(f.registry.inspect(evicted.completion.mint.cookieToken)).toBeUndefined();
+    expect(f.service.request({ publicKey: key.publicKey, remember: false }, ORIGIN).state).toBe(
+      "pending",
+    );
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toHaveLength(live.length - 1);
+    expect(
+      f.service.challenge({ purpose: "complete", subjectId: evicted.descriptor.requestId }, ORIGIN),
+    ).toEqual({ state: "unavailable" });
+    for (const approved of live.slice(1))
+      expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeDefined();
+  });
+
+  it("preserves active-operation visibility but retires the original approval deadline", () => {
+    const f = fixture();
+    const approved = sessionOnlyApproval(f);
+    const releaseOwner = f.registry.beginOperation(f.ownerCookie);
+    const releaseVisitor = f.registry.beginOperation(approved.completion.mint.cookieToken);
+    f.setTime(approved.descriptor.requestedAtMs + 31 * 60_000);
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeDefined();
+    expect(f.service.snapshot(f.ownerCookie)?.approvals).toHaveLength(1);
+    f.setTime(approved.descriptor.requestedAtMs + APP_SESSION_COOKIE_MAX_AGE_SECONDS * 1_000);
+    const replacement = f.registry.mint("replacement launcher");
+    expect(f.service.snapshot(replacement.cookieToken)?.approvals).toEqual([]);
+    expect(f.registry.inspect(approved.completion.mint.cookieToken)).toBeUndefined();
+    releaseOwner?.();
+    releaseVisitor?.();
+    expect(f.registry.sessionCount()).toBe(1);
+    expect(f.store.list()).toEqual([]);
+  });
+});
 
 describe("explicit browser approval", () => {
   it("rejects malformed public points and never accepts private-key fields", () => {
@@ -224,9 +456,11 @@ describe("explicit browser approval", () => {
     expect(f.registry.verify(first.mint.cookieToken)).toBeUndefined();
     expect(f.registry.verify(second.mint.cookieToken)).toBeDefined();
     expect(f.registry.sessionCount()).toBe(2);
+    const outstanding = proof(challenge(f.service, descriptor.requestId), key.privateKey);
     f.registry.revoke(second.mint.session.sessionId);
+    expect(f.service.prove(outstanding, ORIGIN)).toEqual({ state: "unavailable" });
     expect(
-      f.service.prove(proof(challenge(f.service, descriptor.requestId), key.privateKey), ORIGIN),
+      f.service.challenge({ purpose: "complete", subjectId: descriptor.requestId }, ORIGIN),
     ).toEqual({ state: "unavailable" });
   });
 

@@ -48,6 +48,8 @@ export interface SessionRegistry {
   readonly verify: (cookieToken: string | undefined) => AppSession | undefined;
   /** Non-touching validity check for persistent server streams; never refreshes idle expiry. */
   readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
+  /** Owner-only non-touching lookup for management of an already issued session. */
+  readonly inspectSession: (sessionId: string) => AppSession | undefined;
   /** Confirm existing authority and return its remaining absolute cookie lifetime. */
   readonly verifyForCookieRepair: (cookieToken: string | undefined) => number | undefined;
   /** Non-touching count for body-free operation lifecycle evidence. */
@@ -340,6 +342,17 @@ function verifyForCookieRepair(
   );
 }
 
+function inspectOwnedSession(state: RegistryState, sessionId: string): AppSession | undefined {
+  const stored = state.sessions.get(sessionId);
+  if (stored === undefined) return undefined;
+  const nowMs = state.now();
+  if (isExpired(state, stored, nowMs)) {
+    expireStoredSession(state, stored, nowMs);
+    return undefined;
+  }
+  return describe(stored);
+}
+
 function rotateSession(state: RegistryState, sessionId: string): SessionMint | undefined {
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
@@ -404,6 +417,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
       verifySession(state, cookieToken, true),
     inspect: (cookieToken: string | undefined): AppSession | undefined =>
       verifySession(state, cookieToken, false),
+    inspectSession: (sessionId: string): AppSession | undefined =>
+      inspectOwnedSession(state, sessionId),
     inspectOperationCount: (cookieToken: string | undefined): number | undefined => {
       const session = verifySession(state, cookieToken, false);
       return session === undefined

@@ -109,7 +109,7 @@ function observedTime(state: ApprovalState): number | undefined {
   if (!state.store.observeTime(now)) return undefined;
   state.lastObservedAtMs = now;
   for (const [id, request] of state.requests) {
-    if (now >= request.descriptor.expiresAtMs) state.requests.delete(id);
+    if (retireRequest(state, request, now)) state.requests.delete(id);
   }
   for (const [id, challenge] of state.challenges) {
     if (now >= challenge.expiresAtMs) state.challenges.delete(id);
@@ -117,9 +117,19 @@ function observedTime(state: ApprovalState): number | undefined {
   return now;
 }
 
+function retireRequest(state: ApprovalState, request: PendingRequest, now: number): boolean {
+  const live =
+    request.sessionId !== undefined &&
+    state.registry.inspectSession(request.sessionId) !== undefined;
+  if (request.sessionId !== undefined && !live) return true;
+  if (now < request.descriptor.expiresAtMs) return false;
+  return !(request.decision?.remember === false && now < request.decision.expiresAtMs && live);
+}
+
 function describeApproval(approval: StoredBrowserApproval): BrowserApprovalDescriptor {
   return {
     approvalId: approval.approvalId,
+    remembered: true,
     approvedAtMs: approval.approvedAtMs,
     expiresAtMs: approval.expiresAtMs,
     lastUsedAtMs: approval.lastUsedAtMs,
@@ -241,9 +251,10 @@ function completionReadiness(
   state: ApprovalState,
   subjectId: string,
   origin: string,
+  now: number,
 ): "ready" | "pending" | "unavailable" {
   const request = state.requests.get(subjectId);
-  if (request?.origin !== origin) return "unavailable";
+  if (request?.origin !== origin || now >= request.descriptor.expiresAtMs) return "unavailable";
   return request.decision === undefined ? "pending" : "ready";
 }
 
@@ -256,7 +267,7 @@ function issueChallenge(
   const now = observedTime(state);
   if (!parsed.ok || now === undefined) return { state: "unavailable" };
   if (parsed.value.purpose === "complete") {
-    const readiness = completionReadiness(state, parsed.value.subjectId, origin);
+    const readiness = completionReadiness(state, parsed.value.subjectId, origin, now);
     if (readiness !== "ready") return { state: readiness };
   } else if (currentApproval(state, parsed.value.subjectId, now)?.origin !== origin) {
     return { state: "unavailable" };
@@ -317,7 +328,12 @@ function completeRequest(
 ): BrowserApprovalCompletion {
   const request = state.requests.get(challenge.subjectId);
   const decision = request?.decision;
-  if (request === undefined || decision === undefined || now >= decision.expiresAtMs)
+  if (
+    request === undefined ||
+    decision === undefined ||
+    now >= decision.expiresAtMs ||
+    now >= request.descriptor.expiresAtMs
+  )
     return { state: "unavailable" };
   if (!verifyProof(request.publicKey, challenge, signature)) return { state: "unavailable" };
   return finishRequest(state, request, decision, now);
@@ -386,22 +402,47 @@ function managementSnapshot(
     requests: [...state.requests.values()]
       .filter((request) => request.decision === undefined)
       .map((request) => ({ ...request.descriptor })),
-    approvals: state.store.list().map(describeApproval),
+    approvals: [...state.store.list().map(describeApproval), ...sessionApprovalDescriptors(state)],
   };
+}
+
+function sessionApprovalDescriptors(state: ApprovalState): readonly BrowserApprovalDescriptor[] {
+  const approvals: BrowserApprovalDescriptor[] = [];
+  for (const request of state.requests.values()) {
+    const decision = request.decision;
+    if (decision?.remember !== false) continue;
+    const session =
+      request.sessionId === undefined
+        ? undefined
+        : state.registry.inspectSession(request.sessionId);
+    if (request.sessionId !== undefined && session === undefined) continue;
+    approvals.push({
+      approvalId: decision.approvalId,
+      remembered: false,
+      approvedAtMs: decision.approvedAtMs,
+      expiresAtMs: decision.expiresAtMs,
+      lastUsedAtMs: session?.lastSeenAtMs ?? decision.approvedAtMs,
+      publicKeyFingerprint: request.descriptor.publicKeyFingerprint,
+    });
+  }
+  return approvals;
 }
 
 function revokeApproval(state: ApprovalState, cookie: string | undefined, id: string): boolean {
   if (state.registry.verify(cookie) === undefined || observedTime(state) === undefined)
     return false;
   const removed = state.store.remove(id);
-  state.registry.revokeApproval(id);
+  const revokedSessions = state.registry.revokeApproval(id);
+  const revokedSubjects = new Set([id]);
   for (const [requestId, request] of state.requests) {
-    if (request.decision?.approvalId === id) state.requests.delete(requestId);
+    if (request.decision?.approvalId !== id) continue;
+    state.requests.delete(requestId);
+    revokedSubjects.add(requestId);
   }
   for (const [challengeId, challenge] of state.challenges) {
-    if (challenge.subjectId === id) state.challenges.delete(challengeId);
+    if (revokedSubjects.has(challenge.subjectId)) state.challenges.delete(challengeId);
   }
-  return removed;
+  return removed || revokedSessions > 0 || revokedSubjects.size > 1;
 }
 
 export function createBrowserApprovalService(deps: {

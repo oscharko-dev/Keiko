@@ -4745,6 +4745,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      pendingRequestCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sessionApprovalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      rememberedApprovalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       action: {
         type: "string",
         dataClass: "closed-enum",

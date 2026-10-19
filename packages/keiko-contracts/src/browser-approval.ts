@@ -64,6 +64,7 @@ export interface BrowserApprovalRequestDescriptor {
 
 export interface BrowserApprovalDescriptor {
   readonly approvalId: string;
+  readonly remembered: boolean;
   readonly approvedAtMs: number;
   readonly expiresAtMs: number;
   readonly lastUsedAtMs: number;

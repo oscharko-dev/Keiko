@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "046a9781a1ce1458898a9dabb62036e1b6190743f6cbb0b2dbf01f7c8a90b028" as const;
+  "7b49d055cdb2d2ad6517f5cf47cb2d0a92d22d7fad04130bce897de5e9046cc9" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5404,6 +5404,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "pendingRequestCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "rememberedApprovalCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "sessionApprovalCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "sessionCount",

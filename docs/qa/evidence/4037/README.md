@@ -884,3 +884,41 @@ attempts remain retained in `native-cold-refusal-observation.json`.
 
 Actual x64 follow-up, Linux/macOS generation ownership, packaged updates/restart/recovery/state/SSD,
 browser journeys, both skill matrices, original96 and final required checks/integration remain open.
+
+## Checkpoint 34: manage the actual lifetime of session-only browser approval
+
+Session-only grants now remain visible and revocable while their actual sessions remain valid.
+The existing bounded request metadata carries that management state without persisting transient
+authority. Non-touching registry inspection observes the original idle, absolute and grant bounds;
+management polling cannot keep another session alive. Revoked, expired or evicted sessions release
+their metadata and request capacity immediately, including before the original five-minute window.
+That window still limits completion challenge issuance and proof at equality. Retaining management
+metadata does not extend permission to issue or rotate a cookie.
+
+Descriptors identify remembered versus session-only decisions. Revocation acknowledges actual
+authority removal and retires its matching outstanding challenges. The existing Activity Log state
+operation records bounded pending, transient and remembered counts. No new persistent store, clock,
+credential or authority is introduced.
+
+Identical final unit controls have fifteen failures and fifteen healthy results against the
+published parent owners, then thirty passes after the repair. Targeted actual mounted HTTP controls
+have one failure and one healthy result, then two passes; the other nine HTTP controls are filtered
+only in this causal comparison. The full affected run passes all924 tests across45 suites, including
+all eleven HTTP controls. The independent auditor's eighteen actual service/registry/store/P256
+controls have ten failures/eight healthy results against published32 and eighteen passes against
+the candidate. `browser-session-management.json` binds current sources, observations and retained
+failures. None of these controls establishes native browser, OS restart, profile or SSD acceptance.
+
+Head33 also introduced a cross-platform test-assumption error: both Windows owner jobs pass67 of68
+controls but the new cleanup fixture incorrectly expects ignored POSIX TERM behavior. Node terminates
+Windows children unconditionally for TERM. The same real fixture and bounded awaited cleanup now
+require TERM on Windows and actual KILL escalation on POSIX, checking the owned child's signalCode
+as well. All68 owner controls pass locally on ARM64 without skips; actual corrected Windows CI is
+still required. `native-cleanup-platform-control.json` retains the original failed job and scope.
+The separate Node26 timed-writer and development proxy CI failures remain under investigation.
+
+The independently reviewed frozen Gemma V6 experiment has started. It remains known-fixture
+feedback characterization, with unchanged customer skills and all physical calls retained; it is
+not untouched held-out evidence or skill acceptance. Native generation ownership, packaged update
+journeys, browser UI and real browsers, both skill matrices, Chat/search/source96, final exact-head
+required checks, review settlement and authorized integration remain open.

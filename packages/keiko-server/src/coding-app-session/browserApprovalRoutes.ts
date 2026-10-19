@@ -1,6 +1,7 @@
 import {
   isBrowserApprovalId,
   isBrowserApprovalOrigin,
+  type BrowserApprovalManagementSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
   activityLogEvent,
@@ -22,6 +23,9 @@ const APPROVAL_OPERATION = defineActivityLogOperation({
   emitter: "coding-app-session.browserApprovalRoutes.recordApproval",
   fields: {
     sessionCount: { type: "integer", dataClass: "count", required: true },
+    pendingRequestCount: { type: "integer", dataClass: "count", required: false },
+    sessionApprovalCount: { type: "integer", dataClass: "count", required: false },
+    rememberedApprovalCount: { type: "integer", dataClass: "count", required: false },
     action: {
       type: "string",
       dataClass: "closed-enum",
@@ -62,12 +66,26 @@ function recordApproval(
   deps: UiHandlerDeps,
   action: ApprovalAction,
   outcome: ApprovalOutcome,
+  snapshot?: BrowserApprovalManagementSnapshot,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       APPROVAL_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      { action, outcome, sessionCount: deps.codingAppSessionChannel?.sessionCount() ?? 0 },
+      {
+        action,
+        outcome,
+        sessionCount: deps.codingAppSessionChannel?.sessionCount() ?? 0,
+        ...(snapshot === undefined
+          ? {}
+          : {
+              pendingRequestCount: snapshot.requests.length,
+              sessionApprovalCount: snapshot.approvals.filter((approval) => !approval.remembered)
+                .length,
+              rememberedApprovalCount: snapshot.approvals.filter((approval) => approval.remembered)
+                .length,
+            }),
+      },
     ),
   );
 }
@@ -87,7 +105,13 @@ function handleInspect(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const snapshot = deps.codingAppSessionChannel?.browserApproval?.snapshot(
     readSessionCookie(ctx.req),
   );
-  recordApproval(ctx, deps, "inspect", snapshot === undefined ? "unavailable" : "accepted");
+  recordApproval(
+    ctx,
+    deps,
+    "inspect",
+    snapshot === undefined ? "unavailable" : "accepted",
+    snapshot,
+  );
   return {
     status: 200,
     body: snapshot === undefined ? UNAVAILABLE : { state: "active", ...snapshot },

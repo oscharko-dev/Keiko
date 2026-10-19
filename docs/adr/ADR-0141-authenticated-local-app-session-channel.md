@@ -134,7 +134,7 @@ scheme/host/port origin, purpose, subject, random challenge identity and nonce, 
 The server accepts only canonical public coordinates and IEEE-P1363 ECDSA-SHA256 signatures.
 Consuming a challenge removes it before verification; replay, malformed input, a different origin,
 an expired request, and restart-invalidated challenges cannot mint a session. Pending requests are
-bounded to 32 and challenges to 64; a new challenge replaces the previous challenge for that subject
+bounded to 32 together with retained completed-session metadata, and challenges to 64; a new challenge replaces the previous challenge for that subject
 and purpose. JSON uses the existing bounded pairing reader and all existing Host/Origin/CSRF and
 content guards remain mandatory. These new POST routes additionally require the exact transport
 origin, rather than the routing URL's placeholder authority.
@@ -157,6 +157,18 @@ removes the durable approval, pending completion state and every associated live
 the same registry. Within the single BFF owner, verification, store mutation and mint/revocation
 contain no asynchronous gap. A lost completion response can rotate its existing session with a
 fresh proof during the original request window; it cannot mint again after revocation or eviction.
+
+Management distinguishes remembered and session-only approvals explicitly. Approved session-only
+decisions are manageable during their original request window. After successful completion, their
+existing bounded request metadata remains only while the original grant and exact registry session
+are valid; no transient approval is persisted. The registry's owner-only lookup is non-touching:
+management polling cannot renew another browser's inactivity. Rotation keeps the same manageable
+session identity. Idle/absolute expiry, revocation or eviction retires its metadata and releases
+capacity, including before the request window ends. Both completion challenge issuance and proof
+still enforce the original five-minute request deadline even while live metadata remains visible.
+Revocation acknowledges an actual durable row, approved decision or associated session removal,
+and retires only matching completion/renewal challenges. The existing approval Activity Log records
+pending-request, session-only and remembered counts without identities, public points or bearers.
 
 The browser implementation must keep a session-only private key in memory and may remember an
 explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. That UI and

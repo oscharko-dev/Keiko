@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "046a9781a1ce1458898a9dabb62036e1b6190743f6cbb0b2dbf01f7c8a90b028",
+    "catalogDigest": "7b49d055cdb2d2ad6517f5cf47cb2d0a92d22d7fad04130bce897de5e9046cc9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4955,6 +4955,21 @@
             "dataClass": "count",
             "required": true
           },
+          "pendingRequestCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sessionApprovalCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "rememberedApprovalCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "action": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -4974,8 +4989,8 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.browser-approval.state.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:16",
-        "emitterSites": ["packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:67"]
+        "registrationSite": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:17",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:72"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5083,8 +5098,8 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.expired.observation"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:118",
-        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:152"]
+        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:120",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:154"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52898,6 +52913,24 @@
                   "required": true
                 },
                 {
+                  "name": "pendingRequestCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "rememberedApprovalCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "sessionApprovalCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "sessionCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -92304,7 +92337,7 @@
     {
       "op": "coding-app-session.browser-approval.state",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:19",
+      "site": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:20",
       "package": "keiko-server"
     },
     {
@@ -92336,7 +92369,7 @@
     {
       "op": "coding-app-session.expired",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:121",
+      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:123",
       "package": "keiko-server"
     },
     {

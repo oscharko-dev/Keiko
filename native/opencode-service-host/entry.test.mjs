@@ -342,7 +342,7 @@ function authenticated(input) {
   return { authorization: `Basic ${Buffer.from(`opencode:${input.password}`).toString("base64")}` };
 }
 
-test("owned-child cleanup reaps a fixture that ignores graceful termination", async () => {
+test("owned-child cleanup reaps a fixture after platform termination", async () => {
   const own = fixture();
   writeFileSync(
     join(own.root, "host.mjs"),
@@ -358,7 +358,9 @@ test("owned-child cleanup reaps a fixture that ignores graceful termination", as
         timer = setTimeout(() => reject(new Error("owned-child-cleanup-not-bounded")), 3000);
       }),
     ]);
-    assert.equal((await owned.exited).signal, "SIGKILL");
+    const expectedSignal = process.platform === "win32" ? "SIGTERM" : "SIGKILL";
+    assert.equal((await owned.exited).signal, expectedSignal);
+    assert.equal(owned.child.signalCode, expectedSignal);
   } finally {
     clearTimeout(timer);
     if (owned.child.exitCode === null && owned.child.signalCode === null)
