@@ -2044,6 +2044,12 @@ describe("Atlassian live-query public parsers (#3918)", () => {
   });
 
   it("refuses malformed live boundaries with exact owning diagnostics", () => {
+    expect(parsePublicJiraLiveSearchRequest({ jql: { length: 1 } })).toEqual({
+      ok: false,
+      errors: [
+        `liveSearchRequest.jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
+      ],
+    });
     for (const input of [null, undefined, [], 12, "jql"]) {
       expect(parsePublicJiraLiveSearchRequest(input).ok).toBe(false);
       expect(parsePublicJiraLiveSearchResult(input).ok).toBe(false);
