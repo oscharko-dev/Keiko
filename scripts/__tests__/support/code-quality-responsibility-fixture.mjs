@@ -1381,3 +1381,61 @@ export function publicsecond(input: unknown): number { const result = second(inp
   emitSymbolFixture(own.root);
   return own;
 }
+
+export function createObservationOptionsFixture(options = {}) {
+  const own = createResponsibilityFixture();
+  own.put(
+    "packages/alpha/src/owner.ts",
+    `
+function runtimeProperty(value: object, key: PropertyKey): unknown {
+  const property: unknown = Reflect.get(value, key);
+  return property;
+}
+function exactKeys(left: object, right: object): boolean {
+  const leftKeys = Reflect.ownKeys(left);
+  const rightKeys = new Set(Reflect.ownKeys(right));
+  return leftKeys.length === rightKeys.size && leftKeys.every((key) => rightKeys.has(key));
+}
+export interface Observation { readonly admitted: boolean; }
+export function validate(event: object): Observation {
+  return { admitted: runtimeProperty(event, "value") === 1 && exactKeys(event, {value: 1}) };
+}
+`,
+  );
+  own.put(
+    "src/consumer.ts",
+    'import { validate } from "alpha/runtime"; export const result = validate({value: 1});',
+  );
+  const path = "packages/alpha/src/proof.test.ts";
+  own.put(
+    path,
+    `import { validate, type Observation } from "alpha/runtime";
+export function observe(event: object): Observation { const result = validate(event); return result; }
+`,
+  );
+  own.record = observationFixtureRecord(path, options);
+  own.policy = responsibilityPolicy([own.record]);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function observationFixtureRecord(path, options) {
+  const selector = { consumerPath: path, specifier: "alpha/runtime", exportName: "validate" };
+  return {
+    ...responsibilityRecord(),
+    kind: "raw-property-observation",
+    input: { ...selector, parameterIndex: 0 },
+    transform: selector,
+    output: selector,
+    consumer: { kind: "public-api-proof", owner: "alpha", ...selector, exportName: "observe" },
+    rules: [
+      "anti-slop/no-object-parameters",
+      "anti-slop/no-unknown-returns",
+      "anti-slop/no-reflect-get",
+    ],
+    proofs: [path],
+    proofAssertions: [{ path, testName: "observation preservation" }],
+    ...options,
+  };
+}

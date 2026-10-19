@@ -165,6 +165,19 @@ function validCanonicalDecoderRules(record) {
   );
 }
 
+function validObservationOptions(record) {
+  const hasRoot = Object.hasOwn(record, "rawObjectInput");
+  const hasForm = Object.hasOwn(record, "additionalObservationForms");
+  if ((hasRoot || hasForm) && record.kind !== "raw-property-observation") return false;
+  return (
+    (!hasRoot || record.rawObjectInput === true) &&
+    (!hasForm ||
+      (Array.isArray(record.additionalObservationForms) &&
+        record.additionalObservationForms.length === 1 &&
+        record.additionalObservationForms[0] === "own-key-identity"))
+  );
+}
+
 function validObservationRules(record) {
   const rules = [
     "anti-slop/no-object-parameters",
@@ -216,6 +229,9 @@ function responsibilityKeys(record) {
   ];
   if (record !== null && typeof record === "object" && Object.hasOwn(record, "proofAssertions"))
     keys.push("proofAssertions");
+  for (const option of ["rawObjectInput", "additionalObservationForms"])
+    if (record !== null && typeof record === "object" && Object.hasOwn(record, option))
+      keys.push(option);
   return keys;
 }
 
@@ -238,6 +254,7 @@ function validResponsibilityIdentity(record) {
     validRawReaderRules(record) &&
     validCanonicalDecoderRules(record) &&
     validObservationRules(record) &&
+    validObservationOptions(record) &&
     validTypedRecheckRules(record)
   );
 }
@@ -317,6 +334,15 @@ function retainsProofAssertion(record, proof) {
   );
 }
 
+function observationOptionShrank(current, record) {
+  return (
+    (record.rawObjectInput === true && current.rawObjectInput !== true) ||
+    (record.additionalObservationForms ?? []).some(
+      (form) => !(current.additionalObservationForms ?? []).includes(form),
+    )
+  );
+}
+
 function responsibilityShrank(policy, previous) {
   return previous.some((baseline) =>
     (baseline.responsibilities ?? []).some((record) => {
@@ -327,6 +353,7 @@ function responsibilityShrank(policy, previous) {
         identity.some(
           (key) => canonicalIdentity(current[key]) !== canonicalIdentity(record[key]),
         ) ||
+        observationOptionShrank(current, record) ||
         record.rules.some((rule) => !current.rules.includes(rule)) ||
         record.proofs.some((proof) => !current.proofs.includes(proof)) ||
         (record.proofAssertions ?? []).some((proof) => !retainsProofAssertion(current, proof))

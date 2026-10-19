@@ -1258,3 +1258,25 @@ original negative result without replaying it. Source, native type, lint and for
 on the restored candidate. Integrated repository qualification and current-head CI remain separate.
 The earlier synthetic timeout and intermediate withheld results remain separate adverse history;
 a later positive does not identify their cause or replace current-head CI.
+
+### Optional owning raw-object and own-key observation
+
+The existing support observation responsibility may explicitly declare `rawObjectInput: true`
+and/or the singleton `additionalObservationForms: ["own-key-identity"]`. Absent options preserve
+its original three Reflect.get facts. The root option adds only the canonical public validator's
+required object input; it does not certify an event DTO, caller or helper graph. The own-key option
+adds only both required object parameters of the exact private ownKeys/Set/strict-count/every/has
+identity helper. All values, calls, signatures and references bind to current compiler identities;
+foreign builtins, modified algorithms, escaped/ambiguous helpers or either unsupported opted form
+refuse the complete responsibility. Both options reuse one bounded participating-call traversal,
+unchanged budgets/currentness and the existing semantic-only adaptation gate. Raw observations
+remain visible. These are responsibility-specific semantic qualifications, not blanket object grants.
+
+The fifteen original selected assertions remain in order. Their inherited/hidden attachment and
+public consumer tests add raw-refusal, own-key and separate source/public strict type evidence
+without removing any old assertion. The sole sixteenth selector binds the existing public logger's
+malformed raw metadata forwarding and real formatter mismatch. Both declared proof owners execute
+whole; the complete server-log owner remains a separate mandatory physical gate. A declared proof
+path requires its own selected assertion, and the selector cap remains16. Qualification and native
+coordinate comparison on the actual candidate are required; metadata alone proves no runtime
+coverage. The raw-carrier helper and every other object observation retain their obligations.

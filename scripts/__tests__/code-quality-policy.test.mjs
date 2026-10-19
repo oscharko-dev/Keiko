@@ -348,11 +348,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       kind: "public-api-proof",
       owner: record.owner,
     });
-    expect(record.proofs).toEqual([selector.consumerPath]);
-    expect(record.proofAssertions).toHaveLength(15);
-    expect(record.proofAssertions.every((proof) => proof.path === selector.consumerPath)).toBe(
-      true,
-    );
+    expect(record.proofs.slice(0, 1)).toEqual([selector.consumerPath]);
+    expect(record.proofAssertions.slice(0, 15)).toHaveLength(15);
+    expect(
+      record.proofAssertions.slice(0, 15).every((proof) => proof.path === selector.consumerPath),
+    ).toBe(true);
     for (const variant of ["removed", "rebound"]) {
       const changed = structuredClone(policy);
       if (variant === "removed") changed.responsibilities.splice(8, 1);
@@ -1610,4 +1610,46 @@ describe("workspace diagnostic checker provenance", () => {
     );
     expect(validatePolicy(policy)).toEqual([]);
   });
+});
+
+describe("closed optional observation policy declarations", () => {
+  it("retains the fifteen-selector prefix and appends only the shared physical proof", () => {
+    const record = policy.responsibilities[8];
+    expect(record.rawObjectInput).toBe(true);
+    expect(record.additionalObservationForms).toEqual(["own-key-identity"]);
+    expect(record.proofs).toEqual([
+      "packages/keiko-contracts/src/observability.test.ts",
+      "packages/keiko-activity-log/src/server-logger.test.ts",
+    ]);
+    expect(record.proofAssertions).toHaveLength(16);
+    expect(record.proofAssertions[15]).toEqual({
+      path: record.proofs[1],
+      testName:
+        "Support logger raw metadata preservation public: preserves malformed raw metadata and the existing final mismatch",
+    });
+    expect(validatePolicy(policy)).toEqual([]);
+  });
+  it.each([
+    { rawObjectInput: false },
+    { rawObjectInput: "object" },
+    { additionalObservationForms: [] },
+    { additionalObservationForms: ["other"] },
+    { additionalObservationForms: ["own-key-identity", "own-key-identity"] },
+  ])("refuses malformed optional observation metadata %j", (options) => {
+    const changed = structuredClone(policy);
+    Object.assign(changed.responsibilities[8], options);
+    expect(validatePolicy(changed)).toContain("invalid-responsibilities");
+  });
+  it.each(["rawObjectInput", "additionalObservationForms"])(
+    "preserves accepted %s and rejects foreign kinds",
+    (option) => {
+      const shrunk = structuredClone(policy);
+      if (option === "rawObjectInput") delete shrunk.responsibilities[8].rawObjectInput;
+      else delete shrunk.responsibilities[8].additionalObservationForms;
+      expect(validatePolicy(shrunk, [policy])).toContain("responsibility-shrank");
+      const foreign = structuredClone(policy);
+      foreign.responsibilities[0][option] = policy.responsibilities[8][option];
+      expect(validatePolicy(foreign)).toContain("invalid-responsibilities");
+    },
+  );
 });

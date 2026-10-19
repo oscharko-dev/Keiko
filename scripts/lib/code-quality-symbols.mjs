@@ -3069,7 +3069,7 @@ function observationKey(context, key) {
   );
 }
 
-function privateObservationCallable(callable) {
+function privateObservationCallable(callable, result) {
   return (
     ts.isFunctionDeclaration(callable) &&
     !exportedDeclaration(callable) &&
@@ -3077,13 +3077,13 @@ function privateObservationCallable(callable) {
     !callable.asteriskToken &&
     !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
     callable.parameters.length === 2 &&
-    callable.type?.kind === ts.SyntaxKind.UnknownKeyword
+    callable.type?.kind === result
   );
 }
 
 function observationSignature(state) {
   return (
-    privateObservationCallable(state.callable) &&
+    privateObservationCallable(state.callable, ts.SyntaxKind.UnknownKeyword) &&
     observationParameter(state.callable.parameters[0], ts.SyntaxKind.ObjectKeyword) &&
     observationKey(state.context, state.callable.parameters[1])
   );
@@ -3149,7 +3149,7 @@ function reachedObservationCallables(compiler, identity) {
       states.set(target.identity.producer.start, { ...state, ...target });
     }
   }
-  return [...states.values()].filter((state) => observationSignature(state));
+  return [...states.values()];
 }
 
 function privateObservationReferences(state) {
@@ -3158,8 +3158,237 @@ function privateObservationReferences(state) {
   );
 }
 
-function propertyObservationFacts(compiler, identity) {
-  const candidates = reachedObservationCallables(compiler, identity);
+function observationIdentifier(state, node, declaration) {
+  return (
+    ts.isIdentifier(node) &&
+    state.context.checker.getSymbolAtLocation(node) ===
+      state.context.checker.getSymbolAtLocation(declaration.name)
+  );
+}
+
+function observationConst(statement) {
+  if (!ts.isVariableStatement(statement)) return null;
+  const list = statement.declarationList;
+  if (!(list.flags & ts.NodeFlags.Const) || list.declarations.length !== 1) return null;
+  const declaration = list.declarations[0];
+  return ts.isIdentifier(declaration.name) && !declaration.type && declaration.initializer
+    ? declaration
+    : null;
+}
+
+function observationLibraryCall(state, call, method, count) {
+  if (
+    !ts.isCallExpression(call) ||
+    call.typeArguments?.length ||
+    call.arguments.length !== count ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    call.expression.name.text !== method
+  )
+    return false;
+  const signature = state.context.checker.getResolvedSignature(call);
+  return (
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(call.expression.name),
+    ) &&
+    Boolean(signature?.declaration) &&
+    state.context.program.isSourceFileDefaultLibrary(signature.declaration.getSourceFile())
+  );
+}
+
+function observationOwnKeys(state, call, index) {
+  return (
+    observationLibraryCall(state, call, "ownKeys", 1) &&
+    ts.isIdentifier(call.expression.expression) &&
+    call.expression.expression.text === "Reflect" &&
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(call.expression.expression),
+    ) &&
+    sameReaderParameter(state, call.arguments[0], index)
+  );
+}
+
+function observationSetTarget(state, expression) {
+  return (
+    ts.isIdentifier(expression) &&
+    expression.text === "Set" &&
+    defaultLibrarySymbol(state.context, state.context.checker.getSymbolAtLocation(expression))
+  );
+}
+
+function observationKeySet(state, node) {
+  if (!ts.isNewExpression(node) || node.typeArguments?.length || node.arguments?.length !== 1)
+    return false;
+  const signature = state.context.checker.getResolvedSignature(node);
+  return (
+    observationSetTarget(state, node.expression) &&
+    Boolean(signature?.declaration) &&
+    state.context.program.isSourceFileDefaultLibrary(signature.declaration.getSourceFile()) &&
+    observationOwnKeys(state, node.arguments[0], 1)
+  );
+}
+
+function observationMember(state, node, name, declaration) {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === name &&
+    observationIdentifier(state, node.expression, declaration) &&
+    defaultLibrarySymbol(state.context, state.context.checker.getSymbolAtLocation(node.name))
+  );
+}
+
+function observationKeyCount(state, node, left, right) {
+  return (
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+    observationMember(state, node.left, "length", left) &&
+    observationMember(state, node.right, "size", right)
+  );
+}
+
+function observationCallbackParameter(parameter) {
+  return (
+    ts.isIdentifier(parameter.name) &&
+    !parameter.type &&
+    !parameter.initializer &&
+    !parameter.questionToken &&
+    !parameter.dotDotDotToken
+  );
+}
+
+function observationKeyCallback(callback) {
+  if (!ts.isArrowFunction(callback)) return false;
+  if (callback.modifiers?.length || callback.typeParameters?.length || callback.type) return false;
+  return callback.parameters.length === 1 && observationCallbackParameter(callback.parameters[0]);
+}
+
+function observationMembership(state, call, left, right) {
+  if (
+    !observationLibraryCall(state, call, "every", 1) ||
+    !observationIdentifier(state, call.expression.expression, left)
+  )
+    return false;
+  const callback = call.arguments[0];
+  if (!observationKeyCallback(callback)) return false;
+  const contains = callback.body;
+  return (
+    observationLibraryCall(state, contains, "has", 1) &&
+    observationIdentifier(state, contains.expression.expression, right) &&
+    observationIdentifier(state, contains.arguments[0], callback.parameters[0])
+  );
+}
+
+function ownKeyObservationSignature(state) {
+  return (
+    privateObservationCallable(state.callable, ts.SyntaxKind.BooleanKeyword) &&
+    state.callable.parameters.every((parameter) =>
+      observationParameter(parameter, ts.SyntaxKind.ObjectKeyword),
+    )
+  );
+}
+
+function observationOwnKeyReturn(state, result, left, right) {
+  return (
+    ts.isBinaryExpression(result) &&
+    result.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+    observationKeyCount(state, result.left, left, right) &&
+    observationMembership(state, result.right, left, right)
+  );
+}
+
+function ownKeyObservationBody(state) {
+  if (state.callable.body?.statements.length !== 3) return false;
+  const [first, second, returned] = state.callable.body.statements;
+  const left = observationConst(first);
+  const right = observationConst(second);
+  if (!left || !right || !ts.isReturnStatement(returned) || !returned.expression) return false;
+  return (
+    observationOwnKeys(state, left.initializer, 0) &&
+    observationKeySet(state, right.initializer) &&
+    observationOwnKeyReturn(state, returned.expression, left, right)
+  );
+}
+
+function observationObjectSlots(state) {
+  return state.callable.parameters.map((parameter, index) => ({
+    ...annotationSlot(
+      state.context,
+      state.source,
+      parameter.type,
+      state.identity,
+      "parameter",
+      index,
+    ),
+    rule: "anti-slop/no-object-parameters",
+  }));
+}
+
+function observationRootFacts(identity, root) {
+  if (
+    !exportedDeclaration(root.callable) ||
+    root.callable.parameters.length !== 1 ||
+    !observationParameter(root.callable.parameters[0], ts.SyntaxKind.ObjectKeyword)
+  )
+    throw new TypeError("unsupported-property-observation-input");
+  return {
+    slots: observationObjectSlots(root),
+    fact: { form: "raw-object-input", identity },
+  };
+}
+
+function observationOwnKeyFacts(states) {
+  const candidates = states.filter(ownKeyObservationSignature);
+  if (
+    candidates.length !== 1 ||
+    !privateObservationReferences(candidates[0]) ||
+    !ownKeyObservationBody(candidates[0])
+  )
+    throw new TypeError("unsupported-own-key-observation");
+  return {
+    slots: observationObjectSlots(candidates[0]),
+    fact: { form: "own-key-identity", identity: candidates[0].identity },
+  };
+}
+
+function assertObservationOptions(options) {
+  if (options.rawObjectInput !== undefined && options.rawObjectInput !== true)
+    throw new TypeError("unsupported-property-observation-input");
+  const forms = options.additionalObservationForms;
+  if (
+    forms !== undefined &&
+    (!Array.isArray(forms) || forms.length !== 1 || forms[0] !== "own-key-identity")
+  )
+    throw new TypeError("unsupported-property-observation-form");
+  if (
+    Object.keys(options).some(
+      (key) => key !== "rawObjectInput" && key !== "additionalObservationForms",
+    )
+  )
+    throw new TypeError("unsupported-property-observation-option");
+}
+
+function additionalObservationFacts(compiler, identity, states, options) {
+  assertObservationOptions(options);
+  const slots = [];
+  const facts = [];
+  if (options.rawObjectInput === true) {
+    const root = observationRootFacts(identity, states[0]);
+    slots.push(...root.slots);
+    facts.push(root.fact);
+  }
+  if (options.additionalObservationForms !== undefined) {
+    const keys = observationOwnKeyFacts(states);
+    slots.push(...keys.slots);
+    facts.push(keys.fact);
+  }
+  compiler.assertCurrent();
+  return { slots, facts };
+}
+
+function propertyObservationFacts(compiler, identity, options = {}) {
+  const states = reachedObservationCallables(compiler, identity);
+  const candidates = states.filter((state) => observationSignature(state));
   if (candidates.length !== 1) throw new TypeError("unsupported-property-observation-helper");
   const state = candidates[0];
   if (!privateObservationReferences(state))
@@ -3191,8 +3420,15 @@ function propertyObservationFacts(compiler, identity) {
       rule: "anti-slop/no-reflect-get",
     },
   ];
+  const additional = additionalObservationFacts(compiler, identity, states, options);
+  slots.push(...additional.slots);
   compiler.assertCurrent();
-  return { identity: state.identity, root: identity, slots };
+  return {
+    identity: state.identity,
+    root: identity,
+    slots,
+    ...(additional.facts.length ? { additionalObservations: additional.facts } : {}),
+  };
 }
 
 function observationConsumer(context, source, name) {
@@ -3380,7 +3616,8 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     rawReaderFacts: (identity) => rawReaderFacts(compiler, identity),
-    propertyObservationFacts: (identity) => propertyObservationFacts(compiler, identity),
+    propertyObservationFacts: (identity, options) =>
+      propertyObservationFacts(compiler, identity, options),
     observationBinding: (request, producer) => observationBinding(compiler, request, producer),
     callableSlots: (identity) => callableSlots(compiler, identity),
     rawCheckingSlots: (identity, index) => {

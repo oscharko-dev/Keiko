@@ -158,7 +158,10 @@ function responsibilitySlots(resolver, record, roles) {
   if (record.kind === "raw-own-property-reader")
     return [resolver.rawReaderFacts(roles.input.identities[0]).slot];
   if (record.kind === "raw-property-observation")
-    return resolver.propertyObservationFacts(roles.input.identities[0]).slots;
+    return resolver.propertyObservationFacts(roles.input.identities[0], {
+      rawObjectInput: record.rawObjectInput,
+      additionalObservationForms: record.additionalObservationForms,
+    }).slots;
   if (record.kind === "typed-parameter-recheck")
     return resolver.typedRecheckFacts(roles.input.identities[0], record.input.parameterIndex).slots;
   if (record.kind === "raw-canonical-json-decoder")

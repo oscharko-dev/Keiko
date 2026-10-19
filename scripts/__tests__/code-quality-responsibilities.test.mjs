@@ -19,6 +19,7 @@ import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
+  createObservationOptionsFixture,
   createConsumerSeamFixture,
   createDiagnosticFixture,
   createContextDiagnosticFixture,
@@ -3682,4 +3683,95 @@ describe("numeric object unsupported form reporting (#3918)", () => {
       "symbol-subject-changed",
     );
   }, 30_000);
+});
+
+describe("optional own-key and raw-root observation capability", () => {
+  it.each([
+    ["default", {}, 3],
+    ["own-key", { additionalObservationForms: ["own-key-identity"] }, 5],
+    ["raw-root", { rawObjectInput: true }, 4],
+    ["combined", { rawObjectInput: true, additionalObservationForms: ["own-key-identity"] }, 6],
+  ])(
+    "declares exact %s slots without granting unqualified findings",
+    async (_name, options, count) => {
+      const own = createObservationOptionsFixture(options);
+      roots.push(own.root);
+      expect(validatePolicy(own.policy)).toEqual([]);
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      const assessment = report.assessments[0];
+      expect(assessment.structural).toBe("ready");
+      expect(assessment.slots).toHaveLength(count);
+      expect(
+        assessment.slots.filter((slot) => slot.rule === "anti-slop/no-object-parameters"),
+      ).toHaveLength(count - 2);
+      const findings = assessment.slots.map(({ path, rule, line, column }) => ({
+        path,
+        rule,
+        line,
+        column,
+      }));
+      expect(adaptResponsibilityDiagnostics({ violations: findings }, report).adaptations).toEqual(
+        [],
+      );
+      const qualified = { assessments: [{ ...assessment, semantic: "qualified" }] };
+      expect(
+        adaptResponsibilityDiagnostics({ violations: findings }, qualified).adaptations,
+      ).toHaveLength(count);
+    },
+  );
+
+  it.each([
+    [
+      "wrong first receiver",
+      (source) => source.replace("Reflect.ownKeys(left)", "Reflect.ownKeys(right)"),
+    ],
+    ["wrong membership", (source) => source.replace("leftKeys.every", "leftKeys.some")],
+    ["loose equality", (source) => source.replace("leftKeys.length ===", "leftKeys.length ==")],
+    ["mutable binding", (source) => source.replace("const leftKeys", "let leftKeys")],
+    ["extra statement", (source) => source.replace("const leftKeys", "void left; const leftKeys")],
+    [
+      "counterfeit Set",
+      (source) =>
+        source +
+        "\nclass Set { readonly size = 1; constructor(_keys: PropertyKey[]) {} has(_key: PropertyKey): boolean { return true; } }",
+    ],
+    [
+      "counterfeit Reflect",
+      (source) =>
+        source +
+        "\nconst Reflect = { get(_value: object, _key: PropertyKey): unknown { return 1; }, ownKeys(_value: object): PropertyKey[] { return []; } };",
+    ],
+    [
+      "second reachable helper",
+      (source) =>
+        source
+          .replace("function exactKeys", "function otherKeys")
+          .replace(
+            "&& exactKeys(event, {value: 1})",
+            "&& otherKeys(event, {value: 1}) && exactKeys(event, {value: 1})",
+          ) +
+        "\nfunction exactKeys(left: object, right: object): boolean { const leftKeys = Reflect.ownKeys(left); const rightKeys = new Set(Reflect.ownKeys(right)); return leftKeys.length === rightKeys.size && leftKeys.every((key) => rightKeys.has(key)); }",
+    ],
+    [
+      "escaped alias",
+      (source) => source + "\nconst alias = exactKeys; export const escaped = [alias];",
+    ],
+    [
+      "exported helper",
+      (source) => source.replace("function exactKeys", "export function exactKeys"),
+    ],
+    ["unreached helper", (source) => source.replace("&& exactKeys(event, {value: 1})", "")],
+  ])("withholds the entire combined declaration for %s", async (_name, mutate) => {
+    const own = createObservationOptionsFixture({
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+    });
+    roots.push(own.root);
+    const path = "packages/alpha/src/owner.ts";
+    own.put(path, mutate(readFileSync(join(own.root, path), "utf8")));
+    emitSymbolFixture(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).not.toBe("ready");
+    expect(report.assessments[0].slots ?? []).toEqual([]);
+  });
 });

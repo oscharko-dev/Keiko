@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   ACTIVITY_LOG_EVENT_REGISTRATION,
@@ -748,6 +748,8 @@ import {
   validateRegisteredActivityLogEvent as validatePublicObservedEvent,
   withActivityLogCorrelation as publicWithActivityLogCorrelation,
   withActivityLogParentCorrelation as publicWithActivityLogParentCorrelation,
+  type ActivityLogOperationRegistration as PublicActivityLogOperationRegistration,
+  type ActivityLogFieldContract as PublicActivityLogFieldContract,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const publicSupportAdmission = {
@@ -947,6 +949,25 @@ describe("Support public registration shape admission", () => {
       const inheritedAttachment = {};
       Object.setPrototypeOf(inheritedAttachment, event);
       expect(api.activityLogEventRegistration(inheritedAttachment)).toBe(operation);
+      const completeClone = { ...operation };
+      const clonedEvent = attachRaw(event, completeClone);
+      expect(api.activityLogEventRegistration(clonedEvent)).toBe(completeClone);
+      expect(api.validateRegisteredActivityLogEvent(clonedEvent)).toBe(operation);
+      const hiddenClone = { ...operation };
+      Object.defineProperty(hiddenClone, Symbol("fixture-extra-registration-key"), { value: true });
+      const hiddenEvent = attachRaw(event, hiddenClone);
+      expect(api.activityLogEventRegistration(hiddenEvent)).toBe(hiddenClone);
+      expect(() => api.validateRegisteredActivityLogEvent(hiddenEvent)).toThrow(
+        new api.ActivityLogEventValidationError("registration-mismatch"),
+      );
+      const malformedParent = {};
+      Object.defineProperty(malformedParent, ACTIVITY_LOG_EVENT_REGISTRATION, { value: {} });
+      const malformedCarrier = { ...event };
+      Object.setPrototypeOf(malformedCarrier, malformedParent);
+      expect(api.activityLogEventRegistration(malformedCarrier)).toBeUndefined();
+      expect(() => api.validateRegisteredActivityLogEvent(malformedCarrier)).toThrow(
+        new api.ActivityLogEventValidationError("registration-mismatch"),
+      );
     });
     it(`${surface}: retains own and inherited parent identity with the accessor receiver`, () => {
       for (const inherited of [false, true]) {
@@ -1419,6 +1440,34 @@ export function validatePublicObservation(event: object): ActivityLogOperationRe
 }
 
 it("public observation consumer preserves canonical validator identity and refusal", () => {
+  expectTypeOf<Parameters<typeof validateRegisteredActivityLogEvent>[0]>().toEqualTypeOf<object>();
+  expectTypeOf<Parameters<typeof validatePublicObservedEvent>[0]>().toEqualTypeOf<object>();
+  expectTypeOf<Parameters<typeof validateRegisteredActivityLogEvent>[0]>().not.toBeAny();
+  expectTypeOf<Parameters<typeof validatePublicObservedEvent>[0]>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof validateRegisteredActivityLogEvent>
+  >().toEqualTypeOf<ActivityLogOperationRegistration>();
+  expectTypeOf<
+    ReturnType<typeof validatePublicObservedEvent>
+  >().toEqualTypeOf<PublicActivityLogOperationRegistration>();
+  expectTypeOf<ReturnType<typeof validateRegisteredActivityLogEvent>>().not.toBeAny();
+  expectTypeOf<ReturnType<typeof validatePublicObservedEvent>>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof validateRegisteredActivityLogEvent>["fields"][string]
+  >().toEqualTypeOf<ActivityLogFieldContract>();
+  expectTypeOf<
+    ReturnType<typeof validatePublicObservedEvent>["fields"][string]
+  >().toEqualTypeOf<PublicActivityLogFieldContract>();
+  expectTypeOf<
+    ReturnType<typeof validateRegisteredActivityLogEvent>["fields"][string]
+  >().not.toBeAny();
+  expectTypeOf<ReturnType<typeof validatePublicObservedEvent>["fields"][string]>().not.toBeAny();
+  expectTypeOf<
+    ReturnType<typeof validateRegisteredActivityLogEvent>["fields"][string]["required"]
+  >().toEqualTypeOf<boolean>();
+  expectTypeOf<
+    ReturnType<typeof validatePublicObservedEvent>["fields"][string]["required"]
+  >().toEqualTypeOf<boolean>();
   const operation = publicSupportAdmission.activityLogOperationSchema("gateway.instance.reused");
   if (operation === undefined) throw new TypeError("canonical operation required");
   const event: unknown = Reflect.apply(publicSupportAdmission.activityLogEvent, undefined, [

@@ -556,6 +556,8 @@
       "id": "support-raw-property-observation",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "raw-property-observation",
+      "rawObjectInput": true,
+      "additionalObservationForms": ["own-key-identity"],
       "rules": [
         "anti-slop/no-object-parameters",
         "anti-slop/no-unknown-returns",
@@ -584,7 +586,10 @@
         "kind": "public-api-proof",
         "owner": "@oscharko-dev/keiko-contracts"
       },
-      "proofs": ["packages/keiko-contracts/src/observability.test.ts"],
+      "proofs": [
+        "packages/keiko-contracts/src/observability.test.ts",
+        "packages/keiko-activity-log/src/server-logger.test.ts"
+      ],
       "proofAssertions": [
         {
           "path": "packages/keiko-contracts/src/observability.test.ts",
@@ -645,6 +650,10 @@
         {
           "path": "packages/keiko-contracts/src/observability.test.ts",
           "testName": "public observation consumer preserves canonical validator identity and refusal"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves malformed raw metadata and the existing final mismatch"
         }
       ]
     },

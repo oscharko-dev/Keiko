@@ -22,6 +22,7 @@ import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
+  createObservationOptionsFixture,
   createResponsibilityFixture,
   createEnforcementFixture,
   createCrossOwnerEnforcementFixture,
@@ -3274,5 +3275,40 @@ describe("separate collective slot result contracts (#3918)", () => {
     expect(
       own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-object-parameters"),
     ).toEqual([]);
+  });
+});
+
+describe("closed optional observation compiler facts", () => {
+  it("adds exactly the two own-key and one owning-input coordinates to legacy facts", async () => {
+    const own = createObservationOptionsFixture();
+    fixtures.push(own);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const roles = own.resolver.resolveProofExport(own.record.input);
+    const identity = roles.identities[0];
+    const before = own.resolver.propertyObservationFacts(identity);
+    const after = own.resolver.propertyObservationFacts(identity, {
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+    });
+    expect(before.slots).toHaveLength(3);
+    expect(after.slots.slice(0, 3)).toStrictEqual(before.slots);
+    expect(after.slots).toHaveLength(6);
+    expect(after.identity).toStrictEqual(before.identity);
+    expect(after.root).toStrictEqual(before.root);
+    expect(
+      after.slots.slice(3).every((slot) => slot.rule === "anti-slop/no-object-parameters"),
+    ).toBe(true);
+    expect(after.additionalObservations.map(({ form }) => form)).toEqual([
+      "raw-object-input",
+      "own-key-identity",
+    ]);
+    const path = "packages/alpha/src/owner.ts";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n// source changed\n");
+    expect(() =>
+      own.resolver.propertyObservationFacts(identity, { rawObjectInput: true }),
+    ).toThrow();
   });
 });
