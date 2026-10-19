@@ -491,7 +491,7 @@ async function runDraft(
   let releaseLease: (() => void) | undefined;
   let releaseAllowed = true;
   try {
-    releaseLease = acquireRunningDraftLease(options, now, request, draft);
+    releaseLease = acquireRunningDraftLease(options, now, request, draft, correlationId);
     releaseAllowed = persistDraftStatusSafely(
       options,
       now,
@@ -513,8 +513,9 @@ function acquireRunningDraftLease(
   now: () => number,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
+  correlationId: string,
 ): () => void {
-  const releaseLease = options.localState.acquireRemediationLease(draft.actionId);
+  const releaseLease = options.localState.acquireRemediationLease(draft.actionId, correlationId);
   if (releaseLease === undefined) {
     throw new UpdateRemediationError(
       "UPDATE_REMEDIATION_RUNNING",

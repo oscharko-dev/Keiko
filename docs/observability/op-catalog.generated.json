@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a4f83221be504dfb75affbdb19e9233e1c63375e14d7cb7096a7062a7f06de5b",
+    "catalogDigest": "c5319259b89f60074d425bd7badfde796b040fc403a8d16d66f200ab23644fa8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36764,6 +36764,52 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "update.remediation.lease",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "update-runtime-activity.updateRemediationLeaseEvent",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "leaseId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 64
+          },
+          "actionDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "state": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["acquired", "busy", "owner-held", "released", "failed"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["update-runtime"],
+        "proofIds": ["update.remediation.lease.exclusive"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/update-runtime-activity.ts:24",
+        "emitterSites": ["packages/keiko-server/src/update-runtime-activity.ts:59"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "update.runtime.event",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -37014,8 +37060,8 @@
         "failureClasses": ["update-runtime"],
         "proofIds": ["update.runtime.event.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-runtime-activity.ts:50",
-        "emitterSites": ["packages/keiko-server/src/update-runtime-activity.ts:270"]
+        "registrationSite": "packages/keiko-server/src/update-runtime-activity.ts:99",
+        "emitterSites": ["packages/keiko-server/src/update-runtime-activity.ts:319"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37120,8 +37166,8 @@
         "failureClasses": ["update-runtime-legacy-import"],
         "proofIds": ["update.runtime.legacy-snapshot-imported.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-runtime-activity.ts:237",
-        "emitterSites": ["packages/keiko-server/src/update-runtime-activity.ts:327"]
+        "registrationSite": "packages/keiko-server/src/update-runtime-activity.ts:286",
+        "emitterSites": ["packages/keiko-server/src/update-runtime-activity.ts:376"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46916,16 +46962,32 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["update.install-mode.detected", "update.runtime.event"],
+          "state": [
+            "update.install-mode.detected",
+            "update.remediation.lease",
+            "update.runtime.event"
+          ],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["update.install-mode.detected", "update.runtime.event"],
+        "requiredCausalOperations": [
+          "update.install-mode.detected",
+          "update.remediation.lease",
+          "update.runtime.event"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["update.install-mode.detected", "update.runtime.event"],
+        "requiredProofOperations": [
+          "update.install-mode.detected",
+          "update.remediation.lease",
+          "update.runtime.event"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["update.install-mode.detected", "update.runtime.event"],
+        "requiredResourceOperations": [
+          "update.install-mode.detected",
+          "update.remediation.lease",
+          "update.runtime.event"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -87607,7 +87669,11 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["update.install-mode.detected", "update.runtime.event"],
+            "state": [
+              "update.install-mode.detected",
+              "update.remediation.lease",
+              "update.runtime.event"
+            ],
             "end": [],
             "failure": [],
             "loss": []
@@ -87618,12 +87684,20 @@
               "mode": "correlation"
             },
             {
+              "op": "update.remediation.lease",
+              "mode": "correlation"
+            },
+            {
               "op": "update.runtime.event",
               "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["update.install-mode.detected", "update.runtime.event"],
+          "resourceSignals": [
+            "update.install-mode.detected",
+            "update.remediation.lease",
+            "update.runtime.event"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -87683,6 +87757,48 @@
                 "causeChain": false
               },
               "proofIds": ["update.install-mode.detected.body-free"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "update.remediation.lease",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "actionDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "leaseId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "state",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "digest",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["update.remediation.lease.exclusive"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -95533,22 +95649,35 @@
       "package": "keiko-server"
     },
     {
+      "op": "update.remediation.lease",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-local-state.ts:796",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.remediation.lease",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-runtime-activity.ts:27",
+      "package": "keiko-server"
+    },
+    {
       "op": "update.runtime.activity-log",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:1744",
+      "site": "packages/keiko-server/src/update-local-state.ts:1918",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "update.runtime.event",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-runtime-activity.ts:53",
+      "site": "packages/keiko-server/src/update-runtime-activity.ts:102",
       "package": "keiko-server"
     },
     {
       "op": "update.runtime.legacy-snapshot-imported",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-runtime-activity.ts:240",
+      "site": "packages/keiko-server/src/update-runtime-activity.ts:289",
       "package": "keiko-server"
     },
     {
@@ -96352,6 +96481,7 @@
     "update.preflight.bundled-catalog.read",
     "update.release-trust.verify",
     "update.remediation.execute",
+    "update.remediation.lease",
     "update.runtime.activity-log",
     "update.runtime.event",
     "update.runtime.legacy-import-deferred",

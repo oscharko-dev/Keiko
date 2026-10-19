@@ -293,6 +293,45 @@ Fresh malformed publication remains protected by its file-age grace; aged malfor
 quarantined before a replacement lease is published. Valid live or unobserved owners remain held.
 This record classification does not establish exclusive reclaim or foreign-process incarnation.
 
+Canonical lease reads distinguish observed malformed bytes from unobservable ownership. They
+reuse the existing bounded state-file descriptor reader with a 4 KiB record cap, nonblocking
+no-follow admission, regular single-link identity and exact BigInt identity/change checks before
+and after the read. Invalid UTF-8/JSON or record fields use the existing malformed publication
+grace; permission/I/O failures, oversized or unsafe objects and changed snapshots refuse without
+quarantine. An unreadable valid legacy owner therefore never becomes reclaimable merely by age.
+
+Remediation acquisition, reclamation and release also hold one per-action SQLite transaction as an
+OS-backed exclusion guard. The already bundled SQLite runtime owns a stable zero-data file; no
+schema, application data, WAL, helper process or new dependency is introduced. SQLite may retain
+its rollback journal while the transaction is held and removes it when closing normally.
+Both main file and sidecar stay inside the same denied private directory. Nonblocking busy
+admission retains the existing already-running result. Each successful lease retains its connection
+in the existing manager until its idempotent release callback settles, including uncertain-outcome
+holds. Different actions retain independent guards. Failed admission closes its own connection;
+release already holds its guard and therefore requires no competing release acquisition or retry.
+Canonical read/rename/unlink failures are observable release failures and retain the held guard.
+The same manager retains the exact callback and requested-release state. After the filesystem is
+repaired, a later explicit acquisition retries only that previously requested own release before
+attempting new admission. An action whose release was never authorized is not retried or cleared.
+No background scheduler or unbounded retry loop is introduced; an old callback cannot close or
+remove a newer guard entry. A release is logged only after its canonical result and connection close.
+
+Guard files live below `updates/remediation-leases/.keiko/guards/`, including for custom state roots.
+The existing full raw/resolved `.keiko` workspace denial protects them from ordinary Files and
+recursive readers: raw same-process opens/closes must never touch a held SQLite guard, because
+POSIX descriptor closure can cancel SQLite locks. Existing update scans, snapshots and permission
+repair only inspect metadata/counts/modes, and never read guard bodies. Guards are never unlinked,
+recreated, quarantined or hashed while in use. Existing SQLite path preflight rejects symlinks,
+hardlinks and unsafe ancestors; it retains its documented pathname-only, non-atomic same-UID limit.
+
+The JSON lease remains authoritative for valid live/unknown owners, publication grace and process
+identity. An available guard does not authorize reclaiming such a record or clearing an uncertain
+remediation result. The existing Activity Log records closed acquisition/busy/owner-held/release/
+failure outcomes, an opaque attempt identity and action digest with the originating correlation.
+Exclusion applies to cooperating guarded peers; old active writers that ignore the guard must be
+drained by the existing installation-generation ownership boundary. These controls do not establish
+foreign PID incarnation, installed generation transfer or an actual cross-version update.
+
 On macOS, a monitor's zero-live reply is necessary but does not replace successful reaping of the
 supervisor's exact owned root. The supervisor checks the returned child identity and terminal
 status under one monotonic five-second wait deadline, including interruptions and the final

@@ -8800,16 +8800,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["update.install-mode.detected", "update.runtime.event"],
+      state: ["update.install-mode.detected", "update.remediation.lease", "update.runtime.event"],
       end: [],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["update.install-mode.detected", "update.runtime.event"],
+    requiredCausalOperations: [
+      "update.install-mode.detected",
+      "update.remediation.lease",
+      "update.runtime.event",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["update.install-mode.detected", "update.runtime.event"],
+    requiredProofOperations: [
+      "update.install-mode.detected",
+      "update.remediation.lease",
+      "update.runtime.event",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["update.install-mode.detected", "update.runtime.event"],
+    requiredResourceOperations: [
+      "update.install-mode.detected",
+      "update.remediation.lease",
+      "update.runtime.event",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

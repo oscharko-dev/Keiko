@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a4f83221be504dfb75affbdb19e9233e1c63375e14d7cb7096a7062a7f06de5b"
+    "catalogDigest": "c5319259b89f60074d425bd7badfde796b040fc403a8d16d66f200ab23644fa8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 547,
-    "proofCount": 560,
-    "resolvedProofCount": 560,
+    "operationCount": 548,
+    "proofCount": 561,
+    "resolvedProofCount": 561,
     "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -709,6 +709,7 @@
         "update.portable-asset.redirect-refused",
         "update.portable-fetch.failed",
         "update.release-trust.verify",
+        "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.legacy-snapshot-imported",
         "update.session.lifecycle"
@@ -2656,6 +2657,9 @@
     ],
     "update.release-trust.verify.status": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"
+    ],
+    "update.remediation.lease.exclusive": [
+      "packages/keiko-server/src/update-runtime-activity.test.ts"
     ],
     "update.runtime.event.body-free": ["packages/keiko-server/src/update-runtime-activity.test.ts"],
     "update.runtime.legacy-import-deferred.reason": [

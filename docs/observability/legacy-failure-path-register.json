@@ -6261,18 +6261,6 @@
     },
     {
       "path": "packages/keiko-server/src/update-local-state.ts",
-      "owner": "readRemediationLease",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/update-local-state.ts",
-      "owner": "releaseRemediationLease",
-      "kind": "unregistered-catch",
-      "count": 3
-    },
-    {
-      "path": "packages/keiko-server/src/update-local-state.ts",
       "owner": "remediationLeaseAgeMs",
       "kind": "unregistered-catch",
       "count": 1

@@ -14,16 +14,19 @@ import {
   mkdirSync,
   openSync,
   opendirSync,
-  readFileSync,
   readSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  type BigIntStats,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { assertSqliteStatePath, chmodIfPresent } from "@oscharko-dev/keiko-security/fs-hardening";
+import { sqliteErrorLike } from "@oscharko-dev/keiko-security/sqlite-corruption";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   ReleaseImpactRemediation,
@@ -93,7 +96,9 @@ import {
 } from "./diagnostics-log.js";
 import {
   updateRuntimeActivityEvent,
+  updateRemediationLeaseEvent,
   type UpdateRuntimeActivityFields,
+  type UpdateRemediationLeaseState,
 } from "./update-runtime-activity.js";
 import {
   isOptionalProcessIdentity,
@@ -130,6 +135,12 @@ interface ManagerContext {
   readonly processIdentity: string;
   readonly activityLog: SecurityLogSink | undefined;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly remediationLeaseGuards: Map<string, RemediationLeaseGuard>;
+}
+
+interface RemediationLeaseGuard {
+  readonly settle: () => void;
+  releaseRequested: boolean;
 }
 
 type AuditEventInput = Partial<
@@ -150,7 +161,10 @@ export interface UpdateLocalStateManager {
   readonly readRuntimeState: () => UpdateRuntimeState;
   readonly inspectRuntimeState: () => UpdateRuntimeStateInspection;
   readonly writeRuntimeState: (state: UpdateRuntimeState) => UpdateRuntimeState;
-  readonly acquireRemediationLease: (actionId: string) => (() => void) | undefined;
+  readonly acquireRemediationLease: (
+    actionId: string,
+    correlationId?: string,
+  ) => (() => void) | undefined;
   readonly recordAuditEvent: (
     type: UpdateRuntimeEventType,
     input?: AuditEventInput,
@@ -174,7 +188,7 @@ export class UpdateRuntimeStateError extends Error {
   }
 }
 
-function readBoundedRuntimeState(descriptor: number, expectedSize: number): Buffer | undefined {
+function readBoundedStateFile(descriptor: number, expectedSize: number): Buffer | undefined {
   const content = Buffer.allocUnsafe(expectedSize + 1);
   let offset = 0;
   while (offset < content.length) {
@@ -207,6 +221,7 @@ const DEFAULT_REMEDIATION_LEASE_STALE_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_FILE_MODE = 0o600;
 const SNAPSHOT_DIR_MODE = 0o700;
 const MAX_RUNTIME_STATE_BYTES = 1_048_576;
+const MAX_REMEDIATION_LEASE_BYTES = 4_096n;
 const MAX_RUNTIME_COLLECTION_ITEMS = 64;
 const MAX_RUNTIME_TEXT_LENGTH = 4_096;
 const TARGET_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
@@ -449,11 +464,62 @@ function parseRemediationLease(value: unknown): RemediationLeaseRecord | undefin
 }
 
 function readRemediationLease(path: string): RemediationLeaseRecord | undefined {
+  let descriptor: number | undefined;
   try {
-    return parseRemediationLease(JSON.parse(readFileSync(path, "utf8")));
-  } catch {
-    return undefined;
+    const named = lstatSync(path, { bigint: true });
+    assertRemediationLeaseFile(named);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!sameRemediationLeaseFile(named, opened)) {
+      throw new Error("Remediation lease file changed before reading.");
+    }
+    const bytes = readBoundedStateFile(descriptor, Number(opened.size));
+    if (
+      bytes === undefined ||
+      !sameRemediationLeaseFile(opened, fstatSync(descriptor, { bigint: true })) ||
+      !sameRemediationLeaseFile(opened, lstatSync(path, { bigint: true }))
+    ) {
+      throw new Error("Remediation lease file changed while reading.");
+    }
+    return parseRemediationLeaseContent(bytes);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    // Unknown ownership is never a malformed record eligible for age-based quarantine.
+    throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
+}
+
+function assertRemediationLeaseFile(stat: BigIntStats): void {
+  if (!stat.isFile() || stat.nlink !== 1n || stat.size > MAX_REMEDIATION_LEASE_BYTES) {
+    throw new Error("Remediation lease file is unsafe.");
+  }
+}
+
+function parseRemediationLeaseContent(bytes: Buffer): RemediationLeaseRecord | undefined {
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) return undefined;
+  try {
+    return parseRemediationLease(JSON.parse(text));
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+function sameRemediationLeaseFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 function processIsAlive(pid: number): boolean {
@@ -550,30 +616,21 @@ function discardRemediationLease(
 function releaseRemediationLease(path: string, token: string): void {
   // Do not vacate the canonical name until ownership has been established. In particular, an old
   // callback must never move a replacement lease out of the way merely to discover its token.
-  if (readRemediationLease(path)?.token !== token) return;
-  const claimedPath = `${path}.release.${token}`;
-  try {
-    atomicPublishRename(path, claimedPath, { rename: renameSync });
-  } catch {
-    return;
-  }
-  if (readRemediationLease(claimedPath)?.token === token) {
-    try {
-      unlinkSync(claimedPath);
-    } catch {
-      // A settled lease may already have been removed by shutdown cleanup.
+  const current = readRemediationLease(path);
+  if (current?.token !== token) {
+    if (current === undefined && pathExistsFailClosed(path)) {
+      throw new Error("Remediation lease release could not verify ownership.");
     }
     return;
   }
-  try {
-    // Restore a lease claimed by the wrong callback only when the canonical path is still free.
-    // `link` is the no-replace operation that `rename` does not provide portably.
-    publishFileWithoutReplacement(claimedPath, path);
+  const claimedPath = `${path}.release.${token}`;
+  atomicPublishRename(path, claimedPath, { rename: renameSync });
+  if (readRemediationLease(claimedPath)?.token === token) {
     unlinkSync(claimedPath);
-  } catch {
-    // A newer canonical lease wins. Preserve the displaced record for diagnosis instead of
-    // deleting a lease this callback does not own.
+    return;
   }
+  restoreClaimedRemediationLease(claimedPath, path);
+  throw new Error("Remediation lease release ownership changed.");
 }
 
 function publishRemediationLease(path: string, record: RemediationLeaseRecord): void {
@@ -597,7 +654,7 @@ function publishRemediationLease(path: string, record: RemediationLeaseRecord): 
   }
 }
 
-function acquireRemediationLease(
+function acquireRemediationLeaseRecord(
   context: ManagerContext,
   actionId: string,
 ): (() => void) | undefined {
@@ -626,6 +683,123 @@ function acquireRemediationLease(
     }
   }
   return undefined;
+}
+
+function openRemediationLeaseGuard(path: string): DatabaseSync | undefined {
+  const guardPath = join(dirname(path), ".keiko", "guards", basename(path));
+  assertSqliteStatePath(guardPath);
+  mkdirPrivate(dirname(guardPath));
+  assertSqliteStatePath(guardPath);
+  const guard = new DatabaseSync(guardPath);
+  try {
+    chmodIfPresent(guardPath, SNAPSHOT_FILE_MODE);
+    // This stable, zero-data inode is SQLite-owned: never unlink it or open it with raw fs reads.
+    // No schema, application records, WAL, quarantine or process-liveness inference belongs here.
+    guard.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+    return guard;
+  } catch (error) {
+    guard.close();
+    if (sqliteErrorLike(error).errcode === 5) return undefined;
+    throw error;
+  }
+}
+
+function acquireRemediationLease(
+  context: ManagerContext,
+  actionId: string,
+  correlationId?: string,
+): (() => void) | undefined {
+  const path = remediationLeasePath(context.stateDir, actionId);
+  const pending = context.remediationLeaseGuards.get(path);
+  if (pending?.releaseRequested === true) pending.settle();
+  const observation = {
+    leaseId: randomUUID(),
+    actionDigest: createHash("sha256").update(actionId, "utf8").digest("hex"),
+    correlationId,
+  };
+  const log = (state: UpdateRemediationLeaseState): void => {
+    recordRemediationLeaseActivity(context, observation, state);
+  };
+  let guard: DatabaseSync | undefined;
+  let release: (() => void) | undefined;
+  try {
+    guard = openRemediationLeaseGuard(path);
+    if (guard === undefined) {
+      log("busy");
+      return undefined;
+    }
+    release = acquireRemediationLeaseRecord(context, actionId);
+  } catch (error) {
+    log("failed");
+    throw error;
+  } finally {
+    if (release === undefined) guard?.close();
+  }
+  if (release === undefined) {
+    log("owner-held");
+    return undefined;
+  }
+  return retainRemediationLeaseGuard(context, path, guard, release, log);
+}
+
+function retainRemediationLeaseGuard(
+  context: ManagerContext,
+  path: string,
+  guard: DatabaseSync,
+  release: () => void,
+  log: (state: UpdateRemediationLeaseState) => void,
+): () => void {
+  const held: RemediationLeaseGuard = {
+    releaseRequested: false,
+    settle: (): void => {
+      if (context.remediationLeaseGuards.get(path) !== held) return;
+      held.releaseRequested = true;
+      try {
+        release();
+        if (guard.isOpen) guard.close();
+        context.remediationLeaseGuards.delete(path);
+        log("released");
+      } catch (error) {
+        // Retain this exact requested release for a later explicit retry; no background keeper.
+        log("failed");
+        throw error;
+      }
+    },
+  };
+  context.remediationLeaseGuards.set(path, held);
+  log("acquired");
+  return held.settle;
+}
+
+function recordRemediationLeaseActivity(
+  context: ManagerContext,
+  observation: {
+    readonly leaseId: string;
+    readonly actionDigest: string;
+    readonly correlationId: string | undefined;
+  },
+  state: UpdateRemediationLeaseState,
+): void {
+  try {
+    context.activityLog?.write(
+      updateRemediationLeaseEvent(observation.correlationId, {
+        leaseId: observation.leaseId,
+        actionDigest: observation.actionDigest,
+        state,
+      }),
+    );
+  } catch (error) {
+    emitServerDiagnostic(
+      context.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "update.remediation.lease",
+        source: "update-local-state",
+        error,
+        redact: (): string => "A bounded update diagnostic failed.",
+      }),
+    );
+  }
 }
 
 function overallHealth(stores: readonly UpdateStoreHealth[]): UpdateHealthState {
@@ -1549,7 +1723,7 @@ function inspectRuntimeState(context: ManagerContext): UpdateRuntimeStateInspect
         ? { status: "corrupt" }
         : { status: "unwritable" };
     }
-    const bounded = readBoundedRuntimeState(descriptor, opened.size);
+    const bounded = readBoundedStateFile(descriptor, opened.size);
     if (bounded === undefined) return { status: "corrupt" };
     rawBytes = bounded;
     raw = rawBytes.toString("utf8");
@@ -1770,6 +1944,7 @@ export function createUpdateLocalStateManager(
     processIdentity: options.processIdentity ?? PROCESS_START_IDENTITY,
     activityLog: options.activityLog,
     diagnostics: options.diagnostics,
+    remediationLeaseGuards: new Map(),
   };
   return {
     scanCompatibility: (impact): UpdateCompatibilityScan => scanCompatibility(context, impact),
@@ -1781,8 +1956,8 @@ export function createUpdateLocalStateManager(
     readRuntimeState: (): UpdateRuntimeState => readRuntimeState(context),
     inspectRuntimeState: (): UpdateRuntimeStateInspection => inspectRuntimeState(context),
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
-    acquireRemediationLease: (actionId): (() => void) | undefined =>
-      acquireRemediationLease(context, actionId),
+    acquireRemediationLease: (actionId, correlationId): (() => void) | undefined =>
+      acquireRemediationLease(context, actionId, correlationId),
     recordAuditEvent: (type, input, failure): AuditEventRecord =>
       recordAuditEvent(context, type, input, failure),
   };

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   updateLegacySnapshotImportedEvent,
   updateRuntimeActivityEvent,
+  updateRemediationLeaseEvent,
   type UpdateRuntimeActivityFields,
 } from "./update-runtime-activity.js";
 import {
@@ -11,6 +12,24 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 describe("update runtime activity event", () => {
+  it("resolves the body-free exclusive remediation lease proof", () => {
+    const event = updateRemediationLeaseEvent("remediation-lease-proof", {
+      leaseId: "lease-proof-1",
+      actionDigest: "a".repeat(64),
+      state: "acquired",
+    });
+    const persisted = expectActivityLogProof(
+      "update.remediation.lease.exclusive",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({
+      op: "update.remediation.lease",
+      correlationId: "remediation-lease-proof",
+      state: "acquired",
+      actionDigest: "a".repeat(64),
+    });
+  });
+
   it("resolves the update.runtime.event Activity Log proof for a non-failed state", () => {
     const fields: UpdateRuntimeActivityFields = {
       eventId: "runtime-evt-preflight-0001",

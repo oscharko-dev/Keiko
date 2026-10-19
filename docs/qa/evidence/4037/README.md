@@ -1672,3 +1672,26 @@ complete Activity Log/architecture/negative/release checks pass. Concurrent recl
 foreign process incarnation are separate open requirements. No acceptance ledger or frozen
 model-quality outcome changes. The previous PID-record proof additionally links its independent
 final3 comparison-deadline follow-up without rewriting its historical subset results.
+
+## Remediation exclusion and observable release recovery
+
+`remediation-lease-exclusion.json` binds the real multi-process failure and repair, actual
+permission errors and live unreadable legacy records. The existing manager now holds a stable
+per-action SQLite guard inside the existing denied `.keiko` boundary. JSON owner/uncertainty
+authority remains independent. Bounded descriptor reads distinguish malformed content from
+unobservable ownership; failed release retains its exact authorized callback for explicit retry.
+No schema, helper, background queue, prompt or liveness exception is introduced.
+
+Actual macOS ARM and Linux ARM controls under UID 1000 and UID 65534 cover exclusive admission,
+real SIGKILL/reap, positive successor recovery, two eight-contender rounds, permission recovery
+and protected legacy ownership. The stronger post-metadata schedule also passes; an explicitly
+labeled guardless counterfactual retains the final reader but reproduces two grants. Original
+v1/v2 fixtures, failures and budgets remain separate. These controls use a declared 1 ms test
+stale setting and 10 s phase horizons; the default 24-hour policy is unchanged.
+
+The complete server updater run passes 797 tests across 46 suites, with two existing skips.
+Complete typing, root/UI lint, real Sonar, fresh UI build/typecheck, assembled package surface,
+error observability, ADR indexing and all seven Activity Log checks pass. The canonical catch
+register shrinks by two retired entries. Independent reader/domain/formatter/source joins retain
+their precise controlled scopes. Actual installed version transitions, full native app ownership,
+visible UI/skill/browser acceptance, final CI/reviews and merge remain open.

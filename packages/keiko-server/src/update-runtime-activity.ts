@@ -18,6 +18,55 @@ import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
+export type UpdateRemediationLeaseState =
+  "acquired" | "busy" | "owner-held" | "released" | "failed";
+
+const UPDATE_REMEDIATION_LEASE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.remediation.lease",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-runtime-activity.updateRemediationLeaseEvent",
+  fields: {
+    leaseId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 },
+    actionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["acquired", "busy", "owner-held", "released", "failed"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-runtime"],
+  proofIds: ["update.remediation.lease.exclusive"],
+  releaseImpact: "patch",
+});
+
+export function updateRemediationLeaseEvent(
+  correlationId: string | undefined,
+  fields: {
+    readonly leaseId: string;
+    readonly actionDigest: string;
+    readonly state: UpdateRemediationLeaseState;
+  },
+): SecurityLogEvent {
+  return activityLogEvent(
+    UPDATE_REMEDIATION_LEASE_OPERATION,
+    {
+      correlationId: correlationIdOrUnknown(correlationId),
+      level: fields.state === "failed" ? "warn" : "info",
+      ...(fields.state === "failed" ? { errorKind: "internal" } : {}),
+    },
+    { ...fields, completeness: "complete", loss: "none" },
+  );
+}
+
 export interface UpdateRuntimeActivityFields {
   readonly eventId: string;
   readonly type: UpdateRuntimeEventType;

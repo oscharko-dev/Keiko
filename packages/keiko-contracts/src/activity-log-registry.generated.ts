@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a4f83221be504dfb75affbdb19e9233e1c63375e14d7cb7096a7062a7f06de5b" as const;
+  "c5319259b89f60074d425bd7badfde796b040fc403a8d16d66f200ab23644fa8" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -39543,7 +39543,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["update.install-mode.detected", "update.runtime.event"],
+        state: ["update.install-mode.detected", "update.remediation.lease", "update.runtime.event"],
         end: [],
         failure: [],
         loss: [],
@@ -39554,12 +39554,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "update.remediation.lease",
+          mode: "correlation",
+        },
+        {
           op: "update.runtime.event",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["update.install-mode.detected", "update.runtime.event"],
+      resourceSignals: [
+        "update.install-mode.detected",
+        "update.remediation.lease",
+        "update.runtime.event",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -39619,6 +39627,48 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["update.install-mode.detected.body-free"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "update.remediation.lease",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "actionDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "leaseId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["update.remediation.lease.exclusive"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42659,6 +42709,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "update.portable-asset.redirect-refused": "runtime-packages",
     "update.portable-fetch.failed": "runtime-packages",
     "update.release-trust.verify": "runtime-packages",
+    "update.remediation.lease": "runtime-packages",
     "update.runtime.event": "runtime-packages",
     "update.runtime.legacy-import-deferred": "ui",
     "update.runtime.legacy-snapshot-imported": "runtime-packages",
