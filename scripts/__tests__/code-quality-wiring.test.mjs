@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(117);
+    expect(production.responsibilities).toHaveLength(118);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -851,7 +851,14 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 117, incomplete: 0, invalid: 0, qualified: 117, pending: 0, rejected: 0 },
+      counts: {
+        ready: policy.responsibilities.length,
+        incomplete: 0,
+        invalid: 0,
+        qualified: policy.responsibilities.length,
+        pending: 0,
+        rejected: 0,
+      },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -896,6 +903,44 @@ function assertPolicyOperationOrder(job) {
 }
 
 describe("complete production qualification owner", () => {
+  it("binds the optional registration validator to its real public consumer and proofs", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const record = policy.responsibilities.find(
+      ({ id }) => id === "support-public-structural-registration-validator",
+    );
+    expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+    expect(record.kind).toBe("validator");
+    expect(record.rawObjectInput).toBe(true);
+    expect(record.rules).toEqual(["anti-slop/no-object-parameters"]);
+    expect(record.transform).toEqual({
+      consumerPath: "packages/keiko-activity-log/src/server-logger.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/observability",
+      exportName: "activityLogEventRegistration",
+    });
+    expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+    expect(record.output).toEqual(record.transform);
+    expect(record.consumer).toEqual({
+      consumerPath: "packages/keiko-activity-log/src/index.ts",
+      specifier: "./server-logger.js",
+      exportName: "isMandatoryActivityLogEvent",
+      owner: "@oscharko-dev/keiko-activity-log",
+    });
+    expect(record.proofs).toEqual([
+      "packages/keiko-contracts/src/observability.test.ts",
+      "packages/keiko-activity-log/src/server-logger.test.ts",
+    ]);
+    expect(record.proofAssertions).toHaveLength(6);
+    expect(record.proofAssertions).toContainEqual({
+      path: "packages/keiko-activity-log/src/server-logger.test.ts",
+      testName:
+        "Support optional registration mandatory consumer public: refuses malformed loss registration before mandatory classification",
+    });
+    for (const assertion of record.proofAssertions) {
+      expect(record.proofs).toContain(assertion.path);
+      expect(assertion.testName.length).toBeGreaterThan(0);
+    }
+  });
+
   it("admits a constructed exact validator shape without claiming proof execution", () => {
     const { report, policy, policyBytes } = qualificationValidatorFixture();
     expect(() => assertRepositoryQualification(report, policy, policyBytes)).not.toThrow();
@@ -906,7 +951,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 117;
+        r.responsibilities.counts.pending = r.responsibilities.assessments.length;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
