@@ -1334,3 +1334,16 @@ consumer guards absence and catches unreadable attachment access. A structural v
 canonical registration or persistence authority; the physical writer still revalidates separately.
 This option grants neither private helper parameters nor call-result origins, descriptor transport,
 or shared raw carriers. It is a proved boundary responsibility, not an implementation-body theorem.
+
+### Workflow handoff request public admission
+
+The `workflow-handoff-request-public-parser` responsibility binds only the unknown input of
+`parseWorkflowHandoffRequest` to its canonical public result and the direct
+`parsePublicHandoffWitness` proof. Its fifteen exact selected assertions cover source/public
+identity, ordered diagnostics and eager reads, independent result and nested declarations,
+shaped-token nonauthority, and all five physical array fields despite a replaced iterator.
+The complete owning test file remains the proof owner. Shared admission helpers also serve the
+legacy validators: this record does not confer helper, dictionary, runtime-typeof, token
+verification, server-consumer, or workflow authority. The consumer migration remains separate.
+Declaration is not coverage; default structural assessment, actual semantic proof execution and
+current native correspondence must succeed before this boundary adapts a finding.

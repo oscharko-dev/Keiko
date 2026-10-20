@@ -6337,6 +6337,98 @@
           "testName": "Support logger raw metadata preservation public: preserves malformed raw metadata and the existing final mismatch"
         }
       ]
+    },
+    {
+      "id": "workflow-handoff-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workflow-handoff",
+        "exportName": "parseWorkflowHandoffRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workflow-handoff",
+        "exportName": "parseWorkflowHandoffRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workflow-handoff",
+        "exportName": "parseWorkflowHandoffRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workflow-handoff",
+        "exportName": "parsePublicHandoffWitness",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/workflow-handoff.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "source WorkflowHandoff admission returns the original request and nested identities without normalizing optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "source WorkflowHandoff admission refuses raw malformed inputs with the unchanged legacy diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "source WorkflowHandoff admission retains eager read phases and ordered diagnostics after an earlier scope refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "public WorkflowHandoff admission returns the original request and nested identities without normalizing optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "public WorkflowHandoff admission refuses raw malformed inputs with the unchanged legacy diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "public WorkflowHandoff admission retains eager read phases and ordered diagnostics after an earlier scope refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "retains independent source and public handoff admission result declarations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "retains strict nested source and public scope declarations after admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "source WorkflowHandoff admission admits healthy observed inputs without a second pass and does not authenticate a shaped token"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "public WorkflowHandoff admission admits healthy observed inputs without a second pass and does not authenticate a shaped token"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "refuses hidden physical editablePaths members despite a caller iterator"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "refuses hidden physical readOnlyPaths members despite a caller iterator"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "refuses hidden physical evidenceAtomIds members despite a caller iterator"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "refuses hidden physical expectedChecks members despite a caller iterator"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workflow-handoff.test.ts",
+          "testName": "refuses hidden physical unknowns members despite a caller iterator"
+        }
+      ]
     }
   ]
 }

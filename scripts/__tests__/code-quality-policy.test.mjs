@@ -304,6 +304,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "client-diagnostic-ingress-route-validator",
       "client-binding-ingress-route-validator",
       "support-public-structural-registration-validator",
+      "workflow-handoff-request-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);

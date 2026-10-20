@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(118);
+    expect(production.responsibilities).toHaveLength(119);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
