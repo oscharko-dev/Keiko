@@ -119,7 +119,7 @@ describe("M1 — empty startup layout", () => {
       );
       await user.click(await screen.findByRole("button", { name: "Open a new window" }));
       expect(openPalette).toHaveBeenCalledTimes(1);
-      await user.click(screen.getByRole("button", { name: "New window", exact: true }));
+      await user.click(screen.getByRole("button", { name: "New window" }));
       expect(openPalette).toHaveBeenCalledTimes(2);
       expect(diagnostics).toEqual([
         "Workspace window palette opened.",

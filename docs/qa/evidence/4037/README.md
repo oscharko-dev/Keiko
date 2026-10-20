@@ -1990,3 +1990,21 @@ The three linked records bind each causal scope and its limits:
 
 No skill, historical-corpus, installed-update, SSD, full browser, overall acceptance or merge
 clearance is inferred from this checkpoint. The acceptance ledger remains unchanged.
+
+## Checkpoint 74 — complete UI typing before renewed qualification
+
+The fresh production build catches an unsupported Playwright `exact` option in a new React Testing
+Library test query. Checkpoint73 ran package/root typing but omitted the required separate UI
+workspace typecheck. That omission is retained explicitly; its green runtime tests do not establish
+UI type validity. The explicit UI typecheck reproduces TS2769 on the unchanged signed73 source.
+
+The test now uses the supported string-name query. Both clicks, their individual callback counts
+and content-free diagnostic assertions remain unchanged. Product runtime sources, skills, prompts
+and model outputs are unchanged. Explicit UI typing, the actual production UI build, full UI lint,
+editor evidence and actual Sonar pass. The repeated full UI coverage run passes 10,857 tests in
+563 files with one existing skip. The obsolete source73 AMD64 run is cancelled during preparation
+and receives no acceptance credit; the corrected source requires a new uninstrumented run.
+
+[`ui-test-typing.json`](ui-test-typing.json) binds the failure, corrected test and actual checks.
+No functional acceptance, native transition, skill comparison or merge claim follows from this
+small correction.
