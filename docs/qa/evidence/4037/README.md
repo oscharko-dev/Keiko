@@ -1,5 +1,24 @@
 # Chat/Files qualification observations
 
+## Checkpoint 78: bound malformed YAML header classification
+
+A repeated near-miss block-header comment made the fallback classifier rescan the same suffix.
+The public redactor exceeded the existing two-second child deadline at about 196 KB. The replacement
+scans line endings and disjoint header prefixes once, preserving the original classification,
+private-value protection and all existing grants. The same focused failure now passes under the
+unchanged deadline. Code-redaction revision 2 uses the existing Activity Log fields.
+
+The broad affected run passed 8,991 tests with zero failures and four existing skips. Strict type,
+scoped lint/format, architecture and negative controls, the Activity Log aggregate, ADR index and
+the real local Sonar analyzer passed. Independent comparison found zero classification changes
+across 679,255 cases. These are bounded technical results, not complete functional acceptance.
+
+[`bounded-yaml-classification.json`](bounded-yaml-classification.json) binds source hashes,
+failure-first evidence, freezes and actual local receipts. The original UI campaign remains on
+published checkpoint 77 with unchanged questions, skills and grants. Its first-draft failures remain
+failed; neither skill is accepted. Copy Answer preservation, staged vendor closure, remaining
+browser/search/context/updater qualification, final current-head CI and merge remain open.
+
 ## Checkpoint 77: preserve source syntax and private literal protection
 
 The shared redactor previously changed a TypeScript parameter type into a placeholder while

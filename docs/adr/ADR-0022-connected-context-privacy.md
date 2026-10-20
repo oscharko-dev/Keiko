@@ -803,7 +803,7 @@ the next file. Expected read failures retain healthy sibling evidence and emit
 `search.symbol-line.unavailable` through the existing Activity Log, with a path digest, closed
 failure reason and cause metadata. Unexpected programming failures retain their original exception
 and reach the terminal retrieval diagnostic. Secret redaction uses
-one private-key boundary scan and scheme-start guards, including conservative redaction of an
+linear private-key boundary scans and scheme-start guards, including conservative redaction of an
 unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
 Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
 delimiters without retaining its body or columns. Facts between separate secret blocks therefore
@@ -826,6 +826,10 @@ redaction candidate. A malformed TypeScript fragment remains unavailable when it
 escape, unsupported quoting, a sensitive-name plus literal candidate or a strict-redaction change.
 A sensitive word alone, or a public literal without a secret candidate, is not a private value.
 These are source observations, not compilation certificates.
+Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
+once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
+body. Classification, privacy and source-size grants stay unchanged; revision 2 identifies this
+bounded implementation on the existing redaction Activity Log fields.
 All discovery, search, import-graph and persisted-index inputs use this owner after the existing
 admission checks. Index snapshot version 10 invalidates earlier redacted records. The connected
 evidence-details Activity Log records the projection revision without source bodies or paths.

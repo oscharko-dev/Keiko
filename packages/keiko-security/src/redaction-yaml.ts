@@ -30,8 +30,29 @@ export function isYamlDocument(text: string): boolean {
   const document = api.parseDocument(text, { keepSourceTokens: true });
   return (
     (document.errors.length === 0 && complexYaml(document.contents, text)) ||
-    /:[ \t]*[|>][+\d-]*[ \t]*(?:#.*)?(?:\r?\n|$)/u.test(text)
+    hasBlockScalarHeader(text)
   );
+}
+
+/** Scan each line and header once. A comment's near-miss terminator must not cause every
+ * preceding candidate to rescan the same remaining body. Preserve the original dot boundaries. */
+function hasBlockScalarHeader(text: string): boolean {
+  let start = 0;
+  for (const ending of text.matchAll(/[\r\n\u2028\u2029]/gu)) {
+    const end = ending.index;
+    const validEnding = ending[0] === "\n" || text.slice(end, end + 2) === "\r\n";
+    if (validEnding && hasHeaderBeforeLineEnd(text.slice(start, end))) return true;
+    start = end + 1;
+  }
+  return hasHeaderBeforeLineEnd(text.slice(start));
+}
+
+function hasHeaderBeforeLineEnd(line: string): boolean {
+  for (const header of line.matchAll(/:[ \t]*[|>][+\d-]*[ \t]*/gu)) {
+    const end = header.index + header[0].length;
+    if (end === line.length || line.charAt(end) === "#") return true;
+  }
+  return false;
 }
 
 function documentTree(text: string): Document {
