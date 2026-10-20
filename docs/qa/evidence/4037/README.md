@@ -2437,3 +2437,25 @@ predeclared bounded-feedback repair plan is unexecuted. No skill benefit or mode
 [`document-shorthand-admission.json`](document-shorthand-admission.json) binds the repaired scope,
 the interrupted campaign and the outstanding redaction defect. Overall acceptance and merge
 remain open.
+
+## Checkpoint 91 — stable controls during late readiness
+
+A real BFF response arriving between native pointer-down and pointer-up moved the repository
+trigger by 18.5 px in English and 33 px in a 300 px German frame. A separate bounded readiness/transcript
+pane now absorbs that reflow while the existing interaction dock stays in its own grid track.
+An explicit transcript minimum preserves full visibility when the readiness disclosure expands.
+Visible polite/atomic attention, native focus/scrolling and disclosure semantics remain intact.
+
+The two concurrent gestures fail on the original layout; settled controls pass. Final qualification
+passes 121 Chromium cases, all 119 WebKit smoke cases and both final six-case fixture runs. Rejected
+layouts and initial keyboard-fixture failures remain recorded; the separate keyboard scenario waits
+for observable channel settlement, while concurrent-response cases keep their intentional race.
+No product scrolling hook, force click, timeout, coverage floor or update eligibility is changed.
+
+The complete release-coverage chain passes on signed e0106e65; final UI coverage, all coverage
+floors, strict typing, lint, formatting, actual Sonar, architecture, source/operation inventories,
+suite wiring and static-export evidence pass on the corrected presentation source. The source-bound
+[repair packet](workbench-readiness-layout.json) records exact receipts, geometry and limits.
+Required final-head hosted checks, review settlement, protected integration and publication remain
+delivery conditions. Original unfinished acceptance stays in follow-up #4051; the subsequent SSD
+observation must establish the running version and a fresh report through the actual launcher.

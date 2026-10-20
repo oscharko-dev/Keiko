@@ -406,6 +406,21 @@
   background: transparent;
 }
 
+/* Readiness can reflow without moving controls in the separate composer grid row. */
+.cmpSessionContent {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* Keep a usable transcript line below its padding when readiness expands. */
+  grid-template-rows: minmax(0, auto) minmax(3rem, 1fr);
+  overflow: clip;
+}
+
+.cmpSessionContent > :first-child {
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .sessionStream {
   display: flex;
   width: 100%;

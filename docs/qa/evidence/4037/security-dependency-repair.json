@@ -56,7 +56,7 @@
     },
     {
       "path": "release-impact.catalog.json",
-      "sha256": "598a3d2af2fe9db7f71cbed8bdce87fede1bdb535f841dc1667cf926fa5fe999"
+      "sha256": "753631b7ddac0dd3cc453cab0957ba055ab084f75d569bbeced1b08601a16d24"
     },
     {
       "path": "packages/keiko-activity-log/src/reader/support-code-inventory.generated.ts",
