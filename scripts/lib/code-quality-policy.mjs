@@ -183,6 +183,7 @@ function validObjectValidatorOption(record) {
     record.rawObjectInput === true &&
     !Object.hasOwn(record, "additionalObservationForms") &&
     !Object.hasOwn(record, "directRawCheckerInputs") &&
+    !Object.hasOwn(record, "metadataSourceInput") &&
     record.rules.length === 1 &&
     record.rules[0] === "anti-slop/no-object-parameters" &&
     record.input?.parameterIndex === 0 &&
@@ -214,7 +215,16 @@ function validMetadataSourceOption(record) {
   );
 }
 
+function validOwnedPredicateOption(record) {
+  return (
+    record.kind === "validator" &&
+    record.ownedPredicateStage === true &&
+    validObjectValidatorOption(record)
+  );
+}
+
 function validObservationOptions(record) {
+  if (Object.hasOwn(record, "ownedPredicateStage")) return validOwnedPredicateOption(record);
   if (Object.hasOwn(record, "metadataSourceInput")) return validMetadataSourceOption(record);
   if (record.kind === "validator" && Object.hasOwn(record, "rawObjectInput"))
     return validObjectValidatorOption(record);
@@ -284,6 +294,7 @@ function responsibilityKeys(record) {
     keys.push("proofAssertions");
   for (const option of [
     "rawObjectInput",
+    "ownedPredicateStage",
     "additionalObservationForms",
     "directRawCheckerInputs",
     "metadataSourceInput",
@@ -398,6 +409,7 @@ function observationOptionShrank(current, record) {
       canonicalIdentity(current.metadataSourceInput) !==
         canonicalIdentity(record.metadataSourceInput)) ||
     (record.rawObjectInput === true && current.rawObjectInput !== true) ||
+    (record.ownedPredicateStage === true && current.ownedPredicateStage !== true) ||
     (record.directRawCheckerInputs === true && current.directRawCheckerInputs !== true) ||
     (record.additionalObservationForms ?? []).some(
       (form) => !(current.additionalObservationForms ?? []).includes(form),

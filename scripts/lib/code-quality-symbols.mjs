@@ -3902,7 +3902,121 @@ function optionalOwnedObjectResult(compiler, state, signature) {
   );
 }
 
-function objectValidatorFacts(compiler, identity) {
+function ownedStageCheck(state, condition, local) {
+  if (
+    !ts.isBinaryExpression(condition) ||
+    condition.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken
+  )
+    return null;
+  const present = rawParentheses(condition.left);
+  const check = rawParentheses(condition.right);
+  if (
+    !ts.isBinaryExpression(present) ||
+    present.operatorToken.kind !== ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+    !observationIdentifier(state, present.left, local) ||
+    !rawReaderAbsent(state, present.right) ||
+    !typedPredicateCall(check)
+  )
+    return null;
+  return check;
+}
+
+function ownedStageAssignment(callable) {
+  if (!directDiagnosticCallable(callable)) return null;
+  const flow = diagnosticEnvelopeAssignment(callable);
+  return flow && !flow.local.type && ts.isIdentifier(flow.local.name) ? flow : null;
+}
+
+function ownedStageFlow(state) {
+  const flow = ownedStageAssignment(state.callable);
+  if (!flow) return null;
+  const check = ownedStageCheck(state, rawParentheses(flow.result.condition), flow.local);
+  if (
+    !check ||
+    !observationIdentifier(state, check.arguments[0], flow.local) ||
+    !observationIdentifier(state, flow.result.whenTrue, flow.local) ||
+    !rawReaderAbsent(state, flow.result.whenFalse) ||
+    !typedPredicateCall(flow.local.initializer) ||
+    !observationIdentifier(state, flow.local.initializer.arguments[0], state.callable.parameters[0])
+  )
+    return null;
+  return { read: flow.local.initializer, check };
+}
+
+function ownedStageCallable(state, call) {
+  const declaration = typedPredicateDeclaration(state, call);
+  const signature = declaration && typedNamedCallable(state.context, declaration);
+  if (
+    !signature ||
+    signature.thisParameter ||
+    exportedDeclaration(declaration) ||
+    !observationParameter(declaration.parameters[0], ts.SyntaxKind.ObjectKeyword) ||
+    state.context.checker.getResolvedSignature(call) !== signature
+  )
+    return null;
+  const identity = canonicalDeclaration(state.compiler, declaration, null);
+  return identity.owner === state.identity.owner
+    ? { ...state, callable: declaration, declaration, identity, signature }
+    : null;
+}
+
+function ownedStageRawResult(state) {
+  const annotation = state.callable.type;
+  if (
+    !ts.isUnionTypeNode(annotation) ||
+    annotation.types.length !== 2 ||
+    !annotation.types.some((type) => type.kind === ts.SyntaxKind.ObjectKeyword) ||
+    !annotation.types.some((type) => type.kind === ts.SyntaxKind.UndefinedKeyword)
+  )
+    return false;
+  const result = state.context.checker.getReturnTypeOfSignature(state.signature);
+  const kinds = new Set([ts.TypeFlags.NonPrimitive, ts.TypeFlags.Undefined]);
+  return (
+    result.isUnion() &&
+    result.types.length === 2 &&
+    result.types.every((arm) => kinds.has(arm.flags))
+  );
+}
+
+function ownedStagePredicate(state, call, result) {
+  const predicate = ownedStageCallable(state, call);
+  if (!predicate) return null;
+  const narrowed = typedIdentifierPredicate(state.context, predicate.callable, predicate.signature);
+  if (!narrowed || narrowed.type !== result) return null;
+  const references = state.nodes.filter((node) => helperReference(predicate, node));
+  return references.length === 1 &&
+    references[0] === call.expression &&
+    referenceCall(references[0]) === call
+    ? predicate
+    : null;
+}
+
+function ownedPredicateStageSlot(compiler, root, signature) {
+  const state = { ...root, compiler, nodes: sourceNodes(compiler, root.source) };
+  const flow = ownedStageFlow(state);
+  const reader = flow && ownedStageCallable(state, flow.read);
+  const output = state.context.checker.getReturnTypeOfSignature(signature);
+  const defined = output.types.find((arm) => arm.flags !== ts.TypeFlags.Undefined);
+  const predicate =
+    reader && ownedStageRawResult(reader) && ownedStagePredicate(state, flow.check, defined);
+  if (!predicate) throw new TypeError("unsupported-owned-predicate-stage");
+  return {
+    ...annotationSlot(
+      predicate.context,
+      predicate.source,
+      predicate.callable.parameters[0].type,
+      predicate.identity,
+      "parameter",
+      0,
+    ),
+    rule: "anti-slop/no-object-parameters",
+    rawObjectValidatorInput: true,
+    ownedPredicateStageInput: true,
+  };
+}
+
+function objectValidatorFacts(compiler, identity, ownedPredicateStage = false) {
+  compiler.assertCurrent();
   const state = { ...declarationCallable(compiler, identity), identity };
   const signatures = state.context.checker.getTypeAtLocation(state.callable).getCallSignatures();
   const signature = signatures.length === 1 ? signatures[0] : undefined;
@@ -3922,11 +4036,15 @@ function objectValidatorFacts(compiler, identity) {
     "parameter",
     0,
   );
-  compiler.assertCurrent();
-  return {
-    identity,
-    slots: [{ ...slot, rule: "anti-slop/no-object-parameters", rawObjectValidatorInput: true }],
-  };
+  const slots = [
+    { ...slot, rule: "anti-slop/no-object-parameters", rawObjectValidatorInput: true },
+  ];
+  try {
+    if (ownedPredicateStage) slots.push(ownedPredicateStageSlot(compiler, state, signature));
+    return { identity, slots };
+  } finally {
+    compiler.assertCurrent();
+  }
 }
 
 function observationConsumer(context, source, name) {
@@ -4107,7 +4225,11 @@ function validationBoundaryOperations(compiler) {
   return {
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     parserBinding: (request, producer) => parserBinding(compiler, request, producer),
-    objectValidatorFacts: (identity) => objectValidatorFacts(compiler, identity),
+    objectValidatorFacts: (identity, ownedPredicateStage = false) => {
+      if (typeof ownedPredicateStage !== "boolean")
+        throw new TypeError("unsupported-owned-predicate-stage-option");
+      return objectValidatorFacts(compiler, identity, ownedPredicateStage);
+    },
     metadataSourceFacts: (identity) => metadataSourceFacts(compiler, identity),
     metadataSourceConsumer: (request) => resolveProofConsumer(compiler, request, false),
     metadataSourceBinding: (primary, companion, producer, owner) =>

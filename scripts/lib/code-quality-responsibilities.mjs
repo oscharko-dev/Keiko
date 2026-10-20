@@ -191,6 +191,23 @@ function propertyObservationSlots(resolver, record, roles) {
     );
 }
 
+function objectValidatorSlots(resolver, record, identity) {
+  const facts = resolver.objectValidatorFacts(identity, record.ownedPredicateStage === true);
+  return facts.slots.map((slot) =>
+    slot.ownedPredicateStageInput
+      ? {
+          ...slot,
+          predicateStageRoot: {
+            identity,
+            index: 0,
+            recordId: record.id,
+            proofAssertions: structuredClone(record.proofAssertions),
+          },
+        }
+      : slot,
+  );
+}
+
 function responsibilitySlots(resolver, record, roles) {
   if (roles.input.identities.length !== 1 || roles.output.identities.length !== 1)
     throw new TypeError("ambiguous-responsibility-producer");
@@ -205,7 +222,7 @@ function responsibilitySlots(resolver, record, roles) {
       resolver.canonicalDecoderFacts(roles.input.identities[0], roles.output.identities[0]).slot,
     ];
   if (record.kind === "validator" && record.rawObjectInput === true)
-    return resolver.objectValidatorFacts(roles.input.identities[0]).slots;
+    return objectValidatorSlots(resolver, record, roles.input.identities[0]);
   return rawResponsibilitySlots(resolver, record, roles);
 }
 
@@ -361,7 +378,10 @@ function qualifiedAdaptationSlot(assessment, slot, assessments) {
     assessment.semantic !== "qualified"
   )
     return false;
-  return objectFormQualified(assessment, slot, assessments);
+  return (
+    qualifiedPredicateStageRoot(assessment, slot, assessments) &&
+    objectFormQualified(assessment, slot, assessments)
+  );
 }
 
 function adaptedFinding(finding, assessments) {
@@ -450,6 +470,21 @@ function objectProofsCompleted(required, record) {
   return (
     JSON.stringify(record.proofAssertions) ===
     JSON.stringify(required.map((entry) => ({ ...entry, status: "passed" })))
+  );
+}
+
+function qualifiedPredicateStageRoot(assessment, slot, assessments) {
+  if (!slot.ownedPredicateStageInput) return true;
+  const root = slot.predicateStageRoot;
+  if (!root || root.recordId !== assessment.id) return false;
+  const parents = assessments.filter((entry) => entry.id === root.recordId);
+  return (
+    parents.length === 1 &&
+    assessment.structural === "ready" &&
+    assessment.semantic === "qualified" &&
+    assessment.consumerBinding?.bound === true &&
+    objectRootIdentity(root, assessment, slot) &&
+    objectProofsCompleted(root.proofAssertions, assessment)
   );
 }
 

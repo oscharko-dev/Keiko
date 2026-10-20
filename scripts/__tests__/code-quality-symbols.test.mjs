@@ -3501,3 +3501,74 @@ describe("raw metadata source facts and bounded consumers (#3918)", () => {
     },
   );
 });
+
+describe("owned structural predicate stage facts (#3918)", () => {
+  it("adds only the private owned predicate input under explicit opt-in", async () => {
+    const own = createObjectValidatorFixture("valid", true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const original = own.resolver.objectValidatorFacts(identity);
+    expect(original.slots).toHaveLength(1);
+    const expanded = own.resolver.objectValidatorFacts(identity, true);
+    expect(expanded.slots).toHaveLength(2);
+    expect(expanded.slots[0]).toEqual(original.slots[0]);
+    expect(expanded.slots[1]).toMatchObject({
+      index: 0,
+      rule: "anti-slop/no-object-parameters",
+      rawObjectValidatorInput: true,
+      ownedPredicateStageInput: true,
+    });
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    expect(expanded.slots[1].start).toBe(source.indexOf("view: object") + "view: ".length);
+    expect(source.slice(expanded.slots[1].start, expanded.slots[1].end)).toBe("object");
+  });
+
+  it.each([
+    [
+      "different owned predicate target",
+      (source) =>
+        source.replace("view is View", "view is OtherView") +
+        '\ninterface OtherView { readonly owner: string; readonly lifecycle: "loss" | "state" }',
+      "unsupported-owned-predicate-stage",
+    ],
+    [
+      "unchecked raw return",
+      (source) =>
+        source.replace(
+          "export function validate(input: object): View | undefined { const view = raw(input); return view !== undefined && complete(view) ? view : undefined; }",
+          "export function validate(input: object): object | undefined { return raw(input); }",
+        ),
+      "unsupported-object-validator-boundary",
+    ],
+    [
+      "private predicate escape",
+      (source) => source + "\nconst callbacks = [complete]; void callbacks;",
+      "unsupported-owned-predicate-stage",
+    ],
+  ])("withholds the new stage for %s", async (_name, mutate, reason) => {
+    const own = createObjectValidatorFixture("valid", true);
+    fixtures.push(own);
+    const path = "packages/alpha/src/owner.ts";
+    const original = readFileSync(join(own.root, path), "utf8");
+    const changed = mutate(original);
+    expect(changed).not.toBe(original);
+    own.put(path, changed);
+    emitSymbolFixture(own.root);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(() => own.resolver.objectValidatorFacts(identity, true)).toThrow(reason);
+  });
+
+  it("refuses currentness drift before returning an owned predicate fact", async () => {
+    const own = createObjectValidatorFixture("valid", true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const path = join(own.root, identity.producer.path);
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => own.resolver.objectValidatorFacts(identity, true)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+});

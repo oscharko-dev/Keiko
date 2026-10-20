@@ -1616,7 +1616,7 @@ it("object boundary refuses malformed view before use", () => {
 `;
 }
 
-export function createObjectValidatorFixture(variant = "valid") {
+export function createObjectValidatorFixture(variant = "valid", ownedPredicateStage = false) {
   return assembleResponsibilityFixture((own) => {
     const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
     config.exclude = ["**/*.test.ts"];
@@ -1628,6 +1628,7 @@ export function createObjectValidatorFixture(variant = "valid") {
       'import { validate, consume } from "alpha/runtime"; export const view = validate({}); export const kept = consume({});',
     );
     const record = objectValidatorRecord();
+    if (ownedPredicateStage) record.ownedPredicateStage = true;
     const policy = responsibilityPolicy([record]);
     activateResponsibilityFixtureRules(policy, record);
     own.put("scripts/code-quality-policy.json", policy);

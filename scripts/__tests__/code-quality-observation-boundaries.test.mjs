@@ -225,8 +225,8 @@ describe("direct whole-receiver observation qualification", () => {
 });
 
 // Browser declarations belong to the actual Vitest proof context, not structural admission.
-async function objectValidatorSemanticFixture(variant = "valid") {
-  const own = createObjectValidatorFixture(variant);
+async function objectValidatorSemanticFixture(variant = "valid", ownedPredicateStage = false) {
+  const own = createObjectValidatorFixture(variant, ownedPredicateStage);
   await installSemanticFixtureTools(own);
   const path = "packages/alpha/tsconfig.json";
   const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
@@ -471,6 +471,111 @@ describe("raw metadata source responsibility (#3918)", () => {
       expect(
         qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
       ).toBe(true);
+    },
+  );
+});
+
+describe("owned structural predicate stage responsibility (#3918)", () => {
+  it("adds the stage to the same record without rebinding its historical identity", () => {
+    const previous = responsibilityPolicy([objectValidatorRecord()]);
+    const current = structuredClone(previous);
+    current.responsibilities[0].ownedPredicateStage = true;
+    expect(validatePolicy(current, [previous])).toEqual([]);
+    expect(validatePolicy(previous, [current])).toEqual(["responsibility-shrank"]);
+    for (const mutate of [
+      (record) => {
+        record.ownedPredicateStage = false;
+      },
+      (record) => {
+        delete record.rawObjectInput;
+      },
+      (record) => {
+        record.kind = "raw-property-observation";
+      },
+      (record) => {
+        record.directRawCheckerInputs = true;
+      },
+    ]) {
+      const invalid = structuredClone(current);
+      mutate(invalid.responsibilities[0]);
+      expect(validatePolicy(invalid)).not.toEqual([]);
+    }
+  });
+
+  it("requires completed same-parent proof facts on both adaptation dispatch paths", async () => {
+    const own = createObjectValidatorFixture("valid", true);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const parent = report.assessments[0];
+    expect(parent.structural).toBe("ready");
+    expect(parent.slots).toHaveLength(2);
+    const stage = parent.slots[1];
+    // Constructed non-object findings isolate dispatch, not native slot eligibility.
+    const finding = {
+      path: stage.path,
+      rule: "anti-slop/no-known-value-widening",
+      line: stage.line,
+      column: stage.column,
+    };
+    for (const kind of ["validator", "public-parser"]) {
+      const slot = { ...stage, rule: finding.rule };
+      const assessment = {
+        ...parent,
+        kind,
+        slots: [slot],
+        proofs: parent.proofs.map((proof) => ({ ...proof, executed: true })),
+        proofAssertions: own.record.proofAssertions.map((proof) => ({
+          ...proof,
+          status: "passed",
+        })),
+      };
+      if (kind === "public-parser") slot.contributingResponsibilityIds = [assessment.id];
+      const assessed = () =>
+        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+          .violations;
+      expect(assessed()).toEqual([finding]);
+      assessment.semantic = "qualified";
+      expect(assessed()).toEqual([]);
+      const completed = assessment.proofAssertions;
+      assessment.proofAssertions = [];
+      expect(assessed()).toEqual([finding]);
+      assessment.proofAssertions = completed;
+      slot.predicateStageRoot = { ...slot.predicateStageRoot, recordId: "other-parent" };
+      expect(assessed()).toEqual([finding]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "retains the owned predicate slot through real parent public proof completion",
+    async () => {
+      const own = await objectValidatorSemanticFixture("valid", true);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      expect(pending.assessments[0].slots).toHaveLength(2);
+      const slot = pending.assessments[0].slots[1];
+      const finding = { path: slot.path, rule: slot.rule, line: slot.line, column: slot.column };
+      expect(adaptResponsibilityDiagnostics({ violations: [finding] }, pending).violations).toEqual(
+        [finding],
+      );
+      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
+      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+      expect(
+        adaptResponsibilityDiagnostics({ violations: [finding] }, qualified).violations,
+      ).toEqual([]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "withholds actual parent qualification for an unchecked structural predicate",
+    async () => {
+      const own = await objectValidatorSemanticFixture("unchecked", true);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      expect(pending.assessments[0].slots).toHaveLength(2);
+      await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+        "semantic-proof-execution-failed",
+      );
     },
   );
 });
