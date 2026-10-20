@@ -1,3 +1,4 @@
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
@@ -237,6 +238,7 @@ describe("retrieveConnectedContextPack Activity Log proofs", () => {
       formatActivityLogProofLine(evidenceDetails ?? {}),
     );
     expect(evidenceProof).toMatchObject({
+      codeRedactionRevision: CODE_REDACTION_REVISION,
       correlationId: CORRELATION_ID,
       scopeIdentitySha256: startedProof.scopeIdentitySha256,
       queryIdentitySha256: startedProof.queryIdentitySha256,

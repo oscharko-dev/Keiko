@@ -289,7 +289,9 @@
     "eslint-plugin-react@7.37.5": {
       "eslint": "^10.0.0"
     },
-    "@napi-rs/canvas": "1.0.9"
+    "@napi-rs/canvas": "1.0.9",
+    "lodash": "4.18.1",
+    "lodash-es": "4.18.1"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
@@ -349,6 +351,7 @@
     "@oscharko-dev/keiko-verification": "1.2.4",
     "@oscharko-dev/keiko-workflows": "1.2.4",
     "@oscharko-dev/keiko-workspace": "1.2.4",
+    "java-parser": "3.0.1",
     "typescript": "~6.0.3",
     "ws": "^8.21.0",
     "yauzl": "^3.4.0"

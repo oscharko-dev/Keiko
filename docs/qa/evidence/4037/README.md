@@ -1,5 +1,44 @@
 # Chat/Files qualification observations
 
+## Checkpoint 77: preserve source syntax and private literal protection
+
+The shared redactor previously changed a TypeScript parameter type into a placeholder while
+retaining a typed private literal. TypeScript/JavaScript, Java, JSON/JSONC and YAML now use syntax
+ownership for literal projection. Type metadata and computed values remain intact; private values,
+decoded copies and overlapping configured literals remain masked. Guarded discovery, search,
+excerpts, import graphs and persisted index version 10 share this projection. Unsafe source
+projections retain the existing omission and uncertainty path.
+
+Incomplete private/code context stays buffered until a safe publication boundary; cancellation
+discards pending data. BFF framing follows actual writable headroom without larger grants.
+Completed standalone PEM intervals retain UTF-16 offsets and physical lines through parser-only
+whitespace, while unconditional masking consumes the original key material. Public malformed
+fragments without a private candidate remain observable. Two intermediate source guards
+overblocked public material; their original broad failures and unchanged regression assertions
+remain retained. The existing evidence-details sibling carries the projection revision, preserving
+all 48 source-detail fields through canonical formatting.
+
+The final affected run passes 8,982 tests with zero failures and four existing skips; the enlarged
+causal group passes 1,578/1,578. Measured affected owners reach 94.37% lines and 86.94% branches, not
+full-repository coverage. Applicable type/lint/format, architecture, Activity Log, observability,
+dependency, retrieval/context, ADR/Knip and real Sonar checks pass. The complete assembled package
+passes 6,438 files and the unchanged 78,174 B editor result. Runtime parser resolution and production
+supplier audit pass with patched lodash variants. The genuine reference-machine performance
+measurement keeps its original calibration and ceilings; Docker and normal dependencies are restored.
+
+Independent immutable controls preserve privacy, public source availability, stream partitioning,
+actual Gateway/Chat/store/HTTP behavior, cancellation, complete canonical logs and bounded 2 MiB work.
+The final public/private matrix passes 21/21. Java compiler/runtime evidence is joined only for
+inputs identical to the previously executed JDK cases. The final assembly source matches the
+independently audited source; generated UI refresh and canonical test-artifact pruning are explicit.
+[`syntax-preserving-secret-redaction.json`](syntax-preserving-secret-redaction.json) binds the
+sources, checks, coverage, retained failures and independent reports.
+
+No prompt, skill, model grant or historical model outcome changes. The old partial React campaign
+remains failed and incomplete. Fresh actual UI Java/React generation, unchanged compilation/runtime,
+matched controls, bounded feedback and later unused tasks remain pending. Both skills, installed
+updates, broader acceptance, exact-head CI/review settlement and merge remain unaccepted.
+
 ## Checkpoint 66: bind startup health to the selected instance and total deadline
 
 A healthy version string could falsely confirm a different, missing or malformed launch identity.

@@ -125,7 +125,10 @@
     "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "1.2.4"
+    "@oscharko-dev/keiko-contracts": "1.2.4",
+    "typescript": "~6.0.3",
+    "java-parser": "3.0.1",
+    "yaml": "2.9.1"
   },
   "private": true
 }

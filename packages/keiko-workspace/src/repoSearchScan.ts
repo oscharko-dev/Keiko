@@ -16,7 +16,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
 import { Buffer } from "node:buffer";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import {
   discoverCandidateInventory,
   readWorkspaceFileBytesPrefixForInternalUse,
@@ -1033,10 +1033,8 @@ function recordSizeExceeded(relativePath: string, candidates: CandidateFile[]): 
 // The lane switch for every byte the matcher sees. The evidence lane redacts here, at the IO
 // boundary, so no secret-shaped byte can reach an evidence atom, the persisted index, or a grounded
 // answer. The editor lane keeps the raw bytes: see `SearchTextRunner.contentLane`.
-function laneText(runner: SearchTextRunner, text: string): string {
-  return runner.contentLane === "editor"
-    ? text
-    : redact(text, [], { preserveSourceLineBreaks: true });
+function laneText(runner: SearchTextRunner, text: string, relativePath: string): string {
+  return runner.contentLane === "editor" ? text : redactWorkspaceSource(text, relativePath);
 }
 
 async function readRawTextForScan(
@@ -1110,7 +1108,7 @@ async function readBoundedRawText(
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;
   }
-  const text = laneText(runner, decoded.text);
+  const text = laneText(runner, decoded.text, relativePath);
   if (runner.eligibleTextObserver?.active !== true && !abortScanFile(runner, state))
     runner.streamingWorkspaceIndex?.observeRead(
       workspaceIndexFileMetadata(relativePath, read.stat),
@@ -1152,13 +1150,14 @@ function readUtf8TextForScan(
       recordCandidateOmission(candidates, relativePath, "binary");
       return undefined;
     }
+    const text = laneText(runner, read.content, relativePath);
     persistWorkspaceIndexRecord(runner, {
       kind: "text",
       scopePath: relativePath,
       metadata: workspaceIndexFileMetadata(relativePath, read.stat),
-      content: laneText(runner, read.content),
+      content: text,
     });
-    return laneText(runner, read.content);
+    return text;
   } catch (err) {
     if (err instanceof FileTooLargeError) {
       return readOversizedUtf8Text(runner, relativePath, state, candidates, err.sizeBytes);

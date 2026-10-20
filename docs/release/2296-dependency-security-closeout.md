@@ -521,3 +521,32 @@ otherwise. It touches more than twenty files across five kinds of change:
 
 No product runtime behaviour, published surface, or state store changes; the only source edit under
 `packages/` is a corrected comment.
+
+### Source projection runtime dependencies (#4040)
+
+The security boundary lazily loads the existing TypeScript 6.0.3 API and YAML 2.9.1 parser only
+when their formats require them. Java ownership uses java-parser 3.0.1 (Apache-2.0) and its CST;
+no source is compiled or executed during redaction. Global overrides resolve both lodash variants
+to 4.18.1: upstream 4.17.21 and the earlier 4.17.23 correction remain affected by
+[GHSA-r5fr-rjxr-66jc](https://github.com/advisories/GHSA-r5fr-rjxr-66jc) and
+[GHSA-f23m-r3pf-42rh](https://github.com/advisories/GHSA-f23m-r3pf-42rh).
+The initial scoped overrides failed the actual product graph resolution check and were replaced
+by global overrides. The assembled root also declares the same Java parser runtime: npm 11.16.0
+does not propagate these overrides into the workspace-only parser graph. Merely replacing the
+locked files leaves invalid dependency edges. The root declaration gives the existing parser graph
+the root override set without adding another installed package. Actual npm resolution, supplier audit and release gates must pass before
+adoption; the earlier isolated sandbox audit alone is insufficient.
+Knip cannot observe this root lock-resolution requirement as an import. Its exact root workspace
+ignores only `java-parser`; the security workspace dependency and imports remain checked. This
+exception does not permit an unused runtime parser or alter the resolved graph. The actual
+workspace-only and invalid-edge attempts remain retained alongside passing `npm ls` and the
+production supplier audit.
+
+| Dependency    | Scope            | Resolved version | Disposition |
+| ------------- | ---------------- | ---------------- | ----------- |
+| `java-parser` | `root`           | `3.0.1`          | current     |
+| `java-parser` | `keiko-security` | `3.0.1`          | current     |
+| `typescript`  | `keiko-security` | `6.0.3`          | current     |
+| `yaml`        | `keiko-security` | `2.9.1`          | current     |
+| `lodash`      | `root`           | `4.18.1`         | current     |
+| `lodash-es`   | `root`           | `4.18.1`         | current     |

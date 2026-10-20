@@ -26,6 +26,15 @@ See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area
 
 ### Activity Log runtime changes
 
+Source redaction uses the shared security owner to preserve language syntax while masking credential
+values, including escaped JSON/JSONC and YAML scalars. An unsafe or ambiguous projection, or an
+existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
+unavailable. EOF-only JSON prefixes and public, unquoted Java fragments retain their safe text
+projection under the documented guards (ADR-0022). Gateway
+and BFF streaming retain incomplete source/credential context and discard pending text on cancellation.
+The existing Activity Log records projection revision, region/refusal counts and pending-buffer
+counts; it never records source, credentials or parser diagnostics containing source text.
+
 Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.

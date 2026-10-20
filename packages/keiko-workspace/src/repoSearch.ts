@@ -19,7 +19,7 @@ import {
   isValidScopePath,
   validateRetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import {
   readWorkspaceFileForEditing,
   readWorkspaceFileBytesPrefixForInternalUse,
@@ -3994,9 +3994,7 @@ function excerptTextLines(
       "binary",
     );
   }
-  return (lane === "editor" ? raw : redact(raw, [], { preserveSourceLineBreaks: true })).split(
-    "\n",
-  );
+  return (lane === "editor" ? raw : redactWorkspaceSource(raw, scopePath)).split("\n");
 }
 
 async function readExcerptLines(

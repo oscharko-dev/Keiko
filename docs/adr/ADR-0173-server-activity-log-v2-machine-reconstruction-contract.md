@@ -92,6 +92,13 @@ process/request/model-call boundaries, read a Keiko-code stack frame without a h
 directory layout, and scaffold a red-then-green regression test — all without any customer content
 ever appearing in the artifact.
 
+Source projection adds optional, typed counts on the existing `chat.response.streamed` operation:
+projection revision, source regions, depth/size/syntax refusals, and pending/published character-block
+observations. `search.connected-context.evidence-details` identifies the projection revision within its existing field grant. Parser
+errors containing source text never become diagnostics; unavailable source follows existing read
+failure and uncertainty evidence. These fields do not prove compilation, model quality, UI copying,
+or durable persistence: each claim still requires its own actual execution evidence.
+
 **Non-goals.** This epic does not log prompts, responses, document text, secrets, absolute
 filesystem paths, or any other customer content — content-shape and counts only, never bodies. It
 does not introduce runtime source maps, OpenTelemetry, or a second logging/tracing subsystem; every

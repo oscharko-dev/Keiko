@@ -1,3 +1,4 @@
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   hasRecursiveTraversalQuery,
   CANONICAL_MANIFEST_BASENAMES,
@@ -798,6 +799,7 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
       required: true,
       values: ["complete", "unavailable"],
     },
+    codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -11109,6 +11111,7 @@ function logSourceEvidenceDetails(
       SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION,
       { correlationId },
       {
+        codeRedactionRevision: CODE_REDACTION_REVISION,
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,

@@ -63,6 +63,10 @@ import {
   textFromContent,
 } from "./normalize.js";
 import { redact, redactSecretLiterals } from "@oscharko-dev/keiko-security";
+import {
+  CODE_REDACTION_REVISION,
+  createStreamingRedactor,
+} from "@oscharko-dev/keiko-security/redaction";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import {
   OTHER_OUTPUT_TOKEN_FIELD,
@@ -316,6 +320,14 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
     // log. `required: false`: records written before this field existed lack both.
     reasoningEvents: { type: "integer", dataClass: "count", required: false },
     reasoningBytes: { type: "integer", dataClass: "count", required: false },
+    codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
+    streamCodeRegions: { type: "integer", dataClass: "count", required: false },
+    streamCodeDepthRefusals: { type: "integer", dataClass: "count", required: false },
+    streamCodeSizeRefusals: { type: "integer", dataClass: "count", required: false },
+    streamCodeSyntaxRefusals: { type: "integer", dataClass: "count", required: false },
+    redactionMaxPendingChars: { type: "integer", dataClass: "count", required: false },
+    redactionPendingChars: { type: "integer", dataClass: "count", required: false },
+    redactionPublishedBlocks: { type: "integer", dataClass: "count", required: false },
   },
   diagnosticWhen: [
     { field: "outcome", values: ["stalled", "failed"] },
@@ -1018,24 +1030,6 @@ function bindCatalogResponse(
   }
 }
 
-function configuredSecrets(secrets: readonly string[]): readonly string[] {
-  return secrets.filter((secret) => secret.length > 0);
-}
-
-function longestSecretPrefixSuffix(value: string, secrets: readonly string[]): number {
-  let longest = 0;
-  for (const secret of secrets) {
-    const maxLength = Math.min(value.length, secret.length - 1);
-    for (let length = maxLength; length > longest; length -= 1) {
-      if (value.endsWith(secret.slice(0, length))) {
-        longest = length;
-        break;
-      }
-    }
-  }
-  return longest;
-}
-
 function assertUsableAssistantResponse(
   response: NormalizedResponse,
   modelId: string,
@@ -1397,49 +1391,21 @@ function mapOutboundEgressError(
   );
 }
 
-// Appends a delta onto its lane's held-back suffix buffer, then yields the prefix that is now
-// provably safe to emit (i.e. no longer a possible prefix of a configured secret).
-function* emitRedactedDelta(
-  text: string,
-  buffer: { pending: string },
-  activeSecrets: readonly string[],
-  secrets: readonly string[],
-): Generator<string> {
-  buffer.pending += text;
-  const holdLength = longestSecretPrefixSuffix(buffer.pending, activeSecrets);
-  if (buffer.pending.length === holdLength) {
-    return;
-  }
-  const emitLength = buffer.pending.length - holdLength;
-  const emitNow = buffer.pending.slice(0, emitLength);
-  buffer.pending = buffer.pending.slice(emitLength);
-  yield redact(emitNow, secrets);
-}
-
 type StreamTextChunk = Exclude<GatewayStreamChunk, { readonly type: "done" }>;
 
-// The two text lanes of one streamed answer (#3878): the model's reasoning and the answer itself.
-// Each holds back its own possible secret prefix, so a secret split across two deltas of one lane is
-// redacted whole and the lanes never mix.
+// Each publication lane owns its unresolved code/credential context until a complete block is safe.
 interface StreamTextLanes {
-  readonly reasoning: { pending: string };
-  readonly content: { pending: string };
-}
-
-interface StreamSecrets {
-  readonly active: readonly string[];
-  readonly all: readonly string[];
+  readonly reasoning: ReturnType<typeof createStreamingRedactor>;
+  readonly content: ReturnType<typeof createStreamingRedactor>;
 }
 
 function* redactedLaneChunks(
   type: StreamTextChunk["type"],
   text: string,
-  lane: { pending: string },
-  secrets: StreamSecrets,
+  lane: ReturnType<typeof createStreamingRedactor>,
 ): Generator<StreamTextChunk> {
-  for (const token of emitRedactedDelta(text, lane, secrets.active, secrets.all)) {
-    yield { type, token };
-  }
+  const token = lane.push(text);
+  if (token.length > 0) yield { type, token };
 }
 
 // The reasoning and the answer text one provider event carries, as redacted chunks: the reasoning
@@ -1447,7 +1413,6 @@ function* redactedLaneChunks(
 function* textChunksOf(
   chunk: unknown,
   lanes: StreamTextLanes,
-  secrets: StreamSecrets,
   acc: StreamAccumulator,
   report: StreamReport,
 ): Generator<StreamTextChunk> {
@@ -1455,12 +1420,12 @@ function* textChunksOf(
   if (reasoning !== undefined) {
     acc.reasoning += reasoning;
     recordReasoning(report, reasoning);
-    yield* redactedLaneChunks("reasoning", reasoning, lanes.reasoning, secrets);
+    yield* redactedLaneChunks("reasoning", reasoning, lanes.reasoning);
   }
   const content = deltaFromChunk(chunk);
   if (content !== undefined) {
     acc.content += content;
-    yield* redactedLaneChunks("delta", content, lanes.content, secrets);
+    yield* redactedLaneChunks("delta", content, lanes.content);
   }
 }
 
@@ -1560,6 +1525,17 @@ interface StreamReport {
   // #3878: the provider events that carried reasoning and its UTF-8 size; counts, never the text.
   reasoningEvents: number;
   reasoningBytes: number;
+  readonly redaction: StreamRedactionReport;
+}
+
+interface StreamRedactionReport {
+  streamCodeRegions: number;
+  streamCodeDepthRefusals: number;
+  streamCodeSizeRefusals: number;
+  streamCodeSyntaxRefusals: number;
+  redactionMaxPendingChars: number;
+  redactionPendingChars: number;
+  redactionPublishedBlocks: number;
 }
 
 function newStreamReport(): StreamReport {
@@ -1571,6 +1547,15 @@ function newStreamReport(): StreamReport {
     lastDataMs: 0,
     reasoningEvents: 0,
     reasoningBytes: 0,
+    redaction: {
+      streamCodeRegions: 0,
+      streamCodeDepthRefusals: 0,
+      streamCodeSizeRefusals: 0,
+      streamCodeSyntaxRefusals: 0,
+      redactionMaxPendingChars: 0,
+      redactionPendingChars: 0,
+      redactionPublishedBlocks: 0,
+    },
   };
 }
 
@@ -1626,7 +1611,8 @@ function streamReadFields(
   readonly readBudgetMs?: number;
   readonly reasoningEvents: number;
   readonly reasoningBytes: number;
-} {
+  readonly codeRedactionRevision: number;
+} & StreamRedactionReport {
   return {
     modelId: logModelId(read.config.modelId),
     outcome,
@@ -1637,6 +1623,8 @@ function streamReadFields(
     ...(read.bounds === undefined ? {} : { readBudgetMs: read.bounds.budgetMs }),
     reasoningEvents: report.reasoningEvents,
     reasoningBytes: report.reasoningBytes,
+    codeRedactionRevision: CODE_REDACTION_REVISION,
+    ...report.redaction,
   };
 }
 
@@ -1658,27 +1646,22 @@ function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   applyToolCallDelta(acc.toolCalls, chunk);
 }
 
-// Emits whatever content is still held in the buffer once the stream ends —
-// nothing further can arrive to complete a held-back secret prefix.
-function* flushPendingBuffer(
-  buffer: { pending: string },
-  secrets: readonly string[],
-): Generator<string> {
-  if (buffer.pending.length === 0) {
-    return;
-  }
-  yield redact(buffer.pending, secrets);
+function observeStreamRedaction(report: StreamRedactionReport, lanes: StreamTextLanes): void {
+  const observations = [lanes.reasoning.observe(), lanes.content.observe()];
+  report.redactionMaxPendingChars = Math.max(...observations.map((lane) => lane.maxPendingChars));
+  report.redactionPendingChars = observations.reduce((sum, lane) => sum + lane.pendingChars, 0);
+  report.redactionPublishedBlocks = observations.reduce(
+    (sum, lane) => sum + lane.publishedBlocks,
+    0,
+  );
 }
 
-// Both lanes' held-back suffixes once the stream ends, the reasoning first.
-function* flushedLanes(
-  lanes: StreamTextLanes,
-  secrets: readonly string[],
-): Generator<StreamTextChunk> {
-  for (const token of flushPendingBuffer(lanes.reasoning, secrets)) {
-    yield { type: "reasoning", token };
-  }
-  for (const token of flushPendingBuffer(lanes.content, secrets)) yield { type: "delta", token };
+// Only a successfully completed provider read may flush unresolved lane suffixes.
+function* flushedLanes(lanes: StreamTextLanes): Generator<StreamTextChunk> {
+  const reasoning = lanes.reasoning.finish();
+  const content = lanes.content.finish();
+  if (reasoning.length > 0) yield { type: "reasoning", token: reasoning };
+  if (content.length > 0) yield { type: "delta", token: content };
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
@@ -1814,8 +1797,19 @@ export class OpenAiAdapter implements ProviderAdapter {
     acc: StreamAccumulator,
     report: StreamReport,
   ): AsyncGenerator<StreamTextChunk> {
-    const lanes: StreamTextLanes = { reasoning: { pending: "" }, content: { pending: "" } };
-    const secrets: StreamSecrets = { active: configuredSecrets(read.secrets), all: read.secrets };
+    const project = (text: string): string =>
+      redact(text, read.secrets, {
+        onCodeProjection: (projection): void => {
+          report.redaction.streamCodeRegions += projection.regions;
+          report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
+          report.redaction.streamCodeSizeRefusals += projection.sizeRefusals;
+          report.redaction.streamCodeSyntaxRefusals += projection.syntaxRefusals;
+        },
+      });
+    const lanes: StreamTextLanes = {
+      reasoning: createStreamingRedactor(project, read.secrets),
+      content: createStreamingRedactor(project, read.secrets),
+    };
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
     const completion = { sawDone: false };
     try {
@@ -1824,7 +1818,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       })) {
         recordDataEvent(report);
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
-        yield* textChunksOf(chunk, lanes, secrets, acc, report);
+        yield* textChunksOf(chunk, lanes, acc, report);
         applyChunkMetadata(chunk, acc);
       }
       // An explicit provider refusal must retain its refusal class even if the stream then closes.
@@ -1835,12 +1829,14 @@ export class OpenAiAdapter implements ProviderAdapter {
           read.secrets,
         );
       }
-      yield* flushedLanes(lanes, read.secrets);
+      yield* flushedLanes(lanes);
     } catch (error) {
       throw this.withPartialUsage(
         this.mapStreamError(error, read.config, read.secrets, read.signal),
         acc,
       );
+    } finally {
+      observeStreamRedaction(report.redaction, lanes);
     }
   }
 

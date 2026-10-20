@@ -808,8 +808,27 @@ unterminated private-key body, so eligible large text does not trigger repeated 
 Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
 delimiters without retaining its body or columns. Facts between separate secret blocks therefore
 keep their physical source lines in lexical matches, numbered model context, and source navigation.
-The general-purpose redactor's default output remains unchanged. Persisted lexical snapshots from
-before this coordinate policy are invalidated by the existing index version fence.
+Source redaction now uses the shared security projection for TypeScript/JavaScript, Java, JSON/JSONC
+and YAML. Credential assignments mask literal values while preserving syntax metadata and physical
+line delimiters. Java ownership follows its CST after JLS Unicode translation; parsed YAML aliases
+receive their final monotonic sensitivity before one scalar span is emitted. Known issuer patterns,
+private keys and configured secret literals remain unconditional. Malformed inferred code, parser
+stack exhaustion and the existing source-size ceiling produce body-free refusals; a connected source
+with an unavailable projection is omitted through the existing read-failure/uncertainty path.
+Completed standalone private-key intervals are opaque whitespace only in the parser input, with
+unchanged UTF-16 offsets and CR/LF delimiters. Unconditional masking consumes their original bytes;
+public code after a closed interval remains readable. Unclosed intervals receive no parser exemption.
+Declared JSON prefixes retain their observed values only when missing syntax is at EOF; earlier
+lexical errors remain unavailable. Unsupported source languages keep strict text protection without
+being interpreted as TypeScript or Java; ambiguous C# literal forms remain unavailable. A failed Java
+parse can retain only an unquoted, unescaped fragment with no canonical sensitive-name or strict
+redaction candidate. A malformed TypeScript fragment remains unavailable when it contains an
+escape, unsupported quoting, a sensitive-name plus literal candidate or a strict-redaction change.
+A sensitive word alone, or a public literal without a secret candidate, is not a private value.
+These are source observations, not compilation certificates.
+All discovery, search, import-graph and persisted-index inputs use this owner after the existing
+admission checks. Index snapshot version 10 invalidates earlier redacted records. The connected
+evidence-details Activity Log records the projection revision without source bodies or paths.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
 policy. Each requested filename pattern retains a bounded independent result bucket within one
 shared traversal for the symbol and document batches together. Each logical query keeps its own

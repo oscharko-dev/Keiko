@@ -99,6 +99,11 @@ This shapes the product _and_ how you work on it:
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
+  syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
+  use parsed value boundaries. Streaming retains unresolved credential/source context until it can
+  publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
+  not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
   body-free logging on the existing activity log, and when you debug, that log is the source you
   read first (§8).

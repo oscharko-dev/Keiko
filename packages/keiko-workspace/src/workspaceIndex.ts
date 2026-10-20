@@ -47,8 +47,8 @@ import {
 type MaybePromise<T> = T | Promise<T>;
 
 // Matching authority changes with decoding semantics, even when source bytes and stat metadata
-// stay unchanged. Version 9 rejects negatives recorded by the prior markup declaration probe.
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 9;
+// stay unchanged. Version 10 rejects text records made before syntax-aware source redaction.
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 10;
 
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];

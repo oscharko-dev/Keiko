@@ -1815,6 +1815,46 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      codeRedactionRevision: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      streamCodeRegions: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      streamCodeDepthRefusals: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      streamCodeSizeRefusals: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      streamCodeSyntaxRefusals: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      redactionMaxPendingChars: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      redactionPendingChars: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      redactionPublishedBlocks: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -28760,6 +28800,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["complete", "unavailable"],
+      },
+      codeRedactionRevision: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       sourceDescriptorPathCount: {
         type: "integer",
