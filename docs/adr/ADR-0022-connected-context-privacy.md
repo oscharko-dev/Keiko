@@ -1385,6 +1385,9 @@ definitions, relationships, and history retain their existing retrieval and unce
 The existing connected-context completion event partitions planned rings into executed, deliberately
 skipped, and stopped-before-execution kinds, including an initially blocked budget. Closed skip
 reasons explain policy decisions; augmentation separately records `not-reached`, `used`, or `skipped`.
+Structural clipping describes actual generated initial or follow-up queries excluded by admission,
+not unused capacity in a conservative reservation. Later governor exhaustion remains independent;
+this distinction neither refunds reservations nor increases the grant.
 Structural batches reserve at most the remaining search-call grant. Initial anchor queries, then
 bounded follow-up queries, consume only that admitted batch prefix. An oversized optional batch
 cannot charge an unexecuted over-budget request and prevent all structural work. Truncation retains

@@ -6,7 +6,11 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { testSourcePairingAdapter } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
-import { retrieveConnectedContextPack, type RetrievalOnlyOutput } from "./grounded-orchestrator.js";
+import {
+  admitStructuralQueries,
+  retrieveConnectedContextPack,
+  type RetrievalOnlyOutput,
+} from "./grounded-orchestrator.js";
 
 const ROOT = "/structural-reservation-fixture";
 const NOW = 1_700_000_000_000;
@@ -118,6 +122,23 @@ async function retrieve(
 }
 
 describe("admitted structural search reservations", () => {
+  it("distinguishes unused reservation capacity from actually clipped query batches", () => {
+    const first = {
+      kind: "natural-language" as const,
+      text: "Find Example",
+      caseSensitive: false,
+      maxResults: 20,
+      emittedAtMs: NOW,
+    };
+    const second = { ...first, text: "Find its declaration" };
+    const planned = [first, second];
+    expect(admitStructuralQueries(planned, 6)).toEqual({ queries: planned, clipped: false });
+    expect(admitStructuralQueries(planned, 2)).toEqual({ queries: planned, clipped: false });
+    expect(admitStructuralQueries(planned, 1)).toEqual({ queries: [first], clipped: true });
+    expect(admitStructuralQueries(planned, 0)).toEqual({ queries: [], clipped: true });
+    expect(admitStructuralQueries([], 0)).toEqual({ queries: [], clipped: false });
+  });
+
   it.each(["ActionButton", "CheckoutPanel"])(
     "retains the current implementation for diagnostic feedback about an absent %s test",
     async (name) => {

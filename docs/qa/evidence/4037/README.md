@@ -1,5 +1,22 @@
 # Chat/Files qualification observations
 
+## Checkpoint 86: describe actual structural clipping
+
+Initial and follow-up admission now report whether generated queries were actually excluded.
+Unused conservative reservation capacity no longer produces a local structural search-call
+clipping marker. Reservations, source authority and later governor exhaustion retain their original
+semantics. The same actual compiled-retrieval observer fails before and passes after: under grants
+3/4/5/8/16, charges stay 3/4/5/8/12 and final pack markers stay 1/1/1/1/0. Only the false local
+marker at grant8 disappears. No prompt, skill, read, search or model grant grows.
+
+The existing structural reservation suite retains empty, exact, oversized and genuinely clipped
+admission controls. Broad grounded coverage, strict typing, scoped lint, formatting, full Activity
+Log/architecture controls, retrieval/grounding/faithfulness/context/ADR gates and actual increment
+Sonar pass. Canonical catalog generation records its intentional source changes separately. This
+is a local evidence correction, not a new UI/model or installed-update acceptance claim.
+
+[`actual-structural-clipping.json`](actual-structural-clipping.json) binds the exact results.
+
 ## Checkpoint 85: deliver reviewed runtime overrides to real consumers
 
 Root npm overrides are not inherited by customers. The existing staging producer now delivers

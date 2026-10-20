@@ -2874,15 +2874,34 @@ async function settleParallelStage<T>(
   }
 }
 
+interface AdmittedStructuralQueries {
+  readonly queries: readonly RetrievalQuery[];
+  readonly clipped: boolean;
+}
+
+export function admitStructuralQueries(
+  planned: readonly RetrievalQuery[],
+  remaining: number,
+): AdmittedStructuralQueries {
+  const queries = planned.slice(0, Math.max(0, remaining));
+  return { queries, clipped: queries.length < planned.length };
+}
+
+interface NonLexicalAdapterBatch {
+  readonly results: readonly RunRingStructuralResult[];
+  readonly searchesClipped: boolean;
+}
+
 async function runNonLexicalAdapters(
   ring: NonLexicalRing,
   inputs: SearchInputs,
-): Promise<readonly RunRingStructuralResult[]> {
+): Promise<NonLexicalAdapterBatch> {
   const registry = registryForRing(ring);
   const plannedQueries =
     ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
   const reserved = inputs.reservedRingSearchCalls ?? 0;
-  const queries = plannedQueries.slice(0, reserved);
+  const admitted = admitStructuralQueries(plannedQueries, reserved);
+  const queries = admitted.queries;
   const requestContext =
     ring.kind === "structural" ? inputs.structuralContexts.forLimits(ring.searchLimits) : undefined;
   const results = await runAdapterQueries(registry, ring, queries, inputs, requestContext);
@@ -2895,14 +2914,18 @@ async function runNonLexicalAdapters(
           inputs.query,
         )
       : [];
+  const followUp = admitStructuralQueries(followUpQueries, reserved - queries.length);
   const followUpResults = await runAdapterQueries(
     registry,
     ring,
-    followUpQueries.slice(0, Math.max(0, reserved - queries.length)),
+    followUp.queries,
     inputs,
     requestContext,
   );
-  return [...results, ...followUpResults];
+  return {
+    results: [...results, ...followUpResults],
+    searchesClipped: admitted.clipped || followUp.clipped,
+  };
 }
 
 async function gitFileAtomsForRing(
@@ -2972,7 +2995,8 @@ function nonLexicalAtoms(
 
 async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Promise<RingResult> {
   const startedAtMs = inputs.nowMs();
-  const allResults = await runNonLexicalAdapters(ring, inputs);
+  const batch = await runNonLexicalAdapters(ring, inputs);
+  const allResults = batch.results;
   const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
   const merged = mergeAtomsByStableId(allResults, cap);
   const git = await gitFileAtomsForRing(ring, inputs, cap);
@@ -2980,10 +3004,7 @@ async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Pr
   const adapterUncertainty = allResults.flatMap((result) =>
     adapterDiagnostics(result, inputs.nowMs()),
   );
-  if (
-    ring.kind === "structural" &&
-    (inputs.reservedRingSearchCalls ?? 0) < plannedSearchCallsForRing(ring, inputs)
-  )
+  if (ring.kind === "structural" && batch.searchesClipped)
     adapterUncertainty.push(budgetClipped("budget-exhausted on searchCalls", inputs.nowMs()));
   const uncertainty = dedupeUncertainty(
     ring.kind === "git-history"

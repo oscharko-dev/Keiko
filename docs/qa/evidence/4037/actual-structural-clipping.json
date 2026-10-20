@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": 86,
+  "classification": "Scoped correction of structural ring clipping evidence; conservative reservation charges and later legitimate governor exhaustion unchanged. Not new UI/model/native updater acceptance.",
+  "parentCommit": "ed07447244a7617f60a6c4a1828ef9a6dc6cfe7c",
+  "sourceFreezeSha256": "e7874d84726989afb13cdfd5caf5253a1439161689d3668411d6db8f7d199a34",
+  "compiledFreezeSha256": "8eca8f9b5d40d0e56377ca95ddf8f1a11af364cc25c34d4f9d8d806830d676e1",
+  "behavior": "The existing admission owner returns whether actual initial or generated follow-up queries were excluded. Unused conservative reservation capacity cannot create a local search-call clip marker. No charge refund, grant increase, prompt change or source-authority change.",
+  "causalProof": {
+    "sameInputAndObserver": true,
+    "beforeSha256": "a1816ce414348d3cf1b0c6e4abcca596cf69ab2c0852c2ce6e8a8565a0179f5a",
+    "afterSha256": "82cdacbac9d5df6daf4eb1be463c8f78b47c9c3e4be8daef0f9b91a9fac0a778",
+    "grants": [3, 4, 5, 8, 16],
+    "unchangedCharges": [3, 4, 5, 8, 12],
+    "localMarkersBefore": [1, 1, 1, 1, 0],
+    "localMarkersAfter": [1, 1, 1, 0, 0],
+    "unchangedFinalPackMarkers": [1, 1, 1, 1, 0],
+    "failureFirstReceiptSha256": "219b84881fff10ce7e4a99dcbe65aed360d2521eedfada2a8eb9b009ea16dd77",
+    "scope": "Actual compiled retrieval through a one-file synthetic workspace; count-only in-memory observation at the existing local ring boundary, no model calls or behavior substitution."
+  },
+  "tests": {
+    "passed": 2798,
+    "failed": 0,
+    "skipped": 1,
+    "reportSha256": "a824559f79c9594ad7e73d91be182f399aac9c3c413c62385729b6779f1def32",
+    "coverageSummarySha256": "9ebb7ae96aafd18b9aed8b63f2d9dd88833d828e174abd28d0a90f7b1d78cf14",
+    "ownerLinesPercent": 96.93,
+    "ownerBranchesPercent": 88.53
+  },
+  "gates": [
+    {
+      "name": "checkpoint86-typecheck-v2",
+      "receiptSha256": "2123b820af12b5cead6c52b3049379462c11aa7ae192b118af7edc744534e2c7",
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "name": "checkpoint86-lint-v1",
+      "receiptSha256": "3c622165c9a717133f9ec5f3c7655973dcfa91c20cdad355aafa2b6650e6f822",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "checkpoint86-format-v1",
+      "receiptSha256": "46c3a37ed1ed8b603979caf10b1c9b5768827f84faf058c45a6617ddaee990de",
+      "logSha256": "90bda2270ac468296e07c2acba78b48faa4917ee74eaed88b14927c08e159a93"
+    },
+    {
+      "name": "checkpoint86-activity-v1",
+      "receiptSha256": "8085aaa23cda6b36bd6ed4489845c2cdddc73e64b8e59cc289196f6958520817",
+      "logSha256": "e899a7c78491c3f263ca0ff6127986a5a846dd7ea6079dda5965f2dc2dff3f3a"
+    },
+    {
+      "name": "checkpoint86-area-gates-v1",
+      "receiptSha256": "9c09bbda52b04fe22ffd4ed12c45eb9bc7b3df02b4eb5284445867da38f28eca",
+      "logSha256": "f8198e46373324546d16cab01e7051b3725070a13b7b1a6c182c87db8798af1d"
+    },
+    {
+      "name": "checkpoint86-sonar-v1",
+      "receiptSha256": "7f6b118fcac46557e557e308ee78c77e3784a074cee84ed22ac8e5a4f4fd01e6",
+      "logSha256": "7762bb91a42f67a16bbbb3e2f8cb04231f80a6f868a999caecf812cb1d247a18"
+    },
+    {
+      "name": "checkpoint86-marker-green-v2",
+      "receiptSha256": "6794bb05c87969289fafbc4882ac843b8bbf6d6f3e5201cedb1209740427846d",
+      "logSha256": "0498521846e836ad290de79922595e3c56cc2b62701fb2530444212cb5d41b2a"
+    },
+    {
+      "name": "checkpoint86-affected-coverage-v1",
+      "receiptSha256": "ee7f8ba23fb10f61ad04b0c7f82c64154c6937d4cf120abf3c38bedd64ea325e",
+      "logSha256": "e36d039e23958e27aea9fb84b756e2b5d86613371959582631af841b13ccdec6"
+    }
+  ],
+  "catalog": "Canonical generation completed successfully; its receipt intentionally records source changes. Full Activity Log gate rebuilt registrations and passed all seven controls.",
+  "remaining": "Fresh actual UI/Gemma/unused-task, native updater/browser/history and final exact-head CI/review/integration acceptance remain open."
+}
