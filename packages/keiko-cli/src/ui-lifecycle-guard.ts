@@ -5,10 +5,10 @@ import {
   assertSqliteStatePath,
   chmodIfPresent,
 } from "@oscharko-dev/keiko-security/fs-hardening";
-import { cliTargetIdentitySha256 } from "./cli-control-state.js";
+import { cliTargetIdentitySha256, resolveCliControlStateDir } from "./cli-control-state.js";
 import { resolveWithExistingAncestor } from "./launcher-paths.js";
 
-function lifecycleGuardPath(stateDir: string): string {
+function lifecycleGuardPath(stateDir: string, home?: string): string {
   const absolute = resolve(stateDir);
   assertSafeArtifactAncestors(join(dirname(absolute), "ui.pid"), "manifest");
   const parent = resolveWithExistingAncestor(dirname(absolute));
@@ -18,7 +18,7 @@ function lifecycleGuardPath(stateDir: string): string {
       ? canonical.toLowerCase()
       : canonical;
   return join(
-    parent,
+    resolveCliControlStateDir(process.platform, home),
     `.keiko-lifecycle-${cliTargetIdentitySha256(identity)}`,
     ".keiko",
     "guards",
@@ -31,10 +31,11 @@ export async function withUiLifecycleGuard<T>(
   stateDir: string,
   create: boolean,
   operation: () => Promise<T>,
+  home?: string,
 ): Promise<{ readonly kind: "busy" } | { readonly kind: "complete"; readonly value: T }> {
   if (!create && !existsSync(stateDir)) return { kind: "complete", value: await operation() };
   // The stable inode must survive full state removal and fence another start until it finishes.
-  const path = lifecycleGuardPath(stateDir);
+  const path = lifecycleGuardPath(stateDir, home);
   assertSqliteStatePath(path);
   const { acquireSqliteFileGuard } = await import("@oscharko-dev/keiko-security/sqlite-file-guard");
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });

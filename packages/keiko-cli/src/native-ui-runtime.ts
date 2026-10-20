@@ -8,7 +8,9 @@ import {
   encodeLaunchPacket,
 } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
 import { isProcessId } from "@oscharko-dev/keiko-security/process-scope";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { readNativeUiResponse } from "./native-ui-channel.js";
+import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
 import type { PortableLayout } from "./portable-shared.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
@@ -44,7 +46,19 @@ export async function resolveManagedNativeUiRuntime(
   return nativeUiRuntimeForLayout(installed.layout);
 }
 
-export function nativeUiRuntimeForLayout(layout: PortableLayout): NativeUiRuntime {
+export function nativeUiRuntimeForLayout(
+  layout: PortableLayout,
+  securityLogSink?: SecurityLogSink,
+): NativeUiRuntime {
+  try {
+    return readNativeUiRuntimeForLayout(layout);
+  } catch (error) {
+    emitNativeUiOwnership(securityLogSink, "admission", "refused", error);
+    throw new Error("installed native runtime could not be verified.", { cause: error });
+  }
+}
+
+function readNativeUiRuntimeForLayout(layout: PortableLayout): NativeUiRuntime {
   const descriptor = openSync(
     layout.runtimeSupervisorPath,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,

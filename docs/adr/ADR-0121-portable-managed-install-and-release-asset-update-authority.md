@@ -484,16 +484,22 @@ diagnostics.
 
 CLI lifecycle commands serialize existing PID tracking with the same stable, zero-data SQLite
 guard primitive used by updater state publication. Its stable zero-data `ui.pid` guard lives at
-`.keiko-lifecycle-<SHA-256 of canonical selected state path>/.keiko/guards/ui.pid` beside the selected
-state directory. Complete state removal cannot unlink a held guard or admit a concurrent start
+`.keiko-lifecycle-<SHA-256 of canonical selected state path>/.keiko/guards/ui.pid` under the existing
+host CLI control-state directory, outside project and removable runtime trees. The control root
+uses the host platform and home directory, independently from environment overrides or a selected
+installation's target platform. Complete state removal cannot unlink a held guard or admit a concurrent start
 through a replacement inode.
 It is never raw-read or unlinked; read-only repair previews do not acquire or create it.
 The nested `.keiko` segment retains the existing workspace denial for internal authority files.
+The repository's `.keiko/` ignore rule matches that nested segment, not its outer lifecycle directory.
 The existing bounded nearest-ancestor resolver canonicalizes its parent before the lock identity
 is selected, including allowed macOS system aliases and an absent state leaf. Raw ancestor policy
 checks precede that resolution. Dot components, redundant/trailing separators and platform case
 aliases cannot create another guard; conservative case folding may serialize distinct names on
 a case-sensitive macOS or Windows volume. Unrelated symlink ancestors remain refused.
+Command and guard exceptions retain their sanitized failure class on the existing
+`cli.lifecycle.native-owner` event. Only a tracking-state uncertainty uses the ownership-uncertain
+message; unrelated filesystem, configuration and transport failures do not claim that diagnosis.
 A native start first reserves `ui.pid`
 as `native-app-starting-v1` plus its launch identity, without claiming a BFF or owner PID. Missing
 first receipts and uncertain cleanup retain that reservation. Only a matching native terminal

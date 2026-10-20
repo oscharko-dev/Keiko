@@ -1082,7 +1082,7 @@ export async function runUninstallCli(
     const operation = (): Promise<number> =>
       executeUninstall(opts, io, env, resolved, stateDir, activity);
     if (!opts.scopes.state || opts.dryRun) return await operation();
-    const guarded = await withUiLifecycleGuard(stateDir, true, operation);
+    const guarded = await withUiLifecycleGuard(stateDir, true, operation, resolved.homedir());
     if (guarded.kind === "complete") return guarded.value;
     emitUninstallFailure(activity, "UninstallStateInUseError", "server-stop-refused");
     io.err("keiko uninstall: another UI lifecycle operation is in progress; state retained.\n");

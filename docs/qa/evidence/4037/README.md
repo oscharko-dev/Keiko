@@ -1868,3 +1868,28 @@ Original red controls and development failures remain separate from final frozen
 `native-app-handoff.json` binds the mechanisms, source hashes, actual profiles, original failures and
 explicit limits. Installed product transitions, wider UI/skill/search/context/browser acceptance,
 final CI/reviews and merge remain open. No acceptance checkbox or historical model outcome changes.
+
+## Checkpoint 70 — lifecycle control state and sanitized failures
+
+Lifecycle, repair and uninstall now locate their existing stable exclusion file below the host CLI
+control-state directory. The same canonical selected-state digest and denied nested `.keiko` path
+retain exclusion across aliases and complete state removal, without a sibling project artifact.
+Native guard bodies are never read or unlinked.
+
+The existing `cli.lifecycle.native-owner` event retains canonical error kinds and adds the sanitized
+failure class. Tracking-read uncertainty keeps its specific diagnosis; unrelated guard or command
+exceptions no longer claim that cause. Portable native layout verification records admission refusal
+before throwing a stable redacted error, preserving the upgrade restoration path. Four prose spacing
+corrections change no historical counts or outcomes.
+
+Five assertions fail before repair. The final full CLI suite passes 1,490 tests with one existing
+skip, and 74 final affected controls pass, including the unchanged symlink/no-foreign-signal pin.
+Both Linux ARM64 non-root profiles pass all 15 actual CLI/native app-owner lifecycle controls with
+zero source or compiled drift. An omitted Docker toolchain path caused twelve initial command
+failures; they were reproduced, then all 45 targeted command tests and the complete suite passed
+under the declared toolchain. No enforcement, assertion or timeout was weakened.
+
+`cli-lifecycle-control-state.json` binds sources, original failures, frozen native runs and scoped
+validation. Typing, lint, formatting, real Sonar and observability checks pass. Native dead-owner
+recovery, installed product update acceptance, live skill qualification, wider functional acceptance
+and delivery closeout remain open.

@@ -1062,7 +1062,7 @@ export async function runRepairCli(
       Promise.resolve(collectRepairResults(args, io, env, parsed, resolved, vault));
     const guarded = parsed.dryRun
       ? { kind: "complete" as const, value: await operation() }
-      : await withUiLifecycleGuard(stateDir, true, operation);
+      : await withUiLifecycleGuard(stateDir, true, operation, resolved.homedir());
     results =
       guarded.kind === "complete"
         ? guarded.value

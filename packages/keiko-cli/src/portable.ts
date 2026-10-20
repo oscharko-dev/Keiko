@@ -321,7 +321,7 @@ async function launchManaged(
     recovered === undefined ? env : { ...env, KEIKO_PORTABLE_RECOVERED_LAUNCH: recovered.encoded };
   const nativeUiRuntime =
     target === "linux-x64"
-      ? (await import("./native-ui-runtime.js")).nativeUiRuntimeForLayout(layout)
+      ? (await import("./native-ui-runtime.js")).nativeUiRuntimeForLayout(layout, securityLogSink)
       : undefined;
   return deps.lifecycleFn("start", args, io, launchEnv, {
     cwd: layout.appRoot,

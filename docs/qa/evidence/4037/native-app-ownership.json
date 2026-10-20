@@ -22,7 +22,7 @@
     "artifact": "checkpoint67-v2-v4-compiled-join.json",
     "sha256": "328b88eb8215f27d4a8b352fa19bda72a64cc45d40c0b4497643b9bfd1359ee7"
   },
-  "joinScope": "V4 changes exactly the guard runtime, its policy regression and ADR from V2:7537source/configrows and6610non-cache compiled/runtime/declaration/assets stay identical. Full CLI/native and changed-owner checks run on V4; unaffected V2 export/log/UI-lint/server/contracts/security/guard evidence retains its stated subject.",
+  "joinScope": "V4 changes exactly the guard runtime, its policy regression and ADR from V2: 7537 source/config rows and 6610 non-cache compiled/runtime/declaration/assets stay identical. Full CLI/native and changed-owner checks run on V4; unaffected V2 export/log/UI-lint/server/contracts/security/guard evidence retains its stated subject.",
   "sources": [
     {
       "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
@@ -529,7 +529,7 @@
     "Launching CLI exits after explicit native commit while actual BFF health remains launch-bound; independent stop obtains native whole-generation completion. Two cycles include retaining the same committed generation from another CLI.",
     "Uncommitted EOF, original startup deadline, malformed/mismatched PID or commit, lost first receipt and lost commit ACK preserve their closed refusal or uncertainty semantics. No second start is admitted without matching committed ownership.",
     "Known no-child spawn failures and native no-supervisor-fork outcomes retire only their matching pending attempt. Root-zero not-started records never establish reap of an admitted generation.",
-    "Application environment crosses the private control pipe as bounded KAE1 data.140benign entries/provider/certificate/browser values reach only the admitted app root, with selected identity/grant overrides. Native W/S environments stay closed.",
+    "Application environment crosses the private control pipe as bounded KAE1 data. 140 benign entries/provider/certificate/browser values reach only the admitted app root, with selected identity/grant overrides. Native W/S environments stay closed.",
     "Native packet intake, supervisor generation creation and final root exec consume the same original monotonic grant. Independent physical delayed-supervisor controls observe late root execution before and none after under the same one-second grant.",
     "Native PID publication uses complete flushed staging and atomic rename; partial writes never expose a legacy prefix. Unknown/truncated capability markers remain refused.",
     "The existing SQLite exclusion primitive is shared. Canonical path aliases converge, state removal cannot replace the held sibling guard, and its nested .keiko location retains the existing workspace denial.",
@@ -1052,11 +1052,11 @@
     "sha256": "722af881f8e6f5140da7296f6a2591227f10e835bed3917e762e98d9869ffeb8"
   },
   "limits": [
-    "Linux native mechanics execute on ARM64 under UID1000 and65534 with pinned compiler/runtime image and explicit isolated kernel qualification profile. CLI/BFF controls inject the actual fixture runtime paths; they do not attest a shipped linux-x64 package.",
+    "Linux native mechanics execute on ARM64 under UID 1000 and 65534 with pinned compiler/runtime image and explicit isolated kernel qualification profile. CLI/BFF controls inject the actual fixture runtime paths; they do not attest a shipped linux-x64 package.",
     "macOS compiler/analyzer/Seatbelt boundary controls pass; native macOS app/EndpointSecurity and Windows runtime execution are unqualified here.",
     "Outside-old-generation coordinator admission, persistent successor/restoration ownership, actual distinct-version packaged updates, interruption/recovery/SSD/state continuity and older released startup paths remain open.",
     "Private ownership files are CLI lifecycle observations; they never become branded server RuntimeReapReceipt objects. Same-UID hostile pathname replacement is outside the atomicity claim.",
-    "Fresh visible browser/Gemma/skills/retrieval/context acceptance, the original96criterion reconciliation, final exact-head CI/reviews and merge are not established by these controls."
+    "Fresh visible browser/Gemma/skills/retrieval/context acceptance, the original 96 criterion reconciliation, final exact-head CI/reviews and merge are not established by these controls."
   ],
   "allAcceptanceCriteriaComplete": false,
   "mergedToDev": false,

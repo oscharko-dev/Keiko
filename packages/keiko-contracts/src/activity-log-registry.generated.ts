@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8db3c18ec2590607a25356b451fe74ece782987945dd2a1338853c75673359ed" as const;
+  "2e677a650968a81e4b28e4049363ffff30d86658a70994b487b8d319954115e2" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -33391,6 +33391,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "process-lifecycle",
           safeContextFields: [
             {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
@@ -33403,7 +33409,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "error-kind", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

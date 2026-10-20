@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8db3c18ec2590607a25356b451fe74ece782987945dd2a1338853c75673359ed",
+    "catalogDigest": "2e677a650968a81e4b28e4049363ffff30d86658a70994b487b8d319954115e2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2435,6 +2435,12 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["acknowledged", "refused", "uncertain", "reaped", "held"]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
           }
         },
         "causal": "correlation",
@@ -2443,8 +2449,8 @@
         "failureClasses": ["process-startup"],
         "proofIds": ["cli.lifecycle.native-owner.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/lifecycle-native-activity.ts:7",
-        "emitterSites": ["packages/keiko-cli/src/lifecycle-native-activity.ts:45"]
+        "registrationSite": "packages/keiko-cli/src/lifecycle-native-activity.ts:11",
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-native-activity.ts:51"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -81695,6 +81701,12 @@
               "analyzerProjection": "process-lifecycle",
               "safeContextFields": [
                 {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -81707,7 +81719,7 @@
                   "required": true
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -91105,7 +91117,7 @@
     {
       "op": "cli.lifecycle.native-owner",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/lifecycle-native-activity.ts:10",
+      "site": "packages/keiko-cli/src/lifecycle-native-activity.ts:14",
       "package": "keiko-cli"
     },
     {

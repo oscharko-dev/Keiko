@@ -485,12 +485,27 @@ function runningPidRecord(
   return record;
 }
 
+class UiLifecycleTrackingError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("UI lifecycle tracking remains uncertain", options);
+    this.name = "UiLifecycleTrackingError";
+  }
+}
+
+function lifecycleTracking(path: string): ReturnType<typeof readUiLifecycleTracking> {
+  try {
+    return readUiLifecycleTracking(path);
+  } catch (error) {
+    throw new UiLifecycleTrackingError({ cause: error });
+  }
+}
+
 function trackedUiRecord(
   options: LifecycleOptions,
   path: string,
   sink?: SecurityLogSink,
 ): PidRecord | undefined {
-  const tracking = readUiLifecycleTracking(path);
+  const tracking = lifecycleTracking(path);
   if (tracking.kind === "process") return tracking.record;
   if (tracking.kind === "absent") return undefined;
   if (tracking.kind === "starting" && nativeUiAttemptSettled(options.stateDir, tracking.launchId)) {
@@ -498,7 +513,7 @@ function trackedUiRecord(
     emitNativeUiOwnership(sink, "cleanup", "acknowledged");
     return undefined;
   }
-  throw new Error("UI lifecycle tracking remains uncertain");
+  throw new UiLifecycleTrackingError();
 }
 
 function runningPid(
@@ -1445,6 +1460,7 @@ export async function runLifecycleCli(
     io,
     securityLogSink,
     handlers[command],
+    home,
   );
 }
 
@@ -1454,13 +1470,18 @@ async function guardedLifecycleInvocation(
   io: CliIo,
   securityLogSink: SecurityLogSink | undefined,
   operation: () => Promise<number>,
+  home: string,
 ): Promise<number> {
   try {
-    const result = await withUiLifecycleGuard(stateDir, command !== "status", operation);
+    const result = await withUiLifecycleGuard(stateDir, command !== "status", operation, home);
     if (result.kind === "complete") return result.value;
-  } catch {
-    io.err("keiko: UI lifecycle ownership remains uncertain; tracking retained.\n");
-    emitNativeUiOwnership(securityLogSink, "reservation", "held");
+  } catch (error) {
+    const reason =
+      error instanceof UiLifecycleTrackingError
+        ? "UI lifecycle ownership remains uncertain"
+        : `UI lifecycle operation failed (${securityErrorKind(error)})`;
+    io.err(`keiko: ${reason}; tracking retained.\n`);
+    emitNativeUiOwnership(securityLogSink, "reservation", "held", error);
     return 1;
   }
   io.err("keiko: another UI lifecycle operation is still in progress.\n");

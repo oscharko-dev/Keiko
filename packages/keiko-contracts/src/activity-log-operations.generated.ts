@@ -2323,6 +2323,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["acknowledged", "refused", "uncertain", "reaped", "held"],
       },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 64,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

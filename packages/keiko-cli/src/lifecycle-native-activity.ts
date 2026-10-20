@@ -2,7 +2,11 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { emitSecurityLogEvent, type SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
 
 const NATIVE_OWNER_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -24,6 +28,7 @@ const NATIVE_OWNER_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["acknowledged", "refused", "uncertain", "reaped", "held"],
     },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -39,6 +44,7 @@ export function emitNativeUiOwnership(
   sink: SecurityLogSink | undefined,
   phase: "reservation" | "admission" | "commit" | "cleanup",
   outcome: "acknowledged" | "refused" | "uncertain" | "reaped" | "held",
+  error?: unknown,
 ): void {
   emitSecurityLogEvent(
     sink,
@@ -48,7 +54,13 @@ export function emitNativeUiOwnership(
         level: outcome === "acknowledged" || outcome === "reaped" ? "info" : "warn",
         ...(outcome === "acknowledged" || outcome === "reaped" ? {} : { errorKind: "unavailable" }),
       },
-      { phase, outcome, completeness: "complete", loss: "none" },
+      {
+        phase,
+        outcome,
+        ...(error === undefined ? {} : { failureKind: securityErrorKind(error) }),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }
