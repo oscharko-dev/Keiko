@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { extractPathReferences } from "./references.js";
 
 describe("reference wrappers preserve complete paths without promoting prose extensions", () => {
-  it.each(["HTML", "html", "TXT", "txt", "MD", "md"])(
+  it.each(["HTML", "html", "TXT", "txt", "MD", "md", "readmeHelper", "myREADME"])(
     "does not make the ordinary prose word %s a file reference",
     (term) => {
       expect(extractPathReferences(`Explain the ${term} format.`)).toEqual([]);
@@ -25,6 +25,9 @@ describe("reference wrappers preserve complete paths without promoting prose ext
     ['"src/Feature/validation.ts:7-9"', "src/Feature/validation.ts", 7],
     ["manual.html", "manual.html", undefined],
     ["README.md", "README.md", undefined],
+    ["README", "README", undefined],
+    ["readme", "readme", undefined],
+    ["CONTRIBUTING", "CONTRIBUTING", undefined],
     ["CMakeLists.txt", "CMakeLists.txt", undefined],
   ] as const)("preserves an actual file reference %s", (text, path, line) => {
     expect(extractPathReferences(`Explain ${text}`)).toEqual([

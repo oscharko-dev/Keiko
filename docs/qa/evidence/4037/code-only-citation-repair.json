@@ -64,14 +64,14 @@
     "failureFirstUnit": {
       "passed": 18,
       "failed": 4,
-      "existingSkips": 0,
-      "files": 1
+      "files": 1,
+      "notRunByTargetFilter": 0
     },
     "failureFirstPublicHandler": {
       "passed": 0,
       "failed": 2,
-      "existingSkips": 43,
-      "files": 1
+      "files": 1,
+      "notRunByTargetFilter": 43
     },
     "finalAffected": {
       "passed": 192,

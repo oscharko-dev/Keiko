@@ -88,7 +88,7 @@ export {
   type DiscoveryResult,
 } from "./discovery.js";
 
-export { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
+export { discoverWorkspacePaths, matchesDocumentBasenameStem } from "./workspacePathDiscovery.js";
 export {
   executionControlledWorkspaceFs,
   StructuralExecutionStoppedError,

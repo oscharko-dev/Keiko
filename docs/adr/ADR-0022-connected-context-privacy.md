@@ -1506,3 +1506,22 @@ remain unchanged for stable sources. Mutation/cancellation and unavailable sourc
 There is no cross-wave or persistent content cache and no added synthesis attempt or authority.
 Physical read-port diagnostics remain separate from unique-file, excerpt-byte and model-token
 accounting. Discovery completeness does not establish necessary implementation-window recall.
+
+
+### Conventional document-name shorthand
+
+A bare conventional overview document name recognized by the existing candidate classifier, such
+as `README` or `CONTRIBUTING`, is a query file reference. Existing bounded basename discovery
+matches its whole basename stem, case-insensitively, with an optional already supported text or web
+document extension. It filters matches before retention. Extra basename suffixes and source-code
+extensions do not match this shorthand; an explicitly supplied extension keeps exact basename
+semantics. Explicit file selections match only their selected paths without enumerating siblings.
+The existing canonical containment, denied-path, ignore, generated-file, classification, search,
+read, byte and cancellation gates remain authoritative. Existing source-details Activity Log
+counts describe actual discovery and admission without recording names or contents. This changes
+source intake only; it grants no source fact, model authority, prompt instruction or larger budget.
+
+Validated inherited budget omissions retain a `budget-clipped` uncertainty marker at the existing
+context-pack assembly boundary, including when ranking already removed the unread file. Existing
+markers are retained without another marker; non-budget omissions do not acquire a budget claim.
+The stable pack identity includes this uncertainty before publication and caching.

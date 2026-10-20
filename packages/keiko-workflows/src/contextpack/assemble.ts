@@ -825,6 +825,17 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
   );
   if (!validation.ok)
     throw new ContextPackValidationError(validation.reasons.length, validation.reasons);
+  if (
+    omitted.some((entry) => entry.reason === "budget-exhausted") &&
+    !plan.uncertainty.some((marker) => marker.kind === "budget-clipped")
+  ) {
+    plan.uncertainty.push({
+      kind: "budget-clipped",
+      claim: "Context evidence was omitted within the retrieval budget.",
+      impactedAtomIds: [],
+      emittedAtMs: nowMs,
+    });
+  }
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     stableId: buildStableId(input, plan, omitted),

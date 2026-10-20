@@ -1916,3 +1916,32 @@ latency measurement; original times, token use and outcomes remain retained.
 The ongoing frozen Java campaign separately reveals an expressly requested README omitted for low
 relevance. That retrieval defect requires its own repair and live requalification. Neither skill
 acceptance nor wider functional or delivery acceptance is claimed by this optimization.
+
+## Checkpoint 72 — admit requested document names and retain budget uncertainty
+
+Actual UI inspection showed the expressly requested README omitted as low relevance while code,
+build configuration and the neighboring test were retained. The existing path-reference owner now
+recognizes conventional overview document basenames through the existing candidate classifier.
+The existing streaming path discovery matches the complete basename stem, case-insensitively, with
+an optional supported text or web document extension before bounded retention. Explicit filenames
+retain exact matching; extra suffixes and source-code extensions do not match the shorthand. Exact
+file selections match only their selected paths without enumerating siblings. The shared matcher
+is the sole intended runtime/type export added to the generated package contract.
+
+Three source-intake assertions fail before repair. The first broader run then exposes an inherited
+budget omission with no uncertainty marker. A separate context-pack assembler control reproduces
+that failure; the existing assembler now retains one budget marker after validating omissions and
+before stable identity/caching. Existing markers are not duplicated and relevance exclusions do not
+gain a budget claim. No prompt, skill, domain rule, source authority or larger resource grant is added.
+
+The final affected controls pass 76 tests. The frozen broad run passes 3,597 tests in 196 files with
+one existing skip and zero source or compiled drift. Typing, affected-owner lint, all seven Activity
+Log/architecture checks, context/retrieval/grounded/faithfulness gates, error observability, ADR,
+formatting and real Sonar pass. The complete assembled package surface passes with 6,414 files and
+the unchanged editor ceiling. Original failures, initial export-contract drift and a stale-output
+generation attempt remain retained separately from final checks. Checkpoint71 metadata labels its
+43 unselected RED controls accurately without changing any count, model output or outcome.
+
+`document-name-intake.json` binds the repaired owners and scoped evidence. New live post-repair
+source-witness, generation, executable-test and skill comparisons remain pending; the original frozen
+campaign is neither overwritten nor accepted. Wider functional acceptance and delivery stay open.
