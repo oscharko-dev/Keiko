@@ -104,18 +104,57 @@ static int drop_capabilities(void) {
   return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0;
 }
 
+/* Full application values are applied only in the admitted root, after native loader startup. */
+static char **app_environment(const struct launch_request *request,
+                                const struct app_environment_packet *packet) {
+  size_t count = packet->count, used = 0;
+  if (count > SIZE_MAX / sizeof(char *) - request->environment_count - 1u) return NULL;
+  char **selected = spawn_environment(request);
+  char **values = calloc(count + request->environment_count + 1u, sizeof(char *));
+  if (selected == NULL || values == NULL) goto failed;
+  for (size_t i = 0; i < count; ++i) {
+    const char *separator = strchr(packet->values[i], '=');
+    int replaced = 0;
+    if (separator == NULL) goto failed;
+    size_t length = (size_t)(separator - packet->values[i]);
+    for (uint16_t j = 0; j < request->environment_count; ++j)
+      if (strlen(request->environment_names[j]) == length &&
+          memcmp(packet->values[i], request->environment_names[j], length) == 0) replaced = 1;
+    if (!replaced) {
+      values[used] = strdup(packet->values[i]);
+      if (values[used] == NULL) goto failed;
+      ++used;
+    }
+  }
+  for (uint16_t i = 0; i < request->environment_count; ++i) {
+    values[used++] = selected[i]; selected[i] = NULL;
+  }
+  free(selected);
+  return values;
+failed:
+  if (selected != NULL) clear_environment(selected, request->environment_count);
+  clear_environment(values, (uint16_t)used);
+  return NULL;
+}
+
 static void execute_root(const struct launch_request *request, int notices, int failure,
-                         int start_gate, int scope) {
+                         int start_gate, int scope, const struct app_environment_packet *app,
+                         uint64_t deadline) {
   int keep[] = {notices, failure, start_gate, scope};
   char acknowledgement;
-  char **arguments = spawn_arguments(request), **environment = spawn_environment(request);
+  char **arguments = spawn_arguments(request);
+  char **environment = scope < 0 ? spawn_environment(request) : app_environment(request, app);
   if (arguments != NULL && environment != NULL && retain_descriptors(keep, 4) &&
       chdir(request->cwd) == 0 && send(notices, "R", 1, 0) == 1 &&
-      recv(notices, &acknowledgement, 1, 0) == 1 && acknowledgement == 'A') {
+      recv(notices, &acknowledgement, 1, 0) == 1 && acknowledgement == 'A' &&
+      within_deadline(1u, deadline)) {
     close(notices);
     execve(request->executable, arguments, environment);
   }
   int error = errno == 0 ? EINVAL : errno;
+  free(arguments);
+  clear_environment(environment, (uint16_t)(request->environment_count +
+                    (app == NULL ? 0u : app->count)));
   (void)write_exact(failure, &error, sizeof(error));
   _exit(126);
 }
@@ -125,12 +164,13 @@ static int root_exit_code(int status) {
 }
 
 static void run_init(const struct launch_request *request, int gate, int notices, int lease,
-                     int start_gate, uid_t uid, gid_t gid, int owner_handle, int scope) {
+                     int start_gate, uid_t uid, gid_t gid, int owner_handle, int scope,
+                     const struct app_environment_packet *app, uint64_t deadline) {
   int keep[] = {gate, notices, lease, start_gate, owner_handle, scope};
   int execution[2];
   char accepted;
   if (!retain_descriptors(keep, 6) || !keiko_bind_parent_death(owner_handle) ||
-      read(gate, &accepted, 1) != 1 || accepted != 'A')
+      read(gate, &accepted, 1) != 1 || accepted != 'A' || !within_deadline(1u, deadline))
     _exit(126);
   close(gate);
   if (getpid() != 1 || getuid() != uid || geteuid() != uid || getgid() != gid ||
@@ -141,7 +181,7 @@ static void run_init(const struct launch_request *request, int gate, int notices
   close(owner_handle);
   pid_t root = fork();
   if (root < 0) _exit(126);
-  if (root == 0) execute_root(request, notices, execution[1], start_gate, scope);
+  if (root == 0) execute_root(request, notices, execution[1], start_gate, scope, app, deadline);
   if (scope >= 0) close(scope);
   close(execution[1]);
   if (start_gate >= 0) close(start_gate);
@@ -222,12 +262,14 @@ static int receive_notice(int descriptor, char expected, struct generation *gene
 }
 
 static int start_generation(struct generation *generation, const struct launch_request *request,
-                              int scope) {
+                              int scope, const struct app_environment_packet *app,
+                              uint64_t startup_deadline) {
   int gate[2] = {-1, -1}, notices[2] = {-1, -1}, lease[2] = {-1, -1};
   int enabled = 1, result = 0, owner_handle = -1;
   int start_gate = fcntl(5, F_GETFD) == -1 ? -1 : 5;
   uid_t uid = getuid(); gid_t gid = getgid();
   uint64_t now = monotonic_ms(), deadline = now + GENERATION_TIMEOUT_MS;
+  if (startup_deadline < deadline) deadline = startup_deadline;
   if (uid == 0 || uid != geteuid() || gid != getegid()) {
     generation->startup_error = ERROR_NATIVE_UNAVAILABLE;
     goto cleanup;
@@ -248,7 +290,7 @@ static int start_generation(struct generation *generation, const struct launch_r
     goto cleanup;
   }
   if (child == 0) run_init(request, gate[0], notices[1], lease[0], start_gate, uid, gid,
-                           owner_handle, scope);
+                           owner_handle, scope, app, deadline);
   generation->init = child;
   generation->lease = lease[1]; lease[1] = -1;
   close_descriptor(&gate[0]); close_descriptor(&lease[0]); close_descriptor(&notices[1]);
@@ -374,8 +416,24 @@ static int report_held_root(const struct generation *generation) {
   }
 }
 
+static int app_packet_reader(int descriptor, void *buffer, size_t length, void *context) {
+  uint64_t deadline = *(const uint64_t *)context;
+  unsigned char *bytes = buffer;
+  size_t offset = 0;
+  while (offset < length) {
+    if (!wait_readable(descriptor, deadline)) return 0;
+    ssize_t count = read(descriptor, bytes + offset, length - offset);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0 || !within_deadline(1u, deadline)) return 0;
+    offset += (size_t)count;
+  }
+  return within_deadline(1u, deadline);
+}
+
 int main(int argc, char **argv) {
   struct launch_request request = {0};
+  struct app_environment_packet environment = {0};
+  uint64_t now = monotonic_ms(), deadline = now + GENERATION_TIMEOUT_MS;
   struct generation generation = {.init = -1, .root = -1, .init_fd = -1, .root_fd = -1,
                                    .lease = -1, .status = 0, .reaped = 0,
                                    .startup_error = ERROR_PROCESS_CREATE};
@@ -386,12 +444,16 @@ int main(int argc, char **argv) {
   int scope = app ? 7 : -1;
   (void)signal(SIGPIPE, SIG_IGN);
   if ((argc != 1 && !owner_report) || (owner_report && !valid_owner_channel()) ||
-      (app && !valid_owner_socket(7)) ||
-      !read_launch_request(&request)) {
+      (app && (!valid_owner_socket(7) || now == 0 || deadline <= now ||
+               !keiko_app_clip_deadline(&deadline, 1) || !within_deadline(now, deadline))) ||
+      !(app ? read_launch_request_with_reader(&request, app_packet_reader, &deadline)
+            : read_launch_request(&request)) ||
+      (app && !read_app_environment(&environment, app_packet_reader, &deadline))) {
     error = ERROR_PROTOCOL;
     goto cleanup;
   }
-  if (!start_generation(&generation, &request, scope)) {
+  if (!start_generation(&generation, &request, scope, app ? &environment : NULL,
+                        app ? deadline : UINT64_MAX)) {
     error = generation.startup_error;
     goto cleanup;
   }
@@ -409,6 +471,7 @@ cleanup:
   close_descriptor(&scope);
   clear_generation(&generation);
   clear_request(&request);
+  clear_app_environment(&environment);
   if (result != 0) (void)send_error((uint16_t)error);
   return result;
 }

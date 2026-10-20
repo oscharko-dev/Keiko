@@ -177,12 +177,6 @@
     },
     {
       "path": "packages/keiko-cli/src/lifecycle.ts",
-      "owner": "cmdStart",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/lifecycle.ts",
       "owner": "fetchHealthProbe",
       "kind": "unregistered-catch",
       "count": 1
@@ -473,7 +467,7 @@
       "path": "packages/keiko-cli/src/state-paths.ts",
       "owner": "readPidRecord",
       "kind": "unregistered-catch",
-      "count": 2
+      "count": 1
     },
     {
       "path": "packages/keiko-cli/src/support.ts",

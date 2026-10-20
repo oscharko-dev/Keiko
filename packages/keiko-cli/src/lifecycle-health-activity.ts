@@ -6,7 +6,7 @@ import {
 import { emitSecurityLogEvent, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 export type LifecycleHealthOutcome =
-  "healthy" | "process-exited" | "health-timeout" | "identity-mismatch";
+  "healthy" | "process-exited" | "health-timeout" | "identity-mismatch" | "spawn-refused";
 
 const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -26,7 +26,7 @@ const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["healthy", "process-exited", "health-timeout", "identity-mismatch"],
+      values: ["healthy", "process-exited", "health-timeout", "identity-mismatch", "spawn-refused"],
     },
     launchBound: { type: "boolean", dataClass: "closed-enum", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },

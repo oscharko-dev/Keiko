@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { spawn, execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,8 @@ import {
   encodeControlPacket,
   encodeLaunchPacket,
 } from "../../../packages/keiko-server/dist/coding-runtime/nativeRuntimeProcessProtocol.js";
+import { appResponse, commitPacket, appLaunchPacket } from "./app-owner-harness.mjs";
+import { writeExclusivePidFile } from "../../../packages/keiko-cli/dist/state-paths.js";
 import { readBytes, response, streamReader } from "../protocol-harness.mjs";
 
 const execute = promisify(execFile);
@@ -42,6 +44,8 @@ async function qualify(launcher, helper, root, mode, args = [mode], app = true) 
   const hash = createHash("sha256")
     .update(await readFile(helper))
     .digest("hex");
+  const launchId = randomBytes(16).toString("hex");
+  const state = await scopeState(mode, args);
   const child = spawn(launcher, [app ? "--own-app-runtime" : "--own-runtime", helper, hash], {
     env: {},
     stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
@@ -62,18 +66,9 @@ async function qualify(launcher, helper, root, mode, args = [mode], app = true) 
   const timeout = setTimeout(() => child.kill("SIGKILL"), 15000);
   let complete = false;
   try {
-    child.stdio[3].write(
-      encodeLaunchPacket(
-        {
-          recoveryHandle: "0123456789abcdef0123456789abcdef",
-          args,
-          env: {},
-        },
-        { executable: root, cwd: mode.startsWith("node") ? join(directory, "project") : directory },
-      ),
-    );
-    assert.deepEqual(await response(reader), { kind: 1, payload: Buffer.alloc(0) });
-    await finishRoot(child, mode, reader, output, exited);
+    child.stdio[3].write(scopeLaunchPacket(root, mode, args, app, launchId, state));
+    await receiveAdmission(reader, app, state, launchId);
+    await finishRoot(child, mode, reader, output, exited, app ? launchId : undefined);
     complete = true;
   } catch (error) {
     if (!mode.startsWith("node")) throw error;
@@ -96,7 +91,44 @@ async function qualify(launcher, helper, root, mode, args = [mode], app = true) 
   }
 }
 
-async function finishRoot(child, mode, reader, output, exited) {
+async function scopeState(mode, args) {
+  return mode.startsWith("node") ? args[1] : await mkdtemp(join(directory, "owner-state-"));
+}
+
+function scopeLaunchPacket(root, mode, args, app, launchId, state) {
+  return (app ? appLaunchPacket : encodeLaunchPacket)(
+    {
+      recoveryHandle: launchId,
+      args,
+      env: app
+        ? {
+            KEIKO_UI_LAUNCH_ID: launchId,
+            KEIKO_STATE_DIR: state,
+            KEIKO_START_TIMEOUT_SECS: "15",
+          }
+        : {},
+    },
+    { executable: root, cwd: mode.startsWith("node") ? join(directory, "project") : directory },
+  );
+}
+
+async function receiveAdmission(reader, app, state, launchId) {
+  if (app) {
+    const receipt = await appResponse(reader);
+    assert.equal(receipt.kind, 4);
+    assert.equal(receipt.payload.length, 36);
+    assert.equal(receipt.payload.subarray(4).toString(), launchId);
+    writeExclusivePidFile(
+      join(state, "ui.pid"),
+      receipt.payload.readUInt32LE(0),
+      launchId,
+      true,
+      true,
+    );
+  } else assert.deepEqual(await response(reader), { kind: 1, payload: Buffer.alloc(0) });
+}
+
+async function finishRoot(child, mode, reader, output, exited, launchId) {
   const refused = new Set(["node-refused", "node-absent"]).has(mode);
   const expected = refused
     ? "NODE-REFUSED\n"
@@ -106,6 +138,10 @@ async function finishRoot(child, mode, reader, output, exited) {
         ? "SCOPE\n"
         : "NODE-SCOPE\n";
   assert.equal((await readBytes(output, expected.length)).toString(), expected);
+  if (!refused && launchId !== undefined) {
+    child.stdio[3].write(commitPacket(launchId));
+    assert.deepEqual(await appResponse(reader), { kind: 5, payload: Buffer.from(launchId) });
+  }
   if (mode === "node-timeout") await stoppedOwner(child, output);
   if (!refused) child.stdio[3].end(encodeControlPacket(3));
   const retired = await response(reader);

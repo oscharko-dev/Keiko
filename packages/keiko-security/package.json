@@ -95,6 +95,10 @@
       "types": "./dist/macos-keychain.d.ts",
       "import": "./dist/macos-keychain.js"
     },
+    "./sqlite-file-guard": {
+      "types": "./dist/sqlite-file-guard.d.ts",
+      "import": "./dist/sqlite-file-guard.js"
+    },
     "./sqlite-corruption": {
       "types": "./dist/sqlite-corruption.d.ts",
       "import": "./dist/sqlite-corruption.js"

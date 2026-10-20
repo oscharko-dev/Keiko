@@ -40,6 +40,21 @@ import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import { emitBrowserHandoff } from "./lifecycle-browser-activity.js";
 import { emitLifecycleHealth } from "./lifecycle-health-activity.js";
+import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
+import {
+  nativeUiGenerationReaped,
+  nativeUiGenerationOwned,
+  nativeUiAttemptSettled,
+  nativeUiLaunchIdUnused,
+} from "./native-ui-reap.js";
+import { withUiLifecycleGuard } from "./ui-lifecycle-guard.js";
+import {
+  resolveManagedNativeUiRuntime,
+  startNativeUiProcess,
+  type NativeUiRuntime,
+  type NativeUiLaunch,
+  NativeUiAdmissionError,
+} from "./native-ui-runtime.js";
 import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import type { CliIo } from "./runner.js";
 import {
@@ -51,6 +66,9 @@ import {
   KEIKO_UI_LAUNCH_ID_ENV,
   UI_LAUNCH_ID_FLAG,
   readPidRecord,
+  readUiLifecycleTracking,
+  writePendingUiLaunch,
+  removePendingUiLaunch,
   removeStaleShutdownRequest,
   removePidFileIfMatches,
   resolveContainedStateDir,
@@ -153,6 +171,7 @@ interface RawLifecycleOptions {
 }
 
 export interface LifecycleCliDeps {
+  readonly nativeUiRuntime?: NativeUiRuntime | undefined;
   readonly cwd?: string | undefined;
   readonly homedir?: (() => string) | undefined;
   readonly spawnFn?: SpawnFn | undefined;
@@ -171,6 +190,8 @@ export interface LifecycleCliDeps {
 }
 
 interface LifecycleRuntimeDeps {
+  readonly nativeUiRuntime?: NativeUiRuntime | undefined;
+  readonly home: string;
   readonly correlationId: string;
   readonly spawnFn: SpawnFn;
   readonly healthProbe: HealthProbeFn;
@@ -449,25 +470,43 @@ function defaultIsPortAvailable(host: string, port: number): Promise<boolean> {
 function runningPidRecord(
   options: LifecycleOptions,
   isAlive: (pid: number) => boolean,
+  sink?: SecurityLogSink,
 ): ReturnType<typeof readPidRecord> {
   const path = pidFile(options);
-  const record = readPidRecord(path);
-  if (record === undefined) {
-    rmSync(path, { force: true });
-    return undefined;
-  }
+  const record = trackedUiRecord(options, path, sink);
+  if (record === undefined) return undefined;
   if (!isAlive(record.pid)) {
+    if (record.nativeAppRuntime && !nativeUiGenerationReaped(options.stateDir, record))
+      return record;
     rmSync(path, { force: true });
+    if (record.nativeAppRuntime) emitNativeUiOwnership(sink, "cleanup", "reaped");
     return undefined;
   }
   return record;
 }
 
+function trackedUiRecord(
+  options: LifecycleOptions,
+  path: string,
+  sink?: SecurityLogSink,
+): PidRecord | undefined {
+  const tracking = readUiLifecycleTracking(path);
+  if (tracking.kind === "process") return tracking.record;
+  if (tracking.kind === "absent") return undefined;
+  if (tracking.kind === "starting" && nativeUiAttemptSettled(options.stateDir, tracking.launchId)) {
+    removePendingUiLaunch(path, tracking.launchId);
+    emitNativeUiOwnership(sink, "cleanup", "acknowledged");
+    return undefined;
+  }
+  throw new Error("UI lifecycle tracking remains uncertain");
+}
+
 function runningPid(
   options: LifecycleOptions,
   isAlive: (pid: number) => boolean,
+  sink?: SecurityLogSink,
 ): number | undefined {
-  return runningPidRecord(options, isAlive)?.pid;
+  return runningPidRecord(options, isAlive, sink)?.pid;
 }
 
 // #2478 (ADR-0141 W1.5): `keiko start` is the trusted launcher of the UI process. It provisions a
@@ -700,8 +739,24 @@ function spawnUiProcess(
   launchId: string,
 ): ChildProcess {
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
+  return deps.spawnFn(process.execPath, uiProcessArguments(options, cwd, env, launchId), {
+    argv0: KEIKO_PROCESS_TITLE,
+    cwd,
+    detached: true,
+    env: uiProcessEnvironment(options, env, cwd, pairingSecret, launchId),
+    stdio: "ignore",
+  });
+}
+
+function uiProcessEnvironment(
+  options: LifecycleOptions,
+  env: EnvSource,
+  cwd: string,
+  pairingSecret: string,
+  launchId: string,
+): NodeJS.ProcessEnv {
   const preferredLayout = resolvePreferredInstallLayout(cwd);
-  const uiEnv = childEnv({
+  return childEnv({
     ...env,
     KEIKO_STATE_DIR: options.stateDir,
     [KEIKO_UI_LAUNCH_ID_ENV]: launchId,
@@ -715,26 +770,24 @@ function spawnUiProcess(
           KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
         }),
   });
-  return deps.spawnFn(
-    process.execPath,
-    [
-      cliEntryPath(cwd, env),
-      "ui",
-      "--port",
-      String(options.port),
-      "--host",
-      options.host,
-      UI_LAUNCH_ID_FLAG,
-      launchId,
-    ],
-    {
-      argv0: KEIKO_PROCESS_TITLE,
-      cwd,
-      detached: true,
-      env: uiEnv,
-      stdio: "ignore",
-    },
-  );
+}
+
+function uiProcessArguments(
+  options: LifecycleOptions,
+  cwd: string,
+  env: EnvSource,
+  launchId: string,
+): readonly string[] {
+  return [
+    cliEntryPath(cwd, env),
+    "ui",
+    "--port",
+    String(options.port),
+    "--host",
+    options.host,
+    UI_LAUNCH_ID_FLAG,
+    launchId,
+  ];
 }
 
 // The closed start result a failed `keiko start` reports (#3532): the child exited before it
@@ -746,10 +799,10 @@ async function waitForHealth(
   pid: number,
   launchId: string,
   deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
+  deadline = performance.now() + options.startTimeoutMs,
 ): Promise<StartOutcome> {
   // Monotonic clock so a wall-clock adjustment during startup does not skip the health
   // window (forward jump) or hold it open indefinitely (backward jump).
-  const deadline = performance.now() + options.startTimeoutMs;
   while (performance.now() < deadline) {
     if (!deps.isProcessAlive(pid)) return "process-exited";
     const remaining = Math.ceil(deadline - performance.now());
@@ -867,17 +920,22 @@ function trackedUiStillOwned(
   deps: LifecycleRuntimeDeps,
   record: PidRecord,
 ): boolean {
-  const current = readPidRecord(pidFile(options));
-  if (
-    current?.pid !== record.pid ||
-    current.launchId !== record.launchId ||
-    current.browserOpenSupported !== record.browserOpenSupported ||
-    !deps.isProcessAlive(record.pid)
-  ) {
+  const current = readPidRecord(pidFile(options), record.nativeAppRuntime === true);
+  if (!sameTrackedUiRecord(current, record) || !deps.isProcessAlive(record.pid)) {
     return false;
   }
   const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
-  return record.launchId === undefined || verify(record.pid, record.launchId);
+  if (record.launchId !== undefined && !verify(record.pid, record.launchId)) return false;
+  return record.nativeAppRuntime !== true || nativeUiGenerationOwned(options.stateDir, record);
+}
+
+function sameTrackedUiRecord(current: PidRecord | undefined, expected: PidRecord): boolean {
+  return (
+    current?.pid === expected.pid &&
+    current.launchId === expected.launchId &&
+    current.browserOpenSupported === expected.browserOpenSupported &&
+    current.nativeAppRuntime === expected.nativeAppRuntime
+  );
 }
 
 function healthConflictsWithTracked(
@@ -958,7 +1016,7 @@ async function cmdStart(
   deps: LifecycleRuntimeDeps,
   cwd: string,
 ): Promise<number> {
-  const running = runningPidRecord(options, deps.isProcessAlive);
+  const running = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (running !== undefined) {
     const nextAction = await handleStaleRunning(options, io, deps, running);
     if (nextAction !== "start") return nextAction;
@@ -970,10 +1028,28 @@ async function cmdStart(
   const pairingSecret = resolveLauncherPairingSecret(env);
   const launchId = launchIdForStart(env, io);
   if (launchId === undefined) return 1;
+  let native: NativeUiRuntime | undefined;
+  try {
+    native =
+      deps.nativeUiRuntime ??
+      (await resolveManagedNativeUiRuntime(options.stateDir, env, deps.home, deps.platform));
+  } catch {
+    emitNativeUiOwnership(deps.securityLogSink, "admission", "refused");
+    io.err("keiko start: installed native runtime could not be verified.\n");
+    return 1;
+  }
+  if (native !== undefined)
+    return startOwnedUi({ options, io, env, deps, cwd, pairingSecret, launchId }, native);
+  return startDirectUi({ options, io, env, deps, cwd, pairingSecret, launchId });
+}
+
+async function startDirectUi(context: OwnedUiStartContext): Promise<number> {
+  const { options, io, env, deps, cwd, pairingSecret, launchId } = context;
   let child: ChildProcess;
   try {
     child = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
   } catch {
+    emitLifecycleHealth(deps.securityLogSink, "start", "spawn-refused", false);
     io.err("keiko start: failed to spawn the UI process.\n");
     return 1;
   }
@@ -1016,6 +1092,130 @@ async function cmdStart(
   }
 
   return reportUnhealthyStart(options, io, deps, child.pid, launchId, startOutcome);
+}
+
+interface OwnedUiStartContext {
+  readonly options: LifecycleOptions;
+  readonly io: CliIo;
+  readonly env: EnvSource;
+  readonly deps: LifecycleRuntimeDeps;
+  readonly cwd: string;
+  readonly pairingSecret: string;
+  readonly launchId: string;
+}
+
+async function publishOwnedUiPid(
+  context: OwnedUiStartContext,
+  launch: NativeUiLaunch,
+): Promise<boolean> {
+  try {
+    writeExclusivePidFile(pidFile(context.options), launch.pid, context.launchId, true, true);
+    const record = readPidRecord(pidFile(context.options), true);
+    if (
+      record?.pid !== launch.pid ||
+      record.launchId !== context.launchId ||
+      !record.nativeAppRuntime
+    )
+      throw new Error("native-ui-pid-publication-unverified");
+    return true;
+  } catch {
+    await launch.abort();
+    emitNativeUiOwnership(
+      context.deps.securityLogSink,
+      "cleanup",
+      nativeUiGenerationReaped(context.options.stateDir, {
+        pid: launch.pid,
+        launchId: context.launchId,
+      })
+        ? "reaped"
+        : "held",
+    );
+    context.io.err("keiko start: failed to publish native UI ownership.\n");
+    return false;
+  }
+}
+
+async function commitOwnedUi(
+  context: OwnedUiStartContext,
+  launch: NativeUiLaunch,
+  deadline: number,
+): Promise<number> {
+  try {
+    await launch.commit();
+    if (performance.now() >= deadline) throw new Error("native-ui-commit-expired");
+  } catch {
+    launch.release();
+    emitNativeUiOwnership(context.deps.securityLogSink, "commit", "uncertain");
+    context.io.err(
+      "keiko start: native ownership confirmation is unavailable; tracking retained.\n",
+    );
+    return 1;
+  }
+  launch.release();
+  emitNativeUiOwnership(context.deps.securityLogSink, "commit", "acknowledged");
+  return reportHealthyStart(
+    context.options,
+    context.io,
+    launch.pid,
+    context.deps.openExternal,
+    context.deps.securityLogSink,
+    context.pairingSecret,
+  );
+}
+
+function reportOwnedAdmissionFailure(context: OwnedUiStartContext, error: unknown): number {
+  const { options, deps, launchId, io } = context;
+  const settled =
+    (error instanceof NativeUiAdmissionError && !error.nativeAuthorityMayBeLive) ||
+    nativeUiAttemptSettled(options.stateDir, launchId);
+  if (settled) removePendingUiLaunch(pidFile(options), launchId);
+  emitNativeUiOwnership(deps.securityLogSink, "admission", settled ? "refused" : "uncertain");
+  io.err(
+    "keiko start: native UI ownership could not be established. Uncertain starts remain tracked.\n",
+  );
+  return 1;
+}
+
+async function startOwnedUi(
+  context: OwnedUiStartContext,
+  runtime: NativeUiRuntime,
+): Promise<number> {
+  const { options, io, env, deps, cwd, pairingSecret, launchId } = context;
+  const deadline = performance.now() + options.startTimeoutMs;
+  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
+  let launch: NativeUiLaunch;
+  try {
+    launch = await startNativeUiProcess({
+      runtime,
+      args: [runtime.cliBinPath, ...uiProcessArguments(options, cwd, env, launchId).slice(1)],
+      cwd,
+      env: {
+        ...uiProcessEnvironment(options, env, cwd, pairingSecret, launchId),
+        KEIKO_CLI_BIN_PATH: runtime.cliBinPath,
+        KEIKO_UI_STATIC_ROOT: runtime.staticRoot,
+      },
+      launchId,
+      startTimeoutMs: options.startTimeoutMs,
+      deadline,
+      reserve: (): void => {
+        if (!nativeUiLaunchIdUnused(options.stateDir, launchId))
+          throw new Error("Native launch identity was already used");
+        writePendingUiLaunch(pidFile(options), launchId);
+      },
+      spawnFn: deps.spawnFn,
+    });
+  } catch (error) {
+    return reportOwnedAdmissionFailure(context, error);
+  }
+
+  emitNativeUiOwnership(deps.securityLogSink, "admission", "acknowledged");
+  if (!(await publishOwnedUiPid(context, launch))) return 1;
+  io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
+  const outcome = await waitForHealth(options, launch.pid, launchId, deps, deadline);
+  emitLifecycleHealth(deps.securityLogSink, "start", outcome, outcome === "healthy");
+  if (outcome === "healthy") return commitOwnedUi(context, launch, deadline);
+  await launch.abort();
+  return reportUnhealthyStart(options, io, deps, launch.pid, launchId, outcome);
 }
 
 interface TerminateAndConfirmResult {
@@ -1066,7 +1266,7 @@ async function cmdStop(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
 ): Promise<number> {
-  const record = runningPidRecord(options, deps.isProcessAlive);
+  const record = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (record === undefined) {
     io.out("Keiko UI is not running.\n");
     return 0;
@@ -1108,9 +1308,9 @@ function readinessStatusLine(health: HealthProbeResult): string {
 async function cmdStatus(
   options: LifecycleOptions,
   io: CliIo,
-  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "isProcessAlive">,
+  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "isProcessAlive" | "securityLogSink">,
 ): Promise<number> {
-  const pid = runningPid(options, deps.isProcessAlive);
+  const pid = runningPid(options, deps.isProcessAlive, deps.securityLogSink);
   if (pid === undefined) {
     io.out("Keiko UI is not running.\n");
     return 0;
@@ -1132,6 +1332,10 @@ async function cmdRestart(
   return cmdStart(options, io, env, deps, cwd);
 }
 
+function lifecycleHome(deps: LifecycleCliDeps): string {
+  return (deps.homedir ?? defaultHomedir)();
+}
+
 function runtimeDeps(
   deps: LifecycleCliDeps,
   env: EnvSource,
@@ -1141,6 +1345,8 @@ function runtimeDeps(
   const fetchImpl = deps.fetchImpl;
   const platform = deps.platform?.() ?? process.platform;
   return {
+    nativeUiRuntime: deps.nativeUiRuntime,
+    home: lifecycleHome(deps),
     correlationId,
     spawnFn: deps.spawnFn ?? spawn,
     healthProbe:
@@ -1233,5 +1439,31 @@ export async function runLifecycleCli(
     status: () => cmdStatus(options, io, fullDeps),
     restart: () => cmdRestart(options, io, env, fullDeps, cwd),
   };
-  return handlers[command]();
+  return guardedLifecycleInvocation(
+    command,
+    options.stateDir,
+    io,
+    securityLogSink,
+    handlers[command],
+  );
+}
+
+async function guardedLifecycleInvocation(
+  command: LifecycleCommand,
+  stateDir: string,
+  io: CliIo,
+  securityLogSink: SecurityLogSink | undefined,
+  operation: () => Promise<number>,
+): Promise<number> {
+  try {
+    const result = await withUiLifecycleGuard(stateDir, command !== "status", operation);
+    if (result.kind === "complete") return result.value;
+  } catch {
+    io.err("keiko: UI lifecycle ownership remains uncertain; tracking retained.\n");
+    emitNativeUiOwnership(securityLogSink, "reservation", "held");
+    return 1;
+  }
+  io.err("keiko: another UI lifecycle operation is still in progress.\n");
+  emitNativeUiOwnership(securityLogSink, "reservation", "held");
+  return 1;
 }

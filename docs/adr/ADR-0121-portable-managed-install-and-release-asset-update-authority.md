@@ -461,8 +461,74 @@ The existing native-runtime Activity Log operation records one closed Worker bui
 from cold digest resolution. The existing BFF composition supplies its process log sink; accepted
 and refused builds include no file path, descriptor, inode, UID, query or content.
 
-These independently exercised Linux mechanisms do not admit an installed app or updater transition.
-The initial CLI still needs the complete detached outer-owner lifetime; each update still needs
+The Linux initial CLI now uses that app-owner role for an attested managed install. Its app-specific
+root receipt carries the actual BFF PID captured from the held root reference and the selected
+launch identity. Generic runtime admission retains its original empty `LAUNCHED` response and
+controller-EOF lifetime. App admission requires the selected state directory, launch identity and
+start grant; missing fields cannot downgrade to generic admission. The original grant bounds
+provisional ownership, health and the explicit commit acknowledgement. Packet assembly, decoded
+responses and their awaited consumers check the same final monotonic deadline. Linux libuv's
+`uv_hrtime` and the native processes use `CLOCK_MONOTONIC`; the CLI samples that clock before
+the remaining grant and sends a conservatively rounded absolute deadline. The supervisor consumes
+that same deadline before packet intake, generation creation and root execution. A delayed
+consumer cannot obtain a new startup grant.
+
+The full application environment crosses the existing private control pipe as a separate `KAE1`
+data packet, bounded to 4,096 entries and 128 KiB including its header; each value retains the
+16 KiB limit. Only the admitted app root applies those values, overlaying the selected launch,
+state and grant from KRP. The outer owner starts with the closed four selected control values;
+its supervisor receives only the effective absolute deadline. Application loader variables cannot
+select code in either native authority process. Generic KRP environment limits remain unchanged.
+Provider, browser and certificate configuration is neither silently dropped nor inserted into
+diagnostics.
+
+CLI lifecycle commands serialize existing PID tracking with the same stable, zero-data SQLite
+guard primitive used by updater state publication. Its stable zero-data `ui.pid` guard lives at
+`.keiko-lifecycle-<SHA-256 of canonical selected state path>/.keiko/guards/ui.pid` beside the selected
+state directory. Complete state removal cannot unlink a held guard or admit a concurrent start
+through a replacement inode.
+It is never raw-read or unlinked; read-only repair previews do not acquire or create it.
+The nested `.keiko` segment retains the existing workspace denial for internal authority files.
+The existing bounded nearest-ancestor resolver canonicalizes its parent before the lock identity
+is selected, including allowed macOS system aliases and an absent state leaf. Raw ancestor policy
+checks precede that resolution. Dot components, redundant/trailing separators and platform case
+aliases cannot create another guard; conservative case folding may serialize distinct names on
+a case-sensitive macOS or Windows volume. Unrelated symlink ancestors remain refused.
+A native start first reserves `ui.pid`
+as `native-app-starting-v1` plus its launch identity, without claiming a BFF or owner PID. Missing
+first receipts and uncertain cleanup retain that reservation. Only a matching native terminal
+record may retire an uncertain attempt; known pre-spawn validation and failed OS spawning do not
+create a fictitious generation. A previously used launch identity cannot start another generation.
+Repair and uninstall retain pending, unknown and incompletely reaped native ownership.
+If the native owner positively knows it never forked a supervisor, it can publish a separate
+launch-bound `not-started` record with root zero. That record may retire only a pending attempt;
+it never establishes that a previously admitted root generation was reaped.
+
+After the root receipt, the actual PID record is published completely and atomically over the
+owned pending attempt, using the existing marked atomic-state staging namespace. Partial writes,
+flush, close or rename failure cannot expose a valid legacy prefix in place of a native record.
+Native records add the exact `native-app-v1` capability after the existing optional browser
+capability. Both CLI and coordinator readers retain canonical legacy compatibility and refuse
+unknown or truncated capabilities. Native commit requires the canonical native PID binding, an
+authenticated root metadata exchange, the held live root reference and durable ownership state.
+The selected private receipt hierarchy is rebound before and after publication, created directory
+links are flushed, and inaccessible receipt modes refuse. These pathname preflights do not claim
+atomic protection against an external same-UID ancestor replacement.
+
+Before commit, controller loss retires the provisional generation through the existing native
+stop/reap path. After durable commit, launching-CLI EOF leaves the native owner, its direct
+supervisor and the readonly metadata port alive. A lost commit ACK remains uncertain at the CLI;
+it cannot erase tracking or authorize a duplicate. The owner writes a protected, launch-bound
+terminal record only after the held root terminates, its supervisor reports zero remaining members,
+and that direct supervisor is positively reaped. A later CLI stop requires that native observation
+in addition to root termination. A file is never converted into a branded server reap receipt.
+Missing, partial or mismatched records and owner crashes remain held.
+Retaining an already running native generation also requires the matching committed `owned`
+record after health, process identity and canonical PID capability checks. A healthy provisional
+root or a lost commit acknowledgement alone cannot supply that confirmation. Once a lost-ACK
+commit is durably confirmed by its owner, a later launcher may retain the same generation.
+
+These mechanisms do not by themselves admit an installed updater transition. Each update still needs
 the direct BFF-created coordinator channel, separate installed-current and running-owner identities,
 successor ownership and installed-version evidence described above.
 The macOS outer-owner path also remains unqualified. No third helper artifact or Linux sandbox

@@ -64,9 +64,25 @@ static void verify_reused_descriptor(pid_t outer) {
   assert(close(descriptor) == 0 && fclose(second) == 0);
 }
 
+static void verify_inherited_app_environment(void) {
+  if (getenv("KEIKO_QUALIFICATION_CHECK_ENV") == NULL) return;
+  char name[80];
+  for (size_t i = 0; i < 140; ++i) {
+    assert(snprintf(name, sizeof(name), "KEIKO_QUALIFICATION_%zu", i) > 0);
+    assert(getenv(name) != NULL && strcmp(getenv(name), "value") == 0);
+  }
+  assert(strcmp(getenv("OPENAI_API_KEY"), "fixture-placeholder") == 0);
+  assert(strcmp(getenv("NODE_EXTRA_CA_CERTS"), "fixture-certificate.pem") == 0);
+  assert(strcmp(getenv("BROWSER"), "fixture-browser") == 0);
+  assert(strcmp(getenv("KEIKO_START_TIMEOUT_SECS"), "5") == 0);
+  assert(strcmp(getenv("KEIKO_STATE_DIR"), getenv("KEIKO_QUALIFICATION_EXPECTED_STATE")) == 0);
+  assert(strcmp(getenv("KEIKO_UI_LAUNCH_ID"), getenv("KEIKO_QUALIFICATION_EXPECTED_LAUNCH")) == 0);
+}
+
 int main(int argc, char **argv) {
   unsigned char identity[20];
   assert(argc == 2);
+  verify_inherited_app_environment();
   read_packet(identity, 1);
   pid_t outer = (pid_t)read_u32(identity + 12), owner = (pid_t)read_u32(identity + 16);
   assert(getpid() == 2 && outer > 2 && owner > 2 && owner != outer);
@@ -112,8 +128,17 @@ int main(int argc, char **argv) {
     for (;;) pause();
   }
   if (strcmp(argv[1], "stale") == 0) verify_reused_descriptor(outer);
-  else assert(strcmp(argv[1], "valid") == 0);
+  else assert(strcmp(argv[1], "valid") == 0 || strcmp(argv[1], "persistent") == 0);
   assert(write_exact(STDOUT_FILENO, "SCOPE\n", 6));
+  if (strcmp(argv[1], "persistent") == 0) {
+    char command;
+    while (read(STDIN_FILENO, &command, 1) == 1) {
+      if (command == 'X') return 0;
+      assert(command == 'Q');
+      probe(outer, 1);
+      assert(write_exact(STDOUT_FILENO, "SCOPE\n", 6));
+    }
+  }
   close(7);
   for (;;) pause();
 }

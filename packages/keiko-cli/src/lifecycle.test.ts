@@ -1424,6 +1424,7 @@ describe("runLifecycleCli", () => {
   it("never opens ui.log when spawning the UI process throws", async () => {
     const root = makeRoot();
     const c = makeIo();
+    const events: SecurityLogEvent[] = [];
     let spawnOptions: SpawnOptions | undefined;
 
     const code = await runLifecycle(
@@ -1442,6 +1443,11 @@ describe("runLifecycleCli", () => {
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
         sleep: () => Promise.resolve(),
+        securityLogSink: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
       },
     );
 
@@ -1451,6 +1457,9 @@ describe("runLifecycleCli", () => {
     if (spawnOptions !== undefined) expectNoPersistedChildOutput(spawnOptions);
     expect(existsSync(join(root, ".keiko", "ui.log"))).toBe(false);
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+    expect(events.find((event) => event.op === "cli.lifecycle.health")).toMatchObject({
+      extra: { outcome: "spawn-refused", launchBound: false },
+    });
   });
 
   it("keeps a healthy start successful when opening the browser fails", async () => {
@@ -1912,14 +1921,11 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
       },
     );
 
-    // The symlink must never be followed: nothing gets signalled, and stop reports "not running"
-    // (the fail-safe outcome for an unreadable/refused pid file) rather than treating the decoy's
-    // pid as the real one.
+    // Unreadable ownership is held: no foreign signal and no claim that the generation is gone.
     expect(killProcess).not.toHaveBeenCalled();
-    expect(code).toBe(0);
-    expect(c.out()).toContain("not running");
-    // The symlink itself is what gets cleaned up; its target is never read or touched.
-    expect(existsSync(join(stateDir, "ui.pid"))).toBe(false);
+    expect(code).toBe(1);
+    expect(c.err()).toContain("uncertain");
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
     expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
   });
 

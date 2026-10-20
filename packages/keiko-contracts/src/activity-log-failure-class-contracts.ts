@@ -7495,16 +7495,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-cli"],
     requiredLifecycleOperations: {
       start: ["process.started"],
-      state: ["cli.lifecycle.health"],
+      state: ["cli.lifecycle.health", "cli.lifecycle.native-owner"],
       end: [],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["cli.lifecycle.health"],
+    requiredCausalOperations: ["cli.lifecycle.health", "cli.lifecycle.native-owner"],
     requiredLossOperations: [],
-    requiredProofOperations: ["cli.lifecycle.health", "process.started"],
+    requiredProofOperations: [
+      "cli.lifecycle.health",
+      "cli.lifecycle.native-owner",
+      "process.started",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["cli.lifecycle.health", "process.started"],
+    requiredResourceOperations: [
+      "cli.lifecycle.health",
+      "cli.lifecycle.native-owner",
+      "process.started",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

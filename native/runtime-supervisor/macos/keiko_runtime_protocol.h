@@ -140,18 +140,21 @@ static inline char *take_string(unsigned char **cursor, size_t *remaining) {
   return value;
 }
 
-static inline int read_launch_request(struct launch_request *request) {
+typedef int (*krp_read_callback)(int, void *, size_t, void *);
+
+static inline int read_launch_request_with_reader(struct launch_request *request,
+                                                  krp_read_callback reader, void *context) {
   unsigned char header[KRP_HEADER_BYTES], *cursor;
   uint32_t payload_length;
   size_t remaining, index;
   memset(request, 0, sizeof(*request));
-  if (!read_exact(3, header, sizeof(header)) || memcmp(header, "KRP1", 4) != 0 ||
+  if (!reader(3, header, sizeof(header), context) || memcmp(header, "KRP1", 4) != 0 ||
       read_u16(header + 4) != KRP_VERSION || read_u16(header + 6) != 1)
     return 0;
   payload_length = read_u32(header + 8);
   if (payload_length < 16 || payload_length > KRP_MAX_PACKET - KRP_HEADER_BYTES) return 0;
   request->storage = calloc((size_t)payload_length + 1, 1);
-  if (request->storage == NULL || !read_exact(3, request->storage, payload_length)) return 0;
+  if (request->storage == NULL || !reader(3, request->storage, payload_length, context)) return 0;
   request->storage_length = (size_t)payload_length + 1;
   cursor = (unsigned char *)request->storage;
   remaining = payload_length;
@@ -187,6 +190,15 @@ static inline int read_launch_request(struct launch_request *request) {
         strchr(request->environment_names[index], '=') != NULL)
       return 0;
   return 1;
+}
+
+static inline int krp_default_reader(int descriptor, void *bytes, size_t length, void *context) {
+  (void)context;
+  return read_exact(descriptor, bytes, length);
+}
+
+static inline int read_launch_request(struct launch_request *request) {
+  return read_launch_request_with_reader(request, krp_default_reader, NULL);
 }
 
 static inline void clear_request(struct launch_request *request) {
@@ -241,5 +253,75 @@ static inline void clear_environment(char **values, uint16_t count) {
   }
   free(values);
 }
+
+#if defined(__linux__)
+#include <errno.h>
+
+/* App environment is data on the private control channel, never a native loader environment. */
+#define KAE_MAX_ENTRIES 4096u
+struct app_environment_packet {
+  char *storage;
+  size_t storage_length;
+  uint16_t count;
+  char **values;
+};
+
+static inline int read_app_environment(struct app_environment_packet *packet,
+                                        krp_read_callback reader, void *context) {
+  unsigned char header[12];
+  if (!reader(3, header, sizeof(header), context) || memcmp(header, "KAE1", 4) != 0 ||
+      read_u16(header + 4) != 1 || read_u16(header + 6) != 1) return 0;
+  uint32_t length = read_u32(header + 8);
+  if (length < 4 || length > KRP_MAX_PACKET - sizeof(header)) return 0;
+  packet->storage = calloc((size_t)length + 1u, 1);
+  packet->storage_length = (size_t)length + 1u;
+  if (packet->storage == NULL || !reader(3, packet->storage, length, context)) return 0;
+  unsigned char *cursor = (unsigned char *)packet->storage;
+  size_t remaining = length - 4u;
+  packet->count = read_u16(cursor + 2);
+  if (read_u16(cursor) != 0 || packet->count > KAE_MAX_ENTRIES) return 0;
+  cursor += 4;
+  packet->values = calloc((size_t)packet->count + 1u, sizeof(char *));
+  if (packet->values == NULL) return 0;
+  for (uint16_t i = 0; i < packet->count; ++i) {
+    char *value = take_string(&cursor, &remaining);
+    const char *separator = value == NULL ? NULL : strchr(value, '=');
+    if (separator == NULL || separator == value || (size_t)(separator - value) > 128u ||
+        strlen(separator + 1) > 16u * 1024u) return 0;
+    packet->values[i] = value;
+  }
+  return remaining == 0;
+}
+
+static inline void clear_app_environment(struct app_environment_packet *packet) {
+  if (packet->storage != NULL) {
+    memset(packet->storage, 0, packet->storage_length);
+    free(packet->storage);
+  }
+  free(packet->values);
+  memset(packet, 0, sizeof(*packet));
+}
+
+static inline int keiko_positive_u64(const char *value, uint64_t maximum, uint64_t *output) {
+  if (value == NULL || value[0] < '1' || value[0] > '9') return 0;
+  for (const char *byte = value; *byte != '\0'; ++byte)
+    if (*byte < '0' || *byte > '9') return 0;
+  errno = 0;
+  char *end;
+  unsigned long long parsed = strtoull(value, &end, 10);
+  if (errno != 0 || *end != '\0' || parsed > maximum) return 0;
+  *output = (uint64_t)parsed;
+  return 1;
+}
+
+static inline int keiko_app_clip_deadline(uint64_t *deadline, int required) {
+  const char *selected = getenv("KEIKO_UI_START_DEADLINE_MS");
+  uint64_t absolute;
+  if (selected == NULL) return !required;
+  if (!keiko_positive_u64(selected, UINT64_MAX, &absolute)) return 0;
+  if (absolute < *deadline) *deadline = absolute;
+  return 1;
+}
+#endif
 
 #endif

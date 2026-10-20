@@ -1793,3 +1793,23 @@ error observability, ADR indexing and all seven Activity Log checks pass. The ca
 register shrinks by two retired entries. Independent reader/domain/formatter/source joins retain
 their precise controlled scopes. Actual installed version transitions, full native app ownership,
 visible UI/skill/browser acceptance, final CI/reviews and merge remain open.
+
+## Initial Linux native app ownership and CLI lifetime
+
+`native-app-ownership.json` binds the explicit app commit, detached launcher lifetime, native
+whole-generation cleanup observation, original startup deadline and private application-environment
+transport. Actual launching CLIs exit while their BFFs stay healthy; independent launchers retain
+only committed ownership and stop the complete generation. Missing acknowledgements keep tracking
+and refuse duplicates. Both Linux UIDs pass the complete native source/kernel lane.
+
+Canonical lifecycle guards reuse the existing zero-data SQLite primitive, survive complete selected
+state removal, and live behind the existing denied `.keiko` boundary. Actual alias and deny-policy
+counterexamples, independent native deadline/loader observations, atomic PID publication and their
+precise source/fixture limits remain recorded. All prior campaign outcomes and acceptance ledgers
+remain unchanged.
+
+V4 reruns the full CLI suite (1,482 passes and one existing skip), native app mechanics and final
+changed-owner checks. V2 whole-graph/export/log/UI-lint/server/contracts/security evidence retains
+its subject; complete source/output comparisons isolate the final guard-path and test delta.
+Installed update transitions, coordinator/successor integration, model/UI acceptance and delivery
+closeout remain open.

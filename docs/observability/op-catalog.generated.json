@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "01b1db1f557015cafb97a008cceed0241f2b5a5c013ddafc4345734bcee49843",
+    "catalogDigest": "137c56a01df7138214addbce1b0ba8ddc65468c9adbf7d257c596da6803464f1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2383,7 +2383,13 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["healthy", "process-exited", "health-timeout", "identity-mismatch"]
+            "values": [
+              "healthy",
+              "process-exited",
+              "health-timeout",
+              "identity-mismatch",
+              "spawn-refused"
+            ]
           },
           "launchBound": {
             "type": "boolean",
@@ -2399,6 +2405,46 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:11",
         "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:54"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "cli.lifecycle.native-owner",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "lifecycle-native-activity.emitNativeUiOwnership",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["reservation", "admission", "commit", "cleanup"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["acknowledged", "refused", "uncertain", "reaped", "held"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "process-lifecycle",
+        "failureClasses": ["process-startup"],
+        "proofIds": ["cli.lifecycle.native-owner.outcome"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-cli/src/lifecycle-native-activity.ts:7",
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-native-activity.ts:45"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2440,8 +2486,8 @@
         "failureClasses": ["ui-process-stop-escalation"],
         "proofIds": ["cli.lifecycle.stop-escalated.disposition"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:58",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:291"]
+        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:60",
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:309"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2474,8 +2520,8 @@
         "failureClasses": ["ui-process-stop-escalation"],
         "proofIds": ["cli.lifecycle.stop-escalation-failed.kind"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:108",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:378"]
+        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:110",
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:396"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2508,8 +2554,8 @@
         "failureClasses": ["ui-process-stop-request"],
         "proofIds": ["cli.lifecycle.stop-request-failed.kind"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:90",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:367"]
+        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:92",
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:385"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2542,8 +2588,8 @@
         "failureClasses": ["ui-process-stop"],
         "proofIds": ["cli.lifecycle.stop-requested.channel"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:35",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:241"]
+        "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:37",
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:259"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2665,8 +2711,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.completed.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:760",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:998"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:785",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1023"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2727,10 +2773,10 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.failed.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:735",
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:760",
         "emitterSites": [
-          "packages/keiko-cli/src/uninstall.ts:813",
-          "packages/keiko-cli/src/uninstall.ts:956"
+          "packages/keiko-cli/src/uninstall.ts:838",
+          "packages/keiko-cli/src/uninstall.ts:981"
         ]
       },
       {
@@ -2795,8 +2841,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.started.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:698",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:852"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:723",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:877"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45726,16 +45772,24 @@
         "requiredProductSurfaces": ["keiko-cli"],
         "requiredLifecycleOperations": {
           "start": ["process.started"],
-          "state": ["cli.lifecycle.health"],
+          "state": ["cli.lifecycle.health", "cli.lifecycle.native-owner"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["cli.lifecycle.health"],
+        "requiredCausalOperations": ["cli.lifecycle.health", "cli.lifecycle.native-owner"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["cli.lifecycle.health", "process.started"],
+        "requiredProofOperations": [
+          "cli.lifecycle.health",
+          "cli.lifecycle.native-owner",
+          "process.started"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["cli.lifecycle.health", "process.started"],
+        "requiredResourceOperations": [
+          "cli.lifecycle.health",
+          "cli.lifecycle.native-owner",
+          "process.started"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -81520,7 +81574,7 @@
           "lifecycleTransitions": ["start", "state"],
           "lifecycleOperations": {
             "start": ["process.started"],
-            "state": ["cli.lifecycle.health"],
+            "state": ["cli.lifecycle.health", "cli.lifecycle.native-owner"],
             "end": [],
             "failure": [],
             "loss": []
@@ -81531,12 +81585,20 @@
               "mode": "correlation"
             },
             {
+              "op": "cli.lifecycle.native-owner",
+              "mode": "correlation"
+            },
+            {
               "op": "process.started",
               "mode": "none"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["cli.lifecycle.health", "process.started"],
+          "resourceSignals": [
+            "cli.lifecycle.health",
+            "cli.lifecycle.native-owner",
+            "process.started"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -81572,6 +81634,36 @@
                 "causeChain": false
               },
               "proofIds": ["cli.lifecycle.health.decision"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "cli.lifecycle.native-owner",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "process-lifecycle",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.lifecycle.native-owner.outcome"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -90920,27 +91012,33 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.lifecycle.native-owner",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/lifecycle-native-activity.ts:10",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:61",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:63",
       "package": "keiko-cli"
     },
     {
       "op": "cli.lifecycle.stop-escalation-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:111",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:113",
       "package": "keiko-cli"
     },
     {
       "op": "cli.lifecycle.stop-request-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:93",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:95",
       "package": "keiko-cli"
     },
     {
       "op": "cli.lifecycle.stop-requested",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:38",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:40",
       "package": "keiko-cli"
     },
     {
@@ -90952,19 +91050,19 @@
     {
       "op": "cli.uninstall.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:763",
+      "site": "packages/keiko-cli/src/uninstall.ts:788",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:738",
+      "site": "packages/keiko-cli/src/uninstall.ts:763",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:701",
+      "site": "packages/keiko-cli/src/uninstall.ts:726",
       "package": "keiko-cli"
     },
     {
@@ -92548,7 +92646,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:810",
+      "site": "packages/keiko-server/src/update-local-state.ts:802",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -96076,6 +96174,7 @@
     "cli.install-layout.normalized",
     "cli.lifecycle.browser-handoff",
     "cli.lifecycle.health",
+    "cli.lifecycle.native-owner",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",

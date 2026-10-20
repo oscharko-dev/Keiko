@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "01b1db1f557015cafb97a008cceed0241f2b5a5c013ddafc4345734bcee49843" as const;
+  "137c56a01df7138214addbce1b0ba8ddc65468c9adbf7d257c596da6803464f1" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -33323,7 +33323,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["start", "state"],
       lifecycleOperations: {
         start: ["process.started"],
-        state: ["cli.lifecycle.health"],
+        state: ["cli.lifecycle.health", "cli.lifecycle.native-owner"],
         end: [],
         failure: [],
         loss: [],
@@ -33334,12 +33334,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "cli.lifecycle.native-owner",
+          mode: "correlation",
+        },
+        {
           op: "process.started",
           mode: "none",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["cli.lifecycle.health", "process.started"],
+      resourceSignals: ["cli.lifecycle.health", "cli.lifecycle.native-owner", "process.started"],
       replayReferences: [],
       operations: [
         {
@@ -33375,6 +33379,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["cli.lifecycle.health.decision"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "cli.lifecycle.native-owner",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "process-lifecycle",
+          safeContextFields: [
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.lifecycle.native-owner.outcome"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42294,6 +42328,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.install-layout.normalized": "runtime-packages",
     "cli.lifecycle.browser-handoff": "ui",
     "cli.lifecycle.health": "ui",
+    "cli.lifecycle.native-owner": "ui",
     "cli.lifecycle.stop-escalated": "ui",
     "cli.lifecycle.stop-escalation-failed": "ui",
     "cli.lifecycle.stop-request-failed": "ui",

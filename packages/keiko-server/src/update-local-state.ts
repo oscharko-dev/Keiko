@@ -22,11 +22,11 @@ import {
   type BigIntStats,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { acquireSqliteFileGuard } from "@oscharko-dev/keiko-security/sqlite-file-guard";
 import { isDeepStrictEqual } from "node:util";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { assertSqliteStatePath, chmodIfPresent } from "@oscharko-dev/keiko-security/fs-hardening";
-import { sqliteErrorLike } from "@oscharko-dev/keiko-security/sqlite-corruption";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   ReleaseImpactRemediation,
@@ -695,18 +695,10 @@ function openUpdateStateGuard(path: string): DatabaseSync | undefined {
   assertSqliteStatePath(guardPath);
   mkdirPrivate(dirname(guardPath));
   assertSqliteStatePath(guardPath);
-  const guard = new DatabaseSync(guardPath);
-  try {
+  // This stable, zero-data inode is SQLite-owned: never unlink or raw-read it.
+  return acquireSqliteFileGuard(guardPath, (): void => {
     chmodIfPresent(guardPath, SNAPSHOT_FILE_MODE);
-    // This stable, zero-data inode is SQLite-owned: never unlink it or open it with raw fs reads.
-    // No schema, application records, WAL, quarantine or process-liveness inference belongs here.
-    guard.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
-    return guard;
-  } catch (error) {
-    guard.close();
-    if (sqliteErrorLike(error).errcode === 5) return undefined;
-    throw error;
-  }
+  });
 }
 
 function acquireRemediationLease(

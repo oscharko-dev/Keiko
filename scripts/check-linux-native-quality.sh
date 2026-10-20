@@ -32,6 +32,8 @@ if [[ "$mode" == "--kernel" ]]; then
   node "$root/native/runtime-supervisor/linux/owner-channel.test.mjs"
   node "$root/native/runtime-supervisor/linux/outer-owner.test.mjs"
   node "$root/native/runtime-supervisor/linux/process-scope.test.mjs"
+  node "$root/native/runtime-supervisor/linux/app-owner.test.mjs"
+  node "$root/native/runtime-supervisor/linux/app-owner-deadline.test.mjs"
   helper_digest="$(sha256sum "$scratch/keiko_runtime_supervisor")"
   helper_digest="${helper_digest%% *}"
   node "$root/native/runtime-supervisor/linux/protocol.test.mjs" --outer-owner \

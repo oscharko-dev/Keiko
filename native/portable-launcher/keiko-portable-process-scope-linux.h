@@ -134,10 +134,16 @@ static int keiko_scope_serve(keiko_runtime_owner *owner, uint64_t deadline) {
       (read_u16(bytes + 6) == 2 && read_u32(bytes + 12) == 0) || read_u32(bytes + 12) > INT32_MAX ||
       !keiko_tree_before_deadline(deadline)) return 0;
   if (read_u16(bytes + 6) == 4 || read_u16(bytes + 6) == 6)
-    return keiko_scope_file_owner(owner, bytes, deadline);
+  {
+    int result = keiko_scope_file_owner(owner, bytes, deadline);
+    if (result) owner->scope_bound = 1;
+    return result;
+  }
   uint32_t pid = read_u32(bytes + 12), state = keiko_scope_liveness((pid_t)pid);
-  return keiko_tree_before_deadline(deadline) &&
+  int result = keiko_tree_before_deadline(deadline) &&
          keiko_scope_send(owner->scope, 3, pid, state, deadline);
+  if (result) owner->scope_bound = 1;
+  return result;
 }
 
 #endif

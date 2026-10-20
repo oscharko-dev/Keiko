@@ -258,7 +258,13 @@ const code = await runUiCli(
 );
 if (mode === "sqlite-refusal" || mode === "identity-refusal") {
   assert.equal(code, 1);
-  assert.equal(readdirSync(stateDir).length, 0);
+  // Parent CLI/native admission may already have written its private lifecycle evidence.
+  // The refused BFF must still create no durable writer or other runtime state.
+  const parentEvidence = new Set(mode === "identity-refusal" ? [] : [".keiko", "ui.pid"]);
+  assert.deepEqual(
+    readdirSync(stateDir).filter((name) => !parentEvidence.has(name)),
+    [],
+  );
   if (mode === "identity-refusal") assert(failures.some((failure) => failure.identity));
   process.stdout.write("NODE-REFUSED\n");
   process.exitCode = 1;

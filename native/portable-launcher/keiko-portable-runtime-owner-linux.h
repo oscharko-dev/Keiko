@@ -17,6 +17,17 @@ typedef struct {
   int identity;
   int root_handle;
   int scope;
+  int scope_bound;
+  int controller;
+  int state;
+  int receipts;
+  int persistent;
+  int committed;
+  uint64_t started_at;
+  uint64_t commit_deadline;
+  const char *state_path;
+  const char *launch_id;
+  struct stat receipt_identity;
 } keiko_runtime_owner;
 
 static void keiko_owner_close(int *descriptor) {
@@ -56,9 +67,18 @@ static int keiko_owner_write(int descriptor, const void *content, size_t size,
 
 #include "keiko-portable-process-scope-linux.h"
 
+static int keiko_owner_packet_reader(int descriptor, void *bytes, size_t length, void *context) {
+  const uint64_t *deadline = (const uint64_t *)context;
+  return keiko_coordinator_read_exact_deadline(descriptor, bytes, length, *deadline);
+}
+
 static int keiko_owner_child(const char *helper, int executable, const int control[2],
                               const int response[2], int identity, int start_gate, int owner_handle,
-                              int scope) {
+                              int scope, uint64_t deadline) {
+  char deadline_value[64];
+  if (snprintf(deadline_value, sizeof(deadline_value), "KEIKO_UI_START_DEADLINE_MS=%llu",
+               (unsigned long long)deadline) <= 0) return 0;
+  char *const app_environment[] = {deadline_value, NULL};
   char *const arguments[] = {(char *)helper,
     scope < 0 ? (char *)"--owner-report" : (char *)"--app-owner-report", NULL};
   char *const environment[] = {NULL};
@@ -73,7 +93,7 @@ static int keiko_owner_child(const char *helper, int executable, const int contr
        syscall(SYS_close_range, first_closed, (unsigned int)executable - 1u, 0u) != 0) ||
       syscall(SYS_close_range, (unsigned int)executable + 1u, UINT_MAX, 0u) != 0)
     return 0;
-  fexecve(executable, arguments, environment);
+  fexecve(executable, arguments, scope < 0 ? environment : app_environment);
   return 0;
 }
 
@@ -110,7 +130,7 @@ static int keiko_owner_spawn(keiko_runtime_owner *owner, const char *helper,
   if (owner->supervisor < 0) goto cleanup;
   if (owner->supervisor == 0)
     _exit(keiko_owner_child(helper, executable, control, response, identity[1], start_gate,
-                            owner_handle, scope[1]) ? 0 : 126);
+                            owner_handle, scope[1], deadline) ? 0 : 126);
   owner->control = control[1]; control[1] = -1;
   owner->response = response[0]; response[0] = -1;
   owner->identity = identity[0]; identity[0] = -1;
@@ -242,6 +262,8 @@ static int keiko_owner_response(keiko_runtime_owner *owner, unsigned char header
     keiko_coordinator_read_exact_deadline(owner->response, payload, size, deadline));
 }
 
+#include "keiko-portable-app-owner-linux.h"
+
 static int keiko_owner_start_failure(keiko_runtime_owner *owner, uint64_t deadline) {
   unsigned char header[12], payload[64];
   if (!keiko_owner_response(owner, header, payload, deadline) ||
@@ -255,28 +277,46 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
   int stopping = 0;
   uint64_t stop_deadline = 0;
   for (;;) {
-    struct pollfd items[3] = {{stopping ? -1 : 3, POLLIN | POLLHUP, 0},
+    struct pollfd items[3] = {{stopping ? -1 : owner->controller, POLLIN | POLLHUP, 0},
                               {owner->response, POLLIN | POLLHUP, 0},
                               {owner->scope, POLLIN | POLLHUP, 0}};
     uint64_t now = keiko_tree_now_ms();
     if (stopping && (now >= stop_deadline || stop_deadline - now > INT_MAX)) return 0;
-    int timeout = stopping ? (int)(stop_deadline - now) : -1;
+    if (!stopping && owner->persistent && !owner->committed && now >= owner->commit_deadline) {
+      keiko_owner_close(&owner->control);
+      stopping = 1; stop_deadline = now + KEIKO_OWNER_BOUND_MS;
+    }
+    uint64_t bound = stopping ? stop_deadline : owner->commit_deadline;
+    int bounded = stopping || (owner->persistent && !owner->committed);
+    int timeout = !bounded ? -1 : bound - now > INT_MAX ? INT_MAX : (int)(bound - now);
     int ready = poll(items, 3, timeout);
     if (ready < 0 && errno == EINTR) continue;
+    if (ready == 0 && !stopping && owner->persistent && !owner->committed) continue;
     if (ready <= 0 || (stopping && !keiko_tree_before_deadline(stop_deadline))) return 0;
     uint64_t deadline = stopping ? stop_deadline : keiko_tree_now_ms() + KEIKO_OWNER_BOUND_MS;
+    if (!stopping && owner->persistent && !owner->committed && owner->commit_deadline < deadline)
+      deadline = owner->commit_deadline;
     if (items[0].revents != 0) {
-      stop_deadline = deadline;
-      ssize_t count = read(3, header, sizeof(header));
-      if (count == 0) keiko_owner_close(&owner->control);
+      ssize_t count = read(owner->controller, header, sizeof(header));
+      if (count == 0 && owner->committed) {
+        keiko_owner_close(&owner->controller);
+        close(4);
+      } else if (count == 0) {
+        keiko_owner_close(&owner->control);
+        stopping = 1; stop_deadline = deadline;
+      }
       else if (count < 0 || (count < 12 && !keiko_coordinator_read_exact_deadline(
-                   3, header + count, 12u - (size_t)count, deadline)) ||
-               memcmp(header, "KRC1", 4) != 0 || read_u16(header + 4) != 1 ||
-               (read_u16(header + 6) != 2 && read_u16(header + 6) != 3) ||
-               read_u32(header + 8) != 0 ||
-               !keiko_owner_write(owner->control, header, sizeof(header), deadline)) return 0;
-      stopping = 1;
-      keiko_owner_close(&owner->scope);
+                   owner->controller, header + count, 12u - (size_t)count, deadline)) ||
+               memcmp(header, "KRC1", 4) != 0 || read_u16(header + 4) != 1) return 0;
+      else if (owner->persistent && read_u16(header + 6) == 4) {
+        if (!keiko_app_owner_commit(owner, header, deadline)) return 0;
+      } else {
+        if ((read_u16(header + 6) != 2 && read_u16(header + 6) != 3) ||
+            read_u32(header + 8) != 0 ||
+            !keiko_owner_write(owner->control, header, sizeof(header), deadline)) return 0;
+        stopping = 1; stop_deadline = deadline;
+      }
+      if (stopping) keiko_owner_close(&owner->scope);
     }
     if (owner->scope >= 0 && items[2].revents != 0 && !keiko_scope_serve(owner, deadline))
       keiko_owner_close(&owner->scope);
@@ -289,20 +329,31 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
     if (poll(&held, 1, 0) != 1 || (held.revents & POLLIN) == 0 ||
         !keiko_coordinator_waitpid_deadline(&owner->supervisor, &status, deadline) ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 0;
-    return send_response(RESPONSE_REAPED, payload, 8);
+    if (owner->persistent && !keiko_app_owner_record(owner, "reaped", 0, deadline)) return 0;
+    if (!owner->committed) return send_response(RESPONSE_REAPED, payload, 8);
+    if (owner->controller >= 0) (void)send_response(RESPONSE_REAPED, payload, 8);
+    return 1;
   }
 }
 
 static int keiko_runtime_owner_linux(const char *helper, const char *expected, int app) {
   keiko_runtime_owner owner = {.supervisor = -1, .root = -1, .control = -1,
-                                .response = -1, .identity = -1, .root_handle = -1, .scope = -1};
+                                .response = -1, .identity = -1, .root_handle = -1, .scope = -1,
+                                .controller = 3, .state = -1, .receipts = -1};
   struct launch_request request = {0};
+  struct app_environment_packet environment = {0};
   unsigned char header[12] = {'K','R','P','1',1,0,1,0,0,0,0,0}, payload[64];
-  uint64_t deadline = keiko_tree_now_ms() + KEIKO_OWNER_BOUND_MS;
+  owner.started_at = keiko_tree_now_ms();
+  uint64_t deadline = owner.started_at + KEIKO_OWNER_BOUND_MS;
   int result = 1, error = 1;
   int had_start_gate = fcntl(5, F_GETFD) >= 0;
   (void)signal(SIGPIPE, SIG_IGN);
-  if (!read_launch_request(&request)) goto cleanup;
+  if (owner.started_at == 0 || owner.started_at > UINT64_MAX - KEIKO_OWNER_BOUND_MS ||
+      (app && !keiko_app_owner_initial_deadline(&deadline)) ||
+      !read_launch_request_with_reader(&request, keiko_owner_packet_reader, &deadline)) goto cleanup;
+  if (app && !keiko_app_owner_prepare(&owner, &request)) goto cleanup;
+  if (owner.persistent && owner.commit_deadline < deadline) deadline = owner.commit_deadline;
+  if (app && !read_app_environment(&environment, keiko_owner_packet_reader, &deadline)) goto cleanup;
   error = 3;
   if (!keiko_owner_spawn(&owner, helper, expected, deadline, app)) goto cleanup;
   error = 5;
@@ -310,6 +361,13 @@ static int keiko_runtime_owner_linux(const char *helper, const char *expected, i
   if (!keiko_owner_write(owner.control, header, sizeof(header), deadline) ||
       !keiko_owner_write(owner.control, request.storage, request.storage_length - 1u, deadline))
     goto cleanup;
+  if (app) {
+    memcpy(header, "KAE1", 4);
+    write_u32(header + 8, (uint32_t)(environment.storage_length - 1u));
+    if (!keiko_owner_write(owner.control, header, sizeof(header), deadline) ||
+        !keiko_owner_write(owner.control, environment.storage, environment.storage_length - 1u,
+                           deadline)) goto cleanup;
+  }
   if (!keiko_owner_capture(&owner, deadline)) {
     error = keiko_owner_start_failure(&owner, deadline);
     goto cleanup;
@@ -317,16 +375,22 @@ static int keiko_runtime_owner_linux(const char *helper, const char *expected, i
   if (!keiko_owner_response(&owner, header, payload, deadline) ||
       read_u16(header + 6) != RESPONSE_LAUNCHED || read_u32(header + 8) != 0 ||
       (app && !keiko_scope_send(owner.scope, 1, (uint32_t)owner.root, (uint32_t)getpid(), deadline)) ||
-      !send_response(RESPONSE_LAUNCHED, NULL, 0)) goto cleanup;
+      !keiko_app_owner_started(&owner, deadline)) goto cleanup;
   keiko_owner_close(&owner.identity);
   if (had_start_gate) close(5);
   result = keiko_owner_wait(&owner) ? 0 : 1;
 cleanup:
+  if (app && owner.supervisor < 0 && owner.root_handle < 0)
+    keiko_app_owner_record_unstarted();
+  if (result != 0 && owner.persistent && owner.root_handle >= 0 && owner.supervisor > 0)
+    keiko_app_owner_cancel(&owner);
   keiko_owner_close(&owner.control); keiko_owner_close(&owner.response);
   keiko_owner_close(&owner.identity); keiko_owner_close(&owner.root_handle);
   keiko_owner_close(&owner.scope);
   keiko_coordinator_dispose_child(&owner.supervisor);
+  keiko_owner_close(&owner.state); keiko_owner_close(&owner.receipts);
   clear_request(&request);
+  clear_app_environment(&environment);
   if (result != 0) (void)send_error((uint16_t)error);
   return result;
 }

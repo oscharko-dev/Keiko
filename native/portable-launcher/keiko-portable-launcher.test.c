@@ -653,6 +653,12 @@ static void test_ui_identity_records(void) {
   static const struct { const char *content; int expected; } cases[] = {
     {"12345\n0123456789abcdef0123456789abcdef\n", 1},
     {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nnative-app-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v2\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nnative-app-v1\nbrowser-open-v1\n", 0},
+    {"native-app-starting-v1\n0123456789abcdef0123456789abcdef\n", 0},
     {"12345\n0123456789abcdef0123456789abcdef\nother-capability\n", 0},
     {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nextra\n", 0},
     {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1", 0},

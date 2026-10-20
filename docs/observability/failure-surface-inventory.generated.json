@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "01b1db1f557015cafb97a008cceed0241f2b5a5c013ddafc4345734bcee49843"
+    "catalogDigest": "137c56a01df7138214addbce1b0ba8ddc65468c9adbf7d257c596da6803464f1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 550,
-    "proofCount": 563,
-    "resolvedProofCount": 563,
+    "operationCount": 551,
+    "proofCount": 564,
+    "resolvedProofCount": 564,
     "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -70,6 +70,7 @@
       "operations": [
         "cli.lifecycle.browser-handoff",
         "cli.lifecycle.health",
+        "cli.lifecycle.native-owner",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
         "cli.lifecycle.stop-request-failed",
@@ -1175,6 +1176,9 @@
     "cli.lifecycle.health.decision": [
       "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
       "packages/keiko-cli/src/lifecycle-health-owner.test.ts"
+    ],
+    "cli.lifecycle.native-owner.outcome": [
+      "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
     ],
     "cli.lifecycle.stop-escalated.disposition": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"

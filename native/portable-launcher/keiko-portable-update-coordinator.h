@@ -9,10 +9,16 @@ static int keiko_coordinator_pid_record_matches(
     const void *actual_data, size_t actual_length,
     const char *expected, size_t expected_length) {
   static const char capability[] = "browser-open-v1\n";
+  static const char owned[] = "browser-open-v1\nnative-app-v1\n";
+  static const char native_only[] = "native-app-v1\n";
   const unsigned char *actual = (const unsigned char *)actual_data;
   if (actual_length < expected_length || memcmp(actual, expected, expected_length) != 0)
     return 0;
   if (actual_length == expected_length) return 1;
+  if (actual_length - expected_length == sizeof(owned) - 1u)
+    return memcmp(actual + expected_length, owned, sizeof(owned) - 1u) == 0;
+  if (actual_length - expected_length == sizeof(native_only) - 1u &&
+      memcmp(actual + expected_length, native_only, sizeof(native_only) - 1u) == 0) return 1;
   return actual_length - expected_length == sizeof(capability) - 1u &&
          memcmp(actual + expected_length, capability, sizeof(capability) - 1u) == 0;
 }
