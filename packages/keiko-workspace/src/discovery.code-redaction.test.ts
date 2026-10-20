@@ -141,14 +141,18 @@ describe("workspace code evidence redaction", () => {
     expect(readWorkspaceFileForEditing(workspace, "source.ts").rawText).toBe(source);
   });
 
-  it("protects copied YAML values across duplicate rows in inferred text evidence", async () => {
-    const source =
-      'visible: "opaque-workspace-witness"\nnote: public\nnote: public\npassword: "opaque-workspace-witness"\n';
-    const workspace = fixture("notes.txt", source);
-    const scope = { workspace, scopeId: "code-redaction", relativePaths: ["notes.txt"] };
-    expect(readWorkspaceFile(workspace, "notes.txt").text).not.toContain(
-      "opaque-workspace-witness",
-    );
+  it.each([
+    [
+      "notes.txt",
+      'visible: "opaque-workspace-witness"\nnote: public\nnote: public\npassword: "opaque-workspace-witness"\n',
+    ],
+    ["aliased.yaml", "field: &field password\n*field : opaque-workspace-witness\n"],
+    ["aliased.yml", "field: &field password\n*field : opaque-workspace-witness\n"],
+    ["aliased.txt", "field: &field password\n*field : opaque-workspace-witness\n"],
+  ])("protects private YAML values on %s evidence readers", async (name, source) => {
+    const workspace = fixture(name, source);
+    const scope = { workspace, scopeId: "code-redaction", relativePaths: [name] };
+    expect(readWorkspaceFile(workspace, name).text).not.toContain("opaque-workspace-witness");
     const result = await searchText(scope, {
       kind: "exact-symbol",
       text: "opaque-workspace-witness",
@@ -158,13 +162,13 @@ describe("workspace code evidence redaction", () => {
     });
     expect(result.atoms).toHaveLength(0);
     const excerpt = await readExcerpt(scope, {
-      scopePath: "notes.txt",
+      scopePath: name,
       startLine: 1,
-      endLine: 4,
+      endLine: source.split("\n").length,
       maxBytes: 4096,
     });
     expect(excerpt.content).not.toContain("opaque-workspace-witness");
-    expect(readWorkspaceFileForEditing(workspace, "notes.txt").rawText).toBe(source);
+    expect(readWorkspaceFileForEditing(workspace, name).rawText).toBe(source);
   });
   it("reports unavailable source when its safe parser cannot complete", () => {
     const source =

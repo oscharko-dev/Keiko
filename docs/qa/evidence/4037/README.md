@@ -1,5 +1,39 @@
 # Chat/Files qualification observations
 
+## Checkpoint 81: bounded aliases and preserved Markdown boundaries
+
+YAML aliases now use one per-document target index in canonical traversal order. Alias keys reach
+the existing sensitive-name classifier, nearest preceding anchors remain authoritative, and
+unresolved aliases fail closed without expansion. Cycle/private propagation remains monotonic.
+An intermediate anchored-scalar regression corrupted later Markdown code; the retained causal
+tests now preserve public scalar prose and the next canonical code block. Index version 12 rejects
+older projections, and existing body-free diagnostics record redaction revision 4.
+
+The final affected run passes 9,024 tests, with zero failures and four existing skips. All 399
+focused tests, strict typing, scoped lint/format, architecture/negative controls, Activity Log,
+retrieval/context/faithfulness, error observability, ADR index and actual Sonar pass on unchanged
+source. Affected coverage is 94.45% lines and 86.95% branches. Independent controls include 419
+tests, 52 alias cases and 2,234 stream partitions, nine actual Workspace cases, 12 actual Markdown
+integrity cases, old-cache rejection/rebuild and 32 scaling cases. The 16,384-alias case completes
+in about 140 ms; the older code exceeded the same 2.5-second child guard. Intermediate failures
+and the incompatible legacy immediate-mapping-publication expectation remain explicitly retained.
+An additional unscoped root run was stopped intentionally and earns no acceptance credit.
+
+All twelve unchanged Java first drafts are now independently reconciled: correct applications
+pass for 6/6 skill and 5/6 control outputs; the eleven valid baselines each detect 6/6 mutations.
+One skill output fails naming, so full first-draft convention/correctness acceptance is not met.
+All 24 Java/React serialized task calls contain the complete selected skill exactly once or none
+for controls, and all report reasoning tokens. Thinking stays enabled; the Composer is unchanged.
+These checks establish neither complete contiguous source delivery nor model attention or benefit.
+Separate bounded diagnostic UI repair has begun; its outputs never replace original first drafts.
+
+[`yaml-alias-context-and-markdown-boundaries.json`](yaml-alias-context-and-markdown-boundaries.json)
+binds this scope. Inline-source redaction still has a separately reproduced P1 and is next. Two
+separately reproduced consumer assertions also remain open: public workflow diff preservation and
+fenced JSON hint extraction. Their isolated group retains 136 passes and two failures. React,
+unused-task skill benefit, vendor closure, native/browser/search/history acceptance, final exact-head
+gates/reviews and authorized integration remain open. No overall acceptance is claimed.
+
 ## Checkpoint 80: complete mapping context and bounded source scanning
 
 The inferred YAML scanner now retains and reuses a complete parsed mapping, including duplicate

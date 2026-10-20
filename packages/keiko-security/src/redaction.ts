@@ -22,7 +22,7 @@ import {
 } from "./redaction-code.js";
 
 import { REDACTION_PLACEHOLDER as REDACTED } from "./redaction-source-map.js";
-export const CODE_REDACTION_REVISION = 3;
+export const CODE_REDACTION_REVISION = 4;
 /** The exact text `redact` substitutes for a secret. Exported so a consumer that must recognise a
  * scrubbed value in otherwise structured output (a host path in a test runner's stack frame,
  * #3390) matches this one constant instead of restating it. */

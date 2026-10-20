@@ -4,6 +4,7 @@ import {
   mayStartYaml,
   YamlSyntaxRefusal,
   yamlPrivacyPrefix,
+  isPublicYamlScalar,
 } from "./redaction-yaml.js";
 import type { Document } from "yaml";
 import {
@@ -490,31 +491,52 @@ function refusedProjection(
 function inferredYamlPrefix(
   text: string,
   ports: ProjectionPorts,
-): {
-  language: "yaml" | undefined;
-  end: number;
-  yamlDocument?: Document;
-  refusal?: "syntax";
-} {
+):
+  | {
+      language: "yaml" | undefined;
+      end: number;
+      yamlDocument?: Document;
+      refusal?: "syntax";
+    }
+  | undefined {
+  const beforeCode = markdownCodeLineStart(text);
+  if (
+    beforeCode > 0 &&
+    beforeCode < text.length &&
+    isPublicYamlScalar(text.slice(0, beforeCode), ports)
+  )
+    return { language: undefined, end: beforeCode };
   const prefix = yamlPrivacyPrefix(text, mayStartStandaloneSource, ports.sensitiveName);
-  if (prefix?.document !== undefined)
+  if (prefix === undefined) return unparsedYamlPrefix(text);
+  if (prefix.document !== undefined)
     return { language: "yaml", end: prefix.end, yamlDocument: prefix.document };
   if (isYamlDocument(text)) return { language: "yaml", end: text.length };
-  if (prefix?.syntaxRequired === true && !safeUnparsedText(text, ports))
+  if (prefix.syntaxRequired === true && !safeUnparsedText(text, ports))
     return { language: "yaml", end: text.length, refusal: "syntax" };
-  return { language: undefined, end: plainYamlPrefixLength(text) };
+  return unparsedYamlPrefix(text);
+}
+
+function unparsedYamlPrefix(text: string): { language: undefined; end: number } | undefined {
+  const end = plainYamlPrefixLength(text);
+  return end > 0 ? { language: undefined, end } : undefined;
 }
 
 /** Unparsed plain fields retain strict text redaction; a later code candidate gets its own parser. */
 function plainYamlPrefixLength(text: string): number {
-  let start = lineAfter(text, 0, text.length);
-  while (start < text.length) {
-    const end = lineAfter(text, start, text.length);
+  const before = markdownCodeLineStart(text);
+  let start = Math.min(before, lineAfter(text, 0, before));
+  while (start < before) {
+    const end = Math.min(before, lineAfter(text, start, before));
     const line = text.slice(start, end);
     if (mayStartStandaloneSource(line) && !mayStartYaml(line)) return start;
     start = end;
   }
-  return text.length;
+  return before;
+}
+
+function markdownCodeLineStart(text: string): number {
+  const code = markdownCodeRanges(text)[0];
+  return code === undefined ? text.length : text.lastIndexOf("\n", code.start - 1) + 1;
 }
 
 /** Rejected public text receives no code exemption; the ordinary redactor still owns it. */

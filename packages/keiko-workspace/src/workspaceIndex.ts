@@ -47,8 +47,8 @@ import {
 type MaybePromise<T> = T | Promise<T>;
 
 // Matching authority changes with decoding semantics, even when source bytes and stat metadata
-// stay unchanged. Version 11 rejects records made before complete inferred YAML privacy context.
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 11;
+// stay unchanged. Version 12 rejects records made before alias-key-aware YAML privacy projection.
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 12;
 
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];

@@ -11,6 +11,7 @@ describe("YAML inference work and complete private context", () => {
     ],
     ["quoted duplicate keys", '"note": public\n'.repeat(1_024)],
     ["blank prefix before numeric prose", "\n".repeat(131_072) + "Public 1.\n"],
+    ["ambiguous anchor prose", "&copy; public\n".repeat(4_096)],
   ])("bounds %s under the unchanged two-second child deadline", (_label, input) => {
     const moduleUrl = new URL("../dist/redaction.js", import.meta.url).href;
     const script = `import {readFileSync} from 'node:fs';

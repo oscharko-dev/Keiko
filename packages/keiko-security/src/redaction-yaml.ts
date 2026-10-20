@@ -16,6 +16,22 @@ function parsePrivacyDocument(text: string): Document {
   return yamlApi().parseDocument(text, { keepSourceTokens: true, uniqueKeys: false });
 }
 
+export function isPublicYamlScalar(text: string, ports: ProjectionPorts): boolean {
+  const document = parsePrivacyDocument(text);
+  const scalar = document.contents;
+  if (document.errors.length > 0 || !yamlApi().isScalar(scalar) || scalar.value === null)
+    return false;
+  const value = scalar.value;
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean" &&
+    typeof value !== "bigint"
+  )
+    return false;
+  return ports.redactPlain(String(value)) === String(value);
+}
+
 function duplicateMapKeys(value: unknown): boolean {
   const api = yamlApi();
   if (!api.isMap(value)) return false;
@@ -55,6 +71,7 @@ export class YamlSyntaxRefusal extends Error {
 
 export function mayStartYaml(text: string): boolean {
   const body = text.trimStart().replace(/^---[ \t]*\r?\n/u, "");
+  if (/^&\S/u.test(body)) return true;
   const key = /^(?:[\w.-]+|"[^"\n]+"|'[^'\n]+')/u.exec(body);
   return key !== null && /^[ \t]*:(?:[ \t\r\n]|$)/u.test(body.slice(key[0].length));
 }
@@ -174,19 +191,44 @@ interface YamlFrame {
   readonly sensitive: boolean;
 }
 
-function yamlChildren(frame: YamlFrame, ports: ProjectionPorts): readonly YamlFrame[] {
+/** Canonical parser order binds each alias to its nearest preceding anchor without expansion. */
+function yamlAliasTargets(document: Document): ReadonlyMap<Node, Node> {
+  const api = yamlApi();
+  const anchors = new Map<string, Node>();
+  const targets = new Map<Node, Node>();
+  api.visit(document, {
+    Node: (_key, node): void => {
+      if (!api.isAlias(node)) {
+        if (node.anchor !== undefined && node.anchor !== "") anchors.set(node.anchor, node);
+        return;
+      }
+      const target = anchors.get(node.source);
+      if (target === undefined) throw new YamlSyntaxRefusal();
+      targets.set(node, target);
+    },
+  });
+  return targets;
+}
+
+function yamlChildren(
+  frame: YamlFrame,
+  ports: ProjectionPorts,
+  aliases: ReadonlyMap<Node, Node>,
+): readonly YamlFrame[] {
   const api = yamlApi();
   if (api.isSeq(frame.value))
     return frame.value.items.map((value) => ({ value, sensitive: frame.sensitive }));
   if (!api.isMap(frame.value)) return [];
-  return frame.value.items.flatMap((pair) => [
-    { value: pair.key, sensitive: false },
-    {
-      value: pair.value,
-      sensitive:
-        frame.sensitive || (api.isScalar(pair.key) && ports.sensitiveName(String(pair.key.value))),
-    },
-  ]);
+  return frame.value.items.flatMap((pair): YamlFrame[] => {
+    const key = api.isAlias(pair.key) ? aliases.get(pair.key) : pair.key;
+    return [
+      { value: pair.key, sensitive: false },
+      {
+        value: pair.value,
+        sensitive: frame.sensitive || (api.isScalar(key) && ports.sensitiveName(String(key.value))),
+      },
+    ];
+  });
 }
 
 function yamlCommentSpans(text: string, ports: ProjectionPorts): readonly RedactionSpan[] {
@@ -214,6 +256,7 @@ export function projectYamlData(
   const api = yamlApi();
   const document = privacyDocument ?? documentTree(text);
   if (document.errors.length > 0) throw new YamlSyntaxRefusal();
+  const aliases = yamlAliasTargets(document);
   const pending: YamlFrame[] = [{ value: document.contents, sensitive: false }];
   const visited = new Map<Node, boolean>();
   while (pending.length > 0) {
@@ -223,8 +266,8 @@ export function projectYamlData(
     visited.set(frame.value, frame.sensitive);
     if (canonicalPlaceholder(text, frame.value)) continue;
     if (api.isAlias(frame.value)) {
-      pending.push({ value: frame.value.resolve(document), sensitive: frame.sensitive });
-    } else appendYamlChildren(pending, frame, ports);
+      pending.push({ value: aliases.get(frame.value), sensitive: frame.sensitive });
+    } else appendYamlChildren(pending, frame, ports, aliases);
   }
   const plain = inferredPlainScalars(document, privacyDocument, text);
   return [...yamlScalarSpans(text, visited, ports, plain), ...yamlCommentSpans(text, ports)];
@@ -238,8 +281,13 @@ function inferredPlainScalars(
   return privacyDocument !== undefined && !complexYaml(document.contents, text, true);
 }
 
-function appendYamlChildren(pending: YamlFrame[], frame: YamlFrame, ports: ProjectionPorts): void {
-  for (const child of yamlChildren(frame, ports)) pending.push(child);
+function appendYamlChildren(
+  pending: YamlFrame[],
+  frame: YamlFrame,
+  ports: ProjectionPorts,
+  aliases: ReadonlyMap<Node, Node>,
+): void {
+  for (const child of yamlChildren(frame, ports, aliases)) pending.push(child);
 }
 
 function yamlCommentSpan(value: object, ports: ProjectionPorts): RedactionSpan | undefined {

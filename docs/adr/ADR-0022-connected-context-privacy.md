@@ -842,16 +842,26 @@ bindings fail closed. Inferred all-plain fields retain the established plain-tex
 explicit YAML and structured literals retain syntax-safe scalar replacements. Failed parsing cannot
 turn multiline prose into a quoted literal: only observed quoting, anchors or collection syntax
 requires structured refusal. Canonical placeholders remain stable on repeated redaction. A later
-standalone source candidate still receives its own language parser. Streaming retains mapping-shaped context until successful completion; ordinary
-prose can still progress immediately. Index snapshot version 11 invalidates previously projected
+standalone source candidate still receives its own language parser. Streaming retains mapping-shaped
+context until successful completion; ordinary prose can still progress immediately.
+One canonical parser-order traversal binds aliases to their nearest preceding anchors. The same
+per-document index owns value-alias lookup and sensitivity for scalar alias keys. Anchored first
+keys retain the complete parsed context; the leading-anchor check is only a candidate hint.
+An ambiguous scalar prefix is ordinary text, not a code exemption; its cursor stops before the
+opening line of the next canonical Markdown code range. This preserves code fences and quote
+context without repeatedly reparsing remaining public suffixes.
+Parsed aliases without an earlier target fail closed through the existing syntax-refusal path.
+Sensitivity remains monotonic across shared nodes and cycles; no alias graph is expanded to plain
+objects and no per-alias whole-document scan or global cache is introduced.
+Index snapshot version 12 invalidates previously projected
 text even when source bytes and stat metadata are unchanged. The existing body-free projection
-revision records this change without logging source content.
+revision 4 records this change without logging source content.
 Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
 once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
-body. Classification, privacy and source-size grants stay unchanged; revision 2 identifies this
-bounded implementation on the existing redaction Activity Log fields.
+body. Classification, privacy and source-size grants stay unchanged. This scan first shipped in
+revision 2; later revisions retain it on the existing redaction Activity Log fields.
 All discovery, search, import-graph and persisted-index inputs use this owner after the existing
-admission checks. Index snapshot version 10 invalidates earlier redacted records. The connected
+admission checks. The current snapshot schema invalidates earlier redacted records. The connected
 evidence-details Activity Log records the projection revision without source bodies or paths.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
 policy. Each requested filename pattern retains a bounded independent result bucket within one
