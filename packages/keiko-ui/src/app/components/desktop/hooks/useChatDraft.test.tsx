@@ -1,5 +1,5 @@
-import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
-import { useEffect, type ReactNode } from "react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { createRef, useEffect, type ReactNode, type RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
@@ -8,6 +8,9 @@ import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { ChatDraftController } from "./chat-draft-controller";
 import { useChatDraft, useChatDraftUnloadGuard } from "./useChatDraft";
+import { MarkdownComposer } from "../composer/MarkdownComposer";
+import { ComposerEditorController } from "../composer/composer-editor-controller";
+import type { ComposerInputHandle } from "../composer/composer-editor-types";
 
 vi.mock("@/lib/chat-draft-api", () => ({ readChatDraft: vi.fn(), writeChatDraft: vi.fn() }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
@@ -376,4 +379,160 @@ describe("private chat drafts", () => {
       });
     },
   );
+});
+
+interface DraftComposerObservation {
+  controller?: ChatDraftController;
+}
+const admissionLabels = {
+  code: "Code",
+  plainText: "Plain text",
+  language: "Language",
+  continueText: "Continue",
+  loading: "Loading",
+  unavailable: "Unavailable",
+  limit: "Limit",
+  hint: "Markdown",
+};
+
+function DraftComposer({
+  admit,
+  inputRef,
+  observed,
+}: {
+  readonly admit: boolean;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
+  readonly observed: DraftComposerObservation;
+}): ReactNode {
+  const draft = useChatDraft("admission");
+  observed.controller = draft.controller;
+  return (
+    <>
+      <output aria-label="Committed draft">{draft.text}</output>
+      <MarkdownComposer
+        value={draft.text}
+        inputRef={inputRef}
+        documentKey="admission"
+        placeholder="Ask"
+        ariaLabel="Admission message"
+        maxLength={10000}
+        onChange={draft.setText}
+        onSelect={vi.fn()}
+        labels={admissionLabels}
+        onKeyDown={(): void => {
+          if (admit) draft.setText("");
+        }}
+      />
+    </>
+  );
+}
+
+async function draftComposerFixture(admit: boolean): Promise<{
+  readonly editor: ComposerEditorController;
+  readonly observed: DraftComposerObservation;
+  readonly cleanup: () => Promise<void>;
+}> {
+  const initialRead = deferred<ChatDraft>();
+  vi.mocked(readChatDraft).mockReturnValue(initialRead.promise);
+  const inputRef = createRef<ComposerInputHandle>();
+  const observed: DraftComposerObservation = {};
+  const rendered = render(<DraftComposer admit={admit} inputRef={inputRef} observed={observed} />);
+  await waitFor(() => expect(readChatDraft).toHaveBeenCalled());
+  const editor = inputRef.current;
+  if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+  return {
+    editor,
+    observed,
+    cleanup: async (): Promise<void> => {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      initialRead.resolve({ text: "", revision: 0 });
+      await waitFor(() => expect(observed.controller?.entry("admission").pending).toBe(false));
+      rendered.unmount();
+      observed.controller?.forget("admission");
+    },
+  };
+}
+
+function publishPendingDraft(editor: ComposerEditorController): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  act(() => editor.view.dispatch(editor.view.state.tr.insertText("Immediate admitted draft")));
+}
+
+describe("private draft Composer admission", () => {
+  it("clears an admitted Enter after an uncommitted deferred publication", async (): Promise<void> => {
+    const { editor, observed, cleanup } = await draftComposerFixture(true);
+    try {
+      publishPendingDraft(editor);
+      expect(observed.controller?.entry("admission").text).toBe("");
+      act(() => {
+        vi.runOnlyPendingTimers();
+        expect(observed.controller?.entry("admission").text).toBe("Immediate admitted draft");
+        expect(screen.getByLabelText("Committed draft").textContent).toBe("");
+        fireEvent.keyDown(editor.view.dom, { key: "Enter" });
+      });
+      expect(screen.getByLabelText("Committed draft").textContent).toBe("");
+      expect(editor.currentMarkdown).toBe("");
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        "Keiko composer external draft resynchronized.",
+        { composerActivity: "draft-resynchronized" },
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.each([false, true])(
+    "retains refused Enter and newer native input: %s",
+    async (editAgain): Promise<void> => {
+      const { editor, observed, cleanup } = await draftComposerFixture(false);
+      try {
+        publishPendingDraft(editor);
+        vi.mocked(reportClientDiagnostic).mockClear();
+        act(() => {
+          vi.runOnlyPendingTimers();
+          expect(observed.controller?.entry("admission").text).toBe("Immediate admitted draft");
+          expect(screen.getByLabelText("Committed draft").textContent).toBe("");
+          fireEvent.keyDown(editor.view.dom, { key: "Enter" });
+          if (editAgain) editor.view.dispatch(editor.view.state.tr.insertText(" newer"));
+        });
+        expect(screen.getByLabelText("Committed draft").textContent).toBe(
+          "Immediate admitted draft",
+        );
+        expect(editor.currentMarkdown).toBe(
+          editAgain ? "Immediate admitted draft newer" : "Immediate admitted draft",
+        );
+        expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+          "Keiko composer external draft resynchronized.",
+          { composerActivity: "draft-resynchronized" },
+        );
+      } finally {
+        await cleanup();
+      }
+    },
+  );
+
+  it("notifies an equal publication without another edit or persistence schedule", (): void => {
+    vi.useFakeTimers();
+    const changed = vi.fn();
+    const draft = new ChatDraftController(changed);
+    draft.setText("same", "Repeated publication");
+    const entry = draft.entry("same");
+    const version = entry.editVersion;
+    const timer = entry.timer;
+    const phase = entry.phase;
+    const timers = vi.getTimerCount();
+    changed.mockClear();
+    try {
+      draft.setText("same", "Repeated publication");
+      expect(changed).toHaveBeenCalledOnce();
+      expect(entry.editVersion).toBe(version);
+      expect(entry.phase).toBe(phase);
+      expect(entry.timer).toBe(timer);
+      expect(vi.getTimerCount()).toBe(timers);
+      expect(writeChatDraft).not.toHaveBeenCalled();
+    } finally {
+      draft.forget("same");
+    }
+  });
 });

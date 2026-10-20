@@ -22,7 +22,11 @@ export class ChatDraftController {
 
   setText(chatId: string, text: string): void {
     const entry = this.entry(chatId);
-    if (entry.text === text) return;
+    if (entry.text === text) {
+      // A synchronous publication must acknowledge an already-mutated, uncommitted entry.
+      this.changed();
+      return;
+    }
     entry.text = text;
     entry.edited = true;
     entry.editVersion += 1;
