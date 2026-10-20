@@ -1,5 +1,21 @@
 # Chat/Files qualification observations
 
+## Security dependency repair after published commit 28f58337
+
+The required OSV scan then reported two newly reviewed vulnerabilities. The UI Vite declaration
+and root override move to 8.3.3; the native service host's existing selective MCP client/core pair
+moves to 2.3.0. Both canonical locks and the dependency-currency record are updated. A matching local
+OSV 2.6.0 scan reproduces the failure before the patch and passes after it without waiver changes.
+All 68 original native provider/host compatibility tests pass against the installed patched pair.
+The SDK's stricter default redirect policy remains enabled; host fixed facts and approvals stay
+unchanged. Historical native evidence retains its original input hashes.
+
+The prior full release-coverage attempt was stopped after this verified security blocker and has
+no complete-suite acceptance credit. Final patched-toolchain coverage and exact-head hosted gates
+remain required. [`security-dependency-repair.json`](security-dependency-repair.json) records current
+manifest/lock/document bindings, primary advisories and scoped receipts. Original deferred criteria
+remain in [#4051](https://github.com/oscharko-dev/Keiko/issues/4051).
+
 ## Required-gate repairs after published commit 9b4eb9e3
 
 The initial published closeout failed the full gate matrix. This increment fixes the measured

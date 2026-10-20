@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "parentCommit": "28f58337f84814fe58110e7fbb62df09730cef33",
+  "classification": "Required dependency-security repair; existing original functional deferrals remain in #4051.",
+  "followUp": "https://github.com/oscharko-dev/Keiko/issues/4051",
+  "advisories": [
+    "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
+    "https://github.com/advisories/GHSA-6prh-2h8m-c8cw"
+  ],
+  "pins": {
+    "vite": "8.3.3",
+    "nativeMcpClient": "2.3.0",
+    "nativeMcpCore": "2.3.0",
+    "originalHostModule": "2.0.10"
+  },
+  "sourceBindings": [
+    {
+      "path": "docs/release/2296-dependency-security-closeout.md",
+      "sha256": "cbc8e80566e88283c591f229174769c12dc722bac4091ba689ff093fced0e2eb"
+    },
+    {
+      "path": "native/opencode-service-host/package-lock.json",
+      "sha256": "2b012028aa26a4da6f16f597ed0af8bcdc8f49937419eb210c170dc8a01c442c"
+    },
+    {
+      "path": "native/opencode-service-host/package.json",
+      "sha256": "43cd15a62a8b737438e372359743c62660a49a415af6e7ee93d2f0d8d6553ae8"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "a706fe4cbe415bcf996f2128f3cf6009e926f3665cb2bde94a7b33d48708e5ae"
+    },
+    {
+      "path": "package.json",
+      "sha256": "214aa50bb8d873557c5ca13249c4cb2de075581a33e62dc2259011a202422e36"
+    },
+    {
+      "path": "packages/keiko-ui/package.json",
+      "sha256": "850aba4f198ecea0391aee431dac901903e6acc0575ac00ff7fe9ee18d5cfd60"
+    }
+  ],
+  "scopedReceipts": [
+    {
+      "label": "delivery-security89-osv-red-v1",
+      "receiptSha256": "7c815b0a229d95cd4e922109e0f801bba77eac6cee80e0b26ffd8baa7881f596",
+      "exitCode": 1
+    },
+    {
+      "label": "delivery-security89-osv-green-v1",
+      "receiptSha256": "509c51e92a05e7ca7ade3fdac5552567878ae86861efd466ac7cb76f4e1f615f",
+      "exitCode": 0
+    },
+    {
+      "label": "delivery-security89-client-metadata-v1",
+      "receiptSha256": "6cee8d035d77a7cbbfc327ec73316a7b5dd4ab47d34b024d25bfbe9b67f34db4",
+      "exitCode": 0
+    },
+    {
+      "label": "delivery-security89-host-compatibility-v1",
+      "receiptSha256": "05ab2cdc4962fcca75e4b7b2c3415e8b58b00b34950bb10360c095aa825a475c",
+      "exitCode": 0
+    },
+    {
+      "label": "delivery-security89-typecheck-v1",
+      "receiptSha256": "37ac0959ec5e22ba1bd30c795a01860077dd72b6a5ba50d061b6c5d7a8c470fc",
+      "exitCode": 0
+    },
+    {
+      "label": "delivery-closeout88-release-coverage-v1",
+      "receiptSha256": "dc2a48c860f928769ce47c90bbebf9b65eaa13f6e0b5dbdbcf0df82c45735656",
+      "exitCode": 130
+    }
+  ],
+  "scanner": {
+    "version": "2.6.0",
+    "binarySha256": "98c460dcd37de25819babd757d04542045b6243113e209edcd4d89fedb0256b4",
+    "provenance": "Official release binary verified against osv-scanner_SHA256SUMS from the same pinned release. Existing scanner config and waivers unchanged."
+  },
+  "limits": [
+    "68 original native provider/host tests pass against the actual installed 2.3.0 pair; this does not approve or rebind any historical native service-host artifact.",
+    "The previous head full release-coverage attempt exited 130 after the security gate failure. It is not a complete passing suite.",
+    "Fresh final toolchain tests/full coverage and all exact-head app-bound CI checks remain integration prerequisites. Native fixed facts, authority and release approvals are unchanged."
+  ]
+}
