@@ -25,6 +25,12 @@ function proofConsumerKind(record) {
   ].includes(record.kind);
 }
 
+function resolveConsumerRole(resolver, record, selector, proof) {
+  if (record.metadataSourceInput) return resolver.metadataSourceConsumer(selector);
+  if (proof) return resolver.resolveProofConsumer(selector);
+  return resolver.resolveExport(selector);
+}
+
 export function resolveRoles(resolver, record) {
   const proof = proofConsumerKind(record);
   const exports = new Map();
@@ -32,14 +38,7 @@ export function resolveRoles(resolver, record) {
     ["input", "transform", "output", "consumer"].map((role) => {
       const selector = record[role];
       if (role === "consumer")
-        return [
-          role,
-          record.metadataSourceInput
-            ? resolver.metadataSourceConsumer(selector)
-            : proof
-              ? resolver.resolveProofConsumer(selector)
-              : resolver.resolveExport(selector),
-        ];
+        return [role, resolveConsumerRole(resolver, record, selector, proof)];
       const key = exportFactKey(selector, proof);
       if (key !== undefined && exports.has(key)) return [role, structuredClone(exports.get(key))];
       const facts = proof
