@@ -213,6 +213,13 @@ const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
   ...LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
 ]);
 
+const DOCUMENT_SHORTHAND_STEMS: ReadonlySet<string> = new Set(["readme", "contributing"]);
+
+/** Bare document references are distinct from ordinary prose and overview ranking. */
+export function isDocumentBasenameShorthand(stem: string): boolean {
+  return DOCUMENT_SHORTHAND_STEMS.has(stem.toLowerCase());
+}
+
 /** Exact document-name shorthand; paths and extra basename suffixes never match. */
 export function matchesDocumentBasenameStem(path: string, stem: string): boolean {
   const basename = path.split("/").at(-1)?.toLowerCase() ?? "";

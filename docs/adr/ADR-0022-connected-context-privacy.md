@@ -1510,8 +1510,10 @@ accounting. Discovery completeness does not establish necessary implementation-w
 
 ### Conventional document-name shorthand
 
-A bare conventional overview document name recognized by the existing candidate classifier, such
-as `README` or `CONTRIBUTING`, is a query file reference. Existing bounded basename discovery
+A bare `README` or `CONTRIBUTING`, case-insensitively, is a query file reference through one
+shared document-shorthand allowlist. Overview ranking is separate: ordinary words such as
+`architecture` and `agents` are not shorthand references, while their explicit `.md` filenames
+remain eligible for normal reference admission and overview ranking. Existing bounded basename discovery
 matches its whole basename stem, case-insensitively, with an optional already supported text or web
 document extension. It filters matches before retention. Extra basename suffixes and source-code
 extensions do not match this shorthand; an explicitly supplied extension keeps exact basename

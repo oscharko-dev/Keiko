@@ -103,7 +103,10 @@ scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission bou
 Connected-folder retrieval joins `search.connected-context.source-details`, `selection-details`,
 `completion-details`, and `answer-details` with the completed operation under the same request
 correlation, process, and source/query digests. These typed siblings retain the existing contextual
-field cap. Source details describe actual path/reference admission and eligibility; selection
+field cap. Source details describe actual path/reference admission and eligibility. Extensionless
+document admission uses one shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist
+independently of overview ranking. Ordinary prose cannot become an explicit file merely through its ranking bucket;
+explicit filenames and every existing scope/read grant remain authoritative. Selection
 details describe calibrated floors, high/low confidence, addressed-file demotion, reranker
 disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
 final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.

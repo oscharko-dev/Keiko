@@ -21,7 +21,7 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
-  candidateBucketForPath,
+  isDocumentBasenameShorthand,
   matchesDocumentBasenameStem,
   FileTooLargeError,
   PathDeniedError,
@@ -454,11 +454,7 @@ async function classifyHumanSelectedFile(
 }
 
 function isDocumentStem(reference: ExplicitPathReference): boolean {
-  return (
-    !reference.path.includes(".") &&
-    !reference.path.includes("/") &&
-    candidateBucketForPath(`${reference.path}.md`) === "overview-doc"
-  );
+  return isDocumentBasenameShorthand(reference.path);
 }
 
 async function basenamePaths(

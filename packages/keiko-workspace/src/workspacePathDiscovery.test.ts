@@ -4,7 +4,11 @@ import { createStructuralExecutionControl } from "./structuralExecution.js";
 import type { WorkspaceInfo } from "./types.js";
 import { WORKSPACE_PATH_DISCOVERY_LIMITS } from "./types.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
-import { discoverWorkspacePaths, matchesDocumentBasenameStem } from "./workspacePathDiscovery.js";
+import {
+  discoverWorkspacePaths,
+  isDocumentBasenameShorthand,
+  matchesDocumentBasenameStem,
+} from "./workspacePathDiscovery.js";
 
 const WORKSPACE: WorkspaceInfo = {
   root: "/repo",
@@ -237,6 +241,26 @@ describe("workspace path discovery scoped results", () => {
 });
 
 describe("conventional document basename shorthand", () => {
+  it.each(["README", "readme", "ReadMe", "CONTRIBUTING", "contributing"])(
+    "admits the conventional bare name %s independently of overview ranking",
+    (stem) => {
+      expect(isDocumentBasenameShorthand(stem)).toBe(true);
+    },
+  );
+  it.each([
+    "architecture",
+    "Architecture",
+    "agents",
+    "overview",
+    "readmeHelper",
+    "myREADME",
+    "README.md",
+    "docs/README",
+    "",
+  ])("does not promote other words or paths as shorthand: %s", (stem) => {
+    expect(isDocumentBasenameShorthand(stem)).toBe(false);
+  });
+
   it.each(["README", "readme.md", "docs/ReadMe.MD", "README.txt", "README.rst", "README.html"])(
     "matches the exact document stem in %s",
     (path) => {

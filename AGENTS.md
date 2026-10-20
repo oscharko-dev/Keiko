@@ -442,8 +442,13 @@ system that exists, never beside it:
   Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
   basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
   `search.connected-context.source-details` operation; the shared correlation joins its completed
-  read-window and budget evidence without exceeding the operation field cap. Diagnostic-reference
-  selection uses the final six available source-detail fields. Additional selection observations
+  read-window and budget evidence without exceeding the operation field cap. Extensionless document
+  admission uses a shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist, separate
+  from overview ranking. Ordinary prose cannot gain explicit-file authority from its ranking bucket;
+  explicit filenames, selected scope and the existing discovery/read grants remain authoritative.
+  Existing source-details counts distinguish actual explicit admission from ordinary ranking.
+  Diagnostic-reference selection uses the final six available source-detail fields. Additional
+  selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
   Contextual below-floor fallback logs its closed ranking source and remains low confidence. Its

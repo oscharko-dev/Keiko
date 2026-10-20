@@ -4,7 +4,7 @@ import {
   LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import {
-  candidateBucketForPath,
+  isDocumentBasenameShorthand,
   isDenied,
   isCanonicalMetadataFile,
   isEcosystemLockfile,
@@ -50,7 +50,7 @@ function filenameReference(path: string): boolean {
   const dot = basename.lastIndexOf(".");
   const extension = basename.slice(dot + 1).toLowerCase();
   return (
-    (dot < 0 && candidateBucketForPath(`${basename}.md`) === "overview-doc") ||
+    (dot < 0 && isDocumentBasenameShorthand(basename)) ||
     (dot > 0 && KNOWN_EXTENSIONS.has(extension)) ||
     isEcosystemSourceFile(path) ||
     (dot > 0 && (isCanonicalMetadataFile(path) || isEcosystemLockfile(path)))

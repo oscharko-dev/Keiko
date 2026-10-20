@@ -79,6 +79,19 @@ async function retrieve(
 }
 
 describe("query-named explicit path admission", () => {
+  it("keeps architecture prose in ordinary ranking without inventing a named file", async () => {
+    const { output, log } = await retrieve("Explain the architecture model.", {
+      files: {
+        "docs/architecture.md": "Architecture model: dependencies flow toward shared contracts.\n",
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toContain("docs/architecture.md");
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ explicitPathAnchorCount: 0, explicitPathAdmittedCount: 0 });
+    expect(JSON.stringify(log.events)).not.toContain("dependencies flow");
+  });
+
   it.each(["README", "readme", "CONTRIBUTING"])(
     "retains the requested conventional document stem %s inside the selected folder",
     async (stem) => {

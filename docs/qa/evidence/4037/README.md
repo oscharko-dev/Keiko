@@ -2036,3 +2036,33 @@ the cancelled source73 preparation are not reclassified.
 Two missing spaces in older CLI evidence are corrected without changing counts or outcomes.
 The frozen live React comparison continues on source74 without skill, prompt or question changes.
 Its incomplete results do not establish skill benefit. Overall acceptance and merge remain open.
+
+## Checkpoint 76 — separate document shorthand from overview ranking
+
+The shared case-insensitive shorthand allowlist now admits only `README` and `CONTRIBUTING`.
+Both the planner and explicit-path admission use it. Ordinary `architecture`, `agents` and
+`overview` prose cannot gain named-file authority through the broader overview bucket. Explicit
+filenames and normal overview ranking remain eligible, and the existing scope, discovery and
+read grants do not change. ADR-0022 and the contributor contracts describe this separation.
+The existing source-details Activity Log records the actual explicit anchor/admission counts.
+
+Three planner controls and one public-handler control fail before repair. The final focused run
+passes 208 tests; the broader run passes 3,571 tests in 188 files with one existing skip. Strict
+typing, affected lint, all seven Activity Log/architecture checks, context/retrieval/grounded/
+faithfulness gates, ADR indexing and actual Sonar pass. The generated runtime/type contract adds
+only the shared predicate, and the final complete assembled surface passes with 6,414 files.
+An initial unpruned package-generation refusal and the expected contract-generation write remain
+retained separately from the unchanged final gate. Native dependencies are restored before tests.
+
+The live React campaign stops after seven of twelve declared first drafts: the shared secret
+redactor changes a valid TypeScript parameter type into invalid syntax. A separate no-model
+reproduction also corrupts an awaited assignment and retains a typed synthetic assigned value.
+This requires its own repair for both syntax integrity and literal secrecy. All seven UI copies
+match their persisted canonical projections, which establishes consistency, not code correctness.
+Each actual task contains all eleven README witnesses; whole-source equality is not established.
+The six initial runtime failures and the seventh compilation refusal remain unchanged. The
+predeclared bounded-feedback repair plan is unexecuted. No skill benefit or model ceiling is claimed.
+
+[`document-shorthand-admission.json`](document-shorthand-admission.json) binds the repaired scope,
+the interrupted campaign and the outstanding redaction defect. Overall acceptance and merge
+remain open.
