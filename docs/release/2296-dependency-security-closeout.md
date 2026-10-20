@@ -98,6 +98,20 @@ manifest-size and sensitive-path checks. The patched recursive OSV scan and prod
 audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
 to accommodate this update.
 
+On 2026-10-20 the exact OSV Scanner 2.6.0 recursive gate identified
+[GHSA-gfr2-rv44-r23c](https://github.com/advisories/GHSA-gfr2-rv44-r23c) and
+[GHSA-vfgh-jcmw-g37q](https://github.com/advisories/GHSA-vfgh-jcmw-g37q) in the runtime
+`markdown-it` 14.3.2 resolution beneath `prosemirror-markdown`. Both identify compatible 14.3.3
+as patched. The targeted lock update changes only that package's version, archive URL and
+integrity. A clean exact-lock install confirms CommonJS resolution to 14.3.3 from root, UI and
+ProseMirror contexts, while the Composer's existing CommonMark `html: false` setting remains disabled.
+The default-parser reference-definition denial of service is relevant to browser Composer
+availability; the HTML-specific parser option is not enabled on this consumer. Both defects are
+patched without enabling HTML or changing parser options. The same recursive scanner then reports
+zero unwaived findings, and all 74 existing Composer/parser controls pass. Existing waiver IDs,
+expiry dates and reachability limits remain unchanged. Earlier qualification records retain their
+original dependency inputs; current release qualification is repeated for the patched resolution.
+
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query

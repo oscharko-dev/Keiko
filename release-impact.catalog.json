@@ -3536,7 +3536,8 @@
         "Updater reliability: distinguish setup requirements from a newer available version and enforce bounded native process, installation and recovery ownership checks. Existing manual-update eligibility remains unchanged.",
         "Source fidelity and privacy: retain certified recursive source evidence within existing grants, preserve supported code syntax while masking private literals, and preserve code formatting when copying answers. Patch Vite tooling and the private native-host build's MCP inputs for newly reviewed security advisories.",
         "Test-generation skills: offer repository Markdown examples for import into Chat covering Java/Spring Boot and TypeScript/React/MUI/Vitest. Demonstrated repeatable skill benefit, installed update cycles, SSD continuity and complete original browser/retrieval acceptance remain in follow-up #4051; this release does not certify those outcomes.",
-        "Coding Workbench: keep repository and composer controls stable during late readiness updates, with independently scrollable status and transcript regions in narrow windows."
+        "Coding Workbench: keep repository and composer controls stable during late readiness updates, with independently scrollable status and transcript regions in narrow windows.",
+        "Markdown parsing: patch the runtime markdown-it dependency to 14.3.3 against quadratic reference-definition and inline-HTML parsing denial of service. Keep the Composer HTML-disabled parser policy unchanged."
       ],
       "review": {
         "status": "reviewed",
