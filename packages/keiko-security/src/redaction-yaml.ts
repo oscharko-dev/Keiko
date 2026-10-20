@@ -71,7 +71,7 @@ export class YamlSyntaxRefusal extends Error {
 
 export function mayStartYaml(text: string): boolean {
   const body = text.trimStart().replace(/^---[ \t]*\r?\n/u, "");
-  if (/^&\S/u.test(body)) return true;
+  if (/^(?:&\S|\?[ \t]+|\*[^\s]+[ \t]*:)/u.test(body)) return true;
   const key = /^(?:[\w.-]+|"[^"\n]+"|'[^'\n]+')/u.exec(body);
   return key !== null && /^[ \t]*:(?:[ \t\r\n]|$)/u.test(body.slice(key[0].length));
 }
@@ -120,17 +120,70 @@ export function yamlPrivacyPrefix(
   sourceTransition: (line: string) => boolean,
   sensitiveName: (name: string) => boolean,
 ):
-  | { readonly end: number; readonly document?: Document; readonly syntaxRequired?: boolean }
+  | {
+      readonly end: number;
+      readonly document?: Document;
+      readonly syntaxRequired?: boolean;
+      readonly privateKeyObserved?: boolean;
+    }
   | undefined {
   const document = parsePrivacyDocument(text);
   const end = privacyBoundary(text, document, sourceTransition);
   if (end <= 0) return undefined;
   const prefix = end === text.length ? document : parsePrivacyDocument(text.slice(0, end));
   if (prefix.errors.length > 0 || !yamlApi().isMap(prefix.contents))
-    return { end, syntaxRequired: complexYaml(prefix.contents, text.slice(0, end), true, false) };
+    return {
+      end,
+      syntaxRequired: complexYaml(prefix.contents, text.slice(0, end), true, false),
+      privateKeyObserved: malformedYamlHasPrivateKey(prefix, sensitiveName),
+    };
   if (end < (document.range?.[2] ?? text.length) && hasPendingPrivateValue(prefix, sensitiveName))
-    return { end, syntaxRequired: complexYaml(prefix.contents, text.slice(0, end), true, false) };
+    return {
+      end,
+      syntaxRequired: complexYaml(prefix.contents, text.slice(0, end), true, false),
+      privateKeyObserved: true,
+    };
   return { end, document: prefix };
+}
+
+function malformedYamlHasPrivateKey(
+  document: Document,
+  sensitiveName: (name: string) => boolean,
+): boolean {
+  let aliases: ReadonlyMap<Node, Node>;
+  try {
+    aliases = yamlAliasTargets(document);
+  } catch (error) {
+    if (error instanceof YamlSyntaxRefusal) return true;
+    throw error;
+  }
+  const api = yamlApi();
+  const pending: unknown[] = [];
+  api.visit(document, {
+    Map: (_key, map): void => {
+      for (const pair of map.items) pending.push(pair.key);
+    },
+  });
+  const seen = new Set<Node>();
+  while (pending.length > 0) {
+    const key = pending.pop();
+    if (!api.isNode(key) || seen.has(key)) continue;
+    seen.add(key);
+    if (api.isScalar(key) && sensitiveName(String(key.value))) return true;
+    appendYamlKeyChildren(key, pending, aliases);
+  }
+  return false;
+}
+
+function appendYamlKeyChildren(
+  key: Node,
+  pending: unknown[],
+  aliases: ReadonlyMap<Node, Node>,
+): void {
+  const api = yamlApi();
+  if (api.isAlias(key)) pending.push(aliases.get(key));
+  else if (api.isSeq(key)) pending.push(...key.items);
+  else if (api.isMap(key)) for (const pair of key.items) pending.push(pair.key, pair.value);
 }
 
 function hasPendingPrivateValue(

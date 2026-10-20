@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redact, redactSecretLiterals } from "./redaction.js";
+import { createStreamingRedactor, redact, redactSecretLiterals } from "./redaction.js";
 
 describe("configured literal redaction uses original source intervals", () => {
   it.each([false, true])(
@@ -40,5 +40,39 @@ describe("configured literal redaction uses original source intervals", () => {
     expect(redact(text, [], { sourceLanguage: "typescript" })).toBe(
       'const password="[REDACTED]"; const shape={"label":1};',
     );
+  });
+});
+
+describe("overlapping inferred source ownership", () => {
+  const value = "fixture_value_q87";
+  const cases = ["", "`", "``"].flatMap((ticks) =>
+    (
+      [
+        [`const password: string = "${value}";`, true],
+        [`{"pass\\u0077ord":"${value}"}`, true],
+        ["const visible: number = 1;", false],
+      ] as const
+    ).map(([source, privateValue]) => ({
+      ticks,
+      privateValue,
+      text: `Example ${ticks}label: public \n${source}\n`,
+    })),
+  );
+
+  it.each(cases)("does not append an earlier raw suffix ($ticks, $privateValue)", (fixture) => {
+    const safe = redact(fixture.text);
+    if (fixture.privateValue) expect(safe).not.toContain(value);
+    else expect(safe).toBe(fixture.text);
+    expect(redact(safe)).toBe(safe);
+    for (let at = 0; at <= fixture.text.length; at += 1) {
+      const stream = createStreamingRedactor(redact);
+      let output = stream.push(fixture.text.slice(0, at));
+      if (fixture.privateValue) expect(output).not.toContain(value);
+      output += stream.push(fixture.text.slice(at));
+      if (fixture.privateValue) expect(output).not.toContain(value);
+      output += stream.finish();
+      expect(output).toBe(safe);
+      if (fixture.privateValue) expect(output).not.toContain(value);
+    }
   });
 });

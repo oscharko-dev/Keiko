@@ -238,7 +238,8 @@ function syntaxSource(
   kind: Ts.ScriptKind,
 ): { file: Ts.SourceFile; valid: boolean; firstError: number } {
   const ts = typescriptApi();
-  const name = kind === ts.ScriptKind.TSX ? "source.tsx" : "source.ts";
+  const scriptName = kind === ts.ScriptKind.TSX ? "source.tsx" : "source.ts";
+  const name = kind === ts.ScriptKind.JSON ? "source.json" : scriptName;
   const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, kind);
   const host: Ts.CompilerHost = {
     getSourceFile: (path): Ts.SourceFile | undefined => (path === name ? file : undefined),
@@ -254,7 +255,12 @@ function syntaxSource(
   };
   const program = ts.createProgram(
     [name],
-    { noLib: true, noResolve: true, jsx: ts.JsxEmit.Preserve },
+    {
+      noLib: true,
+      noResolve: true,
+      jsx: ts.JsxEmit.Preserve,
+      resolveJsonModule: kind === ts.ScriptKind.JSON,
+    },
     host,
   );
   const diagnostics = program.getSyntacticDiagnostics(file);
@@ -276,7 +282,7 @@ function typescriptSource(text: string, ports: ProjectionPorts): Ts.SourceFile {
   return result.file;
 }
 
-function unsafeMalformedSource(text: string, ports: ProjectionPorts): boolean {
+export function unsafeMalformedSource(text: string, ports: ProjectionPorts): boolean {
   return (
     /\\|"{3}|'{3}|[@$]"/u.test(text) ||
     (ports.mayContainSensitiveName(text) && /["'`\d]/u.test(text)) ||
@@ -288,17 +294,17 @@ function literalName(node: Ts.Node): boolean {
   return "name" in node.parent && node.parent.name === node;
 }
 
-/** Native JSON validation prevents JavaScript labels or expressions from becoming JSON evidence. */
+/** JSON grammar accepts top-level values; configuration-object validation is a different contract. */
 export function isJsonDocument(text: string): boolean {
   if (!/^\s*[{[]/u.test(text)) return false;
-  return typescriptApi().parseConfigFileTextToJson("source.json", text).error === undefined;
+  return syntaxSource(text, typescriptApi().ScriptKind.JSON).valid;
 }
 
 /** Missing EOF syntax may be appended to an admitted prefix; an earlier lexical error may
  * already have detached a private value's tail from its owner and must remain unavailable. */
 export function isJsonSourcePrefix(text: string): boolean {
-  const error = typescriptApi().parseConfigFileTextToJson("source.json", text).error;
-  return error === undefined || error.start === text.length;
+  const result = syntaxSource(text, typescriptApi().ScriptKind.JSON);
+  return result.valid || result.firstError === text.length;
 }
 
 /** Full syntax and a declaration certify bare source; labels/env assignments remain plain text. */

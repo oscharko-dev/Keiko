@@ -853,9 +853,32 @@ context without repeatedly reparsing remaining public suffixes.
 Parsed aliases without an earlier target fail closed through the existing syntax-refusal path.
 Sensitivity remains monotonic across shared nodes and cycles; no alias graph is expanded to plain
 objects and no per-alias whole-document scan or global cache is introduced.
-Index snapshot version 12 invalidates previously projected
+Canonical Markdown inline bodies use the same complete source owners as unlabelled fences,
+including every successive inferred source region. The shared renderer scanner also reports
+unresolved backtick runs as advisory hints only; citation ranges remain unchanged. A source-shaped
+unresolved hint retains streaming context until successful completion. Cancellation discards it.
+Ambiguous nested private source fails closed; an unassigned sensitive word is not itself a value.
+Consumers advance monotonically through retained hint contexts rather than reparsing overlapping
+suffixes. Arbitrary inline text receives no source metadata exemption.
+Language-owned privacy projections may overlap. Strict text processing covers only the complement
+of their interval union and advances monotonically; it cannot append an earlier raw suffix again.
+All private literal spans survive for the existing conservative overlap merge.
+JSON/JSONC validation uses the compiler's JSON syntax diagnostics, not its configuration-object
+conversion. Complete top-level arrays and scalar values are supported; earlier lexical errors
+remain unavailable and only EOF-incomplete prefixes keep the existing bounded projection rule.
+Every JSON-hinted root reaches JSON grammar validation. A filename does not impose format validity:
+after failed validation, strictly public unparsed metadata retains the existing safe-text guard,
+and a complete recognized TypeScript/Java body may use its existing validated source owner.
+Other malformed bodies refuse projection; a scalar prefix cannot detach an escaped private key
+through unconditional unstructured fallback. Configured secrets and strict patterns remain binding.
+Malformed YAML-shaped public prose is not private merely because it discusses safety. Its actual
+scalar/alias key graph and unresolved escapes retain the refusal decision; unresolved alias and
+explicit complex-key starts enter that same parser. Ordinary public instructions remain under strict
+text redaction without a source exemption, including configured secrets and recognized patterns.
+Index snapshot version 15 invalidates previously projected
 text even when source bytes and stat metadata are unchanged. The existing body-free projection
-revision 4 records this change without logging source content.
+revision 7 records this change without logging source content. Intermediate unpublished versions 13
+and 14 also remain ineligible after the JSON-ownership and public-metadata corrections.
 Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
 once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
 body. Classification, privacy and source-size grants stay unchanged. This scan first shipped in

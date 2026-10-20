@@ -1,5 +1,39 @@
 # Chat/Files qualification observations
 
+## Checkpoint 82: inline source privacy and structured-value preservation
+
+The shared redactor reuses canonical Markdown boundaries for inline source, retains unresolved
+source until completion, and keeps overlapping-region stitching monotonic. JSON/JSONC arrays and
+scalar roots use native grammar diagnostics. Safe public metadata under a JSON filename hint remains
+available; private alternative code still requires a validated language owner. Malformed YAML uses
+parsed private-key ownership rather than treating public safety instructions as credential data.
+Index snapshot version 15 invalidates earlier projections; existing body-free observations record
+redaction revision 7. No prompts, skills, budgets or permissions change.
+
+The final affected run passes 9,138 tests, with zero failures and four existing skips. Affected
+coverage is 94.62% lines and 87.1% branches. Strict typing, scoped lint/format, Activity Log including
+architecture and negative controls, retrieval/grounding/context/faithfulness, error observability,
+ADR index and actual Sonar pass. Original public-metadata regression fixtures and assertions remain
+unchanged. Intermediate privacy/availability failures and the early build-overlapping test failure
+remain retained. Stream partitions were split into disjoint test groups under the original timeout.
+
+The independent final source/runtime capture covers 7,577 source and 6,645 compiled files. Its
+unchanged 40 filename-hint cases and 45 JSON-root cases expose no private/configured values;
+7/8 public shapes remain exact, while sensitive prose is a measured conservative refusal. Actual
+old index versions 12/13/14 are rejected and rebuilt as 15; cold/warm/reload checks protect private
+terms and restore harmless public metadata. Inline stream and actual Workspace controls pass.
+
+Java's two separately bounded UI repairs compile, pass the correct application and detect all six
+independent defects. Original first drafts remain 6/6 versus 5/6 correct applications, and 5/6 in each
+group when conventions are included. Thinking remains enabled and the Composer unchanged. React,
+unused-task benefit and full skill acceptance remain open.
+
+[`inline-source-context-and-structured-values.json`](inline-source-context-and-structured-values.json)
+binds these outcomes and their limits. Inferred malformed JSON in plain text, unified-diff privacy
+and preservation, follow-up source selection, vendor closure, remaining native/browser/history
+acceptance, final exact-head checks, review settlement and verified integration remain open.
+No overall acceptance is claimed.
+
 ## Checkpoint 81: bounded aliases and preserved Markdown boundaries
 
 YAML aliases now use one per-document target index in canonical traversal order. Alias keys reach

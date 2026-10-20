@@ -128,13 +128,14 @@ class BlockRedactor implements StreamingRedactor {
     end = literalPrefixStart(pending, end, this.literals);
     const code = completeCodePrefix(pending, end);
     this.waiting = code.waiting;
+    this.waitingForTerminal ||= code.retainUntilTerminal === true;
     if (this.waiting !== undefined) return code.end;
     const start = standaloneSourceStart(
       pending,
       code.end,
       (line) => !yamlPublicationNeedsContext(line) && this.redactText(line) === line,
     );
-    this.waitingForTerminal = context.retainUntilTerminal || start < code.end;
+    this.waitingForTerminal ||= context.retainUntilTerminal || start < code.end;
     return start;
   }
 

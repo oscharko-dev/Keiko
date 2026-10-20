@@ -23,6 +23,7 @@ import {
   maskedLiteralBody,
   hasSourceDeclaration,
   TypeScriptSyntaxRefusal,
+  unsafeMalformedSource,
 } from "./redaction-typescript.js";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
@@ -71,6 +72,12 @@ interface InferredSourcePrefix {
   readonly end: number;
   readonly refusal?: "syntax" | "depth";
   readonly yamlDocument?: Document;
+}
+
+interface InlineSourceHint {
+  readonly start: number;
+  readonly bodyStart: number;
+  readonly end: number;
 }
 
 function inferredRegion(prefix: InferredSourcePrefix, start: number): CodeRegion {
@@ -133,8 +140,6 @@ function codeRegions(
   inferSourceLanguage = true,
 ): readonly CodeRegion[] {
   if (sourceLanguage === undefined && !inferSourceLanguage) return [];
-  if (sourceLanguage === "json" && !/^\s*[[{"]/u.test(text))
-    return codeRegions(text, undefined, ports, inferSourceLanguage);
   if (sourceLanguage !== undefined)
     return [
       {
@@ -156,17 +161,105 @@ function inferredCodeRegions(text: string, ports: ProjectionPorts): readonly Cod
   const result: CodeRegion[] = prefix?.language === undefined ? [] : [inferredRegion(prefix, 0)];
   let from = prefix?.end ?? 0;
   const offset = from;
-  const ranges = markdownCodeRanges(text.slice(offset)).map((range) => ({
-    start: range.start + offset,
-    end: range.end + offset,
-  }));
+  const { ranges, hints } = sourceMarkdownLayout(text, offset);
   for (const range of [...ranges, { start: text.length, end: text.length }]) {
     result.push(...standaloneRegions(text, from, range.start, ports, withinSize));
-    const region = fencedRegion(text, range.start, range.end);
+    const region =
+      fencedRegion(text, range.start, range.end) ??
+      inlineSourceRegion(text, range.start, range.end);
     if (region !== undefined) result.push(...inferredFenceRegions(text, region, ports));
     from = range.end;
   }
-  return result.sort((a, b) => a.start - b.start);
+  result.sort((a, b) => a.start - b.start);
+  return [...result, ...unresolvedInlineRegions(text, hints, result, ports, withinSize)].sort(
+    (a, b) => a.start - b.start,
+  );
+}
+
+function inlineSourceRegion(text: string, start: number, end: number): CodeRegion | undefined {
+  const block = text.slice(start, end);
+  const ticks = /^`+/u.exec(block)?.[0] ?? "";
+  if (ticks.length === 0 || block.length < ticks.length * 2 || !block.endsWith(ticks))
+    return undefined;
+  const bodyStart = start + ticks.length;
+  return {
+    start: bodyStart,
+    end: end - ticks.length,
+    language: undefined,
+    fence: "",
+    quoteDepth: 0,
+    closed: true,
+  };
+}
+
+function sourceMarkdownLayout(
+  text: string,
+  offset = 0,
+): {
+  ranges: readonly { start: number; end: number }[];
+  hints: readonly InlineSourceHint[];
+} {
+  const hints: InlineSourceHint[] = [];
+  const ranges = markdownCodeRanges(text.slice(offset), (range, length): void => {
+    hints.push({
+      start: range.start + offset,
+      bodyStart: range.start + length + offset,
+      end: range.end + offset,
+    });
+  }).map((range) => ({ start: range.start + offset, end: range.end + offset }));
+  return { ranges, hints };
+}
+
+function unresolvedInlineRegions(
+  text: string,
+  hints: readonly InlineSourceHint[],
+  regions: readonly CodeRegion[],
+  ports: ProjectionPorts,
+  withinSize: boolean,
+): readonly CodeRegion[] {
+  const result: CodeRegion[] = [];
+  let covered = 0;
+  let regionIndex = 0;
+  for (const hint of hints) {
+    while ((regions[regionIndex]?.end ?? Infinity) <= hint.start) regionIndex += 1;
+    if (hint.start < covered || (regions[regionIndex]?.start ?? Infinity) <= hint.start) continue;
+    if (!mayStartStandaloneSource(text.slice(hint.bodyStart, hint.end))) continue;
+    result.push(...unresolvedHintRegions(text, hint, ports, withinSize));
+    covered = hint.end;
+  }
+  return result;
+}
+
+function unresolvedHintPrefix(
+  body: string,
+  ports: ProjectionPorts,
+  withinSize: boolean,
+): InferredSourcePrefix | undefined {
+  const prefix = inferredPrefix(body, ports, withinSize);
+  // A YAML interpretation cannot certify nested unresolved Markdown as field ownership.
+  const ambiguous =
+    prefix?.language === undefined || (prefix.language === "yaml" && body.includes("`"));
+  return ambiguous && unsafeMalformedSource(body, ports)
+    ? { language: "typescript", end: body.length, refusal: "syntax" }
+    : prefix;
+}
+
+function unresolvedHintRegions(
+  text: string,
+  hint: InlineSourceHint,
+  ports: ProjectionPorts,
+  withinSize: boolean,
+): readonly CodeRegion[] {
+  const body = text.slice(hint.bodyStart, hint.end);
+  const prefix = unresolvedHintPrefix(body, ports, withinSize);
+  const result: CodeRegion[] = [];
+  if (prefix?.language !== undefined) result.push(inferredRegion(prefix, hint.bodyStart));
+  if (prefix !== undefined && prefix.end < body.length) {
+    result.push(
+      ...standaloneRegions(text, hint.bodyStart + prefix.end, hint.end, ports, withinSize),
+    );
+  }
+  return result;
 }
 
 export interface OpenCodeFence {
@@ -176,23 +269,53 @@ export interface OpenCodeFence {
 export interface CodePublicationPrefix {
   readonly end: number;
   readonly waiting?: OpenCodeFence;
+  readonly retainUntilTerminal?: boolean;
 }
 
 /** Publication retains the complete opening line, including its quote context. */
 export function completeCodePrefix(text: string, before: number): CodePublicationPrefix {
-  let end = before;
+  const { ranges, hints } = sourceMarkdownLayout(text);
+  const hint = hints.find(
+    (candidate) =>
+      candidate.start < before &&
+      mayStartStandaloneSource(text.slice(candidate.bodyStart, candidate.end)),
+  );
+  let end = hint === undefined ? before : text.lastIndexOf("\n", hint.start - 1) + 1;
   let waiting: OpenCodeFence | undefined;
-  for (const range of markdownCodeRanges(text)) {
-    const region = fencedRegion(text, range.start, range.end);
-    if (region === undefined) continue;
-    const containerEnded =
-      region.quoteDepth > 0 && /\n[^\n]*\n/u.test(text.slice(range.end, before));
-    if ((region.closed && before >= range.end) || containerEnded) continue;
-    const opening = text.lastIndexOf("\n", range.start - 1) + 1;
-    end = Math.min(end, opening);
-    if (!region.closed && opening <= end) waiting = region;
+  for (const range of ranges) {
+    const pending = pendingCodeRange(text, range, before);
+    if (pending === undefined) continue;
+    end = Math.min(end, pending.end);
+    if (pending.waiting !== undefined && pending.end <= end) waiting = pending.waiting;
   }
-  return { end, ...(waiting === undefined ? {} : { waiting }) };
+  return {
+    end,
+    ...(waiting === undefined ? {} : { waiting }),
+    ...(hint === undefined ? {} : { retainUntilTerminal: true }),
+  };
+}
+
+function pendingCodeRange(
+  text: string,
+  range: { readonly start: number; readonly end: number },
+  before: number,
+): CodePublicationPrefix | undefined {
+  const region = fencedRegion(text, range.start, range.end);
+  if (region === undefined) {
+    return range.start < before && range.end > before
+      ? { end: text.lastIndexOf("\n", range.start - 1) + 1 }
+      : undefined;
+  }
+  if (fencePublished(text, range.end, region, before)) return undefined;
+  const end = text.lastIndexOf("\n", range.start - 1) + 1;
+  return { end, ...(region.closed ? {} : { waiting: region }) };
+}
+
+function fencePublished(text: string, end: number, region: CodeRegion, before: number): boolean {
+  return (
+    (region.closed && before >= end) ||
+    (region.quoteDepth > 0 && /\n[^\n]*\n/u.test(text.slice(end, before)))
+  );
 }
 
 /** A wake-up hint only; every candidate is certified again by the shared Markdown parser. */
@@ -338,10 +461,22 @@ function languageProjection(
   yamlDocument?: Document,
 ): readonly RedactionSpan[] {
   if (language === "json" && !isJsonSourcePrefix(body))
-    return refusedProjection(body, report, "syntax");
+    return nonJsonSourceProjection(body, ports, report);
   if (language === "java") return javaProjection(body, ports);
   if (language === "yaml") return projectYamlData(body, ports, yamlDocument);
   return projectTypeScriptData(body, ports, language === "json");
+}
+
+function nonJsonSourceProjection(
+  body: string,
+  ports: ProjectionPorts,
+  report: { depthRefusals: number; syntaxRefusals: number },
+): readonly RedactionSpan[] {
+  if (safeUnparsedText(body, ports)) return [];
+  const language = inferredLanguage(body);
+  if (language === "typescript") return projectTypeScriptData(body, ports);
+  if (language === "java") return projectJavaData(body, ports);
+  return refusedProjection(body, report, "syntax");
 }
 
 /** A cheap candidate check avoids loading a language SDK for ordinary diagnostics. */
@@ -349,8 +484,11 @@ export function mayStartStandaloneSource(text: string): boolean {
   const body = text.trimStart();
   if (body.slice(0, lineAfter(body, 0, body.length)).trimEnd() === REDACTION_PLACEHOLDER)
     return false;
+  return mayStartYaml(body) || mayStartTypedSource(body);
+}
+
+function mayStartTypedSource(body: string): boolean {
   return (
-    mayStartYaml(body) ||
     /^(?:\/[/*]|[{[@])/u.test(body) ||
     /^(?:export|import|declare|async|function|interface|type|const|let|var|class|enum|record|public|private|protected|abstract|final|static)\b/u.test(
       body,
@@ -511,9 +649,22 @@ function inferredYamlPrefix(
   if (prefix.document !== undefined)
     return { language: "yaml", end: prefix.end, yamlDocument: prefix.document };
   if (isYamlDocument(text)) return { language: "yaml", end: text.length };
-  if (prefix.syntaxRequired === true && !safeUnparsedText(text, ports))
+  if (mustRefuseMalformedYaml(text, ports, prefix.syntaxRequired, prefix.privateKeyObserved))
     return { language: "yaml", end: text.length, refusal: "syntax" };
   return unparsedYamlPrefix(text);
+}
+
+function mustRefuseMalformedYaml(
+  text: string,
+  ports: ProjectionPorts,
+  syntaxRequired: boolean | undefined,
+  privateKeyObserved: boolean | undefined,
+): boolean {
+  return (
+    syntaxRequired === true &&
+    !safeUnparsedText(text, ports) &&
+    (privateKeyObserved !== false || text.includes("\\"))
+  );
 }
 
 function unparsedYamlPrefix(text: string): { language: undefined; end: number } | undefined {

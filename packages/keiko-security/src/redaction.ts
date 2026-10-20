@@ -22,7 +22,7 @@ import {
 } from "./redaction-code.js";
 
 import { REDACTION_PLACEHOLDER as REDACTED } from "./redaction-source-map.js";
-export const CODE_REDACTION_REVISION = 4;
+export const CODE_REDACTION_REVISION = 7;
 /** The exact text `redact` substitutes for a secret. Exported so a consumer that must recognise a
  * scrubbed value in otherwise structured output (a host path in a test runner's stack frame,
  * #3390) matches this one constant instead of restating it. */
@@ -269,12 +269,14 @@ export function redact(
   ];
   let from = 0;
   for (const region of projection.regions) {
-    spans.push({
-      start: from,
-      end: region.start,
-      replacement: redactPlain(input.slice(from, region.start), additionalSecrets, preserve),
-    });
-    from = region.end;
+    if (region.start > from) {
+      spans.push({
+        start: from,
+        end: region.start,
+        replacement: redactPlain(input.slice(from, region.start), additionalSecrets, preserve),
+      });
+    }
+    from = Math.max(from, region.end);
   }
   spans.push({
     start: from,
