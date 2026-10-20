@@ -1,5 +1,38 @@
 # Chat/Files qualification observations
 
+## Checkpoint 83: admit structural work within the remaining grant
+
+An oversized structural batch previously charged an unexecuted reservation, preventing source
+selection. The existing owner now admits only the remaining batch prefix, shared by initial and
+follow-up queries. Truncation stays explicit; already admitted evidence remains reusable. Search
+usage retains conservative reservation semantics, separate from observed work. No prompts, skills,
+scoring floors, scopes or budgets change.
+
+The final grounded run passes 2,797 tests, with zero failures and one existing skip. Orchestrator
+coverage is 96.92% lines and 88.53% branches. Strict typing, lint/format, Activity Log including
+architecture/negative controls, retrieval/grounding/context/faithfulness, error observability, ADR
+index and actual Sonar pass on unchanged source/runtime. Two source cases fail before the fix;
+existing fan-out and 11/12-call boundary pins remain unchanged. Independent original/renamed cases
+now retain all seven required files and complete implementation bytes, versus three before, within
+the same 16-call grant. Scope, cancellation and actual batch-admission controls pass.
+
+Two strict existing verification pins were relocated to their actual owning conditions: a lone
+stale hint still performs the exact outside-range retry, and an actual one-search exhaustion emits
+the original budget-skip evidence. Independent disabled-behavior controls fail both pins. The native
+queued journey additionally proves the previous hint remains stale, retains its priority, and returns
+current bytes/citations/continuity in one read. Intermediate failed interpretations and reverted
+experiments remain retained; the final runtime is byte-identical to the initial batching repair.
+
+All twelve React first-feedback UI cases are complete on frozen77. Correct subjects pass for 3/6
+skill and 4/6 control; with naming/section conventions included, results are 3/6 and 1/6. Original
+first drafts remain failed. Eight cases retain an eligible, unspent second feedback turn; no plateau,
+exhausted repair cap, untouched-task benefit or skill acceptance is claimed. Further model work
+will bind a current corrected runtime.
+
+[`bounded-structural-reservations.json`](bounded-structural-reservations.json) binds these results.
+Plain-text malformed JSON, unified-diff privacy/preservation, vendor closure, remaining native/UI
+acceptance, final exact-head checks/reviews and verified integration remain open.
+
 ## Checkpoint 82: inline source privacy and structured-value preservation
 
 The shared redactor reuses canonical Markdown boundaries for inline source, retains unresolved

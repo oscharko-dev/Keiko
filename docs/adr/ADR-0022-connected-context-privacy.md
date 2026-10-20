@@ -1373,6 +1373,18 @@ definitions, relationships, and history retain their existing retrieval and unce
 The existing connected-context completion event partitions planned rings into executed, deliberately
 skipped, and stopped-before-execution kinds, including an initially blocked budget. Closed skip
 reasons explain policy decisions; augmentation separately records `not-reached`, `used`, or `skipped`.
+Structural batches reserve at most the remaining search-call grant. Initial anchor queries, then
+bounded follow-up queries, consume only that admitted batch prefix. An oversized optional batch
+cannot charge an unexecuted over-budget request and prevent all structural work. Truncation retains
+a budget uncertainty marker. Search usage retains the existing conservative reservation semantics;
+the separate index and structural counters record observed work. Existing ring, budget and source
+observations expose the admitted execution without recording queries or content. Scope, cancellation,
+absolute deadlines and all search/read/byte/model ceilings remain binding.
+Already admitted current-source evidence remains reusable when no new search reservation fits.
+Queued excerpt reads preserve an admitted stale line hint's priority while reading current bytes;
+a valid sibling range can recover in the same read. The owning reader retains its outside-range
+retry when the stale hint has no admitted current sibling. Integration evidence binds the previous
+hint, current returned ranges, content, citations and scope; facade call count alone is not freshness.
 An overview's additional file listing records `used`, `not-needed`, `skipped-budget`, or
 `skipped-stopped` on the same request's source-details event (`not-evaluated` before lexical search).
 It reserves and charges its own search call. A refused reservation retains a budget marker; a

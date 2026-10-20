@@ -1363,6 +1363,7 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
 }
 
 interface SearchInputs {
+  readonly reservedRingSearchCalls?: number | undefined;
   readonly endpointPreferredSourcePaths?: readonly string[] | undefined;
   readonly admittedPaths?: readonly string[] | undefined;
   readonly rejectedPaths?: readonly string[] | undefined;
@@ -2878,8 +2879,10 @@ async function runNonLexicalAdapters(
   inputs: SearchInputs,
 ): Promise<readonly RunRingStructuralResult[]> {
   const registry = registryForRing(ring);
-  const queries =
+  const plannedQueries =
     ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
+  const reserved = inputs.reservedRingSearchCalls ?? 0;
+  const queries = plannedQueries.slice(0, reserved);
   const requestContext =
     ring.kind === "structural" ? inputs.structuralContexts.forLimits(ring.searchLimits) : undefined;
   const results = await runAdapterQueries(registry, ring, queries, inputs, requestContext);
@@ -2895,7 +2898,7 @@ async function runNonLexicalAdapters(
   const followUpResults = await runAdapterQueries(
     registry,
     ring,
-    followUpQueries,
+    followUpQueries.slice(0, Math.max(0, reserved - queries.length)),
     inputs,
     requestContext,
   );
@@ -2977,6 +2980,11 @@ async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Pr
   const adapterUncertainty = allResults.flatMap((result) =>
     adapterDiagnostics(result, inputs.nowMs()),
   );
+  if (
+    ring.kind === "structural" &&
+    (inputs.reservedRingSearchCalls ?? 0) < plannedSearchCallsForRing(ring, inputs)
+  )
+    adapterUncertainty.push(budgetClipped("budget-exhausted on searchCalls", inputs.nowMs()));
   const uncertainty = dedupeUncertainty(
     ring.kind === "git-history"
       ? suppressGitMetadataAdapterDiagnostics(adapterUncertainty, git.atoms.length)
@@ -3110,9 +3118,17 @@ function reserveRingSearchCalls(
   ring: RetrievalRing,
   inputs: SearchInputs,
 ): RingReservation {
+  const remaining = governor.plan.budget.searchCallsMax - governor.usage.searchCalls;
+  if (remaining <= 0) {
+    const reason = "budget-exhausted on searchCalls";
+    return {
+      governor: { ...governor, status: "budget-exhausted", stopReason: reason },
+      marker: budgetClipped(reason, inputs.nowMs()),
+    };
+  }
   const reserved = applyUsage(
     governor,
-    usageDelta({ searchCalls: plannedSearchCallsForRing(ring, inputs) }),
+    usageDelta({ searchCalls: Math.min(remaining, plannedSearchCallsForRing(ring, inputs)) }),
   );
   if (reserved.status !== "budget-exhausted") {
     return { governor: reserved };
@@ -3337,6 +3353,7 @@ async function runReservedRing(
   decisions.executedRingKinds.push(ring.kind);
   const result = await runRing(ring, {
     ...inputs,
+    reservedRingSearchCalls: reservation.governor.usage.searchCalls - current.usage.searchCalls,
     resolveRepoSemanticSearchProvider: semanticProviderResolver(inputs, grant),
     tryReserveAdditionalSearchCall: (): boolean => {
       if (governor.usage.searchCalls >= governor.plan.budget.searchCallsMax) return false;
