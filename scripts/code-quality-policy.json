@@ -6595,6 +6595,53 @@
           "testName": "voice-session-recap version responsibility preserves true legacy omission and current required counts through public"
         }
       ]
+    },
+    {
+      "id": "coding-repository-request-capture-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-workspace/src/codingRepositorySearch.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-repository-search",
+        "exportName": "isCodingRepositoryRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-workspace/src/codingRepositorySearch.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-repository-search",
+        "exportName": "isCodingRepositoryRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-workspace/src/codingRepositorySearch.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-repository-search",
+        "exportName": "isCodingRepositoryRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-workspace/src/codingRepositorySearch.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-repository-search",
+        "exportName": "captureCodingRepositoryRequest",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-repository-search.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-repository-search.test.ts",
+          "testName": "Coding repository request guard and capture responsibility source: captures isolated bounded read and search requests"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-repository-search.test.ts",
+          "testName": "Coding repository request guard and capture responsibility source: refuses malformed and accessor-bearing requests before capture"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-repository-search.test.ts",
+          "testName": "Coding repository request guard and capture responsibility public: captures isolated bounded read and search requests"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-repository-search.test.ts",
+          "testName": "Coding repository request guard and capture responsibility public: refuses malformed and accessor-bearing requests before capture"
+        }
+      ]
     }
   ]
 }

@@ -1423,3 +1423,20 @@ Default behavior and all other records, rules, scopes, caps and physical writer 
 unchanged. No producer, raw-carrier, scalar, return, reflection, dictionary, runtime-typeof or
 known-value grant follows. Fresh measured native correspondence is required before this optional
 pair can account for the actual marker inputs; declaration alone is not qualification.
+
+### Coding repository request admission and capture
+
+The `coding-repository-request-capture-validator` responsibility connects the existing
+`isCodingRepositoryRequest` guard to its actual same-owner `captureCodingRepositoryRequest`
+consumer. Its module selector uses the workspace implementation's real public runtime import;
+the contracts root index does not reexport these functions. Source and public runtime proofs
+cover malformed and accessor-bearing refusal before capture, bounded read/search capture,
+freezing and isolation from caller-owned glob arrays. Capture precedes the existing server,
+IPC and workspace processing; it confers no filesystem or execution authority.
+
+Only the ordinary unknown-input rule is declared. The guard's type-predicate input is not a
+native finding in the retained census. Its direct private query-check inputs are prospective
+native matches and require fresh measured helper closure, current source/proof binding and
+completed semantic qualification. The capture input and shared or unsupported helpers are not
+additional roots. No dictionary, runtime-typeof, known-value, object or output authority is
+implied; remaining rule scopes and owner obligations stay unchanged.
