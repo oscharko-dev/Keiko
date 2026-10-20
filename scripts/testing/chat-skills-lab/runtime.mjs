@@ -12,6 +12,7 @@ import { createChaosProxy, createChaosState } from "../coding-workbench-lab/chao
 import { openApiSession, importBuilt } from "../coding-workbench-lab/lab-common.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
+const BFF_STOP_TIMEOUT_MS = 5000;
 export const MODEL = "gemma-4-31b-it";
 export const digest = (text) => createHash("sha256").update(text).digest("hex");
 
@@ -314,14 +315,34 @@ function stopBffChild(child) {
   if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
     return;
   return new Promise((resolve, reject) => {
+    const deadline = globalThis.performance.now() + BFF_STOP_TIMEOUT_MS;
+    let forced = false;
+    let settled = false;
     const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       child.off("error", onError);
       child.off("exit", onExit);
       if (error) reject(error);
       else resolve();
     };
     const onError = (error) => finish(error);
-    const onExit = () => finish();
+    const onExit = () =>
+      finish(
+        forced || globalThis.performance.now() >= deadline
+          ? new Error("bff-stop-timeout")
+          : undefined,
+      );
+    let timer = setTimeout(() => {
+      forced = true;
+      timer = setTimeout(() => finish(new Error("bff-stop-reap-timeout")), BFF_STOP_TIMEOUT_MS);
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        finish(new AggregateError([new Error("bff-stop-timeout"), error], "bff-stop-force-failed"));
+      }
+    }, BFF_STOP_TIMEOUT_MS);
     child.once("error", onError);
     child.once("exit", onExit);
     try {

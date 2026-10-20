@@ -1813,3 +1813,25 @@ changed-owner checks. V2 whole-graph/export/log/UI-lint/server/contracts/securit
 its subject; complete source/output comparisons isolate the final guard-path and test delta.
 Installed update transitions, coordinator/successor integration, model/UI acceptance and delivery
 closeout remain open.
+
+## Checkpoint 68 — bound lab shutdown and preserve failed finalization
+
+The actual qualification runtime could wait indefinitely for its own BFF child to exit after
+`SIGTERM`, preventing final evidence from being saved. The existing owner now has a five-second
+graceful stop and a separate five-second forced-exit confirmation bound. It signals only its
+held `ChildProcess`, checks the original monotonic graceful deadline at exit, and clears timers
+and listeners on settlement. Forced termination remains a failure even when reaping succeeds;
+missing exit confirmation and signal errors remain explicit failures. Proxy cleanup and the
+existing finalizer still save the failed outcome. Provider, generation, retry and transport
+budgets are unchanged.
+
+Two regression assertions fail before repair. All 92 tests in the seven affected lab suites pass
+afterward, including missing forced-exit confirmation, delayed timeout delivery, force-signal
+refusal and existing startup/cleanup failures. An exact-source replay with actual fixture-owned
+Node children retains the pre-fix pending ledger and proves healthy termination plus a genuinely
+forced, failed-and-saved outcome after repair. The independent auditor's original baseline is
+retained; the final replay is explicitly developer-owned.
+
+`lab-bounded-shutdown.json` binds sources and scoped receipts. This closes the lab reliability
+defect, not native installed-update transitions, UI journeys, skill benefit or final CI/reviews.
+No acceptance checkbox or frozen campaign outcome is changed.

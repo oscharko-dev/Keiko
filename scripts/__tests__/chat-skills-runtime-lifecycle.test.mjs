@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startObservedBff } from "../testing/chat-skills-lab/runtime.mjs";
+import { finalizeRuntime, startObservedBff } from "../testing/chat-skills-lab/runtime.mjs";
 
 const ports = vi.hoisted(() => ({ fork: vi.fn(), session: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
@@ -77,6 +77,98 @@ describe("Chat skill lab owns process startup and resource cleanup", () => {
     expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
     expect(proxy.close).toHaveBeenCalledOnce();
     expect(proxy.closeAllConnections).toHaveBeenCalledOnce();
+  });
+
+  it("forces an owned child after graceful shutdown expires and saves the failed outcome", async () => {
+    vi.useFakeTimers();
+    const runtime = await readyRuntime();
+    child.kill.mockImplementation((signal) => {
+      if (signal === "SIGKILL") {
+        globalThis.queueMicrotask(() => {
+          child.signalCode = signal;
+          child.emit("exit", null, signal);
+        });
+      }
+      return true;
+    });
+    const save = vi.fn();
+    const completion = finalizeRuntime({ drain: vi.fn(), close: runtime.close }, save).catch(
+      (error) => error,
+    );
+    await vi.runOnlyPendingTimersAsync();
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    expect(await completion).toMatchObject({ message: "bff-stop-timeout" });
+    expect(save).toHaveBeenCalledExactlyOnceWith({
+      status: "failed",
+      drain: "fulfilled",
+      close: "rejected",
+    });
+    expect(proxy.close).toHaveBeenCalledOnce();
+    expect(proxy.closeAllConnections).toHaveBeenCalledOnce();
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds missing forced-exit confirmation without claiming a successful reap", async () => {
+    vi.useFakeTimers();
+    const runtime = await readyRuntime();
+    child.kill.mockImplementation(() => true);
+    const save = vi.fn();
+    const completion = finalizeRuntime({ drain: vi.fn(), close: runtime.close }, save).catch(
+      (error) => error,
+    );
+    await vi.runOnlyPendingTimersAsync();
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    expect(save).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(await completion).toMatchObject({ message: "bff-stop-reap-timeout" });
+    expect(save).toHaveBeenCalledExactlyOnceWith({
+      status: "failed",
+      drain: "fulfilled",
+      close: "rejected",
+    });
+    expect(proxy.close).toHaveBeenCalledOnce();
+    expect(proxy.closeAllConnections).toHaveBeenCalledOnce();
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects a late exit even when the graceful timeout callback has not run", async () => {
+    vi.useFakeTimers();
+    const runtime = await readyRuntime();
+    child.kill.mockImplementation(() => true);
+    const completion = runtime.close().catch((error) => error);
+    const clock = vi.spyOn(globalThis.performance, "now").mockReturnValue(Number.MAX_SAFE_INTEGER);
+    try {
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+      expect(await completion).toMatchObject({ message: "bff-stop-timeout" });
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("retains the shutdown timeout and a force-signal refusal together", async () => {
+    vi.useFakeTimers();
+    const runtime = await readyRuntime();
+    child.kill.mockImplementation((signal) => {
+      if (signal === "SIGKILL") throw cleanupFailure;
+      return true;
+    });
+    const completion = runtime.close().catch((error) => error);
+    await vi.runOnlyPendingTimersAsync();
+    const error = await completion;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.message).toBe("bff-stop-force-failed");
+    expect(error.errors).toEqual([
+      expect.objectContaining({ message: "bff-stop-timeout" }),
+      cleanupFailure,
+    ]);
+    expect(proxy.close).toHaveBeenCalledOnce();
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("does not wait again for a child already terminated by a signal", async () => {
