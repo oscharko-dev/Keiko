@@ -1,16 +1,20 @@
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import {
   BUILD_TIMEOUT_MS,
   QUERY_TIMEOUT_MS,
+  __resetTargetRuntimeCacheForTests,
   clearUsearchAnnCacheForGroup,
   clearUsearchAnnCacheForTests,
   searchUsearchAnnIndex,
   type UsearchAnnSearchRequest,
 } from "./usearch-ann-index.js";
-import { USEARCH_RUNTIME_MANIFEST, usearchRuntimeTargetKey } from "./usearch-runtime-manifest.js";
+import { usearchRuntimeTargetKey } from "./usearch-runtime-manifest.js";
 import {
   USEARCH_COMMAND,
   USEARCH_CONTROL,
@@ -24,6 +28,36 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+
+const { FIXTURE_CONTENT, FIXTURE_SHA256, FIXTURE_VERSION } = vi.hoisted(() => ({
+  FIXTURE_CONTENT: "keiko-usearch-worker-lifetime-fixture",
+  FIXTURE_SHA256: "e266680df53aadc7301b2f2e24b7fe8254296635822ba442a9ea7e800811d74a",
+  FIXTURE_VERSION: "worker-lifetime-fixture-1.0.0",
+}));
+let fixtureDirectory = "";
+
+// The Worker is simulated here; only this file approves the owned fixture. Real-addon tests
+// retain the production manifest and its pinned digest in their separate module instances.
+vi.mock("./usearch-runtime-manifest.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./usearch-runtime-manifest.js")>();
+  return {
+    ...original,
+    usearchRuntimeApproval: (
+      targetKey: string | undefined,
+    ): Readonly<Record<string, string>> | undefined =>
+      targetKey === undefined
+        ? undefined
+        : Object.freeze({
+            version: FIXTURE_VERSION,
+            sourceCommit: "0".repeat(40),
+            tarballUrl: "https://example.test/usearch-lifetime-fixture.tgz",
+            tarballSha256: "0".repeat(64),
+            licenseSha256: "0".repeat(64),
+            archivePath: "fixture/usearch.node",
+            binarySha256: FIXTURE_SHA256,
+          }),
+  };
+});
 
 interface LifetimeScope {
   readonly data: {
@@ -165,7 +199,7 @@ function request(revision = "one"): UsearchAnnSearchRequest {
     queryVector: new Float32Array([1, 0]),
     candidateLimit: 1,
     exactScanThreshold: 0,
-    binaryPath: resolve(".usearch", USEARCH_RUNTIME_MANIFEST.version, target, "usearch.node"),
+    binaryPath: join(fixtureDirectory, "usearch.node"),
   };
 }
 
@@ -185,6 +219,10 @@ function answerQuery(view: Int32Array, index: number): number {
 }
 
 beforeEach(() => {
+  __resetTargetRuntimeCacheForTests();
+  fixtureDirectory = mkdtempSync(join(realpathSync(tmpdir()), "keiko-usearch-lifetime-"));
+  writeFileSync(join(fixtureDirectory, "usearch.node"), FIXTURE_CONTENT);
+  expect(createHash("sha256").update(FIXTURE_CONTENT).digest("hex")).toBe(FIXTURE_SHA256);
   harness.mode = "success";
   harness.events = [];
   harness.scopes = [];
@@ -200,6 +238,9 @@ afterEach(() => {
   for (const scope of harness.scopes) scope.dispose();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  __resetTargetRuntimeCacheForTests();
+  rmSync(fixtureDirectory, { recursive: true, force: true });
+  fixtureDirectory = "";
 });
 
 function expectRetired(): void {

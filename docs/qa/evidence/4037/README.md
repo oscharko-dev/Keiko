@@ -2008,3 +2008,31 @@ and receives no acceptance credit; the corrected source requires a new uninstrum
 [`ui-test-typing.json`](ui-test-typing.json) binds the failure, corrected test and actual checks.
 No functional acceptance, native transition, skill comparison or merge claim follows from this
 small correction.
+
+## Checkpoint 75 — isolate the simulated ANN Worker fixture
+
+The Worker lifetime suite no longer depends on the provisioned multi-megabyte host addon. It
+creates a private canonical temporary fixture, verifies its fixed input digest and uses the
+existing file-scoped approval-mock pattern. Production approval, real-addon tests and the mandatory
+provisioning prerequisite remain unchanged. Cache state, bridges and the owned directory are
+cleaned up for every case. All 17 original lifetime and content-free observation assertions remain.
+
+The owned fixture fails the ready-state assertion under the production approval, then passes with
+its matching test-only approval. An earlier incorrectly quoted name filter selected zero tests;
+that attempt remains retained and receives no failure-first credit. The final combined run passes
+100 tests in six files, including real native ANN/Worker controls and both M2 proof suites. Strict
+typing, affected test lint, normal and negative architecture checks and actual Sonar pass.
+[`ann-worker-fixture-isolation.json`](ann-worker-fixture-isolation.json) binds that scope.
+
+The clean source74 AMD64 qualification also completes without instrumentation. Both non-root
+profiles pass the full native quality command and five additional consecutive 34-test process-scope
+runs each, with zero failure or skip. Actual CLI/BFF lifecycle and two native coordinator handoff,
+cancellation and restoration fixtures pass. The successor fixture remains a small HTTP process;
+this is not an installed update between distinct packaged Keiko versions or an SSD continuity proof.
+[`native-amd64-clean-qualification.json`](native-amd64-clean-qualification.json) retains provenance,
+the explicit qualification security profile, artifact hashes and these limits. Earlier failures and
+the cancelled source73 preparation are not reclassified.
+
+Two missing spaces in older CLI evidence are corrected without changing counts or outcomes.
+The frozen live React comparison continues on source74 without skill, prompt or question changes.
+Its incomplete results do not establish skill benefit. Overall acceptance and merge remain open.

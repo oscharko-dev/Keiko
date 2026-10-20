@@ -149,7 +149,7 @@
     },
     {
       "artifact": "checkpoint70-cli-green-v1.json",
-      "classification": "Initial full run omitted Docker from PATH, causing twelve command-execution failures, plus one real tracking-message regression. The original symlink/no-foreign-signal pin was preserved; tracking reads now retain their specific uncertainty diagnosis. Restoring the declared toolchain PATH makes all45 isolated command tests pass before the full1490-pass repeat."
+      "classification": "Initial full run omitted Docker from PATH, causing twelve command-execution failures, plus one real tracking-message regression. The original symlink/no-foreign-signal pin was preserved; tracking reads now retain their specific uncertainty diagnosis. Restoring the declared toolchain PATH makes all 45 isolated command tests pass before the full 1490-pass repeat."
     },
     {
       "artifact": "checkpoint70-command-failures-repro-v1.json",
