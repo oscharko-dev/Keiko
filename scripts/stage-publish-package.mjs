@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -17,6 +18,13 @@ import { fileURLToPath } from "node:url";
 
 import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import { explicitPrivateWorkspaceExclusions, scope } from "./release-workspace-policy.mjs";
+import {
+  collectRuntimeRequirements,
+  manifestRequirements,
+  resolveLockfileEdge,
+} from "./lib/runtime-requirements.mjs";
+import { planRuntimeOverrides } from "./lib/runtime-override-projection.mjs";
+import { findForbiddenPaths } from "./package-surface-rules.mjs";
 
 const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -95,17 +103,16 @@ function setObjectField(manifest, field, entries) {
   manifest[field] = entries;
 }
 
-function moveInternalDependenciesToPeers(manifest, runtimeNames) {
+function moveInternalDependenciesToPeers(manifest, runtimeNames, projectedVersions) {
   const peers = objectField(manifest, "peerDependencies");
   const peerMeta = objectField(manifest, "peerDependenciesMeta");
   for (const field of ["dependencies", "optionalDependencies"]) {
     const dependencies = objectField(manifest, field);
     for (const [name, specifier] of Object.entries(dependencies)) {
-      if (!name.startsWith(scope)) continue;
-      if (!runtimeNames.has(name)) {
-        throw new Error(`${manifest.name}.${field}.${name} is not a vendored runtime workspace`);
-      }
-      peers[name] = specifier;
+      const projected = projectedVersions.get(name);
+      if (!name.startsWith(scope) && projected === undefined) continue;
+      assertRuntimeDependency(manifest.name, field, name, runtimeNames);
+      peers[name] = projected ?? specifier;
       if (field === "optionalDependencies") peerMeta[name] = { optional: true };
       Reflect.deleteProperty(dependencies, name);
     }
@@ -115,9 +122,20 @@ function moveInternalDependenciesToPeers(manifest, runtimeNames) {
   setObjectField(manifest, "peerDependenciesMeta", peerMeta);
 }
 
-function stagedWorkspaceManifest(sourceManifest, runtimeNames) {
+function assertRuntimeDependency(owner, field, name, runtimeNames) {
+  if (name.startsWith(scope) && !runtimeNames.has(name))
+    throw new Error(`${owner}.${field}.${name} is not a vendored runtime workspace`);
+}
+
+function stagedWorkspaceManifest(sourceManifest, runtimeNames, projectedVersions = new Map()) {
   const manifest = structuredClone(sourceManifest);
-  moveInternalDependenciesToPeers(manifest, runtimeNames);
+  moveInternalDependenciesToPeers(manifest, runtimeNames, projectedVersions);
+  const peers = objectField(manifest, "peerDependencies");
+  for (const name of Object.keys(peers)) {
+    const projected = projectedVersions.get(name);
+    if (projected !== undefined) peers[name] = projected;
+  }
+  setObjectField(manifest, "peerDependencies", peers);
   delete manifest.devDependencies;
   delete manifest.scripts;
   delete manifest.bundleDependencies;
@@ -221,7 +239,39 @@ function vendorArchiveName(record) {
   if (typeof version !== "string" || !/^[0-9A-Za-z.-]+$/u.test(version)) {
     throw new TypeError(`${record.manifest.name} has an unsafe archive version`);
   }
-  return `oscharko-dev-${stagedVendorDirectory(record.manifest.name)}-${version}.tgz`;
+  const name = record.external
+    ? externalVendorDirectory(record.manifest.name)
+    : `oscharko-dev-${stagedVendorDirectory(record.manifest.name)}`;
+  return `${name}-${version}.tgz`;
+}
+
+function externalVendorDirectory(name) {
+  if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/u.test(name))
+    throw new TypeError("external runtime package has an unsafe name");
+  return `runtime-${createHash("sha256").update(name).digest("hex").slice(0, 24)}`;
+}
+
+function npmArchiveName(manifest) {
+  return `${manifest.name.replace(/^@/u, "").replace("/", "-")}-${manifest.version}.tgz`;
+}
+
+function copyExternalSurface(record, destination, relativePath = "") {
+  for (const entry of readdirSync(join(record.packageRoot, relativePath), {
+    withFileTypes: true,
+  })) {
+    if (entry.name === "node_modules" || entry.name === "package.json") continue;
+    const path = join(relativePath, entry.name);
+    if (findForbiddenPaths([path.split(sep).join("/")]).length > 0) continue;
+    const source = join(record.packageRoot, path);
+    if (entry.isDirectory()) {
+      mkdirSync(join(destination, path), { recursive: true });
+      copyExternalSurface(record, destination, path);
+    } else {
+      assertRegularPublishTree(source, record.manifest.name, path);
+      mkdirSync(dirname(join(destination, path)), { recursive: true });
+      cpSync(source, join(destination, path));
+    }
+  }
 }
 
 export function workspacePackInvocation(npmExecutable, platform = process.platform) {
@@ -234,21 +284,24 @@ export function workspacePackInvocation(npmExecutable, platform = process.platfo
 }
 
 function packWorkspace(stageRoot, record, runtimeNames) {
-  const directory = stagedVendorDirectory(record.manifest.name);
+  const directory = record.external
+    ? externalVendorDirectory(record.manifest.name)
+    : stagedVendorDirectory(record.manifest.name);
   const workspaceStage = join(stageRoot, ".vendor-stage", directory);
   const packageRoot = join(workspaceStage, "package");
   const vendorRoot = join(stageRoot, "vendor");
-  const manifest = stagedWorkspaceManifest(record.manifest, runtimeNames);
-  if (!existsSync(join(record.packageRoot, "dist"))) {
+  const manifest = record.stagedManifest ?? stagedWorkspaceManifest(record.manifest, runtimeNames);
+  if (!record.external && !existsSync(join(record.packageRoot, "dist"))) {
     throw new Error(`${record.manifest.name} has no built dist directory`);
   }
   mkdirSync(packageRoot, { recursive: true });
   mkdirSync(vendorRoot, { recursive: true });
-  copyWorkspaceSurface(record.packageRoot, packageRoot, manifest);
+  if (record.external) copyExternalSurface(record, packageRoot);
+  else copyWorkspaceSurface(record.packageRoot, packageRoot, manifest);
   writeJson(join(packageRoot, "package.json"), manifest);
   const archiveName = vendorArchiveName(record);
   const archivePath = join(vendorRoot, archiveName);
-  const stagedArchivePath = join(packageRoot, archiveName);
+  const stagedArchivePath = join(packageRoot, npmArchiveName(manifest));
   const invocation = workspacePackInvocation(resolveHostExecutable("npm"));
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageRoot,
@@ -272,15 +325,11 @@ function packWorkspace(stageRoot, record, runtimeNames) {
   };
 }
 
-function lockedDependencyVersion(lockfile, workspaceDirectory, dependencyName) {
-  const candidates = [
-    `packages/${workspaceDirectory}/node_modules/${dependencyName}`,
-    `node_modules/${dependencyName}`,
-  ];
-  for (const key of candidates) {
-    const version = lockfile.packages?.[key]?.version;
-    if (typeof version === "string" && version.length > 0) return version;
-  }
+function lockedDependencyVersion(lockfile, origin, dependencyName) {
+  const packages = new Map(Object.entries(lockfile.packages ?? {}));
+  const key = resolveLockfileEdge(packages, origin, dependencyName);
+  const version = packages.get(key)?.version;
+  if (typeof version === "string" && version.length > 0) return version;
   throw new Error(`${dependencyName} has no resolved runtime version in package-lock.json`);
 }
 
@@ -333,7 +382,10 @@ function promoteWorkspacePeers(
   const optionalPeers = {};
   for (const [peerName, specifier] of Object.entries(peerDependencies)) {
     if (runtimeNames.has(peerName)) continue;
-    const target = peerMeta[peerName]?.optional === true ? optionalPeers : requiredPeers;
+    const target =
+      record.optional === true || peerMeta[peerName]?.optional === true
+        ? optionalPeers
+        : requiredPeers;
     target[peerName] = specifier;
   }
   for (const [target, peers] of [
@@ -345,7 +397,7 @@ function promoteWorkspacePeers(
       peers,
       runtimeNames,
       workspace.name,
-      record.directory,
+      record.installPath ?? `packages/${record.directory}`,
       lockfile,
       promotedVersions,
     );
@@ -367,7 +419,7 @@ function promoteWorkspaceDependencies(manifest, runtimeNames, records, lockfile)
       objectField(workspace, "dependencies"),
       runtimeNames,
       name,
-      record.directory,
+      `packages/${record.directory}`,
       lockfile,
       promotedVersions,
     );
@@ -376,7 +428,7 @@ function promoteWorkspaceDependencies(manifest, runtimeNames, records, lockfile)
       objectField(workspace, "optionalDependencies"),
       runtimeNames,
       name,
-      record.directory,
+      `packages/${record.directory}`,
       lockfile,
       promotedVersions,
     );
@@ -403,21 +455,147 @@ function promoteWorkspaceDependencies(manifest, runtimeNames, records, lockfile)
   setObjectField(manifest, "optionalDependencies", optionalDependencies);
 }
 
-function stagedRootManifest(sourceManifest, runtimeNames, records, lockfile, vendorPackages) {
+function stagedRootManifest(
+  sourceManifest,
+  runtimeNames,
+  records,
+  lockfile,
+  vendorPackages,
+  pins = new Map(),
+) {
   const manifest = structuredClone(sourceManifest);
   promoteWorkspaceDependencies(manifest, new Set(runtimeNames), records, lockfile);
+  promoteAncestorDependencies(manifest, vendorPackages, lockfile);
   const dependencies = objectField(manifest, "dependencies");
+  const optionalDependencies = objectField(manifest, "optionalDependencies");
   const archives = new Map(
     vendorPackages.map((vendorPackage) => [vendorPackage.name, vendorPackage.archivePath]),
   );
-  for (const name of runtimeNames) {
-    const archivePath = archives.get(name);
-    if (archivePath === undefined) throw new Error(`${name} has no staged vendor archive`);
-    dependencies[name] = `file:${archivePath}`;
+  for (const record of vendorPackages) {
+    const name = record.name;
+    const target = dependencyTarget(name, record.optional, dependencies, optionalDependencies);
+    target[name] = `file:${record.archivePath}`;
   }
+  for (const [name, version] of pins) {
+    const target = dependencyTarget(
+      name,
+      optionalDependencies[name] !== undefined,
+      dependencies,
+      optionalDependencies,
+    );
+    target[name] = version;
+  }
+  for (const name of Object.keys(dependencies)) Reflect.deleteProperty(optionalDependencies, name);
   manifest.dependencies = dependencies;
+  setObjectField(manifest, "optionalDependencies", optionalDependencies);
+  // npm consumes the physical bundle; Yarn consumes the matching tarball-local file archives.
+  manifest.bundleDependencies = [
+    ...new Set([...(manifest.bundleDependencies ?? []), ...archives.keys()]),
+  ];
   manifest.files = [...new Set([...(manifest.files ?? []), "vendor"])];
   return manifest;
+}
+
+function dependencyTarget(name, optional, dependencies, optionalDependencies) {
+  return optional === true && dependencies[name] === undefined
+    ? optionalDependencies
+    : dependencies;
+}
+
+function promoteAncestorDependencies(manifest, packages, lockfile) {
+  const dependencies = objectField(manifest, "dependencies");
+  const optionalDependencies = objectField(manifest, "optionalDependencies");
+  const names = new Set(packages.map((record) => record.name));
+  const versions = rootResolvedVersions(manifest, names, lockfile);
+  for (const record of packages) {
+    if (!record.external) continue;
+    const owner = record.stagedManifest;
+    const required = record.optional === true ? optionalDependencies : dependencies;
+    for (const [target, field] of [
+      [required, "dependencies"],
+      [optionalDependencies, "optionalDependencies"],
+    ])
+      addExternalDependencies(
+        target,
+        objectField(owner, field),
+        names,
+        owner.name,
+        record.installPath,
+        lockfile,
+        versions,
+      );
+    promoteWorkspacePeers(
+      dependencies,
+      optionalDependencies,
+      owner,
+      names,
+      record,
+      lockfile,
+      versions,
+    );
+  }
+  setObjectField(manifest, "dependencies", dependencies);
+  setObjectField(manifest, "optionalDependencies", optionalDependencies);
+}
+
+function externalRuntimeRecord(repoRoot, ancestor) {
+  const packageRoot = join(repoRoot, ancestor.installPath);
+  const manifest = readJson(join(packageRoot, "package.json"));
+  if (manifest.name !== ancestor.name || manifest.version !== ancestor.version)
+    throw new Error("installed runtime override ancestor differs from the lockfile");
+  return { ...ancestor, directory: ancestor.installPath, packageRoot, manifest, external: true };
+}
+
+/** One plan owns the actual staged manifests and the offline consumer's registry requirements. */
+export function prepareRuntimeStagingPlan(repoRoot = defaultRepoRoot) {
+  const rootManifest = readJson(join(repoRoot, "package.json"));
+  const lockfile = readJson(join(repoRoot, "package-lock.json"));
+  const names = runtimeWorkspaceNames(rootManifest);
+  const runtimeNames = new Set(names);
+  const records = workspaceRecords(repoRoot);
+  validateRuntimeRecords(runtimeNames, records);
+  const promoted = structuredClone(rootManifest);
+  promoteWorkspaceDependencies(promoted, runtimeNames, records, lockfile);
+  const sources = [{ origin: "", requirements: manifestRequirements(promoted, runtimeNames) }];
+  for (const name of names)
+    sources.push({
+      origin: `packages/${records.get(name).directory}`,
+      requirements: manifestRequirements(records.get(name).manifest, runtimeNames),
+    });
+  const projection = planRuntimeOverrides(
+    new Map(Object.entries(lockfile.packages ?? {})),
+    collectRuntimeRequirements(sources),
+    rootManifest.overrides,
+  );
+  const selected = names.map((name) => ({
+    ...records.get(name),
+    installPath: `packages/${records.get(name).directory}`,
+  }));
+  selected.push(...projection.ancestors.map((entry) => externalRuntimeRecord(repoRoot, entry)));
+  const versions = new Map(projection.pins);
+  for (const record of selected) {
+    const previous = versions.get(record.manifest.name);
+    if (previous !== undefined && previous !== record.manifest.version)
+      throw new Error("runtime override ancestors require conflicting versions");
+    versions.set(record.manifest.name, record.manifest.version);
+  }
+  const packages = selected.map((record) => ({
+    ...record,
+    stagedManifest: stagedWorkspaceManifest(record.manifest, runtimeNames, versions),
+    archivePath: `vendor/${vendorArchiveName(record)}`,
+  }));
+  return {
+    runtimeNames,
+    packages,
+    rootManifest: stagedRootManifest(
+      rootManifest,
+      runtimeNames,
+      records,
+      lockfile,
+      packages.map((record) => ({ ...record, name: record.manifest.name })),
+      projection.pins,
+    ),
+  };
 }
 
 function validateRuntimeRecords(runtimeNames, records) {
@@ -426,6 +604,10 @@ function validateRuntimeRecords(runtimeNames, records) {
       throw new Error(`${name} is build-time-only and cannot be vendored`);
     }
     if (!records.has(name)) throw new Error(`${name} does not map to a workspace package`);
+    const manifest = records.get(name).manifest;
+    for (const field of ["dependencies", "optionalDependencies"])
+      for (const dependency of Object.keys(objectField(manifest, field)))
+        assertRuntimeDependency(name, field, dependency, runtimeNames);
   }
 }
 
@@ -434,24 +616,16 @@ export function createStagedPublishPackage({
   temporaryRoot = tmpdir(),
 } = {}) {
   const resolvedRepoRoot = resolve(repoRoot);
-  const rootManifest = readJson(join(resolvedRepoRoot, "package.json"));
-  const lockfile = readJson(join(resolvedRepoRoot, "package-lock.json"));
-  const names = runtimeWorkspaceNames(rootManifest);
-  const runtimeNames = new Set(names);
-  const records = workspaceRecords(resolvedRepoRoot);
-  validateRuntimeRecords(runtimeNames, records);
+  const plan = prepareRuntimeStagingPlan(resolvedRepoRoot);
   const stageRoot = mkdtempSync(join(temporaryRoot, "keiko-publish-stage-"));
   const vendorPackages = [];
   try {
-    copyRootSurface(resolvedRepoRoot, stageRoot, rootManifest);
-    for (const name of names) {
-      vendorPackages.push(packWorkspace(stageRoot, records.get(name), runtimeNames));
+    copyRootSurface(resolvedRepoRoot, stageRoot, plan.rootManifest);
+    for (const record of plan.packages) {
+      vendorPackages.push(packWorkspace(stageRoot, record, plan.runtimeNames));
     }
     rmSync(join(stageRoot, ".vendor-stage"), { recursive: true, force: true });
-    writeJson(
-      join(stageRoot, "package.json"),
-      stagedRootManifest(rootManifest, names, records, lockfile, vendorPackages),
-    );
+    writeJson(join(stageRoot, "package.json"), plan.rootManifest);
   } catch (error) {
     rmSync(stageRoot, { recursive: true, force: true });
     throw error;

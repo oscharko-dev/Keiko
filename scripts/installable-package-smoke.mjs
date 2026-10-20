@@ -1,3 +1,18 @@
+import {
+  aliasRange,
+  descriptorIsSatisfied,
+  manifestRequirements,
+  resolveLockfileEdge,
+  lockfileRecordIdentity,
+  collectRuntimeRequirements,
+} from "./lib/runtime-requirements.mjs";
+export {
+  aliasRange,
+  descriptorIsSatisfied,
+  lockfileOwnerPath,
+  resolveLockfileEdge,
+  lockfileRecordIdentity,
+} from "./lib/runtime-requirements.mjs";
 // Installable-package smoke (Issue #169 D2, AC2). Packs the root, installs the tarball into a
 // fresh npm and Yarn projects, and asserts that (a) every private runtime workspace resolves from
 // the tarball-local vendor graph, (b) the CLI bin is executable end-to-end (`--version`, `--help`),
@@ -28,7 +43,6 @@ import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
-import { satisfies } from "semver";
 import ts from "typescript";
 import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import {
@@ -44,7 +58,7 @@ import {
   yarnPackageManagerFromIntegrityLocator,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
-import { createStagedPublishPackage } from "./stage-publish-package.mjs";
+import { createStagedPublishPackage, prepareRuntimeStagingPlan } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -865,39 +879,6 @@ function workspaceThirdPartyRequirements(workspace, packagesRoot) {
 }
 
 /**
- * Whether the version an edge resolves to satisfies THIS descriptor's range.
- *
- * Per descriptor, not per name: when one parent's optional range is satisfied by an installed copy
- * and a second parent declares a NON-OVERLAPPING optional range for the same name, npm may resolve
- * the second to nothing and the walk-up then finds the first parent's copy. Serving it would answer
- * a descriptor it does not satisfy, and Yarn fails with "no candidates" for the other one.
- *
- * `semver` decides this rather than `minimumSatisfyingVersion`'s lowest-member approximation: the
- * ranges here come from every manifest in the transitive closure, and a hand-rolled matcher over
- * that grammar is exactly the guessing this file already refuses to do elsewhere. An `npm:` alias
- * descriptor carries its range after the target, which is the half `semver` needs.
- */
-export function descriptorIsSatisfied(requirement, version) {
-  if (version === undefined) return false;
-  const range = aliasRange(requirement.range ?? "");
-  if (range === "" || range === "*" || range === "latest") return true;
-  return satisfies(version, range, { includePrerelease: true, loose: true });
-}
-
-/**
- * `npm:target@^1.2.3` -> `^1.2.3`. `assertRegistryOnlyDescriptors` already accepts `npm:` as a
- * registry protocol; treating it as unresolvable here is the inconsistency #3133 records, and it
- * made a legitimately absent optional alias fatal instead of stubbing it.
- */
-export function aliasRange(range) {
-  const trimmed = range.trim();
-  if (!trimmed.startsWith("npm:")) return trimmed;
-  const target = trimmed.slice("npm:".length);
-  const at = target.lastIndexOf("@");
-  return at <= 0 ? "*" : target.slice(at + 1);
-}
-
-/**
  * A concrete version that satisfies `range`, used only to name an inert stub for an optional
  * dependency this repository does not install. Handles the npm forms that actually occur —
  * exact, `^`, `~`, `>=`, `v`-prefixed, x-ranges and `*` — and returns `undefined` for anything
@@ -931,89 +912,63 @@ function partialRangeVersion(trimmed) {
   return xRange === null ? undefined : `${xRange[1]}.${xRange[2] ?? "0"}.0`;
 }
 
-/**
- * npm's package-json documentation: "Entries in optionalDependencies will override entries of the
- * same name in dependencies." That precedence is applied per manifest, so a name listed in both is
- * treated as optional. Across DIFFERENT manifests a genuine required edge still wins — see
- * `record()` — because another package really does need it.
- */
-function manifestRequirements(manifest, bundledSet = new Set()) {
-  const merged = new Map();
-  for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
-    merged.set(name, { name, range, optional: false });
-  }
-  for (const [name, range] of Object.entries(manifest.optionalDependencies ?? {})) {
-    merged.set(name, { name, range, optional: true });
-  }
-  return [...merged.values()].filter((requirement) => !bundledSet.has(requirement.name));
-}
-
 export function vendoredDependencyRequirements(
   manifest = rootPackageJson,
   packagesRoot = repoRoot,
+  stagingPlan = undefined,
 ) {
   const declared = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
-  // The staged manifest carries two classes of bundled entry: the private `@oscharko-dev/*`
-  // workspaces the vendor archive tree ships (a `packages/<name>` path answers each), and — as
-  // of the #3510 self-contained-tarball fix — every external runtime dep and transitive that
-  // was copied into `stageRoot/node_modules/` from the source tree. The offline closure only
-  // walks the workspace-scoped ones (bundledWorkspaceLockfilePath rejects any other shape); the
-  // external closure has already been resolved from the lockfile at pack time, so the smoke's
-  // job is only to reason about the workspaces themselves.
   const bundled = declared.filter((name) => name.startsWith("@oscharko-dev/"));
-  const bundledSet = new Set(bundled);
-  const requirements = new Map();
-  // Keyed by name AND range AND kind, so each descriptor keeps the origins that actually declared
-  // IT. Keying by name alone unioned the origins across ranges: two bundled workspaces declaring
-  // the same optional package under non-overlapping ranges produced a range/origin cross-product,
-  // so the origin resolving `foo@2.x` was also checked against `1.x`, missed, and minted a spurious
-  // minimum-version stub that `assertStubsAreForeignOnly` then rejected as unpinned. Required
-  // edges had the same defect one step earlier — the last range overwrote the others while every
-  // origin was retained.
-  const record = ({ name, range, optional }, origin) => {
-    const key = `${name}\u0000${optional === true ? "optional" : "required"}\u0000${range}`;
-    const existing = requirements.get(key) ?? {
-      name,
-      range,
-      optional: optional === true,
-      origins: new Set(),
-    };
-    // The lockfile path the edge was declared from. npm resolves a bundled workspace's dependency
-    // from that workspace's own directory, so a closure that resolved everything from the root
-    // would miss a nested copy — and pick up a hoisted one the workspace never sees.
-    existing.origins.add(origin);
-    requirements.set(key, existing);
-  };
-  // The staged root carries optional entries too — `promoteWorkspacePeers` lifts a workspace's
-  // optional third-party peers into exactly that field — so both groups belong in the closure.
-  for (const requirement of manifestRequirements(manifest, bundledSet)) record(requirement, "");
-  // A bundled workspace ships inside the tarball, but its own third-party dependencies do not:
-  // the consumer's package manager still resolves those from a registry. `keiko-local-knowledge`
-  // declaring `@napi-rs/canvas` is exactly how the 2026-08-13 upstream publish race reached a
-  // required Keiko gate, so the closure has to include them.
-  for (const workspace of bundled) {
-    const origin = bundledWorkspaceLockfilePath(workspace);
-    for (const requirement of workspaceThirdPartyRequirements(workspace, packagesRoot)) {
-      record(requirement, origin);
+  const sources = [
+    {
+      origin: "",
+      requirements: manifestRequirements(
+        registryRootManifest(manifest, stagingPlan),
+        new Set(bundled),
+      ),
+    },
+  ];
+  for (const workspace of bundled)
+    sources.push({
+      origin: bundledWorkspaceLockfilePath(workspace),
+      requirements: projectedWorkspaceRequirements(workspace, packagesRoot, stagingPlan),
+    });
+  const externalSources = (stagingPlan?.packages ?? [])
+    .filter((record) => record.external)
+    .map((record) => ({
+      origin: record.installPath,
+      requirements: manifestRequirements(record.stagedManifest),
+    }));
+  return collectRuntimeRequirements([...sources, ...externalSources]);
+}
+
+function projectedWorkspaceRequirements(name, packagesRoot, plan) {
+  const projected = plan?.packages.find((record) => record.manifest.name === name)?.stagedManifest;
+  return projected === undefined
+    ? workspaceThirdPartyRequirements(name, packagesRoot)
+    : manifestRequirements(projected).filter(
+        ({ name: dependency }) => !dependency.startsWith("@oscharko-dev/"),
+      );
+}
+
+function registryRootManifest(manifest, plan) {
+  if (plan === undefined) return manifest;
+  const archived = new Map(
+    plan.packages
+      .filter((record) => record.external)
+      .map((record) => [record.manifest.name, `file:${record.archivePath}`]),
+  );
+  const root = structuredClone(manifest);
+  for (const field of ["dependencies", "optionalDependencies"]) {
+    for (const [name, descriptor] of Object.entries(root[field] ?? {})) {
+      const expected = archived.get(name);
+      if (expected === undefined) continue;
+      if (descriptor !== expected)
+        throw new Error("staged runtime ancestor descriptor differs from the delivery plan");
+      Reflect.deleteProperty(root[field], name);
     }
   }
-  // A required edge from any manifest supersedes this name's optional descriptors, since that one
-  // must genuinely be present and must never be answered with an inert stub.
-  const required = new Set(
-    [...requirements.values()].filter(({ optional }) => !optional).map(({ name }) => name),
-  );
-  return [...requirements.values()]
-    .filter(({ name, optional }) => !optional || !required.has(name))
-    .sort(
-      (left, right) =>
-        compareStrings(left.name, right.name) || compareStrings(left.range, right.range),
-    )
-    .map(({ name, range, optional, origins }) => ({
-      name,
-      range,
-      optional,
-      origins: [...origins].sort(compareStrings),
-    }));
+  return root;
 }
 
 export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
@@ -1078,46 +1033,6 @@ function readLockfilePackages(lockfilePath) {
   const packages = new Map(Object.entries(parsed.packages ?? {}));
   lockfilePackageCache.set(lockfilePath, packages);
   return packages;
-}
-
-/**
- * The install path that owns `path` — where Node's resolution continues when a name is not found
- * beside it. `node_modules/a/node_modules/b` is owned by `node_modules/a`; a workspace path and a
- * hoisted package alike are owned by the project root, spelled `""`.
- */
-export function lockfileOwnerPath(path) {
-  const marker = "/node_modules/";
-  const at = path.lastIndexOf(marker);
-  return at === -1 ? "" : path.slice(0, at);
-}
-
-/**
- * Resolve one dependency edge the way Node does: beside the requesting package first, then in each
- * owner up to the project root. This is the whole point of #3133 — the answer comes from the edges
- * the lockfile pins, so a copy the production graph never selects is never even considered.
- */
-export function resolveLockfileEdge(packages, originPath, name) {
-  let owner = originPath;
-  for (;;) {
-    const candidate = owner === "" ? `node_modules/${name}` : `${owner}/node_modules/${name}`;
-    if (packages.has(candidate)) return candidate;
-    if (owner === "") return undefined;
-    owner = lockfileOwnerPath(owner);
-  }
-}
-
-/**
- * The name and version a lockfile record pins. An `npm:` alias is installed under the ALIAS
- * directory while Yarn requests the packument under the TARGET name, and the record carries that
- * target in its own `name` field — which is why the alias question this issue also tracks is
- * answered here rather than by re-parsing a descriptor `minimumSatisfyingVersion` cannot read.
- */
-export function lockfileRecordIdentity(path, entry) {
-  const installedAs = path.split("node_modules/").at(-1) ?? "";
-  return {
-    name: typeof entry.name === "string" && entry.name.length > 0 ? entry.name : installedAs,
-    version: typeof entry.version === "string" ? entry.version : undefined,
-  };
 }
 
 /**
@@ -1217,6 +1132,10 @@ export function resolveVendorClosure(
   packagesRoot = repoRoot,
   lockfilePath = join(dirname(modulesRoot), "package-lock.json"),
 ) {
+  const stagingPlan =
+    manifest.overrides === undefined ? undefined : prepareRuntimeStagingPlan(dirname(modulesRoot));
+  const publishedManifest =
+    stagingPlan !== undefined && manifest === rootPackageJson ? stagingPlan.rootManifest : manifest;
   // `manifest` should be the STAGED manifest (`artifact.manifest`), not the repo root:
   // `promoteWorkspacePeers` in stage-publish-package.mjs lifts a bundled workspace's third-party
   // peer dependencies into the staged root, and a closure that re-derived only the workspace's
@@ -1230,7 +1149,11 @@ export function resolveVendorClosure(
     stubs: new Map(),
     missing: [],
   };
-  for (const requirement of vendoredDependencyRequirements(manifest, packagesRoot)) {
+  for (const requirement of vendoredDependencyRequirements(
+    publishedManifest,
+    packagesRoot,
+    stagingPlan,
+  )) {
     for (const origin of requirement.origins) visitClosureEdge(state, origin, requirement);
   }
   return {

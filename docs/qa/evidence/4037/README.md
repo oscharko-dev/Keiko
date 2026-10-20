@@ -1,5 +1,24 @@
 # Chat/Files qualification observations
 
+## Checkpoint 85: deliver reviewed runtime overrides to real consumers
+
+Root npm overrides are not inherited by customers. The existing staging producer now delivers
+only the five affected Java parser ancestors through its existing npm bundle/Yarn archive paths,
+including the peer-coupled plugin. Unchanged children retain registry delivery and actual lockfile
+ownership; optional-only ancestors remain optional. Source manifests, upstream code/licenses and
+reviewed dependency versions are preserved. The #3565 regression retains the exact private inventory
+and forbids every external bundle outside this explicit ADR-0021 D1 exception.
+
+The final actual npm and pinned Yarn consumers both install and execute the real Java parser;
+every physical Lodash/Lodash-es copy is the reviewed 4.18.1. The published84 producer fails the
+original legacy constraint under the same fixture-owned registry. No consumer overrides/resolutions
+or lifecycle hooks are used. The affected 195 regressions and 212 package/supply-chain controls pass;
+typing, lint, formatting, architecture, dependency/ADR gates, real Sonar and the clean assembled
+6,613-file product pass. Each receipt retains its actual source binding and failed attempts remain
+recorded. This is delivery qualification, not a new UI/model or native-update acceptance result.
+
+[`selective-runtime-override-delivery.json`](selective-runtime-override-delivery.json) binds results.
+
 ## Checkpoint 84: preserve patches and close formatted credential boundaries
 
 The shared source projection reuses the canonical unified-diff parser at the contracts leaf;
