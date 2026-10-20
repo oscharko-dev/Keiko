@@ -1406,3 +1406,20 @@ The whole recap test file remains the proof owner. Audit-input, dictionary, runt
 normalization and private-helper slots gain no authority. The retained recap route remains dormant
 without a current UI caller under ADR-0109/ADR-0154. Declaration is not coverage: actual canonical
 binding, native correspondence and completed selected proofs remain required.
+
+### Optional owned refusal-marker pair
+
+The existing metadata-source responsibility may explicitly opt into `ownedMarkerPair: true`.
+The finite same-source relation derives the copier's canonical private refusal reader and
+writer, their shared private symbol key, the writer's immutable hidden descriptor, and the
+reader's existing owned finite-kind guard. It adds only those two `object` input parameters
+alongside the unchanged raw copier source slot. Direct callers are reference-accounted, including
+parameter initializers; their parameters, bodies and results receive no additional authority.
+
+The `support-public-raw-metadata-source` record retains its actual two correlation consumers and
+all six selected public proofs. Both adaptation paths require this same parent to be structurally
+ready, semantically qualified, consumer-bound and current, with every selected proof completed.
+Default behavior and all other records, rules, scopes, caps and physical writer admission stay
+unchanged. No producer, raw-carrier, scalar, return, reflection, dictionary, runtime-typeof or
+known-value grant follows. Fresh measured native correspondence is required before this optional
+pair can account for the actual marker inputs; declaration alone is not qualification.

@@ -6435,6 +6435,7 @@
       "id": "support-public-raw-metadata-source",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "raw-property-observation",
+      "ownedMarkerPair": true,
       "metadataSourceInput": {
         "companion": {
           "owner": "@oscharko-dev/keiko-contracts",
