@@ -1426,7 +1426,8 @@ static void test_ui_identity_records(void) {
     {"12346\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 0},
     {"12345\nffffffffffffffffffffffffffffffff\nbrowser-open-v1\n", 0},
   };
-  wchar_t root[TEST_PATH_CAP], path[TEST_PATH_CAP], other[TEST_PATH_CAP];
+  /* This single-invocation fixture keeps its three large fixed path buffers off the stack. */
+  static wchar_t root[TEST_PATH_CAP], path[TEST_PATH_CAP], other[TEST_PATH_CAP];
   keiko_coordinator_context context = {0};
   test_create_root(root);
   assert(test_join(path, root, L"\\ui.pid"));

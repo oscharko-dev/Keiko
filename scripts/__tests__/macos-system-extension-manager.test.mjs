@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { URL } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
@@ -323,6 +323,8 @@ describe("macOS system-extension activation manager", () => {
               "-Wall",
               "-Wextra",
               "-Werror",
+              "-I",
+              fileURLToPath(new URL("../../native/runtime-supervisor/macos/", import.meta.url)),
               join(root, "test.c"),
               "-o",
               join(root, "test"),

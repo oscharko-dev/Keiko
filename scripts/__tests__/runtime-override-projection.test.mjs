@@ -25,4 +25,38 @@ describe("reviewed runtime override ancestors", () => {
     expect(plan.ancestors.every((entry) => !entry.optional)).toBe(true);
     expect(Object.fromEntries(plan.pins)).toEqual({ leaf: "2.0.0" });
   });
+
+  it("fails closed when an affected override changes the installed package identity", () => {
+    const packages = new Map([
+      ["node_modules/parent", { version: "1.0.0", dependencies: { leaf: "1.0.0" } }],
+      ["node_modules/leaf", { name: "other", version: "2.0.0" }],
+    ]);
+    expect(() =>
+      planRuntimeOverrides(
+        packages,
+        [{ name: "parent", range: "1.0.0", optional: false, origins: [""] }],
+        { leaf: "2.0.0" },
+      ),
+    ).toThrow("runtime override alias needs an explicit delivery projection");
+  });
+
+  it.each([
+    ["non-exact pin", { leaf: "^2.0.0" }, "2.0.0", "1.0.0"],
+    ["object-form override", { leaf: { ".": "2.0.0" } }, "2.0.0", "1.0.0"],
+    ["noncanonical selected version", { leaf: "v2.0.0" }, "v2.0.0", "1.0.0"],
+    ["satisfied original range", { leaf: "2.0.0" }, "2.0.0", "^2.0.0"],
+    ["unselected pin", { leaf: "2.0.0" }, "3.0.0", "1.0.0"],
+  ])("does not stage ancestors for a %s", (_label, overrides, installed, range) => {
+    const packages = new Map([
+      ["node_modules/parent", { version: "1.0.0", dependencies: { leaf: range } }],
+      ["node_modules/leaf", { version: installed }],
+    ]);
+    const plan = planRuntimeOverrides(
+      packages,
+      [{ name: "parent", range: "1.0.0", optional: false, origins: [""] }],
+      overrides,
+    );
+    expect(plan.ancestors).toEqual([]);
+    expect(plan.pins.size).toBe(0);
+  });
 });

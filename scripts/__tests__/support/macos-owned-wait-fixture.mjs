@@ -26,14 +26,14 @@ function declaration(source, name) {
 export function compileMacOwnedWaitFixture(directory, source) {
   const timeout = /^#define KRP_CHILD_REAP_TIMEOUT_MS[^\n]+/mu.exec(source)?.[0];
   if (timeout === undefined) throw new TypeError("Missing actual supervisor wait bound");
-  const functions = ["write_u32", "child_reap_time", "wait_owned_root", "supervise", "main"];
+  const functions = ["child_reap_time", "wait_owned_root", "supervise", "main"];
   writeFileSync(
     join(directory, "owner-under-test.h"),
     functions.map((name) => definition(source, name)).join("\n"),
   );
   writeFileSync(
     join(directory, "owner-declarations.h"),
-    [timeout, declaration(source, "response_kind"), declaration(source, "error_code")].join("\n"),
+    [timeout, declaration(source, "error_code")].join("\n"),
   );
   const executable = join(directory, "fixture");
   const result = spawnSync(

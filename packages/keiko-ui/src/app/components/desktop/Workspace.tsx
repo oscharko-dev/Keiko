@@ -1507,7 +1507,7 @@ export function Workspace({
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
     <main
-      className={`workspace ${selectionStyles.cmpWorkspaceSurface}`}
+      className={`workspace ${selectionStyles.cmpWorkspaceSurface} ${controlStyles.cmpWorkspaceViewport}`}
       data-layout-locked={layoutLocked ? "true" : undefined}
       ref={wsRef}
       aria-label={t("workspace.surface")}

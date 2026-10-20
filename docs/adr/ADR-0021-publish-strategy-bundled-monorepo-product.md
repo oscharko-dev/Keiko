@@ -386,3 +386,4 @@ version and record the reason in the Version History table below.
 | 1.0     | 2026-06-03 | Accepted bundled-monorepo publish strategy for Issue #169; resolves ADR-0020 deferred decision D7. |
 | 1.1     | 2026-08-13 | Replaced the Yarn-incompatible published bundle with isolated `file:` vendoring and mandatory npm/Yarn install proofs.               |
 | 1.2     | 2026-08-18 | Recorded that `@oscharko-dev/keiko-connectors` (ADR-0128) and `@oscharko-dev/keiko-git` (ADR-0115) joined the vendored inventory since v1.1. |
+| 1.3     | 2026-10-20 | D1/D6: selectively stage the five Java parser ancestors affected by reviewed exact root override pins; retain unchanged registry children and clarify identity/license ownership (#4037, #4046). |

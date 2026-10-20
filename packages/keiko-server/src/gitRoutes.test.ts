@@ -823,7 +823,9 @@ describe("GET /api/git/diff", () => {
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${selectedRoot}\n`))
-      .mockResolvedValueOnce(ok("diff --git a/file.ts b/file.ts\n+staged\n"));
+      .mockResolvedValueOnce(
+        ok("diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+staged\n"),
+      );
 
     const result = await handleGitDiff(
       ctx(`/api/git/diff?root=${encodeURIComponent(selectedRoot)}&scope=staged`),
@@ -835,7 +837,7 @@ describe("GET /api/git/diff", () => {
       state: "available",
       scope: "staged",
       path: undefined,
-      diff: "diff --git a/file.ts b/file.ts\n+staged\n",
+      diff: "diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+staged\n",
     });
     expect(runner.mock.calls[1]?.[0]).toEqual(expect.arrayContaining(["--cached"]));
   });
@@ -1096,15 +1098,25 @@ describe("GET /api/git/diff/structured", () => {
     );
   });
 
-  it("returns a bounded truncated diff for a large untracked file", async (): Promise<void> => {
+  it("bounds the real untracked producer and refuses an incomplete source preview", async (): Promise<void> => {
     await runRealGit(["init", "--quiet"]);
     await writeFile(join(root, "large.txt"), "large line\n".repeat(200), "utf8");
+    const outputs: string[] = [];
+    const runner: GitProcessRunner = async (args, options) => {
+      const output = await defaultGitProcessRunner(args, options);
+      if (args.includes("--no-index")) {
+        expect(options.maxBytes).toBe(96);
+        expect(output.truncated).toBe(true);
+        outputs.push(output.stdout);
+      }
+      return output;
+    };
 
     const result = await handleGitDiff(
       ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=large.txt`),
-      deps(defaultGitProcessRunner),
+      deps(runner),
       {
-        runner: defaultGitProcessRunner,
+        runner,
         maxDiffBytes: 96,
         maxStatusBytes: 4_096,
         maxChanges: 10,
@@ -1112,8 +1124,22 @@ describe("GET /api/git/diff/structured", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ available: true, truncated: true });
-    expect(result.body).toHaveProperty("diff", expect.stringMatching(/^diff --git /u));
+    // Relocate the bounded prefix pin to its real producer. Useful incomplete preview and
+    // Workbench truncation presentation remain deferred to #4051; source refusal stays strict.
+    expect(outputs).toEqual([expect.stringMatching(/^diff --git /u)]);
+    expect(Buffer.byteLength(outputs[0] ?? "", "utf8")).toBe(96);
+    const projected: unknown = buildRedactor({})(outputs[0] ?? "");
+    expect(projected).toEqual(expect.stringMatching(/^\[REDACTED\]\s*$/u));
+    if (typeof projected !== "string") throw new TypeError("Expected projected diff text");
+    expect(Buffer.byteLength(projected, "utf8")).toBeLessThanOrEqual(96);
+    expect(result.body).toMatchObject({
+      available: true,
+      truncated: true,
+      scope: "worktree",
+      path: "large.txt",
+      maxBytes: 96,
+      diff: projected,
+    });
   });
 
   it("rejects a symlink swap after Git confirms the untracked path", async (): Promise<void> => {

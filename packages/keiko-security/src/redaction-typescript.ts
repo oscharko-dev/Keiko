@@ -233,14 +233,48 @@ function valueChild(node: Ts.Node, child: Ts.Node): boolean {
   return !ts.isConditionalExpression(node) || node.condition !== child;
 }
 
-function syntaxSource(
+interface SyntaxState {
+  readonly valid: boolean;
+  readonly firstError: number;
+}
+
+function diagnosticOffset(value: unknown, length: number): number | undefined {
+  if (typeof value !== "object" || value === null || !("start" in value)) return undefined;
+  const at = value.start;
+  return typeof at === "number" && Number.isSafeInteger(at) && at >= 0 && at <= length
+    ? at
+    : undefined;
+}
+
+/** The pinned compiler's TS/TSX/JSON syntactic verdict is its existing parse diagnostics.
+ * Treat that optional shape as an optimization only; unknown compiler shapes use the public API. */
+export function parsedTypeScriptSyntaxState(
+  file: unknown,
+  length: number,
+  kind: Ts.ScriptKind,
+): SyntaxState | undefined {
+  const ts = typescriptApi();
+  if (kind !== ts.ScriptKind.TS && kind !== ts.ScriptKind.TSX && kind !== ts.ScriptKind.JSON)
+    return undefined;
+  if (typeof file !== "object" || file === null || !("parseDiagnostics" in file)) return undefined;
+  if (!Array.isArray(file.parseDiagnostics)) return undefined;
+  const entries: readonly unknown[] = file.parseDiagnostics;
+  let firstError = length;
+  for (const entry of entries) {
+    const offset = diagnosticOffset(entry, length);
+    if (offset === undefined) return undefined;
+    firstError = Math.min(firstError, offset);
+  }
+  return { valid: entries.length === 0, firstError };
+}
+
+function publicSyntaxDiagnostics(
+  file: Ts.SourceFile,
+  name: string,
   text: string,
   kind: Ts.ScriptKind,
-): { file: Ts.SourceFile; valid: boolean; firstError: number } {
+): readonly Ts.DiagnosticWithLocation[] {
   const ts = typescriptApi();
-  const scriptName = kind === ts.ScriptKind.TSX ? "source.tsx" : "source.ts";
-  const name = kind === ts.ScriptKind.JSON ? "source.json" : scriptName;
-  const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, kind);
   const host: Ts.CompilerHost = {
     getSourceFile: (path): Ts.SourceFile | undefined => (path === name ? file : undefined),
     getDefaultLibFileName: (): string => "",
@@ -263,7 +297,20 @@ function syntaxSource(
     },
     host,
   );
-  const diagnostics = program.getSyntacticDiagnostics(file);
+  return program.getSyntacticDiagnostics(file);
+}
+
+function syntaxSource(
+  text: string,
+  kind: Ts.ScriptKind,
+): { file: Ts.SourceFile; valid: boolean; firstError: number } {
+  const ts = typescriptApi();
+  const scriptName = kind === ts.ScriptKind.TSX ? "source.tsx" : "source.ts";
+  const name = kind === ts.ScriptKind.JSON ? "source.json" : scriptName;
+  const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, kind);
+  const parsed = parsedTypeScriptSyntaxState(file, text.length, kind);
+  if (parsed !== undefined) return { file, ...parsed };
+  const diagnostics = publicSyntaxDiagnostics(file, name, text, kind);
   return {
     file,
     valid: diagnostics.length === 0,

@@ -1,5 +1,33 @@
 # Chat/Files qualification observations
 
+## Delivery closeout: bounded implementation and explicit follow-up
+
+The owner changed delivery scope: finish PR #4046, transfer every unfulfilled requirement to
+[#4051](https://github.com/oscharko-dev/Keiko/issues/4051), and close its ten predecessors as
+superseded only after verified integration. This does not accept the original functional criteria.
+The follow-up retains the original requirements, incomplete native/browser/history qualification,
+matched skill-benefit comparisons and five explicitly deferred native review findings.
+
+The final increment fixes mobile canvas/control overlap, retains reachable workbench review actions,
+and removes redundant TypeScript Program construction for supported TS/TSX/JSON parse verdicts.
+Unknown parser metadata and unsupported script kinds retain the real public compiler fallback.
+No prompt, model, grant, test timeout, quality floor or redaction rule changes. Fixture repairs use
+real shared native protocols, complete public patches and correctly scoped fault injection. Windows
+fixture path buffers move off the stack; actual Windows qualification remains owned by required CI.
+Generated source inventories change their actual entries/counts, without lowering coverage floors.
+
+Failure-first mobile journeys and compiler work controls remain recorded. The final scoped CSS
+passes both original narrow regressions and all four affected smoke journeys. Linux filesystem
+controls pass105/105; the unchanged portable setup suite passes5/5 with an ordinary private home.
+Its earlier tmpfs-home timeout remains unexplained and retained. The local M3 Linux comparison
+improves199.4 to149.8ms under the same500ms limit; it does not establish that the hosted failure is
+cleared. Exact-head required CI and resolved conversations remain prerequisites for integration.
+
+[`delivery-closeout.json`](delivery-closeout.json) records scoped local results and their receipt
+hashes. The historical checkpoint sections below retain their original scope and failures. No new
+Gemma campaign, proven skill advantage, recovered private history or installed-update acceptance is
+claimed by this closeout.
+
 ## Checkpoint 86: describe actual structural clipping
 
 Initial and follow-up admission now report whether generated queries were actually excluded.

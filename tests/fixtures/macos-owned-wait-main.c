@@ -9,10 +9,18 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+/* Keep the actual wire types and codec while injecting only the fixture's I/O boundaries. */
+#define send_response production_send_response
+#define send_error production_send_error
+#define read_launch_request production_read_launch_request
+#define clear_request production_clear_request
 #include "keiko_runtime_monitor_protocol.h"
+#undef send_response
+#undef send_error
+#undef read_launch_request
+#undef clear_request
 #include "owner-declarations.h"
 
-struct launch_request { char recovery_handle[KEIKO_RECOVERY_HANDLE_BYTES + 1]; };
 static int scenario, reaped, kills, unsafe_kills, replies, frames, stops, clock_unavailable;
 static uint64_t now_ms = 100;
 
@@ -80,6 +88,8 @@ static void consume_control(void) {}
 static int probe_monitor(void) { return 0; }
 static int reconcile(const char *handle) { (void)handle; return 0; }
 static int read_launch_request(struct launch_request *request) {
+  static char handle[KEIKO_RECOVERY_HANDLE_BYTES + 1];
+  request->recovery_handle = handle;
   memset(request->recovery_handle, 'a', KEIKO_RECOVERY_HANDLE_BYTES);
   return 1;
 }
