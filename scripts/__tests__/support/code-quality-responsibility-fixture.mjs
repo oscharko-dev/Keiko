@@ -1777,7 +1777,6 @@ export function createMetadataSourceFixture(variant = "valid") {
   return assembleResponsibilityFixture((own) => {
     const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
     config.exclude = ["**/*.test.ts"];
-    config.compilerOptions.lib.push("DOM");
     own.put("packages/alpha/tsconfig.json", config);
     own.put("packages/alpha/src/owner.ts", metadataSourceOwner(variant));
     own.put("packages/alpha/src/index.ts", 'export { copyMetadata as parse } from "./owner.js";\n');

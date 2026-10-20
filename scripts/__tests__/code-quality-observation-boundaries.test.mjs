@@ -456,6 +456,10 @@ describe("raw metadata source responsibility (#3918)", () => {
     async (variant) => {
       const own = createMetadataSourceFixture(variant);
       await installSemanticFixtureTools(own);
+      const path = "packages/alpha/tsconfig.json";
+      const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+      config.compilerOptions.lib.push("DOM");
+      own.put(path, config);
       const subject = await collectPolicySubject(own.root);
       const pending = assessPolicyResponsibilities(subject, own.policy);
       expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
