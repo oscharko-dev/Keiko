@@ -1704,7 +1704,7 @@ it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toB
   return own;
 }
 
-export function metadataSourceRecord() {
+export function metadataSourceRecord(ownedMarkerPair = false) {
   const record = responsibilityRecord("raw-property-observation");
   const consumer = (exportName) => ({
     owner: "alpha",
@@ -1713,6 +1713,7 @@ export function metadataSourceRecord() {
     exportName,
   });
   record.id = "fixture-metadata-source";
+  if (ownedMarkerPair) record.ownedMarkerPair = true;
   record.rules = ["anti-slop/no-object-parameters"];
   for (const role of ["input", "transform", "output"]) record[role].exportName = "copyMetadata";
   record.consumer = consumer("first");
@@ -1754,7 +1755,8 @@ export function second<Event extends object>(event: Event): Event { return rebou
   return source;
 }
 
-function metadataSourceProof() {
+function metadataSourceProof(ownedMarkerPair = false) {
+  if (ownedMarkerPair) return markerMetadataSourceProof();
   return `import { it, expect } from "vitest";
 import { copyMetadata, first, second, marker } from "alpha/runtime";
 it("metadata source retains target and raw identity", () => {
@@ -1773,22 +1775,115 @@ it("metadata source retains malformed attachment", () => {
 `;
 }
 
-export function createMetadataSourceFixture(variant = "valid") {
+export function createMetadataSourceFixture(variant = "valid", ownedMarkerPair = false) {
   return assembleResponsibilityFixture((own) => {
     const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
     config.exclude = ["**/*.test.ts"];
     own.put("packages/alpha/tsconfig.json", config);
-    own.put("packages/alpha/src/owner.ts", metadataSourceOwner(variant));
+    own.put(
+      "packages/alpha/src/owner.ts",
+      ownedMarkerPair ? markerMetadataSourceOwner(variant) : metadataSourceOwner(variant),
+    );
     own.put("packages/alpha/src/index.ts", 'export { copyMetadata as parse } from "./owner.js";\n');
-    own.put("packages/alpha/src/proof.test.ts", metadataSourceProof());
+    own.put("packages/alpha/src/proof.test.ts", metadataSourceProof(ownedMarkerPair));
     own.put(
       "src/consumer.ts",
       'import { copyMetadata, first, second } from "alpha/runtime"; export const copy = copyMetadata({}, {}); export const one = first({}); export const two = second({});',
     );
-    const record = metadataSourceRecord();
+    const record = metadataSourceRecord(ownedMarkerPair);
     const policy = responsibilityPolicy([record]);
     activateResponsibilityFixtureRules(policy, record);
     own.put("scripts/code-quality-policy.json", policy);
     Object.assign(own, { record, policy });
   });
+}
+
+function markerMetadataSourceOwner(variant) {
+  const original = metadataSourceOwner("valid");
+  const tail = `const refusal = readRefusal(source);
+  if (refusal !== undefined) writeRefusal(target, refusal);
+  return target;`;
+  const source =
+    original.replace("return target;", tail) +
+    `
+const refusalKey = Symbol.for("fixture-refusal");
+type FailureKind = "refused" | "blocked";
+function writeRefusal(event: object, kind: FailureKind): void {
+  Object.defineProperty(event, refusalKey, {
+    value: kind, enumerable: false, configurable: false, writable: false,
+  });
+}
+function readRefusal(event: object): FailureKind | undefined {
+  const value = observeRefusal(event, refusalKey);
+  return isFailureKind(value) ? value : undefined;
+}
+function observeRefusal(value: object, key: PropertyKey): unknown {
+  const observed: unknown = Reflect.get(value, key);
+  return observed;
+}
+function isFailureKind(value: unknown): value is FailureKind {
+  return value === "refused" || value === "blocked";
+}
+`;
+  return markerMetadataVariant(source, variant);
+}
+
+function markerMetadataVariant(source, variant) {
+  if (variant === "unchecked")
+    source = source.replace('return value === "refused" || value === "blocked";', "return true;");
+  if (variant === "wrong-key")
+    source = source.replace(
+      "Object.defineProperty(event, refusalKey,",
+      'Object.defineProperty(event, Symbol.for("other-refusal"),',
+    );
+  if (variant === "mutable-descriptor")
+    source = source.replace("configurable: false", "configurable: true");
+  if (variant === "wrong-builtin")
+    source = source.replace(
+      "Object.defineProperty(event, refusalKey,",
+      "Reflect.defineProperty(event, refusalKey,",
+    );
+  if (variant === "shadowed-builtin")
+    source +=
+      "const Object = { defineProperty(target: object, _key: PropertyKey, _descriptor: PropertyDescriptor): object { return target; } };\n";
+  if (variant === "helper-escape") source += "const escaped = [writeRefusal]; void escaped;\n";
+  if (variant === "key-escape") source += "const escapedKey = { refusalKey }; void escapedKey;\n";
+  return markerMetadataSignatureVariant(source, variant);
+}
+
+function markerMetadataSignatureVariant(source, variant) {
+  if (variant === "default-parameter")
+    source = source.replace("kind: FailureKind", 'kind: FailureKind = "refused"');
+  if (variant === "foreign-domain") {
+    source += 'type OtherKind = "refused" | "blocked";\n';
+    source = source.replace("value is FailureKind", "value is OtherKind");
+  }
+  if (variant === "direct-caller")
+    source +=
+      'function other(event: object): void { writeRefusal(event, "blocked"); }\nvoid other;\n';
+  if (variant === "key-type") source += "type Rejected = { readonly [refusalKey]: FailureKind };\n";
+  return source;
+}
+
+function markerMetadataSourceProof() {
+  const healthy = `
+  const refusalKey = Symbol.for("fixture-refusal");
+  const refused = {}; Object.defineProperty(refused, refusalKey, { value: "refused" });
+  for (const target of [copyMetadata(refused, {}), first(refused), second(refused)])
+    expect(Object.getOwnPropertyDescriptor(target, refusalKey)).toEqual({ value: "refused",
+      enumerable: false, writable: false, configurable: false });`;
+  const malformed = `
+  const refusalKey = Symbol.for("fixture-refusal");
+  const invalid = {}; Object.defineProperty(invalid, refusalKey, { value: "other" });
+  for (const target of [copyMetadata(invalid, {}), first(invalid), second(invalid)])
+    expect(Object.hasOwn(target, refusalKey)).toBe(false);`;
+  return metadataSourceProof()
+    .replace(
+      '});\nit("metadata source retains malformed attachment"',
+      `${healthy}\n});\nit("metadata source retains malformed attachment"`,
+    )
+    .replace(
+      "    expect(Reflect.get(target, marker)).toBe(raw);\n});",
+      `    expect(Reflect.get(target, marker)).toBe(raw);${malformed}\n});`,
+    );
 }

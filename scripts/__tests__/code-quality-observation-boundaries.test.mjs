@@ -583,3 +583,100 @@ describe("owned structural predicate stage responsibility (#3918)", () => {
     },
   );
 });
+
+describe("owned refusal marker pair responsibility (#3918)", () => {
+  it("closes the option on the existing metadata record and retains its history", () => {
+    const previous = responsibilityPolicy([metadataSourceRecord()]);
+    const current = responsibilityPolicy([metadataSourceRecord(true)]);
+    expect(validatePolicy(current, [previous])).toEqual([]);
+    expect(validatePolicy(previous, [current])).toEqual(["responsibility-shrank"]);
+    for (const mutate of [
+      (record) => {
+        record.ownedMarkerPair = false;
+      },
+      (record) => {
+        delete record.metadataSourceInput;
+      },
+      (record) => {
+        record.kind = "validator";
+      },
+      (record) => {
+        record.ownedPredicateStage = true;
+      },
+      (record) => {
+        record.rawObjectInput = true;
+      },
+    ]) {
+      const invalid = structuredClone(current);
+      mutate(invalid.responsibilities[0]);
+      expect(validatePolicy(invalid)).not.toEqual([]);
+    }
+  });
+
+  it("requires current same-parent completed proofs on both dispatches", async () => {
+    const own = createMetadataSourceFixture("valid", true);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const parent = report.assessments[0];
+    expect(parent.structural).toBe("ready");
+    expect(parent.slots).toHaveLength(3);
+    const added = parent.slots.slice(1);
+    for (const kind of ["raw-property-observation", "public-parser"]) {
+      // Non-object findings isolate parent gating on both dispatches, not native form grants.
+      const slots = added.map((slot) => ({ ...slot, rule: "anti-slop/no-known-value-widening" }));
+      const assessment = {
+        ...parent,
+        kind,
+        slots,
+        proofs: parent.proofs.map((proof) => ({ ...proof, executed: true })),
+        proofAssertions: own.record.proofAssertions.map((proof) => ({
+          ...proof,
+          status: "passed",
+        })),
+      };
+      if (kind === "public-parser")
+        for (const slot of slots) slot.contributingResponsibilityIds = [assessment.id];
+      const findings = slots.map(({ path, rule, line, column }) => ({ path, rule, line, column }));
+      const adapted = () =>
+        adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [assessment] })
+          .violations;
+      expect(adapted()).toEqual(findings);
+      assessment.semantic = "qualified";
+      expect(adapted()).toEqual([]);
+      const completed = assessment.proofAssertions;
+      assessment.proofAssertions = completed.slice(0, 1);
+      expect(adapted()).toEqual(findings);
+      assessment.proofAssertions = completed;
+      slots[1].markerPairRoot = { ...slots[1].markerPairRoot, recordId: "other-parent" };
+      expect(adapted()).toEqual([findings[1]]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each(["valid", "unchecked"])(
+    "binds marker slots only after actual %s public refusal proofs",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant, true);
+      await installSemanticFixtureTools(own);
+      const path = "packages/alpha/tsconfig.json";
+      const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+      config.compilerOptions.lib.push("DOM");
+      own.put(path, config);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
+      expect(pending.assessments[0].slots).toHaveLength(3);
+      if (variant === "unchecked") {
+        await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+          "semantic-proof-execution-failed",
+        );
+        return;
+      }
+      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
+      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+      expect(
+        qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
+      ).toBe(true);
+    },
+  );
+});

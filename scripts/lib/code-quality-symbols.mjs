@@ -3815,6 +3815,305 @@ function metadataSourceFacts(compiler, identity) {
   };
 }
 
+function markerDirectCall(call, count) {
+  return (
+    call &&
+    ts.isCallExpression(call) &&
+    ts.isIdentifier(call.expression) &&
+    !call.typeArguments?.length &&
+    call.arguments.length === count
+  );
+}
+
+function markerWriterCall(statement) {
+  const single =
+    ts.isBlock(statement) && statement.statements.length === 1
+      ? statement.statements[0]
+      : statement;
+  return ts.isExpressionStatement(single) && markerDirectCall(single.expression, 2)
+    ? single.expression
+    : null;
+}
+
+function markerCopyCondition(state, condition, local) {
+  return (
+    ts.isBinaryExpression(condition) &&
+    condition.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+    observationIdentifier(state, condition.left, local) &&
+    rawReaderAbsent(state, condition.right)
+  );
+}
+
+function markerCopyArguments(state, local, write, returned) {
+  return (
+    markerDirectCall(local.initializer, 1) &&
+    observationIdentifier(state, local.initializer.arguments[0], state.callable.parameters[0]) &&
+    Boolean(write) &&
+    observationIdentifier(state, write.arguments[0], state.callable.parameters[1]) &&
+    observationIdentifier(state, write.arguments[1], local) &&
+    Boolean(returned.expression) &&
+    observationIdentifier(state, returned.expression, state.callable.parameters[1])
+  );
+}
+
+function markerCopyFlow(state) {
+  const statements = state.callable.body.statements;
+  if (statements.length < 3) return null;
+  const local = observationConst(statements.at(-3));
+  const branch = statements.at(-2);
+  const returned = statements.at(-1);
+  if (
+    !local ||
+    !ts.isIfStatement(branch) ||
+    branch.elseStatement ||
+    !ts.isReturnStatement(returned)
+  )
+    return null;
+  const write = markerWriterCall(branch.thenStatement);
+  return markerCopyCondition(state, branch.expression, local) &&
+    markerCopyArguments(state, local, write, returned)
+    ? { read: local.initializer, write }
+    : null;
+}
+
+function markerPrivateCallable(target, count) {
+  return (
+    Boolean(target) &&
+    target.declaration === target.callable &&
+    !exportedDeclaration(target.callable) &&
+    target.callable.parameters.length === count &&
+    observationParameter(target.callable.parameters[0], ts.SyntaxKind.ObjectKeyword)
+  );
+}
+
+function markerCallable(state, call, count) {
+  if (!markerDirectCall(call, count)) return null;
+  const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
+  if (!markerPrivateCallable(target, count)) return null;
+  const signature = typedNamedCallable(state.context, target.callable);
+  const owned = { ...state, ...target, signature };
+  return signature &&
+    state.context.checker.getResolvedSignature(call) === signature &&
+    target.identity.owner === state.identity.owner &&
+    privateObservationReferences(owned)
+    ? owned
+    : null;
+}
+
+function markerBuiltin(state, call, base, method, count) {
+  return (
+    observationLibraryCall(state, call, method, count) &&
+    ts.isIdentifier(call.expression.expression) &&
+    call.expression.expression.text === base &&
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(call.expression.expression),
+    )
+  );
+}
+
+function markerDescriptorProperties(node) {
+  if (!ts.isObjectLiteralExpression(node) || node.properties.length !== 4) return null;
+  const properties = new Map();
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) return null;
+    if (properties.has(property.name.text)) return null;
+    properties.set(property.name.text, property.initializer);
+  }
+  return properties;
+}
+
+function markerDescriptor(state, node) {
+  const properties = markerDescriptorProperties(node);
+  if (!properties) return false;
+  return (
+    Boolean(properties.get("value")) &&
+    observationIdentifier(state, properties.get("value"), state.callable.parameters[1]) &&
+    properties.get("enumerable")?.kind === ts.SyntaxKind.FalseKeyword &&
+    properties.get("configurable")?.kind === ts.SyntaxKind.FalseKeyword &&
+    properties.get("writable")?.kind === ts.SyntaxKind.FalseKeyword
+  );
+}
+
+function markerWrite(state) {
+  if (
+    state.callable.type.kind !== ts.SyntaxKind.VoidKeyword ||
+    state.callable.body.statements.length !== 1
+  )
+    return null;
+  const statement = state.callable.body.statements[0];
+  if (!ts.isExpressionStatement(statement)) return null;
+  const call = statement.expression;
+  return markerBuiltin(state, call, "Object", "defineProperty", 3) &&
+    observationIdentifier(state, call.arguments[0], state.callable.parameters[0]) &&
+    ts.isIdentifier(call.arguments[1]) &&
+    markerDescriptor(state, call.arguments[2])
+    ? call
+    : null;
+}
+
+function markerReadResult(state, local, result) {
+  return (
+    markerDirectCall(local.initializer, 2) &&
+    observationIdentifier(state, local.initializer.arguments[0], state.callable.parameters[0]) &&
+    ts.isIdentifier(local.initializer.arguments[1]) &&
+    typedPredicateCall(result.condition) &&
+    observationIdentifier(state, result.condition.arguments[0], local) &&
+    observationIdentifier(state, result.whenTrue, local) &&
+    rawReaderAbsent(state, result.whenFalse)
+  );
+}
+
+function markerRead(state) {
+  if (state.callable.body.statements.length !== 2) return null;
+  const local = observationConst(state.callable.body.statements[0]);
+  const returned = state.callable.body.statements[1];
+  if (
+    !local ||
+    !ts.isReturnStatement(returned) ||
+    !returned.expression ||
+    !ts.isConditionalExpression(returned.expression)
+  )
+    return null;
+  if (!markerReadResult(state, local, returned.expression)) return null;
+  const observer = markerCallable(state, local.initializer, 2);
+  return observer && observationSignature(observer) && observationBody(observer)
+    ? { read: local.initializer, check: returned.expression.condition }
+    : null;
+}
+
+function markerResultDomain(state, annotation, domain) {
+  if (!ts.isUnionTypeNode(annotation) || annotation.types.length !== 2) return false;
+  const named = annotation.types.find((arm) => ts.isTypeReferenceNode(arm));
+  const result = named && typedDomain(state.compiler, state.context, named);
+  return (
+    annotation.types.some((arm) => arm.kind === ts.SyntaxKind.UndefinedKeyword) &&
+    Boolean(result) &&
+    JSON.stringify(result.identity) === JSON.stringify(domain.identity)
+  );
+}
+
+function markerDomain(state, reader, check) {
+  const domain = typedDomain(state.compiler, state.context, state.callable.parameters[1].type);
+  const predicate = typedDirectPredicate(state.compiler, reader, check);
+  const declaration = typedPredicateDeclaration(reader, check);
+  return (
+    Boolean(domain) &&
+    domain.identity.producer.path === state.identity.producer.path &&
+    Boolean(predicate) &&
+    !exportedDeclaration(declaration) &&
+    JSON.stringify(predicate.domain.identity) === JSON.stringify(domain.identity) &&
+    markerResultDomain(state, reader.callable.type, domain)
+  );
+}
+
+function markerTypeKeyReference(node) {
+  const computed = node.parent;
+  return (
+    ts.isComputedPropertyName(computed) &&
+    computed.expression === node &&
+    ts.isPropertySignature(computed.parent)
+  );
+}
+
+function markerPrivateKey(state, declaration) {
+  return (
+    declaration.getSourceFile() === state.source &&
+    !declaration.type &&
+    ts.isIdentifier(declaration.name) &&
+    ts.isVariableDeclarationList(declaration.parent) &&
+    declaration.parent.declarations.length === 1 &&
+    Boolean(declaration.parent.flags & ts.NodeFlags.Const) &&
+    declaration.parent.parent.parent === state.source &&
+    !exportedDeclaration(declaration.parent.parent)
+  );
+}
+
+function markerKeyDeclaration(state, symbol) {
+  const declaration = symbol?.valueDeclaration;
+  if (
+    !symbol ||
+    symbol.declarations?.length !== 1 ||
+    !declaration ||
+    !ts.isVariableDeclaration(declaration)
+  )
+    return null;
+  return markerPrivateKey(state, declaration) ? declaration : null;
+}
+
+function markerKeyInitializer(state, declaration) {
+  const call = declaration.initializer;
+  return (
+    Boolean(call) &&
+    markerBuiltin(state, call, "Symbol", "for", 1) &&
+    ts.isStringLiteral(call.arguments[0])
+  );
+}
+
+function markerKey(state, read, write) {
+  const { checker } = state.context;
+  const symbol = checker.getSymbolAtLocation(read.arguments[1]);
+  const declaration = markerKeyDeclaration(state, symbol);
+  if (
+    !declaration ||
+    !markerKeyInitializer(state, declaration) ||
+    checker.getSymbolAtLocation(write.arguments[1]) !== symbol
+  )
+    return false;
+  return !sourceNodes(state.compiler, state.source).some(
+    (node) =>
+      ts.isIdentifier(node) &&
+      referenceValueSymbol(state.context, node) === symbol &&
+      node !== declaration.name &&
+      node !== read.arguments[1] &&
+      node !== write.arguments[1] &&
+      !markerTypeKeyReference(node),
+  );
+}
+
+function markerPairSlots(compiler, identity) {
+  const state = { ...declarationCallable(compiler, identity), identity, compiler };
+  const flow = markerCopyFlow(state);
+  const reader = flow && markerCallable(state, flow.read, 1);
+  const writer = flow && markerCallable(state, flow.write, 2);
+  const read = reader && markerRead(reader);
+  const write = writer && markerWrite(writer);
+  if (
+    !read ||
+    !write ||
+    !markerDomain(writer, reader, read.check) ||
+    !markerKey(state, read.read, write)
+  )
+    throw new TypeError("unsupported-owned-marker-pair");
+  const identities = new Set(
+    [identity, reader.identity, writer.identity].map((entry) => JSON.stringify(entry)),
+  );
+  if (identities.size > compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  return [writer, reader].map((owned) => ({
+    ...annotationSlot(
+      owned.context,
+      owned.source,
+      owned.callable.parameters[0].type,
+      owned.identity,
+      "parameter",
+      0,
+    ),
+    rule: "anti-slop/no-object-parameters",
+    rawMetadataSourceInput: true,
+    ownedMarkerPairInput: true,
+  }));
+}
+
+function metadataMarkerPairFacts(compiler, identity) {
+  compiler.assertCurrent();
+  try {
+    const facts = metadataSourceFacts(compiler, identity);
+    return { ...facts, slots: [...facts.slots, ...markerPairSlots(compiler, identity)] };
+  } finally {
+    compiler.assertCurrent();
+  }
+}
+
 function metadataConsumerPair(compiler, primary, companion, owner) {
   const first = consumerImplementation(compiler, primary);
   const second = consumerImplementation(compiler, companion);
@@ -4230,7 +4529,13 @@ function validationBoundaryOperations(compiler) {
         throw new TypeError("unsupported-owned-predicate-stage-option");
       return objectValidatorFacts(compiler, identity, ownedPredicateStage);
     },
-    metadataSourceFacts: (identity) => metadataSourceFacts(compiler, identity),
+    metadataSourceFacts: (identity, ownedMarkerPair = false) => {
+      if (typeof ownedMarkerPair !== "boolean")
+        throw new TypeError("unsupported-owned-marker-pair-option");
+      return ownedMarkerPair
+        ? metadataMarkerPairFacts(compiler, identity)
+        : metadataSourceFacts(compiler, identity);
+    },
     metadataSourceConsumer: (request) => resolveProofConsumer(compiler, request, false),
     metadataSourceBinding: (primary, companion, producer, owner) =>
       metadataSourceBinding(compiler, primary, companion, producer, owner),

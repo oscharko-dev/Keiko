@@ -3572,3 +3572,80 @@ describe("owned structural predicate stage facts (#3918)", () => {
     );
   });
 });
+
+describe("owned refusal marker pair facts (#3918)", () => {
+  it("keeps the source default and adds only the canonical marker identity parameters", async () => {
+    const own = createMetadataSourceFixture("valid", true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    const original = own.resolver.metadataSourceFacts(producer);
+    expect(original.slots).toHaveLength(1);
+    const opted = own.resolver.metadataSourceFacts(producer, true);
+    expect(opted.slots.slice(0, 1)).toEqual(original.slots);
+    expect(opted.slots).toHaveLength(3);
+    const source = readFileSync(join(own.root, producer.producer.path), "utf8");
+    expect(opted.slots.slice(1).map((slot) => source.slice(slot.start, slot.end))).toEqual([
+      "object",
+      "object",
+    ]);
+    expect(
+      opted.slots.slice(1).every((slot) => slot.ownedMarkerPairInput && slot.index === 0),
+    ).toBe(true);
+    expect(() => own.resolver.metadataSourceFacts(producer, "true")).toThrow(
+      "unsupported-owned-marker-pair-option",
+    );
+    own.resolver.assertCurrent();
+  });
+
+  it.each(["direct-caller", "key-type"])(
+    "accounts for %s without certifying another caller",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant, true);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const producer = own.resolver.resolveExport(own.record.input).identities[0];
+      expect(own.resolver.metadataSourceFacts(producer, true).slots).toHaveLength(3);
+    },
+  );
+
+  it.each([
+    "wrong-key",
+    "mutable-descriptor",
+    "wrong-builtin",
+    "helper-escape",
+    "key-escape",
+    "default-parameter",
+    "foreign-domain",
+    "shadowed-builtin",
+  ])("withholds the whole optional pair for %s", async (variant) => {
+    const own = createMetadataSourceFixture(variant, true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(producer).slots).toHaveLength(1);
+    expect(() => own.resolver.metadataSourceFacts(producer, true)).toThrow(
+      "unsupported-owned-marker-pair",
+    );
+  });
+
+  it("retains the existing alias budget and current source guard", async () => {
+    const own = createMetadataSourceFixture("valid", true);
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject);
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    own.resolver.close();
+    own.resolver = createSymbolResolver(subject, { aliases: 2 });
+    expect(() => own.resolver.metadataSourceFacts(producer, true)).toThrow("symbol-alias-budget");
+    own.resolver.close();
+    own.resolver = createSymbolResolver(subject);
+    const current = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(current, true).slots).toHaveLength(3);
+    own.put(
+      current.producer.path,
+      readFileSync(join(own.root, current.producer.path), "utf8") + "\n",
+    );
+    expect(() => own.resolver.metadataSourceFacts(current, true)).toThrow("symbol-subject-changed");
+  });
+});

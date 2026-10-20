@@ -170,7 +170,21 @@ function proofFacts(subject, resolver, record) {
 
 function propertyObservationSlots(resolver, record, roles) {
   if (record.metadataSourceInput)
-    return resolver.metadataSourceFacts(roles.input.identities[0]).slots;
+    return resolver
+      .metadataSourceFacts(roles.input.identities[0], record.ownedMarkerPair === true)
+      .slots.map((slot) =>
+        slot.ownedMarkerPairInput
+          ? {
+              ...slot,
+              markerPairRoot: {
+                identity: roles.input.identities[0],
+                index: 0,
+                recordId: record.id,
+                proofAssertions: structuredClone(record.proofAssertions),
+              },
+            }
+          : slot,
+      );
   return resolver
     .propertyObservationFacts(roles.input.identities[0], {
       rawObjectInput: record.rawObjectInput,
@@ -379,7 +393,7 @@ function qualifiedAdaptationSlot(assessment, slot, assessments) {
   )
     return false;
   return (
-    qualifiedPredicateStageRoot(assessment, slot, assessments) &&
+    qualifiedOwnedStageRoot(assessment, slot, assessments) &&
     objectFormQualified(assessment, slot, assessments)
   );
 }
@@ -473,10 +487,15 @@ function objectProofsCompleted(required, record) {
   );
 }
 
-function qualifiedPredicateStageRoot(assessment, slot, assessments) {
-  if (!slot.ownedPredicateStageInput) return true;
-  const root = slot.predicateStageRoot;
+function qualifiedOwnedStageRoot(assessment, slot, assessments) {
+  if (!slot.ownedPredicateStageInput && !slot.ownedMarkerPairInput) return true;
+  if (slot.ownedPredicateStageInput && slot.ownedMarkerPairInput) return false;
+  const root = slot.ownedMarkerPairInput ? slot.markerPairRoot : slot.predicateStageRoot;
   if (!root || root.recordId !== assessment.id) return false;
+  return qualifiedOwnedStageParent(assessment, root, assessments, slot);
+}
+
+function qualifiedOwnedStageParent(assessment, root, assessments, slot) {
   const parents = assessments.filter((entry) => entry.id === root.recordId);
   return (
     parents.length === 1 &&

@@ -215,6 +215,14 @@ function validMetadataSourceOption(record) {
   );
 }
 
+function validOwnedMarkerOption(record) {
+  return (
+    record.ownedMarkerPair === true &&
+    !Object.hasOwn(record, "ownedPredicateStage") &&
+    validMetadataSourceOption(record)
+  );
+}
+
 function validOwnedPredicateOption(record) {
   return (
     record.kind === "validator" &&
@@ -224,8 +232,13 @@ function validOwnedPredicateOption(record) {
 }
 
 function validObservationOptions(record) {
+  if (Object.hasOwn(record, "ownedMarkerPair")) return validOwnedMarkerOption(record);
   if (Object.hasOwn(record, "ownedPredicateStage")) return validOwnedPredicateOption(record);
   if (Object.hasOwn(record, "metadataSourceInput")) return validMetadataSourceOption(record);
+  return validLegacyObservationOptions(record);
+}
+
+function validLegacyObservationOptions(record) {
   if (record.kind === "validator" && Object.hasOwn(record, "rawObjectInput"))
     return validObjectValidatorOption(record);
   const present = ["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"].some(
@@ -295,6 +308,7 @@ function responsibilityKeys(record) {
   for (const option of [
     "rawObjectInput",
     "ownedPredicateStage",
+    "ownedMarkerPair",
     "additionalObservationForms",
     "directRawCheckerInputs",
     "metadataSourceInput",
@@ -408,9 +422,9 @@ function observationOptionShrank(current, record) {
     (Object.hasOwn(record, "metadataSourceInput") &&
       canonicalIdentity(current.metadataSourceInput) !==
         canonicalIdentity(record.metadataSourceInput)) ||
-    (record.rawObjectInput === true && current.rawObjectInput !== true) ||
-    (record.ownedPredicateStage === true && current.ownedPredicateStage !== true) ||
-    (record.directRawCheckerInputs === true && current.directRawCheckerInputs !== true) ||
+    ["rawObjectInput", "ownedPredicateStage", "ownedMarkerPair", "directRawCheckerInputs"].some(
+      (key) => record[key] === true && current[key] !== true,
+    ) ||
     (record.additionalObservationForms ?? []).some(
       (form) => !(current.additionalObservationForms ?? []).includes(form),
     )
