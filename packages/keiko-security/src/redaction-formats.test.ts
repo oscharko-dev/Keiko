@@ -44,9 +44,16 @@ describe("source formats retain syntax at the shared redaction boundary", () => 
     },
   );
 
-  it("immediately publishes a complete harmless mapping-shaped line", () => {
+  it("immediately publishes a complete harmless prose line", () => {
     const stream = createStreamingRedactor(redact);
-    expect(stream.push("PUBLIC: safe first.\n")).toBe("PUBLIC: safe first.\n");
+    expect(stream.push("PUBLIC safe first.\n")).toBe("PUBLIC safe first.\n");
+  });
+
+  it("retains a mapping-shaped line until later private bindings are known", () => {
+    const stream = createStreamingRedactor(redact);
+    expect(stream.push("PUBLIC: safe first.\n")).toBe("");
+    const output = stream.push('password: "safe first."\n') + stream.finish();
+    expect(output).not.toContain("safe first.");
   });
   it.each([
     ['const password: string = "private-first private-second', "ts"],

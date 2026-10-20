@@ -1,6 +1,6 @@
 import { REDACTION_PLACEHOLDER } from "./redaction-source-map.js";
 import { createRequire } from "node:module";
-import type { Document, Node } from "yaml";
+import type { Document, Node, Scalar } from "yaml";
 import type { ProjectionPorts, RedactionSpan } from "./redaction-code.js";
 import { maskedLiteralBody } from "./redaction-typescript.js";
 
@@ -10,6 +10,40 @@ let parser: typeof import("yaml") | undefined;
 function yamlApi(): typeof import("yaml") {
   parser ??= requireYaml("yaml") as typeof import("yaml");
   return parser;
+}
+
+function parsePrivacyDocument(text: string): Document {
+  return yamlApi().parseDocument(text, { keepSourceTokens: true, uniqueKeys: false });
+}
+
+function duplicateMapKeys(value: unknown): boolean {
+  const api = yamlApi();
+  if (!api.isMap(value)) return false;
+  const nodes = new Set<unknown>();
+  const values = new Set<unknown>();
+  for (const pair of value.items) {
+    if (nodes.has(pair.key)) return true;
+    nodes.add(pair.key);
+    if (!api.isScalar(pair.key) || Number.isNaN(pair.key.value)) continue;
+    if (values.has(pair.key.value)) return true;
+    values.add(pair.key.value);
+  }
+  return false;
+}
+
+function hasDuplicateKeys(value: unknown): boolean {
+  const api = yamlApi();
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (api.isMap(node)) {
+      if (duplicateMapKeys(node)) return true;
+      for (const pair of node.items) pending.push(pair.key, pair.value);
+    } else if (api.isSeq(node)) {
+      for (const item of node.items) pending.push(item);
+    }
+  }
+  return false;
 }
 
 export class YamlSyntaxRefusal extends Error {
@@ -26,10 +60,11 @@ export function mayStartYaml(text: string): boolean {
 }
 
 export function isYamlDocument(text: string): boolean {
-  const api = yamlApi();
-  const document = api.parseDocument(text, { keepSourceTokens: true });
+  const document = parsePrivacyDocument(text);
   return (
-    (document.errors.length === 0 && complexYaml(document.contents, text)) ||
+    (document.errors.length === 0 &&
+      !hasDuplicateKeys(document.contents) &&
+      complexYaml(document.contents, text)) ||
     hasBlockScalarHeader(text)
   );
 }
@@ -56,17 +91,82 @@ function hasHeaderBeforeLineEnd(line: string): boolean {
 }
 
 function documentTree(text: string): Document {
-  const document = yamlApi().parseDocument(text, { keepSourceTokens: true });
-  if (document.errors.length > 0) throw new YamlSyntaxRefusal();
+  const document = parsePrivacyDocument(text);
+  if (document.errors.length > 0 || hasDuplicateKeys(document.contents))
+    throw new YamlSyntaxRefusal();
   return document;
 }
 
-function scalarSpan(text: string, node: Node, replacement: string): RedactionSpan {
+/** A privacy context preserves every mapping entry; it does not validate configuration uniqueness. */
+export function yamlPrivacyPrefix(
+  text: string,
+  sourceTransition: (line: string) => boolean,
+  sensitiveName: (name: string) => boolean,
+):
+  | { readonly end: number; readonly document?: Document; readonly syntaxRequired?: boolean }
+  | undefined {
+  const document = parsePrivacyDocument(text);
+  const end = privacyBoundary(text, document, sourceTransition);
+  if (end <= 0) return undefined;
+  const prefix = end === text.length ? document : parsePrivacyDocument(text.slice(0, end));
+  if (prefix.errors.length > 0 || !yamlApi().isMap(prefix.contents))
+    return { end, syntaxRequired: complexYaml(prefix.contents, text.slice(0, end), true, false) };
+  if (end < (document.range?.[2] ?? text.length) && hasPendingPrivateValue(prefix, sensitiveName))
+    return { end, syntaxRequired: complexYaml(prefix.contents, text.slice(0, end), true, false) };
+  return { end, document: prefix };
+}
+
+function hasPendingPrivateValue(
+  document: Document,
+  sensitiveName: (name: string) => boolean,
+): boolean {
+  const api = yamlApi();
+  return (
+    api.isMap(document.contents) &&
+    document.contents.items.some(
+      (pair) =>
+        api.isScalar(pair.key) &&
+        sensitiveName(String(pair.key.value)) &&
+        api.isScalar(pair.value) &&
+        pair.value.value === null,
+    )
+  );
+}
+
+function rootKeyLine(text: string, key: unknown): { start: number; line: string } | undefined {
+  if (!yamlApi().isNode(key) || key.range === undefined || key.range === null) return undefined;
+  const start = text.lastIndexOf("\n", key.range[0] - 1) + 1;
+  const newline = text.indexOf("\n", key.range[0]);
+  return { start, line: text.slice(start, newline < 0 ? text.length : newline) };
+}
+
+function privacyBoundary(
+  text: string,
+  document: Document,
+  sourceTransition: (line: string) => boolean,
+): number {
+  if (!yamlApi().isMap(document.contents)) return 0;
+  let end = document.range?.[2] ?? text.length;
+  for (const pair of document.contents.items) {
+    const source = rootKeyLine(text, pair.key);
+    if (source === undefined) continue;
+    const malformedKey = document.errors.length > 0 && pair.value === null;
+    if (!mayStartYaml(source.line) && (sourceTransition(source.line) || malformedKey))
+      end = Math.min(end, source.start);
+  }
+  return end;
+}
+
+function scalarSpan(text: string, node: Node, replacement: string, plain: boolean): RedactionSpan {
   const range = node.range;
   if (range === undefined || range === null) throw new YamlSyntaxRefusal();
   const raw = text.slice(range[0], range[1]);
   const lines = raw.match(/\r\n|\r|\n/gu)?.join("") ?? "";
-  return { start: range[0], end: range[1], replacement: JSON.stringify(replacement) + lines };
+  return {
+    start: range[0],
+    end: range[1],
+    replacement: (plain ? replacement : JSON.stringify(replacement)) + lines,
+  };
 }
 
 interface YamlFrame {
@@ -106,9 +206,14 @@ function yamlCommentSpans(text: string, ports: ProjectionPorts): readonly Redact
 }
 
 /** Parsed scalar ranges protect escaped and block values without reserializing the document. */
-export function projectYamlData(text: string, ports: ProjectionPorts): readonly RedactionSpan[] {
+export function projectYamlData(
+  text: string,
+  ports: ProjectionPorts,
+  privacyDocument?: Document,
+): readonly RedactionSpan[] {
   const api = yamlApi();
-  const document = documentTree(text);
+  const document = privacyDocument ?? documentTree(text);
+  if (document.errors.length > 0) throw new YamlSyntaxRefusal();
   const pending: YamlFrame[] = [{ value: document.contents, sensitive: false }];
   const visited = new Map<Node, boolean>();
   while (pending.length > 0) {
@@ -119,9 +224,22 @@ export function projectYamlData(text: string, ports: ProjectionPorts): readonly 
     if (canonicalPlaceholder(text, frame.value)) continue;
     if (api.isAlias(frame.value)) {
       pending.push({ value: frame.value.resolve(document), sensitive: frame.sensitive });
-    } else pending.push(...yamlChildren(frame, ports));
+    } else appendYamlChildren(pending, frame, ports);
   }
-  return [...yamlScalarSpans(text, visited, ports), ...yamlCommentSpans(text, ports)];
+  const plain = inferredPlainScalars(document, privacyDocument, text);
+  return [...yamlScalarSpans(text, visited, ports, plain), ...yamlCommentSpans(text, ports)];
+}
+
+function inferredPlainScalars(
+  document: Document,
+  privacyDocument: Document | undefined,
+  text: string,
+): boolean {
+  return privacyDocument !== undefined && !complexYaml(document.contents, text, true);
+}
+
+function appendYamlChildren(pending: YamlFrame[], frame: YamlFrame, ports: ProjectionPorts): void {
+  for (const child of yamlChildren(frame, ports)) pending.push(child);
 }
 
 function yamlCommentSpan(value: object, ports: ProjectionPorts): RedactionSpan | undefined {
@@ -143,20 +261,44 @@ function yamlCommentSpan(value: object, ports: ProjectionPorts): RedactionSpan |
       };
 }
 
-function complexYaml(value: unknown, text: string): boolean {
+function complexYaml(
+  value: unknown,
+  text: string,
+  includeFlow = false,
+  includePlainMultiline = true,
+): boolean {
   const api = yamlApi();
+  if (api.isNode(value) && canonicalPlaceholder(text, value)) return false;
   if (api.isAlias(value) || api.isSeq(value)) return true;
-  if (api.isScalar(value))
-    return (
-      value.anchor !== undefined ||
-      (value.type !== undefined && value.type !== "PLAIN") ||
-      (value.range !== undefined &&
-        value.range !== null &&
-        /[\r\n]/u.test(text.slice(value.range[0], value.range[1])))
-    );
+  if (api.isScalar(value)) return complexYamlScalar(value, text, includePlainMultiline);
+  return complexYamlMap(value, text, includeFlow, includePlainMultiline);
+}
+
+function complexYamlScalar(value: Scalar, text: string, includePlainMultiline: boolean): boolean {
   return (
-    api.isMap(value) &&
-    value.items.some((pair) => complexYaml(pair.key, text) || complexYaml(pair.value, text))
+    value.anchor !== undefined ||
+    (value.type !== undefined && value.type !== "PLAIN") ||
+    (includePlainMultiline &&
+      value.range !== undefined &&
+      value.range !== null &&
+      /[\r\n]/u.test(text.slice(value.range[0], value.range[1])))
+  );
+}
+
+function complexYamlMap(
+  value: unknown,
+  text: string,
+  includeFlow: boolean,
+  includePlainMultiline: boolean,
+): boolean {
+  return (
+    yamlApi().isMap(value) &&
+    ((includeFlow && value.flow === true) ||
+      value.items.some(
+        (pair) =>
+          complexYaml(pair.key, text, includeFlow, includePlainMultiline) ||
+          complexYaml(pair.value, text, includeFlow, includePlainMultiline),
+      ))
   );
 }
 
@@ -164,6 +306,7 @@ function yamlScalarSpans(
   text: string,
   nodes: ReadonlyMap<Node, boolean>,
   ports: ProjectionPorts,
+  plain: boolean,
 ): readonly RedactionSpan[] {
   const values = new Set(
     [...nodes]
@@ -179,7 +322,7 @@ function yamlScalarSpans(
       sensitive || (!keys.has(node) && values.has(value))
         ? REDACTION_PLACEHOLDER
         : ports.redactPlain(value);
-    if (safe !== value) spans.push(scalarSpan(text, node, safe));
+    if (safe !== value) spans.push(scalarSpan(text, node, safe, plain));
   }
   return spans;
 }
@@ -193,19 +336,14 @@ function canonicalPlaceholder(text: string, node: Node): boolean {
   );
 }
 
-export function yamlPublicationNeedsContext(
-  text: string,
-  pendingLiteral: (value: string) => boolean,
-): boolean {
+export function yamlPublicationNeedsContext(text: string): boolean {
   const api = yamlApi();
-  const document = api.parseDocument(text, { keepSourceTokens: true });
-  if (document.errors.length > 0 || complexYaml(document.contents, text)) return true;
-  if (!api.isMap(document.contents)) return false;
-  return document.contents.items.some((pair) => {
-    if (!api.isScalar(pair.value)) return pair.value === null;
-    if (pair.value.value === null) return true;
-    return typeof pair.value.value === "string" && pendingLiteral(pair.value.value);
-  });
+  const document = parsePrivacyDocument(text);
+  return (
+    document.errors.length > 0 ||
+    api.isMap(document.contents) ||
+    complexYaml(document.contents, text)
+  );
 }
 
 function yamlKeyNodes(nodes: ReadonlyMap<Node, boolean>): ReadonlySet<Node> {

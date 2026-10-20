@@ -1,5 +1,36 @@
 # Chat/Files qualification observations
 
+## Checkpoint 80: complete mapping context and bounded source scanning
+
+The inferred YAML scanner now retains and reuses a complete parsed mapping, including duplicate
+entries, so a later private binding also protects earlier decoded copies. Explicit YAML still
+rejects duplicate keys using the pinned parser's scalar-value and node-identity semantics.
+Streaming holds mapping context until successful completion; ordinary prose can still progress.
+Blank prefixes are consumed once. Plain fields, public follow-up prose, later code, canonical
+placeholders and physical line coordinates retain their existing contracts. Index snapshot version
+11 invalidates older projected records; existing body-free Activity Log fields record revision 3.
+
+The final affected run passes 9,006 tests with zero failures and four existing skips. Strict types,
+scoped lint/format, architecture and negative controls, Activity Log, retrieval/context/faithfulness,
+error observability, ADR index and real local Sonar pass. Affected coverage is 94.45% lines and
+86.89% branches, not complete repository coverage. Independent checks include 848 private stream
+partitions, 584 strict-key comparisons, 48 plain-prefix/fence cases and the prior publication,
+cancellation and actual Workspace chains.
+
+Intermediate over-refusal/format regressions, Sonar findings and the canonical-placeholder failure
+remain retained. The last broad failure came from a test changing unused Base64url pad bits while
+leaving ciphertext identical. Its fixture now flips a real decoded byte, preserves envelope size
+and verifies rejection through the existing crypto owner before cache reuse; crypto/cache runtime
+behavior is unchanged. The corrected index/crypto group passes 34 tests.
+
+[`bounded-inferred-yaml-context.json`](bounded-inferred-yaml-context.json) binds source/runtime
+freezes, original failures, actual checks and independent receipts. This is scoped repair evidence.
+Two inherited alias defects remain open: repeated resolution exceeds the same two-second child
+limit at 16,384 aliases, and alias keys resolving to private field names can leave values unmasked.
+The next repair addresses both in the existing parser. Vendor closure, skill qualification,
+remaining functional/native acceptance, exact-head CI/review settlement and merge remain open.
+No prompt, skill or grant changes, complete YAML privacy claim or overall acceptance is made.
+
 ## Checkpoint 79: preserve code in Copy Answer
 
 Copy Answer applied repository-evidence prose cleanup inside code, changing literal spaces,

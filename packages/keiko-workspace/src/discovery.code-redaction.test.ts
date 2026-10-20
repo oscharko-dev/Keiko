@@ -140,6 +140,32 @@ describe("workspace code evidence redaction", () => {
     expect(evidence).not.toContain("opaque-workspace-witness");
     expect(readWorkspaceFileForEditing(workspace, "source.ts").rawText).toBe(source);
   });
+
+  it("protects copied YAML values across duplicate rows in inferred text evidence", async () => {
+    const source =
+      'visible: "opaque-workspace-witness"\nnote: public\nnote: public\npassword: "opaque-workspace-witness"\n';
+    const workspace = fixture("notes.txt", source);
+    const scope = { workspace, scopeId: "code-redaction", relativePaths: ["notes.txt"] };
+    expect(readWorkspaceFile(workspace, "notes.txt").text).not.toContain(
+      "opaque-workspace-witness",
+    );
+    const result = await searchText(scope, {
+      kind: "exact-symbol",
+      text: "opaque-workspace-witness",
+      caseSensitive: true,
+      maxResults: 10,
+      emittedAtMs: 0,
+    });
+    expect(result.atoms).toHaveLength(0);
+    const excerpt = await readExcerpt(scope, {
+      scopePath: "notes.txt",
+      startLine: 1,
+      endLine: 4,
+      maxBytes: 4096,
+    });
+    expect(excerpt.content).not.toContain("opaque-workspace-witness");
+    expect(readWorkspaceFileForEditing(workspace, "notes.txt").rawText).toBe(source);
+  });
   it("reports unavailable source when its safe parser cannot complete", () => {
     const source =
       'const token: string = "opaque-depth-witness";\nconst value = ' +

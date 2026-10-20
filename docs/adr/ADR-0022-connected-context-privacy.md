@@ -832,6 +832,20 @@ redaction candidate. A malformed TypeScript fragment remains unavailable when it
 escape, unsupported quoting, a sensitive-name plus literal candidate or a strict-redaction change.
 A sensitive word alone, or a public literal without a secret candidate, is not a private value.
 These are source observations, not compilation certificates.
+Inferred YAML privacy projection keeps the complete parsed mapping, including duplicate entries,
+so a later private binding also masks earlier decoded copies. Privacy parsing is not configuration
+validation: explicitly selected YAML still rejects duplicate keys, using a linear check with the
+pinned parser's scalar-value and node-identity equality. The source scanner consumes public mapping
+contexts and blank prefixes once instead of reclassifying every remaining suffix. Malformed public
+text receives no code exemption and remains subject to ordinary strict redaction. Incomplete private
+bindings fail closed. Inferred all-plain fields retain the established plain-text placeholder style;
+explicit YAML and structured literals retain syntax-safe scalar replacements. Failed parsing cannot
+turn multiline prose into a quoted literal: only observed quoting, anchors or collection syntax
+requires structured refusal. Canonical placeholders remain stable on repeated redaction. A later
+standalone source candidate still receives its own language parser. Streaming retains mapping-shaped context until successful completion; ordinary
+prose can still progress immediately. Index snapshot version 11 invalidates previously projected
+text even when source bytes and stat metadata are unchanged. The existing body-free projection
+revision records this change without logging source content.
 Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
 once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
 body. Classification, privacy and source-size grants stay unchanged; revision 2 identifies this

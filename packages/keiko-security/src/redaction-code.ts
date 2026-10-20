@@ -3,8 +3,14 @@ import {
   isYamlDocument,
   mayStartYaml,
   YamlSyntaxRefusal,
+  yamlPrivacyPrefix,
 } from "./redaction-yaml.js";
-import { projectSourceText, type SourceTextEdit } from "./redaction-source-map.js";
+import type { Document } from "yaml";
+import {
+  REDACTION_PLACEHOLDER,
+  projectSourceText,
+  type SourceTextEdit,
+} from "./redaction-source-map.js";
 import { privateKeyParserSource } from "./redaction-private-key.js";
 import { projectJavaData, isJavaSource, JavaSyntaxRefusal } from "./redaction-java.js";
 import {
@@ -55,7 +61,28 @@ interface CodeRegion {
   readonly fence: string;
   readonly quoteDepth: number;
   readonly closed: boolean;
+  readonly yamlDocument?: Document;
   readonly refusal?: "syntax" | "depth";
+}
+
+interface InferredSourcePrefix {
+  readonly language: SourceRedactionLanguage | undefined;
+  readonly end: number;
+  readonly refusal?: "syntax" | "depth";
+  readonly yamlDocument?: Document;
+}
+
+function inferredRegion(prefix: InferredSourcePrefix, start: number): CodeRegion {
+  return {
+    start,
+    end: start + prefix.end,
+    language: prefix.language,
+    fence: "",
+    quoteDepth: 0,
+    closed: true,
+    ...(prefix.yamlDocument === undefined ? {} : { yamlDocument: prefix.yamlDocument }),
+    ...(prefix.refusal === undefined ? {} : { refusal: prefix.refusal }),
+  };
 }
 
 function fenceLanguage(value: string): SourceRedactionLanguage | undefined {
@@ -101,11 +128,12 @@ function fencedRegion(text: string, start: number, end: number): CodeRegion | un
 function codeRegions(
   text: string,
   sourceLanguage: SourceRedactionLanguage | undefined,
+  ports: ProjectionPorts,
   inferSourceLanguage = true,
 ): readonly CodeRegion[] {
   if (sourceLanguage === undefined && !inferSourceLanguage) return [];
   if (sourceLanguage === "json" && !/^\s*[[{"]/u.test(text))
-    return codeRegions(text, undefined, inferSourceLanguage);
+    return codeRegions(text, undefined, ports, inferSourceLanguage);
   if (sourceLanguage !== undefined)
     return [
       {
@@ -117,26 +145,14 @@ function codeRegions(
         closed: true,
       },
     ];
-  return inferredCodeRegions(text);
+  return inferredCodeRegions(text, ports);
 }
 
-function inferredCodeRegions(text: string): readonly CodeRegion[] {
+function inferredCodeRegions(text: string, ports: ProjectionPorts): readonly CodeRegion[] {
   if (isSyntaxFreeProse(text)) return [];
-  const prefix = inferredPrefix(text);
-  const result: CodeRegion[] =
-    prefix === undefined
-      ? []
-      : [
-          {
-            start: 0,
-            end: prefix.end,
-            language: prefix.language,
-            fence: "",
-            quoteDepth: 0,
-            closed: true,
-            ...(prefix.refusal === undefined ? {} : { refusal: prefix.refusal }),
-          },
-        ];
+  const withinSize = new TextEncoder().encode(text).byteLength <= MAX_RECURSIVE_TEXT_FILE_BYTES;
+  const prefix = inferredPrefix(text, ports, withinSize);
+  const result: CodeRegion[] = prefix?.language === undefined ? [] : [inferredRegion(prefix, 0)];
   let from = prefix?.end ?? 0;
   const offset = from;
   const ranges = markdownCodeRanges(text.slice(offset)).map((range) => ({
@@ -144,9 +160,9 @@ function inferredCodeRegions(text: string): readonly CodeRegion[] {
     end: range.end + offset,
   }));
   for (const range of [...ranges, { start: text.length, end: text.length }]) {
-    result.push(...standaloneRegions(text, from, range.start));
+    result.push(...standaloneRegions(text, from, range.start, ports, withinSize));
     const region = fencedRegion(text, range.start, range.end);
-    if (region !== undefined) result.push(...inferredFenceRegions(text, region));
+    if (region !== undefined) result.push(...inferredFenceRegions(text, region, ports));
     from = range.end;
   }
   return result.sort((a, b) => a.start - b.start);
@@ -237,7 +253,7 @@ export function projectCodeRedaction(
   inferSourceLanguage = true,
 ): CodeRedactionProjection {
   const parserSource = privateKeyParserSource(text);
-  const regions = codeRegions(parserSource, sourceLanguage, inferSourceLanguage);
+  const regions = codeRegions(parserSource, sourceLanguage, ports, inferSourceLanguage);
   const literals: RedactionSpan[] = [];
   const report = { regions: regions.length, depthRefusals: 0, sizeRefusals: 0, syntaxRefusals: 0 };
   for (const region of regions) {
@@ -245,7 +261,13 @@ export function projectCodeRedaction(
     const source = quotedSource(parserSource.slice(region.start, region.end), region.quoteDepth);
     const projection =
       region.refusal === undefined
-        ? boundedProjection(source.text, region.language ?? "typescript", ports, report)
+        ? boundedProjection(
+            source.text,
+            region.language ?? "typescript",
+            ports,
+            report,
+            region.yamlDocument,
+          )
         : refusedProjection(source.text, report, region.refusal);
     literals.push(
       ...projection.map((span) => {
@@ -274,12 +296,13 @@ function boundedProjection(
   language: SourceRedactionLanguage,
   ports: ProjectionPorts,
   report: { depthRefusals: number; sizeRefusals: number; syntaxRefusals: number },
+  yamlDocument?: Document,
 ): readonly RedactionSpan[] {
   if (new TextEncoder().encode(body).byteLength > MAX_RECURSIVE_TEXT_FILE_BYTES) {
     report.sizeRefusals += 1;
   } else {
     try {
-      return languageProjection(body, language, ports, report);
+      return languageProjection(body, language, ports, report, yamlDocument);
     } catch (error) {
       if (safeUnparsedJava(error, body, ports)) return [];
       if (error instanceof RangeError) report.depthRefusals += 1;
@@ -311,17 +334,20 @@ function languageProjection(
   language: SourceRedactionLanguage,
   ports: ProjectionPorts,
   report: { depthRefusals: number; syntaxRefusals: number },
+  yamlDocument?: Document,
 ): readonly RedactionSpan[] {
   if (language === "json" && !isJsonSourcePrefix(body))
     return refusedProjection(body, report, "syntax");
   if (language === "java") return javaProjection(body, ports);
-  if (language === "yaml") return projectYamlData(body, ports);
+  if (language === "yaml") return projectYamlData(body, ports, yamlDocument);
   return projectTypeScriptData(body, ports, language === "json");
 }
 
 /** A cheap candidate check avoids loading a language SDK for ordinary diagnostics. */
 export function mayStartStandaloneSource(text: string): boolean {
   const body = text.trimStart();
+  if (body.slice(0, lineAfter(body, 0, body.length)).trimEnd() === REDACTION_PLACEHOLDER)
+    return false;
   return (
     mayStartYaml(body) ||
     /^(?:\/[/*]|[{[@])/u.test(body) ||
@@ -339,38 +365,39 @@ function inferredLanguage(text: string): SourceRedactionLanguage | undefined {
   return isJavaSource(text) ? "java" : undefined;
 }
 
-function standaloneRegions(text: string, start: number, end: number): readonly CodeRegion[] {
+function standaloneRegions(
+  text: string,
+  start: number,
+  end: number,
+  ports: ProjectionPorts,
+  withinSize = false,
+): readonly CodeRegion[] {
   const result: CodeRegion[] = [];
   for (let at = start; at < end;) {
+    const leading = text.slice(at, end).search(/\S/u);
+    if (leading < 0) break;
+    at += leading;
     const body = text.slice(at, end);
-    const code = inferredPrefix(body);
-    if (code !== undefined) {
-      result.push({
-        start: at,
-        end: at + code.end,
-        language: code.language,
-        fence: "",
-        quoteDepth: 0,
-        closed: true,
-        ...(code.refusal === undefined ? {} : { refusal: code.refusal }),
-      });
-      at += code.end;
-    } else {
-      const newline = text.indexOf("\n", at);
-      at = newline < 0 ? end : newline + 1;
+    const code = inferredPrefix(body, ports, withinSize);
+    if (code === undefined) {
+      at = lineAfter(text, at, end);
+      continue;
     }
+    if (code.language !== undefined) result.push(inferredRegion(code, at));
+    at += code.end;
   }
   return result;
 }
 
 function inferredPrefix(
   text: string,
-): { language: SourceRedactionLanguage; end: number; refusal?: "syntax" | "depth" } | undefined {
+  ports: ProjectionPorts,
+  withinSize = false,
+): InferredSourcePrefix | undefined {
   if (!mayStartStandaloneSource(text)) return undefined;
-  if (new TextEncoder().encode(text).byteLength > MAX_RECURSIVE_TEXT_FILE_BYTES)
-    return { language: "typescript", end: text.length };
+  if (sourceExceedsSize(text, withinSize)) return { language: "typescript", end: text.length };
   try {
-    if (mayStartYaml(text)) return inferredYamlPrefix(text);
+    if (mayStartYaml(text)) return inferredYamlPrefix(text, ports);
     const language = inferredLanguage(text);
     if (language !== undefined) return { language, end: text.length };
     const end = typeScriptPrefixLength(text);
@@ -382,6 +409,10 @@ function inferredPrefix(
     if (!(error instanceof RangeError)) throw error;
     return { language: "typescript", end: text.length, refusal: "depth" };
   }
+}
+
+function sourceExceedsSize(text: string, withinSize: boolean): boolean {
+  return !withinSize && new TextEncoder().encode(text).byteLength > MAX_RECURSIVE_TEXT_FILE_BYTES;
 }
 
 /** Candidate detection ignores canonical Markdown code ranges; completed fences stay whole. */
@@ -415,15 +446,22 @@ function lineAfter(text: string, from: number, fallback: number): number {
   return newline < 0 ? fallback : newline + 1;
 }
 
-function inferredFenceRegions(text: string, region: CodeRegion): readonly CodeRegion[] {
+function inferredFenceRegions(
+  text: string,
+  region: CodeRegion,
+  ports: ProjectionPorts,
+): readonly CodeRegion[] {
   if (region.language !== undefined) return [region];
   const source = quotedSource(text.slice(region.start, region.end), region.quoteDepth);
   if (isSyntaxFreeProse(source.text)) return [];
-  return standaloneRegions(source.text, 0, source.text.length).map((child) => ({
+  const withinSize =
+    new TextEncoder().encode(source.text).byteLength <= MAX_RECURSIVE_TEXT_FILE_BYTES;
+  return standaloneRegions(source.text, 0, source.text.length, ports, withinSize).map((child) => ({
     ...region,
     language: child.language,
     start: region.start + source.rawOffset(child.start),
     end: region.start + source.rawOffset(child.end),
+    ...(child.yamlDocument === undefined ? {} : { yamlDocument: child.yamlDocument }),
     ...(child.refusal === undefined ? {} : { refusal: child.refusal }),
   }));
 }
@@ -449,10 +487,41 @@ function refusedProjection(
   return [{ start: 0, end: body.length, replacement: maskedLiteralBody(body) }];
 }
 
-function inferredYamlPrefix(text: string): { language: "yaml"; end: number } | undefined {
+function inferredYamlPrefix(
+  text: string,
+  ports: ProjectionPorts,
+): {
+  language: "yaml" | undefined;
+  end: number;
+  yamlDocument?: Document;
+  refusal?: "syntax";
+} {
+  const prefix = yamlPrivacyPrefix(text, mayStartStandaloneSource, ports.sensitiveName);
+  if (prefix?.document !== undefined)
+    return { language: "yaml", end: prefix.end, yamlDocument: prefix.document };
   if (isYamlDocument(text)) return { language: "yaml", end: text.length };
-  const end = text.indexOf("\n") + 1;
-  return end > 0 && isYamlDocument(text.slice(0, end)) ? { language: "yaml", end } : undefined;
+  if (prefix?.syntaxRequired === true && !safeUnparsedText(text, ports))
+    return { language: "yaml", end: text.length, refusal: "syntax" };
+  return { language: undefined, end: plainYamlPrefixLength(text) };
+}
+
+/** Unparsed plain fields retain strict text redaction; a later code candidate gets its own parser. */
+function plainYamlPrefixLength(text: string): number {
+  let start = lineAfter(text, 0, text.length);
+  while (start < text.length) {
+    const end = lineAfter(text, start, text.length);
+    const line = text.slice(start, end);
+    if (mayStartStandaloneSource(line) && !mayStartYaml(line)) return start;
+    start = end;
+  }
+  return text.length;
+}
+
+/** Rejected public text receives no code exemption; the ordinary redactor still owns it. */
+function safeUnparsedText(text: string, ports: ProjectionPorts): boolean {
+  return (
+    !text.includes("\\") && !ports.mayContainSensitiveName(text) && ports.redactPlain(text) === text
+  );
 }
 
 function bodyClosingFence(
