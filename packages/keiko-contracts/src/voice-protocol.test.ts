@@ -1108,7 +1108,7 @@ describe("timeout / reconnect defaults", () => {
   });
 });
 
-// SOURCE-ONLY preparation: original/source and freshly built public outcomes remain unexecuted.
+// Source and public validation preserve the current dispatch observation schedule.
 describe("voice protocol current dispatch observation", () => {
   it.each(["source", "public"] as const)(
     "refuses an unknown second kind through %s",
@@ -1159,7 +1159,7 @@ describe("voice protocol current dispatch observation", () => {
   );
 });
 
-// Source-only healthy changing second dispatch observation; no transport authority is granted.
+// Healthy changing second dispatch observation grants no transport authority.
 describe("family6 healthy changing current voice dispatch", () => {
   it.each(["source", "public"])(
     "retains an allowed envelope-only second kind through %s",
@@ -1181,6 +1181,37 @@ describe("family6 healthy changing current voice dispatch", () => {
       };
       expect(validate(input)).toEqual({ ok: true });
       expect(reads).toBe(2);
+    },
+  );
+});
+
+describe("voice structural validation responsibility", () => {
+  it.each(["source", "public"] as const)(
+    "voice guard and decoder preserve identity and refuse malformed input through %s",
+    async (entrypoint) => {
+      const publicApi = await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol");
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceControlMessage
+          : publicApi.validateVoiceControlMessage;
+      const guard =
+        entrypoint === "source" ? isVoiceControlMessage : publicApi.isVoiceControlMessage;
+      const decode =
+        entrypoint === "source" ? decodeVoiceControlMessage : publicApi.decodeVoiceControlMessage;
+      const healthy = {
+        ...wellFormedMessage("error"),
+        direction: "host-to-client",
+        code: "negotiation-failed",
+        correlationId: "voice-chain-healthy",
+      };
+      const malformed = withoutField(healthy, "code");
+
+      expect(validate(healthy)).toEqual({ ok: true });
+      expect(guard(healthy)).toBe(true);
+      expect(decode(healthy)).toBe(healthy);
+      expect(validate(malformed)).toEqual({ ok: false, reasons: ["error code invalid"] });
+      expect(guard(malformed)).toBe(false);
+      expect(decode(malformed)).toBeUndefined();
     },
   );
 });

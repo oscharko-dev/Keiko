@@ -6495,6 +6495,57 @@
           "testName": "Support logger raw metadata preservation public: preserves a genuine refusal kind and one buffered-logger schema-loss count"
         }
       ]
+    },
+    {
+      "id": "voice-control-structural-validation",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-protocol.js",
+        "exportName": "validateVoiceControlMessage",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-protocol.js",
+        "exportName": "validateVoiceControlMessage"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-protocol.js",
+        "exportName": "validateVoiceControlMessage"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-protocol.js",
+        "exportName": "isVoiceControlMessage",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/voice-protocol.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/voice-protocol.test.ts",
+          "testName": "voice structural validation responsibility voice guard and decoder preserve identity and refuse malformed input through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-protocol.test.ts",
+          "testName": "voice structural validation responsibility voice guard and decoder preserve identity and refuse malformed input through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-protocol.test.ts",
+          "testName": "voice protocol current dispatch observation refuses an unknown second kind through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-protocol.test.ts",
+          "testName": "voice protocol current dispatch observation preserves a stable healthy kind through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-protocol.test.ts",
+          "testName": "envelope validation & guards decodes an error after discarding only malformed optional correlation metadata"
+        }
+      ]
     }
   ]
 }

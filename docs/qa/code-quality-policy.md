@@ -1368,3 +1368,16 @@ Legacy raw-observation options and records retain their existing behavior.
 real correlation rebind APIs. Its direct public proof retains the supplied target, hidden immutable
 marker and malformed raw identity; existing logger proofs retain closed rejection and the real
 formatter's final mismatch. Structural observation and transport grant no canonical write authority.
+
+### Voice control structural validation
+
+The `voice-control-structural-validation` validator responsibility binds only the unknown input
+of `validateVoiceControlMessage` to its existing closed diagnostic result and actual exported
+`isVoiceControlMessage` consumer through the real package-index reexport. The browser negotiation
+decoder calls that guard, and the two browser clients consume its narrower typed result; this
+transitive use does not replace the direct guard-consumer binding. Selected source/public proofs
+preserve healthy decoder identity, refuse a missing required error code, retain the current-kind
+read schedule, and retain optional error-correlation copying. The complete Voice protocol test
+file remains the proof owner. No private helper, dictionary, runtime-typeof, decoder-input,
+transport or Twin authority is granted. Declaration alone is not coverage: current native
+correspondence and completed semantic qualification are required for this exact boundary.
