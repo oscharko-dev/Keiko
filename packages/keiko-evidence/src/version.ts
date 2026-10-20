@@ -1,1 +1,1 @@
-export const KEIKO_EVIDENCE_VERSION = "1.2.4" as const;
+export const KEIKO_EVIDENCE_VERSION = "1.2.5" as const;

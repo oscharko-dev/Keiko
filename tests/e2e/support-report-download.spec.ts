@@ -77,6 +77,10 @@ async function openChat(page: Page, chatId: string): Promise<Locator> {
   await page.goto(`/${editorM11PairingFragment("support-download")}`);
   const window = page.getByRole("region", { name: `Chat — ${title}` });
   await expect(window).toBeVisible();
+  // Session/offline notices can shrink the canvas while floating geometry stays human-owned.
+  // Use the normal full-screen control so this report transport journey follows the live viewport.
+  await window.getByRole("button", { name: "Full screen Chat window", exact: true }).click();
+  await expect(window).toHaveAttribute("data-max", "true");
   return window;
 }
 

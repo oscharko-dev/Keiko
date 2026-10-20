@@ -16,6 +16,32 @@ remain required. [`security-dependency-repair.json`](security-dependency-repair.
 manifest/lock/document bindings, primary advisories and scoped receipts. Original deferred criteria
 remain in [#4051](https://github.com/oscharko-dev/Keiko/issues/4051).
 
+The owner additionally chose release **1.2.5** after verified integration. Canonical `set-version`
+updates workspace manifests, pins, constants and the retained support-registry history. The new
+catalog row is append-only; V45/V46 browser approval and creation-intent migrations are explicit.
+Existing manual-update eligibility stays unchanged. The Markdown skills are repository examples
+for import into Chat, not automatically installed product skills. Actual SSD updater UI verification
+is requested after publication and has not yet occurred.
+
+The auditor found Vite8.3.0 in the installed tree despite the corrected canonical and hidden locks.
+Those earlier UI/builder runs do not qualify patched Vite. Clean `npm ci` and actual root/UI/Vitest
+resolution now establish Vite8.3.3/Rolldown1.2.14. Repeated builder controls pass193/193; complete UI
+coverage passes10,866 tests with one existing skip (94.21% lines,84.86% branches). The quiet reference
+run passes all three cases against unchanged calibration/budgets, with Docker and services restored.
+
+The original Chromium selector guard fails on two matching regions and passes with an exact inner
+region name. Its functional assertions remain unchanged. The original package coverage inventory
+guard reproduces a new source-file undercount; inventory-only generation changes831 to832 while
+preserving every threshold and measured baseline. Remaining full-suite/hosted gates are still required.
+
+The complete original Chromium lane runs113 cases:111 pass and two report-download clicks fail
+when fixed canvas controls cover the bottom of a human-sized floating window after a session/offline
+banner shrinks the canvas. Report transport fixtures now click the real full-screen control and
+assert its state before proceeding; all original transport/privacy/layout assertions remain. The
+whole affected four-case file passes, including the unchanged320x240 global-notice case. This does
+not claim automatic reflow of arbitrary floating geometry. The original failure and external-config
+collection refusal remain retained; final hosted full-lane qualification is still required.
+
 ## Required-gate repairs after published commit 9b4eb9e3
 
 The initial published closeout failed the full gate matrix. This increment fixes the measured

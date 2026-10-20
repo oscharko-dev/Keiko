@@ -397,7 +397,7 @@ test("coding workbench opens its per-window repository selector @smoke", async (
 
   await page.goto("/");
   await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
-  const workbenchWindow = page.getByRole("region", { name: "Coding Workbench" });
+  const workbenchWindow = page.getByRole("region", { name: "Coding Workbench", exact: true });
   await expect(workbenchWindow).toBeVisible();
 
   // The fresh window has no bound task workspace yet, so it shows the setup form and this is the

@@ -28,15 +28,43 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "a706fe4cbe415bcf996f2128f3cf6009e926f3665cb2bde94a7b33d48708e5ae"
+      "sha256": "33af59fac200e861f48ef03c35e16d4737d85f435af0a9fc72815dd6bd4ec80d"
     },
     {
       "path": "package.json",
-      "sha256": "214aa50bb8d873557c5ca13249c4cb2de075581a33e62dc2259011a202422e36"
+      "sha256": "1421d44ea8503684cb196935d2fa2d783c77e1313466eea3ecedd646436060a3"
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "850aba4f198ecea0391aee431dac901903e6acc0575ac00ff7fe9ee18d5cfd60"
+      "sha256": "ee9388d51ea8019a5216a53fc7e6d0ab383d4ce1c76d83b37749206166787e35"
+    },
+    {
+      "path": "docs/release/3415-tool-catalog-perf-evidence.json",
+      "sha256": "1b8c2611813153eb9e7ea7e775edfb33ac209bcd0157b5667dd46480b9ae1628"
+    },
+    {
+      "path": "tests/e2e/release-smoke.spec.ts",
+      "sha256": "e5345fc35f2adb4046499e403866570b220465d60b3dd55ee0b691e27e402913"
+    },
+    {
+      "path": "docs/qa/package-coverage-baseline.json",
+      "sha256": "062f95ebb72263771e6f6a7c0a121290d1ccc579e82e64baf383cfc933876c6a"
+    },
+    {
+      "path": "tests/e2e/support-report-download.spec.ts",
+      "sha256": "981099816877a7f3c40b1eea011f4c03809d0d4056c0af63afde83f085081d26"
+    },
+    {
+      "path": "release-impact.catalog.json",
+      "sha256": "598a3d2af2fe9db7f71cbed8bdce87fede1bdb535f841dc1667cf926fa5fe999"
+    },
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-code-inventory.generated.ts",
+      "sha256": "1e786e05d39f31f2f4c5a8a04c1faff58585aaae1a23d030dfe2c41cca8d1afd"
+    },
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-registry-history.generated.ts",
+      "sha256": "594d03e99e57d6f4d919d34fef029e76e8e71e0c858c315621b009584d8ce7b4"
     }
   ],
   "scopedReceipts": [
@@ -69,6 +97,150 @@
       "label": "delivery-closeout88-release-coverage-v1",
       "receiptSha256": "dc2a48c860f928769ce47c90bbebf9b65eaa13f6e0b5dbdbcf0df82c45735656",
       "exitCode": 130
+    },
+    {
+      "label": "delivery-security90-root-clean-install-v1",
+      "receiptSha256": "e6c6c83c7b0532276b9b0e8f1a9bd3ecdb72b1dedff5a0c92a0559c4cd669886",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-installed-consumers-v1",
+      "receiptSha256": "252312e62c8a3f33704f56a470045c8c738803674eb0c5c100c4371258bb4f49",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-patched-builder-tests-v2",
+      "receiptSha256": "bd2546b4412ca8c11b20240c8598b4b83caedd8d25da1a3d96ad33064f21f119",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-typecheck-v1",
+      "receiptSha256": "f62146228299177fb8399537256e6acf18f763268c8cf9f50c8c52f219efcd9e",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-ui-typecheck-v1",
+      "receiptSha256": "e9257e2184b3412e519533db60ed48b9c668a776cdba8e0ac6c8e3a5872ba11d",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-patched-ui-coverage-v2",
+      "receiptSha256": "33cd08ea323ef5eb69982888b9b4c746e60332a8633a19b1056854cbb9377e30",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-selector-red-v1",
+      "receiptSha256": "3eacc7113f3ea278d4ac7e67be18b1f20c22693ede012fefc6f6611f38d7d5e3",
+      "exitCode": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-selector-green-v1",
+      "receiptSha256": "e204798e0237a000136ed7f276c660a4687c2f98a7a6a79acc3ce19c481dc9dd",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-package-inventory-red-v1",
+      "receiptSha256": "4a979c8dd69cb3550c3af7e48a7977300939154115dbf8e2a288a270e05adefe",
+      "exitCode": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-package-inventory-refresh-v1",
+      "receiptSha256": "d76953a14716cef7bce5f149c9ff49315da2c6ba57ef136314503cbeb3c46932",
+      "exitCode": 0,
+      "sourceUnchanged": false
+    },
+    {
+      "label": "delivery-security89-tool-catalog-reference-v2",
+      "receiptSha256": "805b64a209db47f37e2c2789d14439a5d43660a4fa5e5fe69f83e5fe0b497972",
+      "exitCode": 0,
+      "sourceUnchanged": false
+    },
+    {
+      "label": "delivery-release125-package-inventory-green-v1",
+      "receiptSha256": "3eedf35de8d538b0357c715618c7d82c546390af3047f4db38e967479c16b056",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-reference-subject-v1",
+      "receiptSha256": "993f68d20a3dd41b52e45162b2e71fbdfd43a038c68003d182a60b0cf85e7677",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-full-chromium-smoke-v1",
+      "receiptSha256": "c36d3595dbcaadad030aa74b725b00a0076f2dc8a8286684bf6c81e67c43fe7c",
+      "exitCode": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-full-chromium-smoke-v2",
+      "receiptSha256": "4220be2b33200d011caa90f6daff924c68b61d4b5ff08fd0828b030edbcdba80",
+      "exitCode": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-support-download-green-v1",
+      "receiptSha256": "e6f78cbe3fe3aca23bdddeb94d59aa9a2dd64c227d4a9746da31d9141d000812",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-osv-green-v2",
+      "receiptSha256": "08d22227d45cc94af3bef3bd7f3373704f7aa81c90d924d3412375ec76d0c485",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-sonar-v1",
+      "receiptSha256": "8bf9cfcd666ec709fa7d6ca8ebb11d838d9542a1c83a369920f8591ce6b07d58",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-ui-build-v2",
+      "receiptSha256": "476a358a6b46a7ae8c9665a5007bbf78b47dbbdd5f69b0a7d8ad9fe1aaeb5b3f",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-editor-evidence-v1",
+      "receiptSha256": "b65d2fca67226cc65fa74cd2e72dabdec0c2f1192c4ac7bf95d25e5a57102d6d",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-ui-lint-v1",
+      "receiptSha256": "e2b8b58c171a4b5ba672f701d681adb631f3555dddcfab99c1e317765980cbcb",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-root-scoped-lint-v1",
+      "receiptSha256": "d75a1c0251b4e082520e99d0feb13867ee38f33b5d0ce1c1639c2ae184653452",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-wiring-v1",
+      "receiptSha256": "2cd345e9c02254dabae19b8287eba4e3f21444354a2c3372a2f572ec18095ceb",
+      "exitCode": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "label": "delivery-release125-support-inventory-check-v1",
+      "receiptSha256": "f37ec03b157e0cb7b6d0d3c9952f7ea84c43abc2bd0bed88f4478be7a0224313",
+      "exitCode": 0,
+      "sourceUnchanged": true
     }
   ],
   "scanner": {
@@ -79,6 +251,22 @@
   "limits": [
     "68 original native provider/host tests pass against the actual installed 2.3.0 pair; this does not approve or rebind any historical native service-host artifact.",
     "The previous head full release-coverage attempt exited 130 after the security gate failure. It is not a complete passing suite.",
-    "Fresh final toolchain tests/full coverage and all exact-head app-bound CI checks remain integration prerequisites. Native fixed facts, authority and release approvals are unchanged."
-  ]
+    "Fresh final toolchain tests/full coverage and all exact-head app-bound CI checks remain integration prerequisites. Native fixed facts, authority and release approvals are unchanged.",
+    "An independent installed-tree audit found actual Vite8.3.0/Rolldown1.2.9 despite correct canonical and hidden lock versions. Earlier security89 UI and 193 Vitest builder runs do not qualify patched Vite. A clean exact-lock npm ci and real root/UI/Vitest resolution now prove8.3.3/1.2.14 before repeated193-control and fullUI coverage passes.",
+    "The isolated reference producer passed on clean22dd9547 with the exact documented64GiB/16CPU environment. Only generated measurement changed; calibration and budget hashes are unchanged. The version-only1.2.5 lock normalization preserves the subject; current producer identity remains a separate gate. Docker24GiB settings and three original services were restored after the quiet window.",
+    "The Chromium selector regression is a strict two-match ambiguity, reproduced before the one-line exact-name correction and passing afterward without assertion changes. Coverage inventory refresh changes only keiko-server files831 to832 and preserves all thresholds and measured baselines.",
+    "Full exact-head local release coverage, required hosted checks, settled reviews, protected merge, publication and the subsequent actual SSD updater UI check remain prerequisites for their respective claims.",
+    "The external preserved-build Playwright adapter failed full-suite collection before browser journeys; it receives no acceptance credit. The original complete Chromium command then ran113 cases:111passed/two report-download clicks intercepted by fixed canvas controls after session/offline banners reduced available space. The failures and traces remain retained.",
+    "Report transport fixtures now use the actual visible full-screen button and verify data-max:true after restoring their original floating geometry. The complete affected four-case file passes without force clicks, timeout changes or removed assertions; the independent320x240 stacked-report case is unchanged. This qualifies the explicit full-screen report workflow, not automatic reflow of human-owned floating geometry. No product stacking or window-sizing policy is changed."
+  ],
+  "releasePreparation": {
+    "version": "1.2.5",
+    "ownerDecisionReference": "https://github.com/oscharko-dev/Keiko/pull/4046",
+    "publication": "Only after protected integration and governed owner-authorized release workflow; actual SSD updater UI verification follows publication.",
+    "stateSchema": {
+      "from": 44,
+      "to": 46
+    },
+    "oneClickEligibility": "Existing false/manual-review-required/verifiedCarryForward:false retained; no unqualified automatic update authority."
+  }
 }
