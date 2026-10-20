@@ -1545,7 +1545,7 @@ function validDiagnosticValues(contract: ActivityLogFieldContract, value: unknow
 
 function diagnosticConditionMatchesContract(
   contract: ActivityLogFieldContract,
-  candidate: object,
+  candidate: { readonly field: unknown },
 ): boolean {
   const fieldType = runtimeProperty(contract, "type");
   if ("positive" in candidate)
