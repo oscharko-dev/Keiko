@@ -1,0 +1,4 @@
+/* The scene owns stacking level 2; canvas controls stay above its ordinary windows. */
+.cmpWorkspaceControl.cmpWorkspaceControl {
+  z-index: 3;
+}

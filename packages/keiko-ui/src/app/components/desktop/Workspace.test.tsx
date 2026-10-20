@@ -107,15 +107,27 @@ describe("M1 — empty startup layout", () => {
   it("calls openPalette when the empty-state blob button is clicked", async () => {
     const openPalette = vi.fn();
     const user = userEvent.setup();
-    render(
-      <Workspace
-        ws={workspace({ wins: [] })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={openPalette}
-      />,
-    );
-    await user.click(await screen.findByRole("button", { name: "Open a new window" }));
-    expect(openPalette).toHaveBeenCalledTimes(1);
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    try {
+      render(
+        <Workspace
+          ws={workspace({ wins: [] })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={openPalette}
+        />,
+      );
+      await user.click(await screen.findByRole("button", { name: "Open a new window" }));
+      expect(openPalette).toHaveBeenCalledTimes(1);
+      await user.click(screen.getByRole("button", { name: "New window", exact: true }));
+      expect(openPalette).toHaveBeenCalledTimes(2);
+      expect(diagnostics).toEqual([
+        "Workspace window palette opened.",
+        "Workspace window palette opened.",
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("does not render the empty-state when wins has at least one window", () => {

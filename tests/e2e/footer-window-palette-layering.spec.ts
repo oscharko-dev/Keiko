@@ -17,30 +17,68 @@ interface PaletteHitTest {
   readonly insideRightRail: boolean;
 }
 
-async function seedFilesWindow(page: Page): Promise<void> {
+async function seedFilesWindow(
+  page: Page,
+  geometry = { x: 96, y: 72, w: 620, h: 640 },
+): Promise<void> {
   fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-issue-1426-"));
   writeFileSync(join(fixtureRoot, "README.md"), "# Keiko overlay fixture\n", "utf8");
 
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-1426-files",
-          type: "files",
-          x: 96,
-          y: 72,
-          w: 620,
-          h: 640,
-          z: 10,
-          cfg: { root },
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, fixtureRoot);
+  await page.addInitScript(
+    ({ root, geometry }) => {
+      window.localStorage.setItem(
+        "keiko.workspace.v4",
+        JSON.stringify([
+          {
+            id: "issue-1426-files",
+            type: "files",
+            ...geometry,
+            z: 10,
+            cfg: { root },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem("keiko.conns.v1");
+    },
+    { root: fixtureRoot, geometry },
+  );
 }
+
+async function expectControlOwnsHitPoint(page: Page, name: string): Promise<void> {
+  const control = page.getByRole("button", { name, exact: true });
+  await expect(control).toBeVisible();
+  const hit = await control.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return {
+      owned: top !== null && element.contains(top),
+      windowIntercepts: top?.closest(".window") !== null,
+    };
+  });
+  expect(hit, name).toEqual({ owned: true, windowIntercepts: false });
+}
+
+test("workspace controls @smoke — ordinary windows cannot cover new-window or zoom controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await seedFilesWindow(page, { x: 0, y: 0, w: 2000, h: 1600 });
+  await page.goto("/");
+  const frame = page.locator('[data-window-id="issue-1426-files"]');
+  await expect(frame).toBeVisible();
+  await expect(frame).toHaveAttribute("data-max", "false");
+  for (const name of ["New window", "Zoom out", "Zoom in"]) {
+    await expectControlOwnsHitPoint(page, name);
+  }
+  await page.getByRole("button", { name: "New window", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "New window", exact: true })).toBeVisible();
+  await page.getByRole("dialog", { name: "New window", exact: true }).press("Escape");
+  await expect(page.getByRole("dialog", { name: "New window", exact: true })).toBeHidden();
+  await frame.locator("[data-window-header]").dblclick({ position: { x: 100, y: 20 } });
+  await expect(page.getByRole("button", { name: "New window", exact: true })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Zoom out", exact: true })).toBeHidden();
+});
 
 // GEN-UI-A11Y-025 turned the right rail from a named <aside> landmark into a plain <div> layout
 // spacer. The old `aside.rail.rail-right` selector kept matching nothing, which made the

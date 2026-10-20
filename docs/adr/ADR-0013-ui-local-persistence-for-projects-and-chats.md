@@ -558,9 +558,12 @@ or authentication credential. The BFF accepts only capability registry entries w
 can be written. A registry id can retain one trailing `@region` qualifier (letters, digits and
 hyphens), as regional OpenAI-compatible gateways require. This does not admit email domains,
 repeated qualifiers or credential-bearing URLs, and the existing length bound still applies.
-The `short_result` column (chat messages) is passed through
-`deepRedactStrings(value, redactor)` before persistence, using the same `UiHandlerDeps.redactor`
-the BFF already applies to live payloads (ADR-0011 D9). No reasoning traces, no evidence
+The `short_result` column (chat messages) is redacted and truncated before persistence.
+Grounded answer metadata uses the existing `deepRedactStrings(value, redactor)` on string
+leaves before JSON serialization. A free-text redactor must never consume serialized JSON:
+escaped quotes in code or quoted assignments can otherwise corrupt its structure. Retrieval
+activity validation still runs before and after that redaction. The BFF uses the same
+redactor for live payloads (ADR-0011 D9). No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is

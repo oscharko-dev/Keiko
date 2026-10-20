@@ -433,6 +433,10 @@ nonlocal ownership requires this observation, including when an unmapped UID loo
 the caller's UID. No UID mapping, ptrace capability or filesystem permission is widened. Failed
 or expired requests permanently retire that lookup port; they never revive from a delayed reply
 and do not terminate the healthy app. Existing containment and stop proofs remain independent.
+An interrupted packet read or write (`EINTR`, before a byte transfer) may resume only while its
+original monotonic grant remains live; interruption never renews that deadline or resends a
+successfully written request. Other I/O errors, partial or invalid packets and late results retain
+the existing permanent refusal. This does not retry decoder initialization or descriptor closure.
 The existing process start and heartbeat events record the selected coordinate and closed
 observation state without paths, file contents or numeric process references in their extra fields.
 Native SQLite unavailability refuses before durable state instead of replacing the root by re-exec.

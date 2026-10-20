@@ -13,6 +13,11 @@ const state = vi.hoisted(() => ({
   namespaceReads: 0,
   stats: 0,
   mainThread: true,
+  readFaults: [] as string[],
+  writeFaults: [] as string[],
+  clock: 0,
+  readStepMs: 0,
+  writeStepMs: 0,
 }));
 const originalPlatform = process.platform;
 
@@ -28,6 +33,11 @@ vi.mock("node:fs", async (original) => {
     readSync: (fd: number, bytes: Buffer): number => {
       if (fd !== 7) throw new Error("unexpected descriptor");
       state.reads += 1;
+      const fault = state.readFaults.shift();
+      if (fault !== undefined) {
+        state.clock += state.readStepMs;
+        throw Object.assign(new Error(), { code: fault });
+      }
       const frame = state.frames.shift();
       if (frame === undefined) throw Object.assign(new Error(), { code: "EAGAIN" });
       frame.copy(bytes);
@@ -36,6 +46,11 @@ vi.mock("node:fs", async (original) => {
     writeSync: (fd: number, bytes: Buffer): number => {
       if (fd !== 7) throw new Error("unexpected descriptor");
       state.writes += 1;
+      const fault = state.writeFaults.shift();
+      if (fault !== undefined) {
+        state.clock += state.writeStepMs;
+        throw Object.assign(new Error(), { code: fault });
+      }
       state.requests.push(Buffer.from(bytes));
       return bytes.length;
     },
@@ -85,6 +100,11 @@ beforeEach(async () => {
   state.namespaceReads = 0;
   state.stats = 0;
   state.mainThread = true;
+  state.readFaults = [];
+  state.writeFaults = [];
+  state.clock = 0;
+  state.readStepMs = 0;
+  state.writeStepMs = 0;
   ({ createNativeProcessScope } = await import("./native-process-scope.js"));
 });
 afterEach(() => {
@@ -93,6 +113,75 @@ afterEach(() => {
 });
 
 describe("native process coordinate consumer", () => {
+  it.each(["initial-read", "reply-read", "request-write"])(
+    "retains the selected channel after interrupted %s I/O",
+    (stage) => {
+      state.frames.push(frame(1, 4321, 5432), frame(3, 6789, 1));
+      if (stage === "initial-read") state.readFaults = ["EINTR", "EINTR"];
+      const port = createNativeProcessScope();
+      if (stage === "reply-read") state.readFaults = ["EINTR", "EINTR"];
+      if (stage === "request-write") state.writeFaults = ["EINTR", "EINTR"];
+      expect(port.probe(6789)).toBe("alive");
+      expect(port.observation?.()).toBe("ready");
+      expect(state.requests).toHaveLength(1);
+      expect(state.closes).toBe(0);
+    },
+  );
+
+  it("retains exact held-file ownership after an interrupted metadata read", () => {
+    state.frames.push(frame(1, 4321, 5432), metadataFrame(1));
+    const port = createNativeProcessScope();
+    state.readFaults = ["EINTR"];
+    expect(port.fileOwnerUid?.(9, 123n, 456n, 0o40755n)).toBe(1000n);
+    expect(port.observation?.()).toBe("ready");
+    expect(state.requests).toHaveLength(1);
+    expect(state.closes).toBe(0);
+  });
+
+  it("does not renew the initial identity grant after repeated interruptions", () => {
+    state.frames.push(frame(1, 4321, 5432));
+    state.readFaults = Array.from({ length: 10 }, () => "EINTR");
+    state.readStepMs = 2000;
+    vi.spyOn(performance, "now").mockImplementation(() => state.clock);
+    expect(() => createNativeProcessScope()).toThrow();
+    expect(state.clock).toBe(6000);
+    expect(state.reads).toBe(3);
+    expect(state.frames).toHaveLength(1);
+    expect(state.closes).toBe(1);
+    expect(() => createNativeProcessScope()).toThrow();
+    expect([state.namespaceReads, state.stats, state.reads, state.closes]).toEqual([1, 1, 3, 1]);
+  });
+
+  it.each(["read", "write"])("expires interrupted %s I/O under the original deadline", (stage) => {
+    state.frames.push(frame(1, 4321, 5432), frame(3, 6789, 1));
+    const port = createNativeProcessScope();
+    vi.spyOn(performance, "now").mockImplementation(() => state.clock);
+    state.readStepMs = 2000;
+    state.writeStepMs = 2000;
+    if (stage === "read") state.readFaults = Array.from({ length: 10 }, () => "EINTR");
+    else state.writeFaults = Array.from({ length: 10 }, () => "EINTR");
+    expect(port.probe(6789)).toBe("unknown");
+    expect(port.observation?.()).toBe("unavailable");
+    expect(state.clock).toBe(6000);
+    expect(state.frames).toHaveLength(1);
+    expect(state.requests).toHaveLength(stage === "read" ? 1 : 0);
+    const attempts = [state.reads, state.writes];
+    expect(port.probe(6789)).toBe("unknown");
+    expect([state.reads, state.writes]).toEqual(attempts);
+    expect(state.closes).toBe(1);
+  });
+
+  it.each(["EAGAIN", "EIO", "EPERM"])("never retries a non-interruption %s", (code) => {
+    state.frames.push(frame(1, 4321, 5432), frame(3, 6789, 1));
+    const port = createNativeProcessScope();
+    state.readFaults = [code];
+    expect(port.probe(6789)).toBe("unknown");
+    expect(port.observation?.()).toBe("unavailable");
+    expect(state.reads).toBe(2);
+    expect(state.frames).toHaveLength(1);
+    expect(state.closes).toBe(1);
+  });
+
   it("refuses Worker initialization before observing or touching the shared descriptor", () => {
     state.mainThread = false;
     state.frames.push(frame(1, 4321, 5432));

@@ -1945,3 +1945,48 @@ generation attempt remain retained separately from final checks. Checkpoint71 me
 `document-name-intake.json` binds the repaired owners and scoped evidence. New live post-repair
 source-witness, generation, executable-test and skill comparisons remain pending; the original frozen
 campaign is neither overwritten nor accepted. Wider functional acceptance and delivery stay open.
+
+## Checkpoint 73 — preserve answers, interrupted observations and canvas controls
+
+The post72 live Java campaign admitted all 13 nonempty README witness lines without changing the
+compact skill, question or grants. Its first skill output passes 11 tests on the correct application
+and detects all six independent mutations. The following no-skill control completes at the gateway
+but fails in UiStore persistence; its draft survives and no generated test receives execution credit.
+The campaign stops after two of twelve declared runs. It is not a completed skill comparison.
+
+A free-text redactor could consume escaped quotes in serialized answer JSON. Persistence now uses
+the existing recursive string-leaf redactor before serialization, retaining both retrieval-activity
+validations. Three final quoted-assignment controls fail on the exact signed parent owner. All 53
+store tests pass after repair, including create, attach, reload, database reopen, unmodified input,
+metadata preservation and absence of the unambiguous assigned fixture value on disk. The lost live
+provider answer cannot be replayed byte for byte; the causal regression establishes the failing
+owner and input class. Original setup and developer-fixture failures remain retained.
+
+Actual AMD64 diagnostics identify EINTR while observing held-file ownership. Interrupted packet
+reads and writes now retain their original monotonic grant and the same channel; expiry and other
+errors still retire it. Six interruption controls fail before repair alongside three passing refusal
+controls; all 60 final consumer tests pass. The one-shot decoder, exact tuple, late-response and
+non-interruption refusals remain intact. The existing Node Worker is explicitly named NodeWorker
+to prevent Vite from treating it as a browser Worker; both previously blocked UI suites now execute.
+A fresh complete, uninstrumented AMD64 qualification remains pending.
+
+A real browser also reproduces ordinary windows intercepting the canvas new-window control. One
+prefixed CSS Module keeps new-window and zoom controls above the scene, preserving fullscreen
+hiding and the existing style exception inventory. The regression fails before repair and passes
+after normal hit testing/clicks. The complete browser surface suite passes 8 tests with its explicitly
+owned readable initial project. Its retained first full run passes 7 and fails the zero-console-error
+check on editor-settings reads from an excluded default checkout; no path policy or assertion is
+weakened. Palette opening uses the existing content-free client diagnostic writer.
+
+The final affected run passes 3,521 tests in 187 files with one existing skip. The full UI coverage
+run passes 10,857 tests in 563 files with one existing skip. Typing, root/UI lint, all seven Activity
+Log/architecture checks, context/retrieval/grounded/faithfulness, editor evidence, E2E wiring, ADR and
+actual Sonar pass on unchanged source. The original failing runs remain separate from these checks.
+The three linked records bind each causal scope and its limits:
+
+- [`quoted-answer-persistence.json`](quoted-answer-persistence.json)
+- [`native-process-scope-interruption.json`](native-process-scope-interruption.json)
+- [`workspace-controls-hit-testing.json`](workspace-controls-hit-testing.json)
+
+No skill, historical-corpus, installed-update, SSD, full browser, overall acceptance or merge
+clearance is inferred from this checkpoint. The acceptance ledger remains unchanged.

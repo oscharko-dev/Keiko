@@ -28,10 +28,29 @@ function packet(kind: number, pid: number): Buffer {
   return bytes;
 }
 
+function interruptedIo(deadline: number, action: () => number): number {
+  for (;;) {
+    if (performance.now() >= deadline) throw new Error("native process scope I/O deadline expired");
+    try {
+      return action();
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "EINTR"
+      )
+        throw error;
+    }
+  }
+}
+
 function response(kind: number, deadline: number, payloadBytes = 8): Buffer {
   const expected = 12 + payloadBytes;
   const bytes = Buffer.alloc(expected + 1);
-  const size = readSync(PROCESS_SCOPE_DESCRIPTOR, bytes, 0, bytes.length, null);
+  const size = interruptedIo(deadline, () =>
+    readSync(PROCESS_SCOPE_DESCRIPTOR, bytes, 0, bytes.length, null),
+  );
   if (
     performance.now() >= deadline ||
     size !== expected ||
@@ -71,7 +90,8 @@ function exchange(
   const deadline = performance.now() + PROCESS_SCOPE_BOUND_MS;
   try {
     if (
-      writeSync(PROCESS_SCOPE_DESCRIPTOR, request) !== request.length ||
+      interruptedIo(deadline, () => writeSync(PROCESS_SCOPE_DESCRIPTOR, request)) !==
+        request.length ||
       performance.now() >= deadline
     )
       throw new Error("native process scope request refused");

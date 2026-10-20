@@ -2,7 +2,7 @@ import {
   createProcessScopeWorkerBridge,
   type ProcessScopeWorkerBridge,
 } from "@oscharko-dev/keiko-security/process-scope-worker";
-import { Worker } from "node:worker_threads";
+import { Worker as NodeWorker } from "node:worker_threads";
 import {
   SUPPORT_REPORT_WORKER_TIMEOUT_MS,
   type ActivityLogErrorKind,
@@ -61,7 +61,7 @@ export class SupportReportJobError extends Error {
 }
 
 function prepareReport(
-  worker: Worker,
+  worker: NodeWorker,
   stateDir: string,
   correlationId: string | undefined,
   onCreated: ((record: SupportIncidentRecord) => void) | undefined,
@@ -80,7 +80,7 @@ function prepareReport(
 }
 
 function reportMessageHandler(
-  worker: Worker,
+  worker: NodeWorker,
   stateDir: string,
   correlationId: string | undefined,
   resolve: (report: DesktopSupportReportResponse) => void,
@@ -117,7 +117,7 @@ function reportMessageHandler(
 let running = false;
 
 async function awaitReport(
-  worker: Worker,
+  worker: NodeWorker,
   stateDir: string,
   correlationId: string | undefined,
   signal?: AbortSignal,
@@ -162,7 +162,7 @@ async function awaitReport(
 }
 
 interface OwnedReportWorker {
-  readonly worker: Worker;
+  readonly worker: NodeWorker;
   readonly scope: ProcessScopeWorkerBridge | undefined;
 }
 
@@ -226,7 +226,7 @@ async function releaseReportJob(
 function startReportWorker(stateDir: string, correlationId: string | undefined): OwnedReportWorker {
   const scope = createProcessScopeWorkerBridge();
   try {
-    const worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
+    const worker = new NodeWorker(new URL("./support-report-worker.js", import.meta.url), {
       workerData: {
         stateDir,
         correlationId,
