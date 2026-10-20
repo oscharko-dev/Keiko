@@ -308,6 +308,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "support-public-raw-metadata-source",
       "voice-control-structural-validation",
       "voice-recap-version-audit-validator",
+      "coding-repository-request-capture-validator",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
