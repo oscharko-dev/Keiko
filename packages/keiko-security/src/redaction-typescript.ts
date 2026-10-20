@@ -198,7 +198,7 @@ export function projectTypeScriptData(
     : typescriptSource(text, ports);
   const literals: ObservedLiteral[] = [];
   const spans: RedactionSpan[] = [];
-  const privateValues = new Set<string>();
+  const privateValues = ports.privateLiteralValues ?? new Set<string>();
   const pending: { node: Ts.Node; sensitive: boolean }[] = [{ node: file, sensitive: false }];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -277,7 +277,11 @@ function typescriptSource(text: string, ports: ProjectionPorts): Ts.SourceFile {
   if (jsx.valid) return jsx.file;
   const plain = syntaxSource(text, ts.ScriptKind.TS);
   const result = plain.valid || plain.firstError >= jsx.firstError ? plain : jsx;
-  if (!result.valid && result.firstError < text.length && unsafeMalformedSource(text, ports))
+  if (
+    !result.valid &&
+    (ports.completeSource === true ||
+      (result.firstError < text.length && unsafeMalformedSource(text, ports)))
+  )
     throw new TypeScriptSyntaxRefusal();
   return result.file;
 }
@@ -300,11 +304,51 @@ export function isJsonDocument(text: string): boolean {
   return syntaxSource(text, typescriptApi().ScriptKind.JSON).valid;
 }
 
+/** Native lexical boundaries identify a scalar followed by JSON structure. Numbered prose and
+ * complete scalar lines stay ordinary text; a comma retains an unresolved JSON continuation. */
+export function mayStartJsonScalar(text: string): boolean {
+  if (!/^\s*(?:true\b|false\b|null\b|["\d-])/u.test(text)) return false;
+  const ts = typescriptApi();
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
+  let token = scanner.scan();
+  if (token === ts.SyntaxKind.MinusToken) token = scanner.scan();
+  if (!jsonScalarToken(token)) return false;
+  const end = scanner.getTokenEnd();
+  const next = scanner.scan();
+  if (next === ts.SyntaxKind.CommaToken) return jsonContinuation(scanner.scan());
+  return (
+    (next === ts.SyntaxKind.OpenBraceToken || next === ts.SyntaxKind.OpenBracketToken) &&
+    !/[\r\n]/u.test(text.slice(end, scanner.getTokenStart()))
+  );
+}
+
+function jsonContinuation(token: Ts.SyntaxKind): boolean {
+  const ts = typescriptApi();
+  return (
+    token === ts.SyntaxKind.EndOfFileToken ||
+    token === ts.SyntaxKind.OpenBraceToken ||
+    token === ts.SyntaxKind.OpenBracketToken ||
+    token === ts.SyntaxKind.MinusToken ||
+    jsonScalarToken(token)
+  );
+}
+
+function jsonScalarToken(token: Ts.SyntaxKind): boolean {
+  const ts = typescriptApi();
+  return (
+    token === ts.SyntaxKind.StringLiteral ||
+    token === ts.SyntaxKind.NumericLiteral ||
+    token === ts.SyntaxKind.TrueKeyword ||
+    token === ts.SyntaxKind.FalseKeyword ||
+    token === ts.SyntaxKind.NullKeyword
+  );
+}
+
 /** Missing EOF syntax may be appended to an admitted prefix; an earlier lexical error may
  * already have detached a private value's tail from its owner and must remain unavailable. */
-export function isJsonSourcePrefix(text: string): boolean {
+export function isJsonSourcePrefix(text: string, complete = false): boolean {
   const result = syntaxSource(text, typescriptApi().ScriptKind.JSON);
-  return result.valid || result.firstError === text.length;
+  return result.valid || (!complete && result.firstError === text.length);
 }
 
 /** Full syntax and a declaration certify bare source; labels/env assignments remain plain text. */

@@ -415,17 +415,39 @@ function yamlScalarSpans(
       .map(([node]) => (yamlApi().isScalar(node) ? String(node.value) : "")),
   );
   const keys = yamlKeyNodes(nodes);
+  recordPrivateYamlValues(nodes, ports);
   const spans: RedactionSpan[] = [];
   for (const [node, sensitive] of nodes) {
     if (!yamlApi().isScalar(node)) continue;
     const value = String(node.value);
     const safe =
-      sensitive || (!keys.has(node) && values.has(value))
+      sensitive || (!keys.has(node) && knownYamlValue(node, values, ports))
         ? REDACTION_PLACEHOLDER
         : ports.redactPlain(value);
     if (safe !== value) spans.push(scalarSpan(text, node, safe, plain));
   }
   return spans;
+}
+
+function recordPrivateYamlValues(nodes: ReadonlyMap<Node, boolean>, ports: ProjectionPorts): void {
+  for (const [node, sensitive] of nodes)
+    if (sensitive && yamlApi().isScalar(node))
+      ports.privateLiteralValues?.add(sharedYamlLiteralKey(node));
+}
+
+function knownYamlValue(
+  node: Scalar,
+  values: ReadonlySet<string>,
+  ports: ProjectionPorts,
+): boolean {
+  return (
+    values.has(String(node.value)) ||
+    ports.privateLiteralValues?.has(sharedYamlLiteralKey(node)) === true
+  );
+}
+
+function sharedYamlLiteralKey(node: Scalar): string {
+  return `${typeof node.value}:${String(node.value)}`;
 }
 
 function canonicalPlaceholder(text: string, node: Node): boolean {

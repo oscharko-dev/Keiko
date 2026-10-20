@@ -4,6 +4,7 @@ import {
   completeCodePrefix,
   mayEndCodeFence,
   standaloneSourceStart,
+  completedMarkdownLabel,
   type OpenCodeFence,
 } from "./redaction-code.js";
 
@@ -133,7 +134,9 @@ class BlockRedactor implements StreamingRedactor {
     const start = standaloneSourceStart(
       pending,
       code.end,
-      (line) => !yamlPublicationNeedsContext(line) && this.redactText(line) === line,
+      (line) =>
+        (completedMarkdownLabel(line) || !yamlPublicationNeedsContext(line)) &&
+        this.redactText(line) === line,
     );
     this.waitingForTerminal ||= context.retainUntilTerminal || start < code.end;
     return start;

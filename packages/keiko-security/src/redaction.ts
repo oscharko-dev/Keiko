@@ -22,7 +22,7 @@ import {
 } from "./redaction-code.js";
 
 import { REDACTION_PLACEHOLDER as REDACTED } from "./redaction-source-map.js";
-export const CODE_REDACTION_REVISION = 7;
+export const CODE_REDACTION_REVISION = 8;
 /** The exact text `redact` substitutes for a secret. Exported so a consumer that must recognise a
  * scrubbed value in otherwise structured output (a host path in a test runner's stack frame,
  * #3390) matches this one constant instead of restating it. */
@@ -78,12 +78,13 @@ const NORMALIZED_SECRET_KEY_NAMES: ReadonlySet<string> = new Set([
   "connectionstring",
   "credential",
 ]);
+const SECRET_FIELD_LABEL = String.raw`(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)["']?[*_]*\s*`;
 const SECRET_KEY_VALUE_PATTERN = new RegExp(
-  String.raw`(?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)["']?\s*[:=]\s*`,
+  String.raw`(?<![A-Za-z0-9])${SECRET_FIELD_LABEL}[:=][*_]*\s*`,
   "gi",
 );
 const PENDING_CREDENTIAL_CONTEXT = new RegExp(
-  String.raw`(?<![A-Za-z0-9])(?:(?:Bearer|Basic)\s*|(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)["']?\s*(?:[:=]\s*["']?)?)$`,
+  String.raw`(?<![A-Za-z0-9])(?:(?:Bearer|Basic)\s*|${SECRET_FIELD_LABEL}(?:[:=][*_]*\s*["']?)?)$`,
   "iu",
 );
 

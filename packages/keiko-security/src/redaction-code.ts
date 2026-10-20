@@ -11,6 +11,7 @@ import {
   REDACTION_PLACEHOLDER,
   projectSourceText,
   type SourceTextEdit,
+  type SourceTextProjection,
 } from "./redaction-source-map.js";
 import { privateKeyParserSource } from "./redaction-private-key.js";
 import { projectJavaData, isJavaSource, JavaSyntaxRefusal } from "./redaction-java.js";
@@ -18,6 +19,7 @@ import {
   projectTypeScriptData,
   isJsonDocument,
   isJsonSourcePrefix,
+  mayStartJsonScalar,
   isTypeScriptSource,
   typeScriptPrefixLength,
   maskedLiteralBody,
@@ -27,8 +29,10 @@ import {
 } from "./redaction-typescript.js";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { projectUnifiedDiff, firstUnifiedDiffHeader } from "./redaction-diff.js";
 
 export type SourceRedactionLanguage = "typescript" | "javascript" | "java" | "json" | "yaml";
+type ProjectionLanguage = SourceRedactionLanguage | "unified-diff";
 
 export interface RedactionSpan {
   readonly start: number;
@@ -54,12 +58,15 @@ export interface ProjectionPorts {
   readonly mayContainSensitiveName: (text: string) => boolean;
   readonly redactPlain: (text: string) => string;
   readonly publicPrefix: (text: string) => boolean;
+  readonly completeSource?: boolean;
+  readonly privateLiteralValues?: Set<string>;
+  readonly inferUnifiedDiff?: boolean;
 }
 
 interface CodeRegion {
   readonly start: number;
   readonly end: number;
-  readonly language: SourceRedactionLanguage | undefined;
+  readonly language: ProjectionLanguage | undefined;
   readonly fence: string;
   readonly quoteDepth: number;
   readonly closed: boolean;
@@ -68,7 +75,7 @@ interface CodeRegion {
 }
 
 interface InferredSourcePrefix {
-  readonly language: SourceRedactionLanguage | undefined;
+  readonly language: ProjectionLanguage | undefined;
   readonly end: number;
   readonly refusal?: "syntax" | "depth";
   readonly yamlDocument?: Document;
@@ -93,7 +100,8 @@ function inferredRegion(prefix: InferredSourcePrefix, start: number): CodeRegion
   };
 }
 
-function fenceLanguage(value: string): SourceRedactionLanguage | undefined {
+function fenceLanguage(value: string): ProjectionLanguage | undefined {
+  if (/^(?:diff|patch)$/iu.test(value)) return "unified-diff";
   if (/^(?:ts|tsx|typescript)$/iu.test(value)) return "typescript";
   if (/^(?:js|jsx|javascript|mjs|cjs)$/iu.test(value)) return "javascript";
   if (value.toLowerCase() === "json") return "json";
@@ -378,11 +386,26 @@ export function projectCodeRedaction(
 ): CodeRedactionProjection {
   const parserSource = privateKeyParserSource(text);
   const regions = codeRegions(parserSource, sourceLanguage, ports, inferSourceLanguage);
+  const owned: { start: number; end: number }[] = [];
   const literals: RedactionSpan[] = [];
   const report = { regions: regions.length, depthRefusals: 0, sizeRefusals: 0, syntaxRefusals: 0 };
   for (const region of regions) {
     const body = text.slice(region.start, region.end);
     const source = quotedSource(parserSource.slice(region.start, region.end), region.quoteDepth);
+    if (region.language === "unified-diff") {
+      const diff = projectUnifiedDiff(source.text, ports, projectCodeRedaction);
+      for (const range of diff.regions)
+        owned.push({
+          start: region.start + source.rawOffset(range.start),
+          end: region.start + source.rawOffset(range.end),
+        });
+      literals.push(...mappedRegionSpans(body, region, source, diff.literals));
+      report.depthRefusals += diff.report.depthRefusals;
+      report.sizeRefusals += diff.report.sizeRefusals;
+      report.syntaxRefusals += diff.report.syntaxRefusals;
+      continue;
+    }
+    owned.push(region);
     const projection =
       region.refusal === undefined
         ? boundedProjection(
@@ -393,26 +416,34 @@ export function projectCodeRedaction(
             region.yamlDocument,
           )
         : refusedProjection(source.text, report, region.refusal);
-    literals.push(
-      ...projection.map((span) => {
-        const start = source.rawOffset(span.start);
-        const end = source.rawOffset(span.end);
-        return {
-          start: start + region.start,
-          end: end + region.start,
-          replacement:
-            region.quoteDepth > 0 && /[\r\n]/u.test(span.replacement)
-              ? quotedMask(
-                  body.slice(start, end),
-                  region.quoteDepth,
-                  span.replacement.replace(/\r\n|\r|\n/gu, ""),
-                )
-              : span.replacement,
-        };
-      }),
-    );
+    literals.push(...mappedRegionSpans(body, region, source, projection));
   }
-  return { regions, literals, report };
+  owned.sort((a, b) => a.start - b.start);
+  return { regions: owned, literals, report };
+}
+
+function mappedRegionSpans(
+  body: string,
+  region: CodeRegion,
+  source: SourceTextProjection,
+  projection: readonly RedactionSpan[],
+): readonly RedactionSpan[] {
+  return projection.map((span) => {
+    const start = source.rawOffset(span.start);
+    const end = source.rawOffset(span.end);
+    return {
+      start: start + region.start,
+      end: end + region.start,
+      replacement:
+        region.quoteDepth > 0 && /[\r\n]/u.test(span.replacement)
+          ? quotedMask(
+              body.slice(start, end),
+              region.quoteDepth,
+              span.replacement.replace(/\r\n|\r|\n/gu, ""),
+            )
+          : span.replacement,
+    };
+  });
 }
 
 function boundedProjection(
@@ -460,7 +491,7 @@ function languageProjection(
   report: { depthRefusals: number; syntaxRefusals: number },
   yamlDocument?: Document,
 ): readonly RedactionSpan[] {
-  if (language === "json" && !isJsonSourcePrefix(body))
+  if (language === "json" && !isJsonSourcePrefix(body, ports.completeSource))
     return nonJsonSourceProjection(body, ports, report);
   if (language === "java") return javaProjection(body, ports);
   if (language === "yaml") return projectYamlData(body, ports, yamlDocument);
@@ -484,11 +515,27 @@ export function mayStartStandaloneSource(text: string): boolean {
   const body = text.trimStart();
   if (body.slice(0, lineAfter(body, 0, body.length)).trimEnd() === REDACTION_PLACEHOLDER)
     return false;
-  return mayStartYaml(body) || mayStartTypedSource(body);
+  return (
+    body.startsWith("--- ") ||
+    mayStartUnifiedDiff(body) ||
+    mayStartMarkedSource(body) ||
+    mayStartYaml(body) ||
+    mayStartTypedSource(body)
+  );
+}
+
+function mayStartMarkedSource(body: string): boolean {
+  const marker = /^[+-]+[ \t]*/u.exec(body);
+  return marker !== null && mayStartTypedSource(body.slice(marker[0].length));
+}
+
+function mayStartUnifiedDiff(text: string): boolean {
+  return /^(?:diff --(?:git|cc) |--- [^\r\n]*\r?\n(?:\+\+\+ |@@)|@@)/u.test(text);
 }
 
 function mayStartTypedSource(body: string): boolean {
   return (
+    mayStartJsonScalar(body) ||
     /^(?:\/[/*]|[{[@])/u.test(body) ||
     /^(?:export|import|declare|async|function|interface|type|const|let|var|class|enum|record|public|private|protected|abstract|final|static)\b/u.test(
       body,
@@ -535,19 +582,79 @@ function inferredPrefix(
 ): InferredSourcePrefix | undefined {
   if (!mayStartStandaloneSource(text)) return undefined;
   if (sourceExceedsSize(text, withinSize)) return { language: "typescript", end: text.length };
+  const lineEnd = lineAfter(text, 0, text.length);
+  const line = text.slice(0, lineEnd);
+  if (publicMarkdownLabel(line, ports)) return { language: undefined, end: lineEnd };
   try {
-    if (mayStartYaml(text)) return inferredYamlPrefix(text, ports);
-    const language = inferredLanguage(text);
-    if (language !== undefined) return { language, end: text.length };
-    const end = typeScriptPrefixLength(text);
-    if (end > 0) return { language: "typescript", end };
-    return hasSourceDeclaration(text)
-      ? { language: "typescript", end: text.length, refusal: "syntax" }
-      : undefined;
+    return classifiedSourcePrefix(text, ports);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
     return { language: "typescript", end: text.length, refusal: "depth" };
   }
+}
+
+function classifiedSourcePrefix(
+  text: string,
+  ports: ProjectionPorts,
+): InferredSourcePrefix | undefined {
+  const marked = markedSourcePrefix(text, ports);
+  if (marked !== undefined) return marked;
+  if (ports.inferUnifiedDiff !== false && mayStartUnifiedDiff(text))
+    return { language: "unified-diff", end: text.length };
+  return mayStartYaml(text) ? inferredYamlPrefix(text, ports) : inferredTypedPrefix(text);
+}
+
+function markedSourcePrefix(
+  text: string,
+  ports: ProjectionPorts,
+): InferredSourcePrefix | undefined {
+  if (!mayStartMarkedSource(text)) return undefined;
+  const end = firstUnifiedDiffHeader(text);
+  if (end === 0) return undefined;
+  return unsafeMalformedSource(text.slice(0, end), ports)
+    ? { language: "typescript", end, refusal: "syntax" }
+    : { language: undefined, end };
+}
+
+function inferredTypedPrefix(text: string): InferredSourcePrefix | undefined {
+  const language = inferredLanguage(text);
+  if (language !== undefined) return { language, end: text.length };
+  const end = typeScriptPrefixLength(text);
+  if (end > 0) return { language: "typescript", end };
+  return hasSourceDeclaration(text)
+    ? { language: "typescript", end: text.length, refusal: "syntax" }
+    : undefined;
+}
+
+/** Both whole text and stream publication apply strict redaction before releasing a prose label.
+ * Structured values, quotes and escapes still retain the full native-parser context. */
+export function completedMarkdownLabel(line: string): boolean {
+  if (!line.endsWith("\n")) return false;
+  const body = markdownPresentationLine(line);
+  const opening = /^(?:\*{1,3}|_{1,3})/u.exec(body)?.[0];
+  if (opening === undefined) return false;
+  const colon = body.indexOf(":");
+  if (colon < 0) return false;
+  const label = body.slice(opening.length, colon);
+  const closing = body.slice(colon + 1);
+  const prose = closing.slice(opening.length);
+  return (
+    /^[\p{L}\p{N} ._-]+$/u.test(label) &&
+    closing.startsWith(opening) &&
+    /^[ \t]/u.test(prose) &&
+    /^[\p{L}\p{M}\p{N} _.,!?;-]+$/u.test(prose.trim())
+  );
+}
+
+function markdownPresentationLine(line: string): string {
+  return line
+    .trim()
+    .replace(/^(?:>[ \t]*)+/u, "")
+    .replace(/^[-+*][ \t]+/u, "");
+}
+
+function publicMarkdownLabel(line: string, ports: ProjectionPorts): boolean {
+  return completedMarkdownLabel(line) && ports.redactPlain(line) === line;
 }
 
 function sourceExceedsSize(text: string, withinSize: boolean): boolean {
@@ -612,7 +719,7 @@ function isSyntaxFreeProse(text: string): boolean {
 }
 
 function inferredDocumentLanguage(text: string): "json" | "yaml" | undefined {
-  if (isJsonDocument(text) || /^\s*\{\s*"/u.test(text)) return "json";
+  if (isJsonDocument(text) || mayStartJsonScalar(text) || /^\s*\{\s*"/u.test(text)) return "json";
   return undefined;
 }
 

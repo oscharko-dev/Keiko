@@ -101,7 +101,8 @@ This shapes the product _and_ how you work on it:
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
-  use parsed value boundaries. Streaming retains unresolved credential/source context until it can
+  use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
+  leaf and separate native old/new images; unsupported fragments fail closed. Streaming retains unresolved credential/source context until it can
   publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
   not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own

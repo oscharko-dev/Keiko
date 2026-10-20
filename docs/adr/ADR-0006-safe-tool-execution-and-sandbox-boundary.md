@@ -307,11 +307,17 @@ contains no validation logic — because validation belongs to the caller, not t
 
 ### D4 — Patch validation rules, dry-run-never-writes, and fail-closed atomic apply
 
-**Supported subset.** `parseUnifiedDiff` (`src/tools/patch-parse.ts:193`) handles standard unified
+**Supported subset.** `parseUnifiedDiff` handles standard unified
 diffs: `--- a/<path>` / `+++ b/<path>` headers, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
 file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). This is not git-apply: no rename
 detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).
+
+The pure parser lives in `keiko-contracts/runtime/unified-diff`; the existing tools module re-exports
+the same function and error constructor. Its default return shape and accepted grammar are unchanged.
+An optional observer publishes exact UTF-16 header/body ranges only after the entire parse succeeds.
+Incomplete/header-only files and ignored preamble, gaps or tails gain no ownership. Security uses
+these observations for source privacy; there is no second diff grammar or new patch authority.
 
 The `\ No newline at end of file` marker is kept on the body line it annotates and applied as Git
 reads it (#3873): a marked line is the file's last line without a line break, an unmarked line has

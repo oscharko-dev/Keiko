@@ -814,8 +814,8 @@ unterminated private-key body, so eligible large text does not trigger repeated 
 Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
 delimiters without retaining its body or columns. Facts between separate secret blocks therefore
 keep their physical source lines in lexical matches, numbered model context, and source navigation.
-Source redaction now uses the shared security projection for TypeScript/JavaScript, Java, JSON/JSONC
-and YAML. Credential assignments mask literal values while preserving syntax metadata and physical
+Source redaction now uses the shared security projection for TypeScript/JavaScript, Java, JSON/JSONC,
+YAML and the existing ordinary two-sided unified-diff subset. Credential assignments mask literal values while preserving syntax metadata and physical
 line delimiters. Java ownership follows its CST after JLS Unicode translation; parsed YAML aliases
 receive their final monotonic sensitivity before one scalar span is emitted. Known issuer patterns,
 private keys and configured secret literals remain unconditional. Malformed inferred code, parser
@@ -875,10 +875,22 @@ Malformed YAML-shaped public prose is not private merely because it discusses sa
 scalar/alias key graph and unresolved escapes retain the refusal decision; unresolved alias and
 explicit complex-key starts enter that same parser. Ordinary public instructions remain under strict
 text redaction without a source exemption, including configured secrets and recognized patterns.
-Index snapshot version 15 invalidates previously projected
-text even when source bytes and stat metadata are unchanged. The existing body-free projection
-revision 7 records this change without logging source content. Intermediate unpublished versions 13
-and 14 also remain ineligible after the JSON-ownership and public-metadata corrections.
+Unified-diff privacy reuses the tools parser's accepted source ranges at the contracts leaf. Native
+source owners inspect separate old/new images; only coordinate-contiguous hunks share source syntax.
+Known private literal identities propagate within the complete patch using a temporary set and one
+bounded second projection, without inventing bindings across gaps. Replacements map back per physical
+line, preserving diff prefixes, LF/CRLF, UTF-16 positions and no-final-newline annotations. Headers,
+function context, preamble and tails retain strict protection. Unsupported or incomplete private
+fragments, parser exhaustion and the existing size ceiling fail closed. Public supported patches
+remain byte-exact; this adds neither combined-diff support nor execution authority.
+Markdown credential labels use the same emphasis-aware field grammar for terminal value spans and
+pending streaming context, including nested emphasis. Completed public prose labels pass the same
+strict check in whole-text inference and publication; YAML anchor/alias grammar remains unchanged.
+Native JSON lexical boundaries retain malformed scalar continuations with structured values, while
+ordinary numbered/quoted prose receives no JSON exemption or refusal solely for naming a field.
+Index snapshot version 16 invalidates previously projected text even when source bytes and stat
+metadata are unchanged. The existing body-free projection revision 8 records this change without
+logging source content. Earlier versions, including 15, remain ineligible after the privacy repair.
 Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
 once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
 body. Classification, privacy and source-size grants stay unchanged. This scan first shipped in

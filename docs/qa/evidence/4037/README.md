@@ -1,5 +1,32 @@
 # Chat/Files qualification observations
 
+## Checkpoint 84: preserve patches and close formatted credential boundaries
+
+The shared source projection reuses the canonical unified-diff parser at the contracts leaf;
+tools retain the same parser/error identity. Separate native old/new images and physical-line
+replacement mapping preserve public patches without exempting private values, ignored material or
+unsupported fragments. A temporary complete-patch value scope includes nested patches, with only
+its owner performing one bounded second pass. Terminal and streaming credential labels share one
+emphasis-aware grammar. Public label progress uses small linear checks, and native scalar-JSON
+continuation hints preserve the qualified ordinary prose controls. Projection revision 8 and index
+version 16 invalidate old projected text without changing source files or their stat metadata.
+
+The final broad run passes 4,234 tests with no failures and three existing Windows-only skips.
+Affected redaction coverage is 97.13% lines and 88.03% branches. Strict typing, affected lint,
+format, full Activity Log/architecture controls, retrieval/grounding/faithfulness/context,
+observability, ADR index, actual Sonar and a clean assembled package pass. The fixed 24 logical
+patch cases / 144 presentation variants are retained as hermetic regression tests. Original
+CLI/workflow consumers remain unchanged. Independent compiled-runtime controls confirm privacy,
+public/stream consistency, actual workspace reads and rejection/rebuild of retained encrypted
+version-15 data as version 16; all three public search witnesses remain available.
+
+Failure-first and intermediate failed verification receipts remain recorded. The 29-case YAML
+comparison preserves three malformed/unknown alias probes without claiming resolved private keys
+or a blanket 29/29 privacy result. No new model/UI benefit is claimed here. Remaining delivery,
+native/browser/model acceptance, final exact-head checks/reviews and verified integration stay open.
+
+[`source-diff-and-markdown-privacy.json`](source-diff-and-markdown-privacy.json) binds these results.
+
 ## Checkpoint 83: admit structural work within the remaining grant
 
 An oversized structural batch previously charged an unexecuted reservation, preventing source

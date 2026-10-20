@@ -249,11 +249,14 @@ function javaLiteralSpans(
   ports: ProjectionPorts,
 ): RedactionSpan[] {
   const values = new Set(literals.filter((literal) => literal.sensitive).map(javaLiteralKey));
+  for (const literal of literals)
+    if (literal.sensitive) ports.privateLiteralValues?.add(sharedJavaLiteralKey(literal));
   return literals
     .filter(
       (literal) =>
         literal.sensitive ||
         values.has(javaLiteralKey(literal)) ||
+        ports.privateLiteralValues?.has(sharedJavaLiteralKey(literal)) === true ||
         ports.redactPlain(literal.value) !== literal.value,
     )
     .map((literal) => javaMask(source, input, literal.data));
@@ -261,6 +264,10 @@ function javaLiteralSpans(
 
 function javaLiteralKey(literal: ObservedJavaLiteral): string {
   return `${literal.data.kind}:${literal.value}`;
+}
+
+function sharedJavaLiteralKey(literal: ObservedJavaLiteral): string {
+  return literal.data.kind === "text-block" ? `string:${literal.value}` : javaLiteralKey(literal);
 }
 
 /** Java CST owns declarator/assignment boundaries; source is never compiled or executed here. */
