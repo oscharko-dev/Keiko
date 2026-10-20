@@ -256,7 +256,7 @@ async function admissionCutpoint(command, launcher, helper, hash) {
 try {
   const launcher = await compile("launcher", "../../portable-launcher/keiko-portable-launcher.c");
   const helper = await compile("supervisor", "./keiko_runtime_supervisor.c");
-  const root = await compile("root", "./process_scope_root_fixture.c");
+  const root = await compile("root", "./app_control_root_fixture.c");
   const hash = createHash("sha256")
     .update(await readFile(helper))
     .digest("hex");

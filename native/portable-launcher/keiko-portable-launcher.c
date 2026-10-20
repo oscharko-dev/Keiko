@@ -553,6 +553,21 @@ static int resume_update(keiko_coordinator_context *coordinator, const char *exe
   char app_root[PATH_MAX];
   char node[PATH_MAX];
   char cli[PATH_MAX];
+  const char *runtime_owner = NULL;
+#if defined(__linux__)
+  const char *selected_launch = getenv("KEIKO_UI_LAUNCH_ID");
+  if (selected_launch != NULL) {
+    int metadata_type, control_type;
+    socklen_t metadata_length = sizeof(metadata_type), control_length = sizeof(control_type);
+    if (strcmp(selected_launch, coordinator->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID
+                                                                 : KEIKO_KHP_NEW_LAUNCH_ID]) != 0 ||
+        getsockopt(7, SOL_SOCKET, SO_TYPE, &metadata_type, &metadata_length) != 0 ||
+        metadata_type != SOCK_SEQPACKET ||
+        getsockopt(8, SOL_SOCKET, SO_TYPE, &control_type, &control_length) != 0 ||
+        control_type != SOCK_STREAM) return 1;
+    runtime_owner = "--runtime-owner";
+  }
+#endif
   if (!portable_root(app_root, sizeof(app_root), executable) ||
 #if defined(__APPLE__)
       !join_path(node, sizeof(node), app_root, "/Contents/Resources/runtime/node/bin/node") ||
@@ -566,6 +581,7 @@ static int resume_update(keiko_coordinator_context *coordinator, const char *exe
         coordinator->plan.field[KEIKO_KHP_OLD_PORT], "--launch-id",
         coordinator->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID
                                           : KEIKO_KHP_NEW_LAUNCH_ID],
+        runtime_owner,
         (char *)NULL);
   return 1;
 }

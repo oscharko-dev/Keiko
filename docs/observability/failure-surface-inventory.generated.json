@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "137c56a01df7138214addbce1b0ba8ddc65468c9adbf7d257c596da6803464f1"
+    "catalogDigest": "8db3c18ec2590607a25356b451fe74ece782987945dd2a1338853c75673359ed"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 551,
-    "proofCount": 564,
-    "resolvedProofCount": 564,
+    "operationCount": 552,
+    "proofCount": 565,
+    "resolvedProofCount": 565,
     "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -710,6 +710,7 @@
         "update.install-mode.detected",
         "update.portable-asset.redirect-refused",
         "update.portable-fetch.failed",
+        "update.portable.native-control",
         "update.release-trust.verify",
         "update.remediation.lease",
         "update.runtime.event",
@@ -2664,6 +2665,9 @@
     ],
     "update.portable-fetch.failed.reason": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"
+    ],
+    "update.portable.native-control.lifetime": [
+      "packages/keiko-server/src/update-native-handoff-activity.test.ts"
     ],
     "update.release-trust.verify.status": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"

@@ -693,6 +693,55 @@ static void test_ui_identity_records(void) {
   assert(rmdir(root) == 0);
 }
 
+static void test_port_probe_matches_runtime_rebinding(void) {
+  int server = socket(AF_INET, SOCK_STREAM, 0), client = -1, accepted = -1, enabled = 1;
+  struct sockaddr_in address = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+  socklen_t length = sizeof(address);
+  keiko_coordinator_context context = {0};
+  char port[8], eof;
+  assert(server >= 0 && setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) == 0);
+  assert(bind(server, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(server, 1) == 0);
+  assert(getsockname(server, (struct sockaddr *)&address, &length) == 0);
+  assert(snprintf(port, sizeof(port), "%u", (unsigned int)ntohs(address.sin_port)) > 0);
+  context.plan.field[KEIKO_KHP_OLD_PORT] = port;
+  assert(!keiko_coordinator_port_bindable(&context));
+  client = socket(AF_INET, SOCK_STREAM, 0);
+  assert(client >= 0 && connect(client, (struct sockaddr *)&address, sizeof(address)) == 0);
+  accepted = accept(server, NULL, NULL);
+  assert(accepted >= 0 && close(accepted) == 0);
+  assert(read(client, &eof, 1) == 0 && close(client) == 0 && close(server) == 0);
+  assert(keiko_coordinator_port_bindable(&context));
+}
+
+static void test_control_write_deadline(void) {
+  int channel[2], flags, status = 0;
+  unsigned char buffer[4096] = {0};
+  assert(pipe(channel) == 0);
+  flags = fcntl(channel[1], F_GETFL);
+  assert(flags >= 0 && fcntl(channel[1], F_SETFL, flags | O_NONBLOCK) == 0);
+  while (write(channel[1], buffer, sizeof(buffer)) > 0) {}
+  assert(errno == EAGAIN || errno == EWOULDBLOCK);
+  assert(fcntl(channel[1], F_SETFL, flags) == 0);
+  pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    int result = keiko_coordinator_write_deadline(channel[1], buffer, 1u,
+                                                  keiko_tree_now_ms() + 25u);
+    _exit(result ? 1 : 0);
+  }
+  int completed = keiko_coordinator_waitpid_deadline(&child, &status, keiko_tree_now_ms() + 1000u);
+  keiko_coordinator_dispose_child(&child);
+  assert(completed && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+  assert(pipe(channel) == 0);
+  assert(!keiko_coordinator_write_deadline(channel[1], buffer, 1u, keiko_tree_now_ms()));
+  struct pollfd available = {channel[0], POLLIN, 0};
+  assert(poll(&available, 1, 0) == 0);
+  assert(keiko_coordinator_write_deadline(channel[1], buffer, 1u, keiko_tree_now_ms() + 1000u));
+  assert(read(channel[0], buffer, 1u) == 1);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+}
+
 int main(int argc, char **argv) {
   char path[64];
   if (argc == 2 && strcmp(argv[1], "--ui-identity-deadline") == 0) {
@@ -713,6 +762,8 @@ int main(int argc, char **argv) {
   assert(current_executable_path(path, 2) == 0);
 #endif
   test_ui_identity_deadline();
+  test_port_probe_matches_runtime_rebinding();
+  test_control_write_deadline();
   test_ui_identity_records();
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);

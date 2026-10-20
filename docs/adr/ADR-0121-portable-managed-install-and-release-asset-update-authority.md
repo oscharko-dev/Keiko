@@ -523,13 +523,47 @@ terminal record only after the held root terminates, its supervisor reports zero
 and that direct supervisor is positively reaped. A later CLI stop requires that native observation
 in addition to root termination. A file is never converted into a branded server reap receipt.
 Missing, partial or mismatched records and owner crashes remain held.
+
+For a managed Linux app, the same outer owner dispatches its selected update coordinator outside
+the retiring namespace. The main root uses a separate private stream (FD8); the readonly metadata
+port remains independent. Its closed, length-bounded messages select only the activation, plan
+digest, current coordinator digest, launch identity and original monotonic acceptance deadline.
+The owner authenticates each stream fragment against its held root reference. It attests the copied
+coordinator against its loaded executable, holds the direct coordinator child, and passes the held
+old-root reference and a private launch/plan-bound proof pipe. EOF cannot establish old-generation
+completion. Only the owner may publish that proof after its whole supervisor generation is reaped.
+The BFF publishes the actual coordinator PID before authorization and persists accepted intent
+before committing the transfer. Cancellation requires positive reaping of that direct child;
+delayed acceptance, commit or failure messages cannot substitute for the cancellation receipt.
+
+Application environment data follows the existing bounded KAE representation through a sealed,
+anonymous descriptor to the coordinator. It is inherited from the already admitted app generation,
+not selected by a command or pathname in the control stream. The native loader environments remain
+closed. Only the new app root receives the application values, overlaid with its new selected
+launch and state identity. The existing packet limits, original transaction deadlines and evidence
+redaction continue to apply; no provider configuration or value enters a native diagnostic.
+
+The coordinator starts a successor or restored generation through the same persistent app-owner
+role used by initial CLI launch. Startup retains its original exec deadline; provisional ownership
+is separately bounded by the transaction's original cleanup deadline. Until verified cleanup or
+verified restoration, the canonical PID record continues to name the retiring generation, whose
+whole-generation receipt remains held. This prevents a provisional successor exit from admitting
+a competing CLI start during filesystem replacement. Only after those mutations finish does the
+coordinator atomically publish the actual successor PID and request durable ownership. A positive
+commit acknowledgement releases the successor owner independently of the coordinator. Missing
+acknowledgement remains uncertainty. Socket availability uses Node's reuse semantics so TCP
+TIME_WAIT alone does not block a valid replacement; a live listener remains a refusal.
+
+These mechanisms do not substitute for installed-version, platform, interruption, restart or SSD
+qualification. In particular, a small native integration fixture is not a complete packaged Keiko
+update or an endorsement of an unexecuted platform.
 Retaining an already running native generation also requires the matching committed `owned`
 record after health, process identity and canonical PID capability checks. A healthy provisional
 root or a lost commit acknowledgement alone cannot supply that confirmation. Once a lost-ACK
 commit is durably confirmed by its owner, a later launcher may retain the same generation.
 
 These mechanisms do not by themselves admit an installed updater transition. Each update still needs
-the direct BFF-created coordinator channel, separate installed-current and running-owner identities,
+authenticated coordinator selection, separate installed-current and running-owner identities,
 successor ownership and installed-version evidence described above.
 The macOS outer-owner path also remains unqualified. No third helper artifact or Linux sandbox
 egress exception is introduced.

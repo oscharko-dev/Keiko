@@ -180,6 +180,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     surface: "runtime-packages",
   },
   { owner: "keiko-server", emitterPrefix: "update-runtime-activity", surface: "runtime-packages" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "update-native-handoff-activity",
+    surface: "runtime-packages",
+  },
   { owner: "keiko-server", emitterPrefix: "update-session", surface: "runtime-packages" },
   { owner: "keiko-server", emitterPrefix: "voice-live-dictation", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "voice-realtime", surface: "model-gateway" },

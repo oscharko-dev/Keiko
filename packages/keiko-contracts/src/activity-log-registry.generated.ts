@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "137c56a01df7138214addbce1b0ba8ddc65468c9adbf7d257c596da6803464f1" as const;
+  "8db3c18ec2590607a25356b451fe74ece782987945dd2a1338853c75673359ed" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -39619,6 +39619,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         start: [],
         state: [
           "update.install-mode.detected",
+          "update.portable.native-control",
           "update.remediation.lease",
           "update.runtime.event",
           "update.runtime.state-write",
@@ -39630,6 +39631,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "update.install-mode.detected",
+          mode: "correlation",
+        },
+        {
+          op: "update.portable.native-control",
           mode: "correlation",
         },
         {
@@ -39648,6 +39653,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lossSignals: [],
       resourceSignals: [
         "update.install-mode.detected",
+        "update.portable.native-control",
         "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.state-write",
@@ -39711,6 +39717,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["update.install-mode.detected.body-free"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "update.portable.native-control",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "nativeAuthorityMayBeLive",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["update.portable.native-control.lifetime"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42824,6 +42866,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "update.install-mode.detected": "runtime-packages",
     "update.portable-asset.redirect-refused": "runtime-packages",
     "update.portable-fetch.failed": "runtime-packages",
+    "update.portable.native-control": "runtime-packages",
     "update.release-trust.verify": "runtime-packages",
     "update.remediation.lease": "runtime-packages",
     "update.runtime.event": "runtime-packages",

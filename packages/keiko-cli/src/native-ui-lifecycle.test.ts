@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +67,53 @@ afterEach(() => {
 });
 
 describe("native UI lifecycle terminal evidence", () => {
+  it.each(["missing", "provisional", "owned"])(
+    "signals a live native root only after committed ownership: %s",
+    async (phase) => {
+      const { root, state, receipt } = fixture();
+      const publish = (value: string): void => {
+        writeFileSync(
+          receipt,
+          `keiko-ui-runtime-v1\n${String(pid)}\n${launchId}\n12345\n${value}\n`,
+          {
+            mode: 0o600,
+          },
+        );
+      };
+      if (phase !== "missing") publish(phase);
+      let clock = 0;
+      let alive = true;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const killProcess = vi.fn((): void => {
+        alive = false;
+        if (phase === "owned") publish("reaped");
+      });
+      const result = await runLifecycleCli(
+        "stop",
+        ["--state-dir", state, "--stop-timeout", "1"],
+        { out: vi.fn(), err: vi.fn() },
+        {},
+        {
+          cwd: root,
+          homedir: (): string => root,
+          platform: (): NodeJS.Platform => "linux",
+          isProcessAlive: (): boolean => alive,
+          verifyLaunchIdentity: (): boolean => true,
+          killProcess,
+          sleep: (ms: number): Promise<void> => {
+            clock += ms;
+            return Promise.resolve();
+          },
+          securityLogSink: { write: vi.fn() },
+        },
+      );
+      expect(result).toBe(phase === "owned" ? 0 : 1);
+      if (phase === "owned") expect(killProcess).toHaveBeenCalledExactlyOnceWith(pid, "SIGTERM");
+      else expect(killProcess).not.toHaveBeenCalled();
+      expect(existsSync(join(state, "ui.shutdown"))).toBe(false);
+    },
+  );
+
   it.each(["missing", "provisional", "reaped", "owned"])(
     "requires committed evidence when adopting a live native generation: %s",
     async (phase) => {

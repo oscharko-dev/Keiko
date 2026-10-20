@@ -2,10 +2,10 @@
 #define KEIKO_PORTABLE_PROCESS_SCOPE_LINUX_H
 
 /* A private app-root port of the existing generation owner, in its outer PID coordinate. */
-static int keiko_scope_socket(int descriptors[2]) {
+static int keiko_owner_socket(int descriptors[2], int type) {
   int enabled = 1;
   struct timeval bound = {.tv_sec = 5, .tv_usec = 0};
-  if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, descriptors) != 0 ||
+  if (socketpair(AF_UNIX, type | SOCK_CLOEXEC, 0, descriptors) != 0 ||
       setsockopt(descriptors[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) != 0 ||
       setsockopt(descriptors[1], SOL_SOCKET, SO_RCVTIMEO, &bound, sizeof(bound)) != 0 ||
       setsockopt(descriptors[1], SOL_SOCKET, SO_SNDTIMEO, &bound, sizeof(bound)) != 0) return 0;
@@ -14,7 +14,12 @@ static int keiko_scope_socket(int descriptors[2]) {
     if (moved < 0) return 0;
     close(descriptors[i]); descriptors[i] = moved;
   }
+  if (type == SOCK_STREAM && fcntl(descriptors[0], F_SETFL, O_NONBLOCK) != 0) return 0;
   return 1;
+}
+
+static int keiko_scope_socket(int descriptors[2]) {
+  return keiko_owner_socket(descriptors, SOCK_SEQPACKET);
 }
 
 static int keiko_scope_write(int descriptor, const unsigned char *bytes, size_t size,
@@ -33,16 +38,6 @@ static int keiko_scope_send(int descriptor, uint16_t kind, uint32_t pid, uint32_
   write_u16(bytes + 6, kind);
   write_u32(bytes + 12, pid); write_u32(bytes + 16, value);
   return keiko_scope_write(descriptor, bytes, sizeof(bytes), deadline);
-}
-
-static void keiko_scope_u64(unsigned char *bytes, uint64_t value) {
-  for (size_t i = 0; i < 8; ++i) bytes[i] = (unsigned char)(value >> (8u * i));
-}
-
-static uint64_t keiko_scope_read_u64(const unsigned char *bytes) {
-  uint64_t value = 0;
-  for (size_t i = 0; i < 8; ++i) value |= (uint64_t)bytes[i] << (8u * i);
-  return value;
 }
 
 static int keiko_scope_file_matches(const struct stat *file, const unsigned char *request) {

@@ -1835,3 +1835,36 @@ retained; the final replay is explicitly developer-owned.
 `lab-bounded-shutdown.json` binds sources and scoped receipts. This closes the lab reliability
 defect, not native installed-update transitions, UI journeys, skill benefit or final CI/reviews.
 No acceptance checkbox or frozen campaign outcome is changed.
+
+## Checkpoint 69 — native Linux coordinator and successor ownership
+
+The existing native app owner now starts the actual update coordinator outside the retiring
+generation. A fixed, bounded private protocol binds launch, activation, plan and selected coordinator.
+The server publishes the actual coordinator PID before authorization and persists acceptance before
+commit. A wrong launch cannot consume the legitimate channel. Late committed/failed responses do not
+replace positive cancellation acknowledgement, and uncertainty retains ownership.
+
+After positive old-generation reaping, the coordinator reuses the existing app-owner role for the
+replacement or restoration. The canonical PID continues to identify the old owner until the new
+owner's explicit commit. Bounded application configuration travels as private data through a sealed
+anonymous descriptor; native loader environments remain closed. Actual second-update execution
+exposed and repaired a descriptor whose close-on-exec flag survived a no-op duplication. Actual
+restoration exposed an early return before consuming an already completed owner's positive reap
+proof. Port checks now use the runtime's rebinding semantics while still refusing a live listener.
+
+Both Linux ARM64 non-root profiles pass the complete compiler/analyzer/protocol/kernel lane, two
+sequential native updates, three positively acknowledged coalesced cancellations followed by two
+updates, and failed-replacement restoration followed by another update. Whole source and compiled
+freezes contain 7,554 and 6,621 files and remain unchanged throughout these final runs. These are real
+native owners/coordinators with a tiny HTTP fixture using production handoff machinery; they are not
+assembled Keiko package, AMD64, Windows, macOS Endpoint Security or SSD acceptance.
+
+The final affected CLI/contracts/updater families pass 10,145 tests in 342 files, with three existing
+skips and no failures. Strict typing, full-inventory Activity Log checks including both architecture
+lanes, real Sonar, formatting and strict macOS C compilation/execution retain their scoped receipts.
+Full root/UI lint and the final staged-tree secret scan are recorded with publication evidence.
+Original red controls and development failures remain separate from final frozen qualification.
+
+`native-app-handoff.json` binds the mechanisms, source hashes, actual profiles, original failures and
+explicit limits. Installed product transitions, wider UI/skill/search/context/browser acceptance,
+final CI/reviews and merge remain open. No acceptance checkbox or historical model outcome changes.

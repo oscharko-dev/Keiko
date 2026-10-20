@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "137c56a01df7138214addbce1b0ba8ddc65468c9adbf7d257c596da6803464f1",
+    "catalogDigest": "8db3c18ec2590607a25356b451fe74ece782987945dd2a1338853c75673359ed",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2487,7 +2487,7 @@
         "proofIds": ["cli.lifecycle.stop-escalated.disposition"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:60",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:309"]
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:313"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2521,7 +2521,7 @@
         "proofIds": ["cli.lifecycle.stop-escalation-failed.kind"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:110",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:396"]
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:400"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2555,7 +2555,7 @@
         "proofIds": ["cli.lifecycle.stop-request-failed.kind"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:92",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:385"]
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:389"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2589,7 +2589,7 @@
         "proofIds": ["cli.lifecycle.stop-requested.channel"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:37",
-        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:259"]
+        "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:263"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36788,6 +36788,51 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "update.portable.native-control",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "update-native-handoff-activity.emitNativeHandoffState",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["admission", "acceptance", "commit", "cleanup"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["completed", "failed", "uncertain"]
+          },
+          "nativeAuthorityMayBeLive": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["update-runtime"],
+        "proofIds": ["update.portable.native-control.lifetime"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/update-native-handoff-activity.ts:11",
+        "emitterSites": ["packages/keiko-server/src/update-native-handoff-activity.ts:52"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "update.release-trust.verify",
         "category": "security",
         "owner": "keiko-server",
@@ -47103,6 +47148,7 @@
           "start": [],
           "state": [
             "update.install-mode.detected",
+            "update.portable.native-control",
             "update.remediation.lease",
             "update.runtime.event",
             "update.runtime.state-write"
@@ -47113,6 +47159,7 @@
         },
         "requiredCausalOperations": [
           "update.install-mode.detected",
+          "update.portable.native-control",
           "update.remediation.lease",
           "update.runtime.event",
           "update.runtime.state-write"
@@ -47120,6 +47167,7 @@
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "update.install-mode.detected",
+          "update.portable.native-control",
           "update.remediation.lease",
           "update.runtime.event",
           "update.runtime.state-write"
@@ -47127,6 +47175,7 @@
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "update.install-mode.detected",
+          "update.portable.native-control",
           "update.remediation.lease",
           "update.runtime.event",
           "update.runtime.state-write"
@@ -87892,6 +87941,7 @@
             "start": [],
             "state": [
               "update.install-mode.detected",
+              "update.portable.native-control",
               "update.remediation.lease",
               "update.runtime.event",
               "update.runtime.state-write"
@@ -87903,6 +87953,10 @@
           "causalEdges": [
             {
               "op": "update.install-mode.detected",
+              "mode": "correlation"
+            },
+            {
+              "op": "update.portable.native-control",
               "mode": "correlation"
             },
             {
@@ -87921,6 +87975,7 @@
           "lossSignals": [],
           "resourceSignals": [
             "update.install-mode.detected",
+            "update.portable.native-control",
             "update.remediation.lease",
             "update.runtime.event",
             "update.runtime.state-write"
@@ -87984,6 +88039,42 @@
                 "causeChain": false
               },
               "proofIds": ["update.install-mode.detected.body-free"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "update.portable.native-control",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "nativeAuthorityMayBeLive",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["update.portable.native-control.lifetime"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -95905,6 +95996,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "update.portable.native-control",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-native-handoff-activity.ts:14",
+      "package": "keiko-server"
+    },
+    {
       "op": "update.preflight.bundled-catalog.read",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/update-preflight-catalog.ts:215",
@@ -96748,6 +96845,7 @@
     "update.install-mode.detected",
     "update.portable-asset.redirect-refused",
     "update.portable-fetch.failed",
+    "update.portable.native-control",
     "update.preflight.bundled-catalog.read",
     "update.release-trust.verify",
     "update.remediation.execute",

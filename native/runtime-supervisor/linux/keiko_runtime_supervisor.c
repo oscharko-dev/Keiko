@@ -138,13 +138,14 @@ failed:
 }
 
 static void execute_root(const struct launch_request *request, int notices, int failure,
-                         int start_gate, int scope, const struct app_environment_packet *app,
+                         int start_gate, int scope, int app_control,
+                         const struct app_environment_packet *app,
                          uint64_t deadline) {
-  int keep[] = {notices, failure, start_gate, scope};
+  int keep[] = {notices, failure, start_gate, scope, app_control};
   char acknowledgement;
   char **arguments = spawn_arguments(request);
   char **environment = scope < 0 ? spawn_environment(request) : app_environment(request, app);
-  if (arguments != NULL && environment != NULL && retain_descriptors(keep, 4) &&
+  if (arguments != NULL && environment != NULL && retain_descriptors(keep, 5) &&
       chdir(request->cwd) == 0 && send(notices, "R", 1, 0) == 1 &&
       recv(notices, &acknowledgement, 1, 0) == 1 && acknowledgement == 'A' &&
       within_deadline(1u, deadline)) {
@@ -164,12 +165,12 @@ static int root_exit_code(int status) {
 }
 
 static void run_init(const struct launch_request *request, int gate, int notices, int lease,
-                     int start_gate, uid_t uid, gid_t gid, int owner_handle, int scope,
+                     int start_gate, uid_t uid, gid_t gid, int owner_handle, int scope, int app_control,
                      const struct app_environment_packet *app, uint64_t deadline) {
-  int keep[] = {gate, notices, lease, start_gate, owner_handle, scope};
+  int keep[] = {gate, notices, lease, start_gate, owner_handle, scope, app_control};
   int execution[2];
   char accepted;
-  if (!retain_descriptors(keep, 6) || !keiko_bind_parent_death(owner_handle) ||
+  if (!retain_descriptors(keep, 7) || !keiko_bind_parent_death(owner_handle) ||
       read(gate, &accepted, 1) != 1 || accepted != 'A' || !within_deadline(1u, deadline))
     _exit(126);
   close(gate);
@@ -181,8 +182,9 @@ static void run_init(const struct launch_request *request, int gate, int notices
   close(owner_handle);
   pid_t root = fork();
   if (root < 0) _exit(126);
-  if (root == 0) execute_root(request, notices, execution[1], start_gate, scope, app, deadline);
+  if (root == 0) execute_root(request, notices, execution[1], start_gate, scope, app_control, app, deadline);
   if (scope >= 0) close(scope);
+  if (app_control >= 0) close(app_control);
   close(execution[1]);
   if (start_gate >= 0) close(start_gate);
   int launched = 0;
@@ -262,7 +264,7 @@ static int receive_notice(int descriptor, char expected, struct generation *gene
 }
 
 static int start_generation(struct generation *generation, const struct launch_request *request,
-                              int scope, const struct app_environment_packet *app,
+                              int scope, int app_control, const struct app_environment_packet *app,
                               uint64_t startup_deadline) {
   int gate[2] = {-1, -1}, notices[2] = {-1, -1}, lease[2] = {-1, -1};
   int enabled = 1, result = 0, owner_handle = -1;
@@ -290,7 +292,7 @@ static int start_generation(struct generation *generation, const struct launch_r
     goto cleanup;
   }
   if (child == 0) run_init(request, gate[0], notices[1], lease[0], start_gate, uid, gid,
-                           owner_handle, scope, app, deadline);
+                           owner_handle, scope, app_control, app, deadline);
   generation->init = child;
   generation->lease = lease[1]; lease[1] = -1;
   close_descriptor(&gate[0]); close_descriptor(&lease[0]); close_descriptor(&notices[1]);
@@ -378,15 +380,19 @@ static int supervise(struct generation *generation) {
   }
 }
 
-static int valid_owner_socket(int descriptor) {
+static int valid_owner_socket_type(int descriptor, int expected_type) {
   int type = 0;
   struct ucred peer;
   socklen_t type_size = sizeof(type), peer_size = sizeof(peer);
   return getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &type, &type_size) == 0 &&
-         type_size == sizeof(type) && type == SOCK_SEQPACKET &&
+         type_size == sizeof(type) && type == expected_type &&
          getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &peer, &peer_size) == 0 &&
          peer_size == sizeof(peer) && peer.pid > 0 && peer.pid == getppid() &&
          peer.uid == geteuid() && peer.gid == getegid() && keiko_parent_death_is_armed();
+}
+
+static int valid_owner_socket(int descriptor) {
+  return valid_owner_socket_type(descriptor, SOCK_SEQPACKET);
 }
 
 static int valid_owner_channel(void) { return valid_owner_socket(6); }
@@ -438,27 +444,31 @@ int main(int argc, char **argv) {
                                    .lease = -1, .status = 0, .reaped = 0,
                                    .startup_error = ERROR_PROCESS_CREATE};
   int error = ERROR_PROCESS_CREATE, result = 1;
-  int app = argc == 2 && strcmp(argv[1], "--app-owner-report") == 0;
+  int managed_app = argc == 2 && strcmp(argv[1], "--managed-app-owner-report") == 0;
+  int app = managed_app || (argc == 2 && strcmp(argv[1], "--app-owner-report") == 0);
   int owner_report = app || (argc == 2 && strcmp(argv[1], "--owner-report") == 0);
   int owner_descriptor = owner_report ? 6 : -1;
   int scope = app ? 7 : -1;
+  int app_control = managed_app ? 8 : -1;
   (void)signal(SIGPIPE, SIG_IGN);
   if ((argc != 1 && !owner_report) || (owner_report && !valid_owner_channel()) ||
       (app && (!valid_owner_socket(7) || now == 0 || deadline <= now ||
                !keiko_app_clip_deadline(&deadline, 1) || !within_deadline(now, deadline))) ||
+      (managed_app && !valid_owner_socket_type(8, SOCK_STREAM)) ||
       !(app ? read_launch_request_with_reader(&request, app_packet_reader, &deadline)
             : read_launch_request(&request)) ||
       (app && !read_app_environment(&environment, app_packet_reader, &deadline))) {
     error = ERROR_PROTOCOL;
     goto cleanup;
   }
-  if (!start_generation(&generation, &request, scope, app ? &environment : NULL,
+  if (!start_generation(&generation, &request, scope, app_control, app ? &environment : NULL,
                         app ? deadline : UINT64_MAX)) {
     error = generation.startup_error;
     goto cleanup;
   }
   error = ERROR_TREE_OBSERVE;
   close_descriptor(&scope);
+  close_descriptor(&app_control);
   if (owner_report) {
     int reported = report_held_root(&generation);
     close_descriptor(&owner_descriptor);
@@ -469,6 +479,7 @@ int main(int argc, char **argv) {
 cleanup:
   close_descriptor(&owner_descriptor);
   close_descriptor(&scope);
+  close_descriptor(&app_control);
   clear_generation(&generation);
   clear_request(&request);
   clear_app_environment(&environment);

@@ -76,6 +76,14 @@ static int keiko_app_owner_select(keiko_runtime_owner *owner,
     if (!keiko_positive_u64(selected, UINT64_MAX, &absolute)) return 0;
     if (absolute < owner->commit_deadline) owner->commit_deadline = absolute;
   }
+  /* The coordinator carries its original cleanup grant separately from the exec grant. */
+  selected = getenv("KEIKO_UI_COMMIT_DEADLINE_MS");
+  if (selected != NULL) {
+    if (!keiko_positive_u64(selected, UINT64_MAX, &absolute) ||
+        absolute < owner->commit_deadline ||
+        absolute - owner->started_at > KEIKO_COORDINATOR_MAX_CONTROL_MS) return 0;
+    owner->commit_deadline = absolute;
+  }
   owner->state = keiko_app_owner_move(keiko_coordinator_open_directory_path(owner->state_path));
   if (!keiko_app_owner_directory(owner->state) ||
       !keiko_app_owner_sync_parent(owner->state_path)) return 0;

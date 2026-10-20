@@ -24,7 +24,7 @@ import {
 import { loadTools } from "./lazy-modules.js";
 import { liveProcessHasLaunchId, type LiveLaunchIdentityReaders } from "./ui-process-identity.js";
 import { clearShutdownRequest, readPidRecord, writeShutdownRequest } from "./state-paths.js";
-import { nativeUiGenerationReaped } from "./native-ui-reap.js";
+import { nativeUiGenerationOwned, nativeUiGenerationReaped } from "./native-ui-reap.js";
 import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
 
 export type WindowsTreeKill = (pid: number, processEnv: NodeJS.ProcessEnv) => WindowsTreeKillResult;
@@ -172,6 +172,10 @@ export async function terminateUiProcess(
 ): Promise<TerminateUiProcessResult> {
   const record = readPidRecord(join(input.stateDir, UI_PID_FILE));
   if (record?.nativeAppRuntime && record.pid === input.pid) {
+    if (!nativeUiGenerationOwned(input.stateDir, record)) {
+      emitNativeUiOwnership(input.securityLogSink, "cleanup", "held");
+      return { confirmed: false, escalated: false };
+    }
     const result = await terminateTrackedUiProcess({
       ...input,
       isProcessAlive: (pid: number): boolean =>

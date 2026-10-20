@@ -1,0 +1,419 @@
+/* Native ownership and cutover regression. This fixture is not an installed-product acceptance. */
+import { strict as assert } from "node:assert";
+import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile, chmod } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
+import { test } from "node:test";
+import {
+  appLaunchPacket,
+  appResponse,
+  commitPacket,
+  compileOwnerFixture,
+} from "./app-owner-harness.mjs";
+import { streamReader } from "../protocol-harness.mjs";
+import { writeExclusivePidFile } from "../../../packages/keiko-cli/dist/state-paths.js";
+import {
+  createPortableHandoffPlan,
+  writePortableHandoffPlan,
+} from "../../../packages/keiko-server/dist/update-portable-handoff-plan.js";
+import { hashPortableHandoffTree } from "../../../packages/keiko-server/dist/update-portable-handoff-tree.js";
+import {
+  portableRegistrationDocument,
+  posixPortableActivationLayout,
+} from "../../../packages/keiko-server/dist/update-portable-activation-files.js";
+import { readPortableHandoffReceipts } from "../../../packages/keiko-server/dist/update-portable-handoff-receipts.js";
+import {
+  primaryLauncher,
+  runtimeFor,
+} from "../../../packages/keiko-server/dist/update-portable-staging-shared.js";
+
+const { fetch, AbortSignal, performance } = globalThis;
+const coalesced = process.argv.includes("--coalesced");
+const restoration = process.argv.includes("--restore");
+const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const digest = async (path) => sha(await readFile(path));
+const environmentMarker = "native-handoff-fixture-data";
+const directory = await mkdtemp(join(tmpdir(), "keiko-app-handoff-"));
+const stateDir = join(directory, "state");
+const managedRoot = join(directory, "Keiko");
+const rootFixture = fileURLToPath(new URL("./app-handoff-root-fixture.mjs", import.meta.url));
+let initialOwner;
+let ownerExited;
+let port;
+let currentActivation;
+const knownLaunchIds = new Set();
+
+async function fixturePackage(root, launcher, helper, version) {
+  for (const path of ["runtime/native", "runtime/node/bin", "app/dist/cli", ".portable"])
+    await mkdir(join(root, path), { recursive: true, mode: 0o700 });
+  await copyFile(launcher, join(root, "Keiko"));
+  await copyFile(helper, join(root, "runtime/native/keiko-runtime-supervisor"));
+  // This is an isolated native transaction fixture with the actual Linux Node executable.
+  await copyFile(process.execPath, join(root, "runtime/node/bin/node"));
+  for (const path of ["Keiko", "runtime/native/keiko-runtime-supervisor", "runtime/node/bin/node"])
+    await chmod(join(root, path), 0o700);
+  const entry =
+    `process.env.KEIKO_HANDOFF_FIXTURE_VERSION=${JSON.stringify(version)};\n` +
+    `process.env.KEIKO_HANDOFF_FIXTURE_RESUME="1";\n` +
+    `process.env.KEIKO_HANDOFF_FIXTURE_FAIL_BOOT=${JSON.stringify(restoration && version === "1.0.1" ? "1" : "0")};\n` +
+    `await import(${JSON.stringify(rootFixture)});\n`;
+  await writeFile(join(root, "app/dist/cli/index.js"), entry, { mode: 0o600 });
+  await writeFile(
+    join(root, "app/package.json"),
+    JSON.stringify({ name: "native-handoff-fixture", version, type: "module" }),
+  );
+  await writeFile(
+    join(root, ".portable/setup-manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      packageName: "@oscharko-dev/keiko",
+      packageVersion: version,
+      platformTarget: "linux-x64",
+      stable: true,
+      bootstrapUpdateEligible: false,
+      primaryLauncher: primaryLauncher("linux-x64"),
+      runtime: runtimeFor("linux-x64"),
+    }),
+  );
+}
+
+async function unusedPort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert(address !== null && typeof address !== "string");
+  const selected = address.port;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return selected;
+}
+
+async function receipt(launchId) {
+  return (await readFile(join(stateDir, ".keiko/ui-runtime", `${launchId}.receipt`), "utf8")).split(
+    "\n",
+  );
+}
+
+async function awaitPhase(launchId, phase, timeoutMs) {
+  const deadline = performance.now() + timeoutMs;
+  while ((await receipt(launchId))[4] !== phase && performance.now() < deadline) await delay(20);
+  assert.equal((await receipt(launchId))[4], phase);
+}
+
+function updateOutcome(plan, previous, index, newLaunchId) {
+  const restores = restoration && index === 0;
+  return {
+    launchId: restores ? plan.restoreLaunchId : newLaunchId,
+    version: restores ? previous.version : plan.targetVersion,
+    timeoutMs: restores ? 70_000 : 15_000,
+    receiptKind: restores ? "restored-verify" : "complete",
+  };
+}
+
+async function assertClosedNativeLoader(launchId) {
+  const proof = await receipt(launchId);
+  const names = (await readFile(`/proc/${proof[3]}/environ`, "utf8"))
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => entry.slice(0, entry.indexOf("=")))
+    .sort();
+  assert.deepEqual(
+    names,
+    [
+      "KEIKO_STATE_DIR",
+      "KEIKO_START_TIMEOUT_SECS",
+      "KEIKO_UI_LAUNCH_ID",
+      "KEIKO_UI_START_DEADLINE_MS",
+      "KEIKO_UI_COMMIT_DEADLINE_MS",
+    ].sort(),
+  );
+}
+
+async function awaitState(version, launchId, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  let last;
+  while (performance.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/state`, {
+        signal: AbortSignal.timeout(500),
+      });
+      const body = await response.json();
+      const proof = await receipt(launchId);
+      last = { version: body.version, pid: body.pid, phase: proof[4] };
+      if (response.ok && body.version === version && proof[4] === "owned") {
+        assert.equal(body.retainedEnvironment, true);
+        assert.equal(body.environmentDigest, sha(environmentMarker));
+        assert.equal(Number(proof[1]), body.pid);
+        const record = await readFile(join(stateDir, "ui.pid"), "utf8");
+        assert.equal(record, `${body.pid}\n${launchId}\nbrowser-open-v1\nnative-app-v1\n`);
+        return body;
+      }
+    } catch {
+      // A replacement has a bounded interval with no listener or only a provisional receipt.
+    }
+    await delay(20);
+  }
+  console.error(
+    JSON.stringify({
+      classification: "native-fixture-failure",
+      last,
+      receipts:
+        currentActivation === undefined
+          ? []
+          : readPortableHandoffReceipts(stateDir, currentActivation).map(({ kind, outcome }) => ({
+              kind,
+              outcome,
+            })),
+    }),
+  );
+  throw new Error("native fixture did not reach the selected owned version");
+}
+
+async function initialStart(launcher, helper, hash) {
+  const launchId = randomBytes(16).toString("hex");
+  knownLaunchIds.add(launchId);
+  initialOwner = spawn(launcher, ["--own-app-runtime", helper, hash], {
+    env: {},
+    stdio: ["ignore", "pipe", "inherit", "pipe", "pipe"],
+  });
+  ownerExited = new Promise((resolve) =>
+    initialOwner.once("exit", (code, signal) => resolve({ code, signal })),
+  );
+  const reader = streamReader(initialOwner.stdio[4]);
+  initialOwner.stdio[3].write(
+    appLaunchPacket(
+      {
+        recoveryHandle: launchId,
+        args: [rootFixture, "ui", "--port", String(port)],
+        env: {
+          KEIKO_STATE_DIR: stateDir,
+          KEIKO_UI_LAUNCH_ID: launchId,
+          KEIKO_START_TIMEOUT_SECS: "15",
+        },
+      },
+      { executable: process.execPath, cwd: directory },
+      {
+        KEIKO_HANDOFF_FIXTURE_VERSION: "1.0.0",
+        KEIKO_HANDOFF_FIXTURE_DATA: environmentMarker,
+        KEIKO_HANDOFF_FIXTURE_WRONG_LAUNCH: "1",
+        KEIKO_HANDOFF_FIXTURE_COALESCED: coalesced ? "1" : "0",
+        OPENAI_API_KEY: "fixture-placeholder",
+        ...Object.fromEntries(
+          Array.from({ length: 140 }, (_, index) => [
+            `KEIKO_HANDOFF_FIXTURE_VALUE_${index}`,
+            "x".repeat(512),
+          ]),
+        ),
+      },
+    ),
+  );
+  const started = await appResponse(reader);
+  assert.equal(started.kind, 4);
+  writeExclusivePidFile(
+    join(stateDir, "ui.pid"),
+    started.payload.readUInt32LE(0),
+    launchId,
+    true,
+    true,
+  );
+  const readyDeadline = performance.now() + 10_000;
+  let ready = false;
+  while (!ready && performance.now() < readyDeadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/state`, {
+        signal: AbortSignal.timeout(500),
+      });
+      ready = response.ok && (await response.json()).pid === started.payload.readUInt32LE(0);
+    } catch {
+      // The actual root must consume and prove its metadata port before ownership commits.
+    }
+    if (!ready) await delay(20);
+  }
+  assert(ready);
+  initialOwner.stdio[3].write(commitPacket(launchId));
+  assert.equal((await appResponse(reader)).kind, 5);
+  initialOwner.stdio[3].end();
+  return { launchId, ...(await awaitState("1.0.0", launchId)) };
+}
+
+function registration(root) {
+  const layout = posixPortableActivationLayout("linux-x64", root);
+  return portableRegistrationDocument({
+    layout: { ...layout, installRoot: managedRoot },
+    target: "linux-x64",
+    env: {},
+    home: directory,
+    now: Date.now(),
+  });
+}
+
+async function planUpdate(previous, candidateRoot, targetVersion) {
+  const activationId = randomBytes(16).toString("hex");
+  const stageRoot = dirname(candidateRoot);
+  const previousRegistration = await readFile(join(stateDir, "portable-install-state.json"));
+  const preparedRegistration = registration(candidateRoot);
+  const newLaunchId = randomBytes(16).toString("hex");
+  const restoreLaunchId = randomBytes(16).toString("hex");
+  knownLaunchIds.add(newLaunchId);
+  knownLaunchIds.add(restoreLaunchId);
+  const hashTree = (root) => hashPortableHandoffTree(root, { deadline: Date.now() + 30_000 });
+  const now = Date.now();
+  const plan = createPortableHandoffPlan({
+    activationId,
+    sessionId: "native-fixture",
+    stageId: basename(stageRoot),
+    target: "linux-x64",
+    targetVersion,
+    newLaunchId,
+    restoreLaunchId,
+    aggregateRevision: 1,
+    previousRegistrationState: "present",
+    oldProcess: {
+      pid: previous.pid,
+      launchId: previous.launchId,
+      host: "127.0.0.1",
+      port,
+      version: previous.version,
+    },
+    paths: {
+      managedRoot,
+      stageRoot,
+      candidateRoot,
+      backupRoot: join(directory, `.keiko-previous-${activationId}`),
+      candidateLauncher: join(candidateRoot, "Keiko"),
+      candidateSupervisor: join(candidateRoot, "runtime/native/keiko-runtime-supervisor"),
+    },
+    digests: {
+      currentTreeSha256: await hashTree(managedRoot),
+      candidateTreeSha256: await hashTree(candidateRoot),
+      currentLauncherSha256: await digest(join(managedRoot, "Keiko")),
+      currentSupervisorSha256: await digest(
+        join(managedRoot, "runtime/native/keiko-runtime-supervisor"),
+      ),
+      candidateLauncherSha256: await digest(join(candidateRoot, "Keiko")),
+      candidateSupervisorSha256: await digest(
+        join(candidateRoot, "runtime/native/keiko-runtime-supervisor"),
+      ),
+      previousRegistrationSha256: sha(previousRegistration),
+      preparedRegistrationSha256: sha(preparedRegistration),
+    },
+    deadlines: {
+      oldExitAt: now + 15_000,
+      startAt: now + 35_000,
+      verifyAt: now + 50_000,
+      cleanupAt: now + 65_000,
+    },
+  });
+  writePortableHandoffPlan({ stateDir, plan });
+  const capsule = join(stateDir, "updates/handoff", activationId);
+  await writeFile(join(capsule, "registration.previous"), previousRegistration, { mode: 0o600 });
+  await writeFile(join(capsule, "registration.next"), preparedRegistration, { mode: 0o600 });
+  return { plan, newLaunchId };
+}
+
+await test(
+  `native app owner hands off two real coordinators outside the previous generations (${restoration ? "restoration" : coalesced ? "coalesced cancellation" : "production admission"})`,
+  { timeout: 180_000 },
+  async (context) => {
+    context.after(async () => {
+      if (port === undefined) return;
+      try {
+        const base = `http://127.0.0.1:${port}`;
+        const state = await fetch(`${base}/state`, { signal: AbortSignal.timeout(500) }).then(
+          (response) => response.json(),
+        );
+        const proofs = await Promise.all(
+          [...knownLaunchIds].map(async (id) => {
+            try {
+              return await receipt(id);
+            } catch {
+              return [];
+            }
+          }),
+        );
+        if (proofs.some((proof) => Number(proof[1]) === state.pid))
+          await fetch(`${base}/shutdown`, { method: "POST", signal: AbortSignal.timeout(1000) });
+      } catch {
+        // A stopped fixture has no HTTP endpoint; cleanup never signals a numeric PID.
+      }
+    });
+    await mkdir(stateDir, { mode: 0o700 });
+    const launcher = await compileOwnerFixture(
+      directory,
+      "launcher",
+      "../../portable-launcher/keiko-portable-launcher.c",
+    );
+    const helper = await compileOwnerFixture(
+      directory,
+      "supervisor",
+      "./keiko_runtime_supervisor.c",
+    );
+    const hash = await digest(helper);
+    const stages = [
+      join(directory, ".keiko-portable-updates/stage-b/Keiko"),
+      join(directory, ".keiko-portable-updates/stage-c/Keiko"),
+    ];
+    await fixturePackage(managedRoot, launcher, helper, "1.0.0");
+    await fixturePackage(stages[0], launcher, helper, "1.0.1");
+    await fixturePackage(stages[1], launcher, helper, "1.0.2");
+    await writeFile(join(stateDir, "portable-install-state.json"), registration(managedRoot));
+    port = await unusedPort();
+    let previous = await initialStart(join(managedRoot, "Keiko"), helper, hash);
+    for (let index = 0; index < (coalesced ? 3 : 0); ++index) {
+      const { plan } = await planUpdate(previous, stages[0], "1.0.1");
+      const before = await hashPortableHandoffTree(managedRoot, { deadline: Date.now() + 30_000 });
+      const response = await fetch(`http://127.0.0.1:${port}/handoff`, {
+        method: "POST",
+        body: JSON.stringify({ activationId: plan.activationId, cancel: true }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const cancelled = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(cancelled));
+      assert.equal(cancelled.cancelled, true);
+      assert(cancelled.coordinatorPid > 1 && cancelled.coordinatorPid !== previous.pid);
+      assert.equal(
+        await hashPortableHandoffTree(managedRoot, { deadline: Date.now() + 30_000 }),
+        before,
+      );
+      assert.equal((await awaitState(previous.version, previous.launchId)).pid, previous.pid);
+    }
+    for (const [index, candidateRoot] of stages.entries()) {
+      const version = `1.0.${index + 1}`;
+      const { plan, newLaunchId } = await planUpdate(previous, candidateRoot, version);
+      currentActivation = plan.activationId;
+      const response = await fetch(`http://127.0.0.1:${port}/handoff`, {
+        method: "POST",
+        body: JSON.stringify({ activationId: plan.activationId }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const accepted = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(accepted));
+      assert.equal(accepted.accepted, true);
+      assert.notEqual(accepted.coordinatorPid, previous.pid);
+      const outcome = updateOutcome(plan, previous, index, newLaunchId);
+      const next = await awaitState(outcome.version, outcome.launchId, outcome.timeoutMs);
+      await assertClosedNativeLoader(outcome.launchId);
+      await awaitPhase(previous.launchId, "reaped", 5000);
+      assert.equal(
+        readPortableHandoffReceipts(stateDir, plan.activationId).at(-1).kind,
+        outcome.receiptKind,
+      );
+      if (index === 0) assert.deepEqual(await ownerExited, { code: 0, signal: null });
+      previous = { ...next, launchId: outcome.launchId };
+    }
+    await fetch(`http://127.0.0.1:${port}/shutdown`, {
+      method: "POST",
+      signal: AbortSignal.timeout(1000),
+    });
+    await awaitPhase(previous.launchId, "reaped", 10_000);
+  },
+);
+
+if (initialOwner !== undefined && initialOwner.exitCode === null) initialOwner.kill("SIGKILL");
+await rm(directory, { recursive: true, force: true });

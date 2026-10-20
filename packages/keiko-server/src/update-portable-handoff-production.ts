@@ -481,6 +481,7 @@ export function createProductionPortableHandoffRuntime(
     });
   const coordinator = createPortableHandoffCoordinator({
     stateDir: options.stateDir,
+    securityLogSink: options.securityLogSink,
     persistPrepared: ({ sessionId, activationWal }) =>
       persistWal({ sessionId, activationWal, prepared: true }),
     persistAccepted: ({ sessionId, activationWal }) =>

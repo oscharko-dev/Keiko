@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   encodeAppEnvironmentPacket,
+  decodeNativeAppControlFrame,
+  encodeNativeAppHandoffStart,
   encodeLaunchPacket,
+  nativeAppControlFrameLength,
   type NativeRuntimeLaunchPacketInput,
 } from "./native-runtime-wire.js";
 
@@ -11,6 +14,50 @@ const request: NativeRuntimeLaunchPacketInput = {
   args: [],
   env: {},
 };
+
+describe("private app handoff wire", () => {
+  const binding = {
+    activationId: "a".repeat(32),
+    launchId: "b".repeat(32),
+    planSha256: "c".repeat(64),
+    coordinatorSha256: "d".repeat(64),
+  };
+
+  it("retains the complete selected activation, plan, artifact and launch binding", () => {
+    const bytes = encodeNativeAppHandoffStart(binding, 123456789n);
+    const frame = decodeNativeAppControlFrame(bytes);
+    expect(nativeAppControlFrameLength(bytes.subarray(0, 12))).toBe(bytes.length);
+    expect(frame.kind).toBe(2);
+    expect(frame.payload.subarray(0, -8).toString()).toBe(
+      binding.activationId + binding.planSha256 + binding.coordinatorSha256 + binding.launchId,
+    );
+    expect(frame.payload.readBigUInt64LE(frame.payload.length - 8)).toBe(123456789n);
+  });
+
+  it.each(["activationId", "launchId", "planSha256", "coordinatorSha256"])(
+    "refuses a malformed %s before transport",
+    (field) => {
+      expect(() =>
+        encodeNativeAppHandoffStart({ ...binding, [field]: "../arbitrary" }, 1n),
+      ).toThrow();
+    },
+  );
+
+  it.each(["magic", "version", "kind", "length", "partial", "trailing"])(
+    "refuses an invalid %s frame without broadening generic KRS",
+    (fault) => {
+      const bytes = encodeNativeAppHandoffStart(binding, 1n);
+      if (fault === "magic") bytes[0] = 0;
+      if (fault === "version") bytes.writeUInt16LE(2, 4);
+      if (fault === "kind") bytes.writeUInt16LE(11, 6);
+      if (fault === "length") bytes.writeUInt32LE(0xffffffff, 8);
+      const input = fault === "partial" ? bytes.subarray(0, -1) : bytes;
+      expect(() =>
+        decodeNativeAppControlFrame(fault === "trailing" ? Buffer.concat([input, input]) : input),
+      ).toThrow();
+    },
+  );
+});
 
 describe("native runtime wire limits", () => {
   it("carries a bounded large app environment separately from the generic launch", () => {

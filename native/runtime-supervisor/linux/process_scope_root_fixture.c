@@ -10,6 +10,10 @@
 #include <sys/stat.h>
 #include <stdio.h>
 
+#ifndef KEIKO_APP_CONTROL_QUALIFICATION
+#define KEIKO_APP_CONTROL_QUALIFICATION(root, owner) ((void)0)
+#endif
+
 static void read_packet(unsigned char bytes[20], uint16_t kind) {
   assert(recv(7, bytes, 20, MSG_TRUNC) == 20);
   assert(memcmp(bytes, "KPI1", 4) == 0 && read_u16(bytes + 4) == 1);
@@ -85,6 +89,7 @@ int main(int argc, char **argv) {
   verify_inherited_app_environment();
   read_packet(identity, 1);
   pid_t outer = (pid_t)read_u32(identity + 12), owner = (pid_t)read_u32(identity + 16);
+  KEIKO_APP_CONTROL_QUALIFICATION(outer, owner);
   assert(getpid() == 2 && outer > 2 && owner > 2 && owner != outer);
   /* These outer PIDs cannot be observed through this app's local kill namespace. */
   errno = 0;

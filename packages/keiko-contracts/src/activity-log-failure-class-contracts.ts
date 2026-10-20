@@ -8810,6 +8810,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: [],
       state: [
         "update.install-mode.detected",
+        "update.portable.native-control",
         "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.state-write",
@@ -8820,6 +8821,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     },
     requiredCausalOperations: [
       "update.install-mode.detected",
+      "update.portable.native-control",
       "update.remediation.lease",
       "update.runtime.event",
       "update.runtime.state-write",
@@ -8827,6 +8829,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLossOperations: [],
     requiredProofOperations: [
       "update.install-mode.detected",
+      "update.portable.native-control",
       "update.remediation.lease",
       "update.runtime.event",
       "update.runtime.state-write",
@@ -8834,6 +8837,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "update.install-mode.detected",
+      "update.portable.native-control",
       "update.remediation.lease",
       "update.runtime.event",
       "update.runtime.state-write",
