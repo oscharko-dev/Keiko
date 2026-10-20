@@ -10,6 +10,7 @@ import {
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
   classifyErrorKind,
+  copyActivityLogEventMetadata,
   defineActivityLogOperation,
   isErrorKind,
   validateActivityLogOperationFields,
@@ -745,6 +746,7 @@ import {
   activityLogEventRegistration as publicActivityLogEventRegistration,
   activityLogOperationSchema as publicActivityLogOperationSchema,
   isActivityLogDiagnosticWhen as publicIsActivityLogDiagnosticWhen,
+  copyActivityLogEventMetadata as publicCopyActivityLogEventMetadata,
   validateRegisteredActivityLogEvent as validatePublicObservedEvent,
   withActivityLogCorrelation as publicWithActivityLogCorrelation,
   withActivityLogParentCorrelation as publicWithActivityLogParentCorrelation,
@@ -757,6 +759,7 @@ const publicSupportAdmission = {
   activityLogEvent: publicActivityLogEvent,
   activityLogEventRegistration: publicActivityLogEventRegistration,
   activityLogOperationSchema: publicActivityLogOperationSchema,
+  copyActivityLogEventMetadata: publicCopyActivityLogEventMetadata,
   isActivityLogDiagnosticWhen: publicIsActivityLogDiagnosticWhen,
   validateRegisteredActivityLogEvent: validatePublicObservedEvent,
   withActivityLogCorrelation: publicWithActivityLogCorrelation,
@@ -906,6 +909,7 @@ describe("Support public registration shape admission", () => {
         activityLogEvent,
         activityLogOperationSchema,
         activityLogEventRegistration,
+        copyActivityLogEventMetadata,
         validateRegisteredActivityLogEvent,
         withActivityLogCorrelation,
         withActivityLogParentCorrelation,
@@ -931,6 +935,35 @@ describe("Support public registration shape admission", () => {
       return copy;
     }
     // Preservation proofs: structural observation is not canonical write admission.
+    it(`${surface}: copies raw metadata to the supplied target without certification`, () => {
+      const { event, operation } = fixtureEvent();
+      const target = { ...event };
+      expect(api.copyActivityLogEventMetadata(event, target)).toBe(target);
+      expect(Object.getOwnPropertyDescriptor(target, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
+        value: operation,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      expect(api.validateRegisteredActivityLogEvent(target)).toBe(operation);
+      const raw = {};
+      const malformed = attachRaw(event, raw);
+      const retained = { ...event };
+      expect(api.copyActivityLogEventMetadata(malformed, retained)).toBe(retained);
+      expect(Object.getOwnPropertyDescriptor(retained, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
+        value: raw,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      expect(api.activityLogEventRegistration(retained)).toBeUndefined();
+      expect(() => api.validateRegisteredActivityLogEvent(retained)).toThrow(
+        new api.ActivityLogEventValidationError("registration-mismatch"),
+      );
+      expect(() => api.copyActivityLogEventMetadata(event, Object.preventExtensions({}))).toThrow(
+        TypeError,
+      );
+    });
     it(`${surface}: observes inherited registration values and hidden symbol attachments`, () => {
       const { event, operation } = fixtureEvent();
       const inherited = {};

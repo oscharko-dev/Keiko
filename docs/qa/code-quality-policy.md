@@ -1347,3 +1347,24 @@ legacy validators: this record does not confer helper, dictionary, runtime-typeo
 verification, server-consumer, or workflow authority. The consumer migration remains separate.
 Declaration is not coverage; default structural assessment, actual semantic proof execution and
 current native correspondence must succeed before this boundary adapts a finding.
+
+### Public raw metadata sources
+
+The closed `metadataSourceInput` option belongs only to a `raw-property-observation`
+record with the object-input rule, source parameter zero and one explicit companion consumer.
+Its exported signature takes an exact `object` source plus a caller-owned `Target extends object`,
+and returns that same target type. This signature fact grants only the source annotation; it does
+not certify either object, helper inputs, returned raw fields or descriptor writes. Both adaptation
+paths require the record's selected semantic proofs to complete.
+
+The two declared exported consumers are resolved in the production context, not as test-proof
+wrappers. They must belong to the same production owner and source and both reach the actual
+producer through the existing bounded consumer graph. The companion seeds the
+second root; all helper incoming-reference, escape, cycle, ownership and currentness checks remain.
+This is a closed pair, not factory/callback reachability or a general multi-consumer declaration.
+Legacy raw-observation options and records retain their existing behavior.
+
+`copyActivityLogEventMetadata` preserves raw registration and closed refusal markers through the
+real correlation rebind APIs. Its direct public proof retains the supplied target, hidden immutable
+marker and malformed raw identity; existing logger proofs retain closed rejection and the real
+formatter's final mismatch. Structural observation and transport grant no canonical write authority.

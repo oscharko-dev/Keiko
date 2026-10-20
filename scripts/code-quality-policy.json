@@ -6429,6 +6429,72 @@
           "testName": "refuses hidden physical unknowns members despite a caller iterator"
         }
       ]
+    },
+    {
+      "id": "support-public-raw-metadata-source",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "raw-property-observation",
+      "metadataSourceInput": {
+        "companion": {
+          "owner": "@oscharko-dev/keiko-contracts",
+          "consumerPath": "packages/keiko-contracts/src/observability.ts",
+          "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+          "exportName": "withActivityLogParentCorrelation"
+        }
+      },
+      "rules": ["anti-slop/no-object-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "copyActivityLogEventMetadata",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "copyActivityLogEventMetadata"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "copyActivityLogEventMetadata"
+      },
+      "consumer": {
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/observability.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "withActivityLogCorrelation"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/observability.test.ts",
+        "packages/keiko-activity-log/src/server-logger.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: copies raw metadata to the supplied target without certification"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: rebinds absent and explicitly undefined parents without losing the marker"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: refuses an empty public registration while preserving private mismatch"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves healthy metadata, correlation and real formatter admission"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves malformed raw metadata and the existing final mismatch"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves a genuine refusal kind and one buffered-logger schema-loss count"
+        }
+      ]
     }
   ]
 }
