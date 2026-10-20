@@ -550,9 +550,9 @@ jobs:
   # heaviest suite split into vitest shards. Every one of them MEASURES and none of them judges
   # (ADR-0156 D1): a shard writes a vitest blob report, and `coverage-sonar` below merges the blobs
   # and evaluates every floor exactly once, against complete coverage. A per-shard verdict would
-  # compare a third of the suite against the whole suite's floors.
+  # compare a fraction of the suite against the whole suite's floors.
   coverage-packages:
-    name: Coverage shard (packages ${{ matrix.shard }}/3)
+    name: Coverage shard (packages ${{ matrix.shard }}/4)
     needs: verified-tree
     # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
     # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
@@ -566,7 +566,7 @@ jobs:
       # One shard's result must never mask another's; `coverage-sonar` fails closed on all of them.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -589,7 +589,7 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
-        # Restore-only. The measuring jobs sit on the critical path, and on a cold key all five
+        # Restore-only. The measuring jobs sit on the critical path, and on a cold key all six
         # would otherwise tar and compress a several-hundred-megabyte `~/.npm` in their post-job
         # step for exactly one of them to win the reservation. `coverage-sonar` runs last and owns
         # the save.
@@ -652,17 +652,17 @@ jobs:
         # before collecting, which increases the pressure that causes the kill.
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
+        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/4 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-blob-packages-${{ matrix.shard }}
-          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the three uploads merge into
+          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the four uploads merge into
           # one directory without collision. That per-shard name is exactly what an explicit
-          # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
-          # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
-          # measurement, silently. The shard script therefore passes no output path and this follows
+          # `--outputFile.blob` destroys: a set output path wins verbatim, so all shards write
+          # the one same file and `merge-multiple` keeps only the last of them, losing most of the
+          # measurement silently. The shard script therefore passes no output path and this follows
           # the reporter default. Vitest 4 writes `.vitest-reports`; the temporary Vitest 5 line
           # used `.vitest/blob`, so this path is deliberately pinned to the governed major.
           path: .vitest-reports/
@@ -881,7 +881,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
+          # use: the measuring checkouts feed one merged verdict, and `refs/pull/N/merge` is rewritten
           # whenever the head or base moves. Skew would have the shards measure one tree while the
           # gates and the scanner judge another, with nothing to detect it (Issue #2704).
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
@@ -899,7 +899,7 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore and maintain the npm download cache
         # The one job that also SAVES. It runs after the measuring jobs, so a cold key costs exactly
-        # one post-job compression instead of six racing ones.
+        # one post-job compression instead of seven racing ones.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
@@ -915,7 +915,7 @@ jobs:
           # The reporter default directory the shard script writes to, so that script followed by
           # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
           # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
-          # the three per-shard blob names into one.
+          # the per-shard blob names into one.
           path: .vitest-reports
           pattern: coverage-blob-packages-*
           merge-multiple: true
@@ -934,12 +934,12 @@ jobs:
       - name: Verify every package coverage shard delivered its evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # download-artifact's `pattern:` form succeeds silently when nothing matches, so it is the
-        # one fail-open primitive in this chain. Counting the blobs binds the hardcoded `/3` in the
+        # one fail-open primitive in this chain. Counting the blobs binds the hardcoded `/4` in the
         # shard command to the matrix: if the two ever drift, a PARTIAL merge would otherwise be
         # judged as if it were complete.
         run: |
           set -euo pipefail
-          expected=3
+          expected=4
           actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
@@ -955,7 +955,7 @@ jobs:
         # with no line identity and is not losslessly concatenable. This run uses the JUDGING
         # configuration, so the per-file floors are evaluated here, once, on complete coverage.
         # Same bound as the shards, for the same reason. The merge re-runs every reporter over the
-        # reassembled coverage map of all three shards — the largest single object in the lane — in
+        # reassembled coverage map of all package shards — the largest single object in the lane — in
         # a job that also holds the downloaded artifacts.
         env:
           NODE_OPTIONS: --max-old-space-size=3072

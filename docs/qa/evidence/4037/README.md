@@ -2459,3 +2459,31 @@ suite wiring and static-export evidence pass on the corrected presentation sourc
 Required final-head hosted checks, review settlement, protected integration and publication remain
 delivery conditions. Original unfinished acceptance stays in follow-up #4051; the subsequent SSD
 observation must establish the running version and a fresh report through the actual launcher.
+
+## Checkpoint 92 — compatible Markdown parser security patch
+
+Two newly published runtime parser advisories are reproduced with the exact OSV 2.6.0 recursive
+command on 14.3.2 and absent on compatible 14.3.3. Only that root-lock package record changes;
+CommonMark HTML-disabled options, all waiver scopes and automatic-update eligibility stay fixed.
+Clean installation, actual entrypoint resolution and all 74 Composer/parser controls establish
+the patched dependency input before fresh UI qualification.
+
+The original reference producer runs on clean signed e2aab34a in the actual declared reference
+environment, with the auditor idle, models unloaded and test services stopped. All 90 samples
+pass unchanged ceilings; calibration and budget bytes stay fixed. Docker 24 GiB settings, CPU-key
+absence and all three prior services are restored before the subsequent Activity Log gate passes.
+
+Fresh verification passes 10866 UI tests with one existing skip, 121 Chromium cases and 119 WebKit
+cases. The fixed initial-script ceiling is preserved. The [security repair packet](markdown-parser-security-repair.json)
+binds current inputs and receipts; earlier packets retain their historical dependency scope.
+The native-keyboard scenario now observes full transcript intersection again after Tab focus.
+The earlier local WebKit Home failure and subsequent hosted Chromium German Home failure remain
+recorded; the stronger readiness precondition retains every navigation assertion and does not
+claim a proven shared-follow root cause.
+
+Package coverage shard 2 reached the configured 30-minute deadline in two successive hosted runs.
+Four measuring shards now distribute the complete original suite while preserving the 30-minute
+cap, two workers, 3072 MiB heap, distinct blob names, every-suite-success guard and all merged floors.
+Focused tests execute the actual completeness guard for empty, missing, complete and extra sets.
+Complete final-source local release coverage and exact-head hosted checks remain integration
+conditions. Original unfinished functional acceptance remains in #4051.

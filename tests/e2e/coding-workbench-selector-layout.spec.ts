@@ -102,6 +102,8 @@ for (const mode of MODES) {
     expect((await log.boundingBox())?.height).toBeGreaterThanOrEqual(48);
     await page.keyboard.press("Tab");
     await expect(log).toBeFocused();
+    // Native focus can scroll nested panes; observe their visibility before navigation.
+    await expect(log).toBeInViewport({ ratio: 1 });
     await page.keyboard.press("Home");
     await expect.poll(() => log.evaluate((node) => node.scrollTop)).toBe(0);
     await page.keyboard.press("End");
