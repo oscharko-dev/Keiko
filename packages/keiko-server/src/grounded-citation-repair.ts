@@ -18,6 +18,16 @@ export function fitsCitationRepairTextLimit(text: string): boolean {
   return text.length <= REPAIR_TEXT_MAX;
 }
 
+/** The annotation protocol can target only original text outside rendered Markdown code. */
+export function hasCitationRepairProse(sourceText: string): boolean {
+  let cursor = 0;
+  for (const range of markdownCodeRanges(sourceText)) {
+    if (sourceText.slice(cursor, range.start).trim().length > 0) return true;
+    cursor = range.end;
+  }
+  return sourceText.slice(cursor).trim().length > 0;
+}
+
 interface MarkerInsertion {
   readonly start: number;
   readonly end: number;

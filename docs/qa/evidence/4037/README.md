@@ -1893,3 +1893,26 @@ under the declared toolchain. No enforcement, assertion or timeout was weakened.
 validation. Typing, lint, formatting, real Sonar and observability checks pass. Native dead-owner
 recovery, installed product update acceptance, live skill qualification, wider functional acceptance
 and delivery closeout remain open.
+
+## Checkpoint 71 — skip citation annotation without a prose target
+
+Actual live Java generations returned a single code block, then spent their remaining time and
+output grant on the prose-only citation annotation protocol. The existing deterministic repair
+dispatcher now uses the canonical Markdown code ranges to check whether original prose exists
+outside fenced or inline code. When none exists, it preserves the original answer object and usage
+without a repair call. Mixed prose and code retain the bounded repair path. Uncited uncertainty,
+assessment, content and citation validation remain unchanged. No prompt, skill or budget is enlarged.
+The existing citation reconciliation event records only an optional prose-availability boolean.
+
+Four unit assertions and two configured public-handler controls fail before the change. The final
+affected suites pass 192 tests; the grounded families pass 2,780 tests with one existing skip. Strict
+typing, affected-owner lint, all seven Activity Log/architecture checks, retrieval quality, grounded
+retrieval, faithfulness, error observability, ADR indexing, whole formatting and real Sonar pass.
+A controlled exact-owner replay on five unchanged canonical answers copied through the actual UI
+reduces repair dispatches from five to zero. That replay makes no model call and is not a new live
+latency measurement; original times, token use and outcomes remain retained.
+
+`code-only-citation-repair.json` binds sources, original failures, frozen checks and replay limits.
+The ongoing frozen Java campaign separately reveals an expressly requested README omitted for low
+relevance. That retrieval defect requires its own repair and live requalification. Neither skill
+acceptance nor wider functional or delivery acceptance is claimed by this optimization.

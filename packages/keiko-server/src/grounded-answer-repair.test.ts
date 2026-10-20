@@ -20,6 +20,24 @@ function context(content: string, numeric = false): GroundedRepairContext {
 }
 
 describe("citation repair dispatch eligibility", () => {
+  it.each([
+    "```java\nclass ExampleTest {}\n```",
+    " \n```tsx\nrender(<Example />);\n```\n ",
+    "```ts\nconst first = 1;\n```\n\n~~~java\nclass Second {}\n~~~",
+    "`example()`",
+  ])(
+    "does not dispatch prose annotations for a code-only source projection: %s",
+    async (content) => {
+      const ctx = context(content, true);
+      const repair = vi.fn((): Promise<GroundedAnswerPayload> => Promise.resolve("Unused."));
+      const result = await repairGroundedAnswer({ ...ctx, invokeRepair: repair });
+      expect(repair).not.toHaveBeenCalled();
+      expect(result.disposition).toBe("skipped-capability");
+      expect(result.answer).toBe(ctx.answer);
+      expect(result.answer.usage).toEqual({ promptTokens: 17, completionTokens: 7 });
+    },
+  );
+
   it("applies a bounded citation annotation without asking the model to copy generated code", async () => {
     const content = "The feature returns true.\n\n```ts\nconst feature = true;\n```";
     const ctx = context(content, true);

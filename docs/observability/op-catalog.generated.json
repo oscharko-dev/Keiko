@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2e677a650968a81e4b28e4049363ffff30d86658a70994b487b8d319954115e2",
+    "catalogDigest": "99d4c689d58d27b9dfb91b20169029eaa80c15f513d955977973dc99b80e8113",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -28968,8 +28968,8 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.answer.assessed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:372",
-        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:439"]
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:376",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:443"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29026,6 +29026,11 @@
               "skipped-budget",
               "skipped-capability"
             ]
+          },
+          "repairProseAvailable": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
           },
           "citationBehaviour": {
             "type": "string",
@@ -29126,10 +29131,10 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.citations.reconciled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:39",
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/grounded-citation-log.ts:236",
-          "packages/keiko-server/src/grounded-citation-log.ts:276"
+          "packages/keiko-server/src/grounded-citation-log.ts:238",
+          "packages/keiko-server/src/grounded-citation-log.ts:279"
         ]
       },
       {
@@ -29179,8 +29184,8 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.citations.support-settled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:307",
-        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:350"]
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:311",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:354"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -78102,6 +78107,12 @@
                   "required": true
                 },
                 {
+                  "name": "repairProseAvailable",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "scopeIdentitySha256",
                   "type": "string",
                   "dataClass": "digest",
@@ -95459,19 +95470,19 @@
     {
       "op": "search.answer.assessed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:375",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:379",
       "package": "keiko-server"
     },
     {
       "op": "search.citations.reconciled",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:42",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:43",
       "package": "keiko-server"
     },
     {
       "op": "search.citations.support-settled",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:310",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:314",
       "package": "keiko-server"
     },
     {

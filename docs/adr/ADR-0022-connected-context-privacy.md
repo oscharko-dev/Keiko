@@ -1019,6 +1019,12 @@ The repair dispatcher and validator share the same 131,072 UTF-16-code-unit text
 original answer above that supported size skips the extra model call as `skipped-capability`;
 it retains its original content, usage and uncited uncertainty. File and numeric citation paths
 use the same eligibility check, and the bound is not an additional token grant.
+The prose-annotation dispatcher also skips a source projection containing only rendered Markdown
+code and whitespace. It reuses the canonical fenced/inline code ranges and leaves the original
+answer, spend and uncited uncertainty unchanged as `skipped-capability`; it never invents a marker
+or promotes generated code to a verified source answer. Mixed prose and code retain the existing
+bounded repair. The existing citation-reconciliation Activity Log records whether original prose
+was available, without recording that prose or code.
 Both literal repair and locally constructed annotations preserve complete substantive tokens:
 markers cannot split contractions, contiguous symbolic operators or existing guarded graphemes,
 identifiers, decimal values and paths. Refusal preserves the original answer and uncited warning,

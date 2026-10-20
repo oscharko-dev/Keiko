@@ -23,7 +23,11 @@ import {
   reconcileInlineCitations,
   reconcileNumericCitations,
 } from "./grounded-faithfulness.js";
-import { citationRepairContent, fitsCitationRepairTextLimit } from "./grounded-citation-repair.js";
+import {
+  citationRepairContent,
+  fitsCitationRepairTextLimit,
+  hasCitationRepairProse,
+} from "./grounded-citation-repair.js";
 
 export interface GroundedRepairContext {
   readonly numericMarkers?: ReadonlySet<number> | undefined;
@@ -62,7 +66,11 @@ export interface GroundedRepairResult {
 function repairDisposition(ctx: GroundedRepairContext): CitationRepairDisposition | undefined {
   if (!hasSubstantiveEvidenceAnswer(ctx)) return "not-needed";
   if (hasParsedRepairCitations(ctx)) return "not-needed";
-  if (!fitsCitationRepairTextLimit(ctx.answer.content)) return "skipped-capability";
+  if (
+    !fitsCitationRepairTextLimit(ctx.answer.content) ||
+    !hasCitationRepairProse(groundedAnswerSourceText(ctx.answer.content))
+  )
+    return "skipped-capability";
   if (repairInvoker(ctx) === undefined) return "skipped-capability";
   if (ctx.deps.answerer?.remainingSynthesisCalls?.() === 0) return "skipped-budget";
   if (repairBudgetExhausted(ctx)) return "skipped-budget";

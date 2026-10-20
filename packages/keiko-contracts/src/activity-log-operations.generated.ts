@@ -27734,6 +27734,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "skipped-capability",
         ],
       },
+      repairProseAvailable: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       citationBehaviour: {
         type: "string",
         dataClass: "closed-enum",
