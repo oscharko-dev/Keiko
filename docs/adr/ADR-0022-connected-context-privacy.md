@@ -73,6 +73,12 @@ and bind final source-warning decisions to canonical scope/query digests. Unknow
 observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
 observations even when a separate labelled assessment is allowed.
 
+Answer copying and repository-reference cleanup share the existing Markdown code-range owner.
+Only prose is normalized: fenced and inline code retains literal bytes, whitespace, punctuation
+and source-label-shaped text. Grounded citation removal uses those same code boundaries. The
+existing answer-copy Activity Log event records success/failure and removed/retained marker-group
+counts without the copied body; it applies to this projection without a second clipboard or log path.
+
 ### D1.1 — Changing sources cancels the current answer
 
 A validated change to the canonical grounding identity cancels the current generation and any

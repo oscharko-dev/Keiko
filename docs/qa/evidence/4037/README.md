@@ -1,5 +1,29 @@
 # Chat/Files qualification observations
 
+## Checkpoint 79: preserve code in Copy Answer
+
+Copy Answer applied repository-evidence prose cleanup inside code, changing literal spaces,
+indentation and evidence-shaped string values. The shared sanitizer now uses the existing Markdown
+code ranges around its complete cleanup pipeline. Prose/reference cleanup remains unchanged, and
+existing answer-copy events retain body-free outcome and citation counts.
+
+Four causal cases failed before the fix; the affected three suites then passed 229 tests. Four
+additional string/Python cases are retained. The final full UI run passed 10,865 tests with zero
+failures and one existing skip. Root/UI typecheck, UI lint, formatting, architecture/negative
+controls, Activity Log aggregate, ADR index, actual production UI build, editor bundle evidence
+and real local Sonar passed.
+
+The separate actual model-only UI turn preserves all four literal witnesses and the same 175-byte
+canonical code through Copy Code and Copy Answer. An initial helper sent this scenario to the old
+comparison tab by mistake; that setup failure remains retained and earns no candidate credit. The
+corrected run used explicit tab actions and normal session-only browser approval.
+
+[`code-preserving-answer-copy.json`](code-preserving-answer-copy.json) binds the hashes and checks.
+This does not change the completed frozen77 React first-draft result: zero of six skill outputs and
+zero of six controls pass the correct subject. All failures and original files remain unchanged;
+no mutation or skill-benefit credit is claimed. Java comparison, bounded repair qualification,
+vendor closure, remaining functional/native acceptance and final delivery remain open.
+
 ## Checkpoint 78: bound malformed YAML header classification
 
 A repeated near-miss block-header comment made the fallback classifier rescan the same suffix.
