@@ -6546,6 +6546,53 @@
           "testName": "envelope validation & guards decodes an error after discarding only malformed optional correlation metadata"
         }
       ]
+    },
+    {
+      "id": "voice-recap-version-audit-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-session-recap.js",
+        "exportName": "isVoiceSessionRecapSchemaVersionSupported",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-session-recap.js",
+        "exportName": "isVoiceSessionRecapSchemaVersionSupported"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-session-recap.js",
+        "exportName": "isVoiceSessionRecapSchemaVersionSupported"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./voice-session-recap.js",
+        "exportName": "validateVoiceSessionRecapAuditRecord",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/voice-session-recap.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/voice-session-recap.test.ts",
+          "testName": "voice-session-recap version responsibility admits string versions and refuses unsupported schema values through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-session-recap.test.ts",
+          "testName": "voice-session-recap version responsibility admits string versions and refuses unsupported schema values through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-session-recap.test.ts",
+          "testName": "voice-session-recap version responsibility preserves true legacy omission and current required counts through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/voice-session-recap.test.ts",
+          "testName": "voice-session-recap version responsibility preserves true legacy omission and current required counts through public"
+        }
+      ]
     }
   ]
 }

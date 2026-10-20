@@ -1381,3 +1381,17 @@ read schedule, and retain optional error-correlation copying. The complete Voice
 file remains the proof owner. No private helper, dictionary, runtime-typeof, decoder-input,
 transport or Twin authority is granted. Declaration alone is not coverage: current native
 correspondence and completed semantic qualification are required for this exact boundary.
+
+### Recap version validation into the existing audit consumer
+
+The `voice-recap-version-audit-validator` responsibility binds only the unknown version input
+of `isVoiceSessionRecapSchemaVersionSupported` to its actual
+`validateVoiceSessionRecapAuditRecord` consumer. The index module reference is a canonical symbol
+anchor; its type-only export is not a runtime root-index value. Source/public proofs use the
+existing `runtime/voice-session-recap` entry and distinguish supported string versions "1" and "2"
+from unsupported "3" and numeric 2. The audit consumer retains exact schema refusal, healthy and
+user-triggered controls, nonmutating true legacy omission, and current-v2 required-count refusal.
+The whole recap test file remains the proof owner. Audit-input, dictionary, runtime-typeof,
+normalization and private-helper slots gain no authority. The retained recap route remains dormant
+without a current UI caller under ADR-0109/ADR-0154. Declaration is not coverage: actual canonical
+binding, native correspondence and completed selected proofs remain required.
