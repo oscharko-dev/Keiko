@@ -36,6 +36,7 @@ import type {
   VerificationReport,
   GitDeliveryApprovalClaim,
   GitCommitMessageValidation,
+  CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -105,6 +106,23 @@ let options: VerifiedCommitServiceOptions;
 let events: ServerLogEvent[];
 let evidence: Map<string, string>;
 const DIGEST = "a".repeat(64);
+function commitPermissionEvent(): {
+  readonly request: Promise<string>;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+} {
+  let accept!: (requestId: string) => void;
+  const request = new Promise<string>((resolve) => {
+    accept = resolve;
+  });
+  return {
+    request,
+    onRuntimeEvent: (event): void => {
+      if (event.kind === "permission-requested" && event.permissionRequest?.actionKind === "commit")
+        accept(event.permissionRequest.requestId);
+    },
+  };
+}
+
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], {
     cwd: root,
@@ -829,18 +847,25 @@ describe("verified Code-task commit service", () => {
   });
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "routes actual verification, review, approval and commit through the runtime facade in %s",
-    // eslint-disable-next-line complexity -- this is the exhaustive three-mode behavior matrix
     async (mode) => {
       service = createVerifiedCommitService({
         ...options,
         policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
       });
+      const permission = commitPermissionEvent();
       const {
         facade,
         bridge,
         events: runtimeEvents,
         verification,
-      } = commitFacadeFixture({ service, root, mode, live: () => live, report });
+      } = commitFacadeFixture({
+        service,
+        root,
+        mode,
+        live: () => live,
+        report,
+        onRuntimeEvent: permission.onRuntimeEvent,
+      });
       const invoke = (body: unknown): ReturnType<typeof facade.execute> =>
         facade.execute({ capability: "server-capability", body: JSON.stringify(body) });
       expect((await invoke(verification)).status).toBe("completed");
@@ -853,11 +878,12 @@ describe("verified Code-task commit service", () => {
         message: "feat: reviewed runtime commit",
       });
       if (mode !== "autonomous-delivery") {
-        await vi.waitFor(() => {
-          expect(runtimeEvents.at(-1)?.permissionRequest?.actionKind).toBe("commit");
-        });
-        const pendingId = runtimeEvents.at(-1)?.permissionRequest?.requestId;
-        if (pendingId === undefined) throw new Error("commit permission missing");
+        const pendingId = await Promise.race([
+          permission.request,
+          pendingProposal.then(() => {
+            throw new Error("commit permission missing");
+          }),
+        ]);
         expect(bridge.issueCommit?.("run-1", pendingId)).toBeDefined();
       }
       const proposed = await pendingProposal;

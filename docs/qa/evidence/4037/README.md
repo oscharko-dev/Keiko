@@ -1,5 +1,29 @@
 # Chat/Files qualification observations
 
+## Required-gate repairs after published commit 9b4eb9e3
+
+The initial published closeout failed the full gate matrix. This increment fixes the measured
+causes: initial window-chrome bytes, repeated redaction inside prompt fitting, a one-second polling
+assumption in the commit test, the reviewed Windows runner compiler change, and a missing native
+fixture header. The Firefox long-path journey now waits for the initially mounted Chat scope pill
+before changing scope; initial-mount announcement silence stays unchanged.
+
+The frame split retains hidden minimized loading states, current props, pending removals and frame
+identity across minimize/restore. Existing rendering/performance pins now await real import settlement;
+their assertions remain unchanged. The 122 affected component controls and 16 original Chromium browser
+journeys pass. The fit regression fails before reuse and passes after it; cached and uncached complete
+prompt messages are equal under unchanged budgets. No parser or redaction projection is bypassed.
+
+The Windows profile binds the observed compiler distribution containing 111 files and all four unchanged framework
+reference digests. Both independent regeneration and committed assembly byte equality are still
+required on Windows. Local Firefox launches failed before the journey in both available environments;
+those attempts do not prove browser behavior. The required hosted final-head Firefox run must pass.
+
+[`required-gate-repairs.json`](required-gate-repairs.json) records current code bindings, retained
+failure-first receipts and limitations. Full coverage and exact-head required CI remain separate
+integration prerequisites. The packet below describes the earlier published increment at its own
+historical binding. Original unfulfilled criteria stay in [#4051](https://github.com/oscharko-dev/Keiko/issues/4051).
+
 ## Delivery closeout: bounded implementation and explicit follow-up
 
 The owner changed delivery scope: finish PR #4046, transfer every unfulfilled requirement to
@@ -8,7 +32,7 @@ superseded only after verified integration. This does not accept the original fu
 The follow-up retains the original requirements, incomplete native/browser/history qualification,
 matched skill-benefit comparisons and five explicitly deferred native review findings.
 
-The final increment fixes mobile canvas/control overlap, retains reachable workbench review actions,
+The earlier published increment fixes mobile canvas/control overlap, retains reachable workbench review actions,
 and removes redundant TypeScript Program construction for supported TS/TSX/JSON parse verdicts.
 Unknown parser metadata and unsupported script kinds retain the real public compiler fallback.
 No prompt, model, grant, test timeout, quality floor or redaction rule changes. Fixture repairs use

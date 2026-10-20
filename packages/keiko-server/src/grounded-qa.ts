@@ -1,4 +1,5 @@
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
+import { promptFitRedactor } from "./grounded-prompt-redactor.js";
 import {
   parseExpectedSkillSelectionRevision,
   markdownSkillSelectionRefusal,
@@ -1289,23 +1290,24 @@ function fitGroundedPrompt(
 ): FittedPromptPack {
   const modelPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
   const budgetedPack = withCallerPromptInputBudget(modelPack, options.callerInputTokensMax);
+  const fitRedactor = promptFitRedactor(redactor, budgetedPack.budget.excerptBytesMax);
   const fitOptions = { ...options, modelInputTokensMax: modelPack.budget.modelInputTokensMax };
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
   const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
     promptByteLength(candidate) <= limit &&
     countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
       budgetedPack.budget.modelInputTokensMax;
-  const messages = build(question, budgetedPack, redactor);
+  const messages = build(question, budgetedPack, fitRedactor);
   if (fits(messages)) return { messages, pack: budgetedPack, omissionPathBytes: limit };
   const metadataFit = fitPromptOmissionMetadata(
-    (bytes) => build(question, budgetedPack, redactor, bytes),
+    (bytes) => build(question, budgetedPack, fitRedactor, bytes),
     fits,
     limit,
   );
   if (metadataFit !== undefined) return { ...metadataFit, pack: budgetedPack };
 
   const render = (candidate: ConnectedContextPack): readonly GatewayChatMessage[] =>
-    build(question, candidate, redactor, 0);
+    build(question, candidate, fitRedactor, 0);
   // Adding uncertainty when a hint is clipped can make prompt cost nonmonotonic. Find the
   // source window with stable metadata first, then admit only its truthful, re-rendered form.
   const optimistic = fitExcerptPromptWindow(

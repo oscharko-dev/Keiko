@@ -25,6 +25,10 @@ async function compileFixture(root, fixtureName = "runtime-monitor-event-stream"
   const executable = join(root, fixtureName);
   copyFileSync(resolve("tests/fixtures", `${fixtureName}.m`), source);
   copyFileSync(protocol, join(root, "protocol.h"));
+  copyFileSync(
+    resolve("native/runtime-supervisor/macos/keiko_runtime_protocol.h"),
+    join(root, "keiko_runtime_protocol.h"),
+  );
   const args = [...invocation.args];
   args[args.indexOf("-o") + 1] = executable;
   args[args.length - 1] = source;

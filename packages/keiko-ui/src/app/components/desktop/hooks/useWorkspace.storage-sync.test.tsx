@@ -171,11 +171,14 @@ describe("no-op cross-tab storage event does not re-render window bodies (BENCHM
     setWebdriver(true);
   });
 
-  it("skips all window body rebuilds on a byte-identical storage event", () => {
+  it("skips all window body rebuilds on a byte-identical storage event", async () => {
     const seeded = [win({ id: "agents-1" }), win({ id: "agents-2", x: 600 })];
     const serialized = JSON.stringify(seeded);
     window.localStorage.setItem(WS_LS, serialized);
     render(<IntegrationHarness />);
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     // Bodies rendered once at mount.
     expect([...bodyRenders].sort()).toEqual(["agents-1", "agents-2"]);

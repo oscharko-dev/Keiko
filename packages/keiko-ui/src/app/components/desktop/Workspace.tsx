@@ -25,7 +25,7 @@ import {
   isTextInputTarget,
   workspaceInteractionLocked,
 } from "./interactionGuards";
-import { WindowFrame } from "./windows/WindowFrame";
+import { createWindowChunkFallback } from "./widgets/WindowChunkFallback";
 import { KNOWLEDGE_CONNECTOR_NODE_SIZE, localizedWindowTitle } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
@@ -70,6 +70,12 @@ const ZoomOutIcon = Icons.zoomOut;
 const ExpandIcon = Icons.expand;
 const ZoomInIcon = Icons.zoomIn;
 const AddIcon = Icons.add;
+
+// Window chrome is only needed when a window exists; keep the empty canvas interactive first.
+const WindowFrame = dynamic(
+  () => import("./windows/WindowFrame").then((module) => module.WindowFrame),
+  { ssr: false, loading: createWindowChunkFallback("window chunk") },
+);
 
 // Load connection geometry independently of the initial desktop shell.
 const ConnectionsLayer = dynamic(
@@ -893,18 +899,23 @@ function WorkspaceScene({
       ) : null}
       {wins !== null
         ? wins.map((w) => (
-            <WindowFrame
+            <div
               key={w.id}
-              win={w}
-              top={top !== null && w.id === top.id}
-              connState={connStateById.get(w.id) ?? null}
-              api={api}
-              wsRef={wsRef}
-              linkRevision={linkRevision}
-              layoutLocked={layoutLocked}
-              selected={selectedWindowIds.has(w.id)}
-              selectedWindowCount={selectedWindowIds.size}
-            />
+              hidden={w.minimized === true}
+              style={{ display: w.minimized === true ? "none" : "contents" }}
+            >
+              <WindowFrame
+                win={w}
+                top={top !== null && w.id === top.id}
+                connState={connStateById.get(w.id) ?? null}
+                api={api}
+                wsRef={wsRef}
+                linkRevision={linkRevision}
+                layoutLocked={layoutLocked}
+                selected={selectedWindowIds.has(w.id)}
+                selectedWindowCount={selectedWindowIds.size}
+              />
+            </div>
           ))
         : null}
       {/* Selection rings render as sibling overlays on their own window's z-layer

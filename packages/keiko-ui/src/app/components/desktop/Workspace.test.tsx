@@ -143,7 +143,7 @@ describe("M1 — empty startup layout", () => {
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 
-  it("keeps minimized windows mounted but hidden so background work can continue", () => {
+  it("keeps minimized windows mounted but hidden so background work can continue", async () => {
     const wins = [
       appWindow({ id: "agents-1", type: "agents", minimized: true }),
       appWindow({ id: "agents-2", type: "agents", minimized: false }),
@@ -155,6 +155,9 @@ describe("M1 — empty startup layout", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     const minimizedWindow = container.querySelector('[data-window-id="agents-1"]');
     expect(minimizedWindow).toHaveAttribute("hidden");
@@ -225,7 +228,7 @@ describe("Workspace card connections", () => {
     );
   });
 
-  it("confirms a valid target even when a target child stops pointer bubbling", () => {
+  it("confirms a valid target even when a target child stops pointer bubbling", async () => {
     const confirmConnect = vi.fn();
     const workspaceApi = api({ confirmConnect });
     const wins = [
@@ -239,6 +242,9 @@ describe("Workspace card connections", () => {
     });
 
     render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     // uiux-fix F031 C297 — control labels are window-scoped now ("Full screen Files
     // window"), so the files-1 target is addressable by name directly.
@@ -251,7 +257,7 @@ describe("Workspace card connections", () => {
     expect(confirmConnect).toHaveBeenCalledWith("files-1", expect.any(Object));
   });
 
-  it("starts a connection from a port on pointer down", () => {
+  it("starts a connection from a port on pointer down", async () => {
     const startConnect = vi.fn();
     const workspaceApi = api({ startConnect });
     const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
@@ -263,6 +269,9 @@ describe("Workspace card connections", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /connect agents from top edge/i }), {
       button: 0,
@@ -852,6 +861,9 @@ describe("Workspace card connections", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     const port = screen.getByRole("button", { name: /connect agents from top edge/i });
     port.focus();
@@ -888,6 +900,9 @@ describe("Workspace card connections", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     // uiux-fix F031 C297 — port labels are window-scoped, so the files-1 target
     // port is addressable by name directly.
@@ -925,6 +940,9 @@ describe("Workspace card connections", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     const targetPort = screen.getAllByRole("button", { name: /connect agents from top edge/i })[1];
     expect(targetPort).toBeDefined();
@@ -1153,7 +1171,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface).not.toHaveAttribute("data-marquee");
   });
 
-  it("issue #2710 audit — starting a marquee clears a stale text selection", () => {
+  it("issue #2710 audit — starting a marquee clears a stale text selection", async () => {
     // startMarqueeSelection calls preventDefault() on the canvas pointerdown
     // (see the ADR-0123 D6 comment above tryHandleWorkspaceClipboardShortcut),
     // which also suppresses the browser's own default action of collapsing
@@ -1172,6 +1190,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
     const text = document.createElement("p");
@@ -1211,7 +1232,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface).not.toHaveAttribute("data-panning");
   });
 
-  it("does not let Space plus primary drag over a window steal window interactions", () => {
+  it("does not let Space plus primary drag over a window steal window interactions", async () => {
     const focus = vi.fn();
     const panBy = vi.fn();
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
@@ -1223,6 +1244,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const surface = screen.getByRole("main", { name: "Workspace surface" });
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
@@ -1658,7 +1682,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(status).toHaveTextContent("2 workspace windows selected");
   });
 
-  it("issue #2150 — routes copy and paste commands from a focused window's chrome, not only the bare surface", () => {
+  it("issue #2150 — routes copy and paste commands from a focused window's chrome, not only the bare surface", async () => {
     // Completing a marquee-select (or clicking a window's header/body) leaves
     // focus on the window's own section, never on the bare <main> surface —
     // startMarqueeSelection calls preventDefault() on pointerdown, which
@@ -1675,6 +1699,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
 
@@ -1689,7 +1716,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(paste.defaultPrevented).toBe(true);
   });
 
-  it("does not intercept copy and paste commands from an embedded text-entry control (ADR-0123 D6)", () => {
+  it("does not intercept copy and paste commands from an embedded text-entry control (ADR-0123 D6)", async () => {
     const copySelectedWindows = vi.fn(() => ({ captured: 1, skipped: 0, overflow: 0 }));
     const pasteCopiedWindows = vi.fn(() => ({ pasted: 1, limitReached: false }));
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
@@ -1700,6 +1727,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
     const input = document.createElement("input");
@@ -1712,7 +1742,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(pasteCopiedWindows).not.toHaveBeenCalled();
   });
 
-  it("issue #2710 — yields Ctrl+C to the native text copy while a text selection is active", () => {
+  it("issue #2710 — yields Ctrl+C to the native text copy while a text selection is active", async () => {
     const copySelectedWindows = vi.fn(() => ({ captured: 1, skipped: 0, overflow: 0 }));
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
     const { container } = render(
@@ -1726,6 +1756,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
     const text = document.createElement("p");
@@ -1881,7 +1914,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(status).toHaveTextContent("2 selected windows skipped (not duplicable)");
   });
 
-  it("issue #2710 — Escape still clears the selection from a read-only selectable pane", () => {
+  it("issue #2710 — Escape still clears the selection from a read-only selectable pane", async () => {
     // Making file previews/diffs selectable tagged them data-text-selectable,
     // which isTextEntryTarget treats as text entry. Escape must not be swallowed
     // there: the pane consumes no keystrokes, so Escape has no local meaning and
@@ -1899,6 +1932,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const windowEl = container.querySelector<HTMLElement>(".window");
     const pane = document.createElement("section");
     pane.setAttribute("data-text-selectable", "true");
@@ -1934,7 +1970,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(clearSelection).not.toHaveBeenCalled();
   });
 
-  it("issue #2710 / ADR-0123 D6 — does not intercept clipboard commands from a file tree", () => {
+  it("issue #2710 / ADR-0123 D6 — does not intercept clipboard commands from a file tree", async () => {
     const copySelectedWindows = vi.fn(() => ({ captured: 1, skipped: 0, overflow: 0 }));
     const pasteCopiedWindows = vi.fn(() => ({ pasted: 1, limitReached: false }));
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
@@ -1945,6 +1981,9 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
         openPalette={() => undefined}
       />,
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
     const tree = document.createElement("ul");

@@ -1511,6 +1511,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/grounded-preselection-reranker",
   "keiko-server/grounded-prompt",
   "keiko-server/grounded-prompt-context",
+  "keiko-server/grounded-prompt-redactor",
   "keiko-server/grounded-qa",
   "keiko-server/grounded-qa-hybrid",
   "keiko-server/grounded-qa-multi-source",
