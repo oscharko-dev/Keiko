@@ -1702,3 +1702,93 @@ it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toB
   await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
   return own;
 }
+
+export function metadataSourceRecord() {
+  const record = responsibilityRecord("raw-property-observation");
+  const consumer = (exportName) => ({
+    owner: "alpha",
+    consumerPath: "packages/alpha/src/owner.ts",
+    specifier: "alpha/runtime",
+    exportName,
+  });
+  record.id = "fixture-metadata-source";
+  record.rules = ["anti-slop/no-object-parameters"];
+  for (const role of ["input", "transform", "output"]) record[role].exportName = "copyMetadata";
+  record.consumer = consumer("first");
+  record.metadataSourceInput = { companion: consumer("second") };
+  record.proofAssertions = ["retains target and raw identity", "retains malformed attachment"].map(
+    (name) => ({ path: record.proofs[0], testName: `metadata source ${name}` }),
+  );
+  return record;
+}
+
+function metadataSourceOwner(variant) {
+  const copy = ["wrong-source", "wrong-target"].includes(variant)
+    ? 'throw new TypeError("unsupported fixture signature");'
+    : variant === "dropped"
+      ? "void source;"
+      : "Object.defineProperty(target, marker, { value: Reflect.get(source, marker) });";
+  let source = `export const marker = Symbol("fixture-registration");
+export function copyMetadata<Target extends object>(source: object, target: Target): Target {
+  ${copy}
+  ${["wrong-source", "wrong-target"].includes(variant) ? "" : "return target;"}
+}
+function rebound<Event extends object, Copy extends Event>(event: Event, target: Copy): Copy {
+  return copyMetadata<Copy>(event, target);
+}
+export function first<Event extends object>(event: Event): Event { return rebound(event, { ...event }); }
+export function second<Event extends object>(event: Event): Event { return rebound(event, { ...event }); }
+`;
+  if (variant === "wrong-source") source = source.replace("source: object", "source: unknown");
+  if (variant === "wrong-target") source = source.replace("target: Target", "target: object");
+  if (variant === "third-caller")
+    source +=
+      "export function third(event: object): object { return rebound(event, { ...event }); }\n";
+  if (variant === "callback-escape") source += "const escaped = [rebound]; void escaped;\n";
+  if (variant === "unbound-second")
+    source = source.replace(
+      "second<Event extends object>(event: Event): Event { return rebound(event, { ...event }); }",
+      "second<Event extends object>(event: Event): Event { return event; }",
+    );
+  return source;
+}
+
+function metadataSourceProof() {
+  return `import { it, expect } from "vitest";
+import { copyMetadata, first, second, marker } from "alpha/runtime";
+it("metadata source retains target and raw identity", () => {
+  const raw = { owner: "fixture" }; const source = {};
+  Object.defineProperty(source, marker, { value: raw }); const target = {};
+  expect(copyMetadata(source, target)).toBe(target);
+  expect(Object.getOwnPropertyDescriptor(target, marker)).toEqual({ value: raw,
+    enumerable: false, writable: false, configurable: false });
+  for (const rebound of [first(source), second(source)]) expect(Reflect.get(rebound, marker)).toBe(raw);
+});
+it("metadata source retains malformed attachment", () => {
+  const raw = {}; const source = {}; Object.defineProperty(source, marker, { value: raw });
+  for (const target of [copyMetadata(source, {}), first(source), second(source)])
+    expect(Reflect.get(target, marker)).toBe(raw);
+});
+`;
+}
+
+export function createMetadataSourceFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    config.compilerOptions.lib.push("DOM");
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", metadataSourceOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { copyMetadata as parse } from "./owner.js";\n');
+    own.put("packages/alpha/src/proof.test.ts", metadataSourceProof());
+    own.put(
+      "src/consumer.ts",
+      'import { copyMetadata, first, second } from "alpha/runtime"; export const copy = copyMetadata({}, {}); export const one = first({}); export const two = second({});',
+    );
+    const record = metadataSourceRecord();
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}

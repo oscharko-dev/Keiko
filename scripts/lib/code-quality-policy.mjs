@@ -190,7 +190,32 @@ function validObjectValidatorOption(record) {
   );
 }
 
+function validMetadataSourceRules(record) {
+  return (
+    record.rules.length === 1 &&
+    record.rules[0] === "anti-slop/no-object-parameters" &&
+    record.input?.parameterIndex === 0 &&
+    record.proofAssertions?.length > 0
+  );
+}
+
+function validMetadataSourceOption(record) {
+  const option = record.metadataSourceInput;
+  return (
+    record.kind === "raw-property-observation" &&
+    exactKeys(option, ["companion"]) &&
+    validConsumerSelector(option.companion) &&
+    option.companion.owner === record.owner &&
+    record.consumer?.owner === record.owner &&
+    !["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"].some((key) =>
+      Object.hasOwn(record, key),
+    ) &&
+    validMetadataSourceRules(record)
+  );
+}
+
 function validObservationOptions(record) {
+  if (Object.hasOwn(record, "metadataSourceInput")) return validMetadataSourceOption(record);
   if (record.kind === "validator" && Object.hasOwn(record, "rawObjectInput"))
     return validObjectValidatorOption(record);
   const present = ["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"].some(
@@ -205,6 +230,7 @@ function validObservationOptions(record) {
 }
 
 function validObservationRules(record) {
+  if (Object.hasOwn(record, "metadataSourceInput")) return validMetadataSourceOption(record);
   const rules = [
     "anti-slop/no-object-parameters",
     "anti-slop/no-unknown-returns",
@@ -229,6 +255,7 @@ function validTypedRecheckRules(record) {
 }
 
 function validResponsibilityConsumer(record) {
+  if (Object.hasOwn(record, "metadataSourceInput")) return validConsumerSelector(record.consumer);
   return [
     "diagnostic-checker",
     "public-parser",
@@ -255,7 +282,12 @@ function responsibilityKeys(record) {
   ];
   if (record !== null && typeof record === "object" && Object.hasOwn(record, "proofAssertions"))
     keys.push("proofAssertions");
-  for (const option of ["rawObjectInput", "additionalObservationForms", "directRawCheckerInputs"])
+  for (const option of [
+    "rawObjectInput",
+    "additionalObservationForms",
+    "directRawCheckerInputs",
+    "metadataSourceInput",
+  ])
     if (record !== null && typeof record === "object" && Object.hasOwn(record, option))
       keys.push(option);
   return keys;
@@ -362,6 +394,9 @@ function retainsProofAssertion(record, proof) {
 
 function observationOptionShrank(current, record) {
   return (
+    (Object.hasOwn(record, "metadataSourceInput") &&
+      canonicalIdentity(current.metadataSourceInput) !==
+        canonicalIdentity(record.metadataSourceInput)) ||
     (record.rawObjectInput === true && current.rawObjectInput !== true) ||
     (record.directRawCheckerInputs === true && current.directRawCheckerInputs !== true) ||
     (record.additionalObservationForms ?? []).some(

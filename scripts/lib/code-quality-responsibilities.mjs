@@ -14,6 +14,7 @@ function inventoryFile(subject, path) {
 }
 
 function proofConsumerKind(record) {
+  if (record.kind === "raw-property-observation" && record.metadataSourceInput) return false;
   return [
     "diagnostic-checker",
     "public-parser",
@@ -33,7 +34,11 @@ export function resolveRoles(resolver, record) {
       if (role === "consumer")
         return [
           role,
-          proof ? resolver.resolveProofConsumer(selector) : resolver.resolveExport(selector),
+          record.metadataSourceInput
+            ? resolver.metadataSourceConsumer(selector)
+            : proof
+              ? resolver.resolveProofConsumer(selector)
+              : resolver.resolveExport(selector),
         ];
       const key = exportFactKey(selector, proof);
       if (key !== undefined && exports.has(key)) return [role, structuredClone(exports.get(key))];
@@ -108,12 +113,15 @@ function rawReaderIdentityReasons(record, roles, reasons) {
   if (roles.input.signatures[0]?.result.kind !== "unknown") reasons.push("nonraw-reader-output");
 }
 
-function objectValidatorIdentityReasons(record, roles, reasons) {
-  if (record.kind !== "validator" || record.rawObjectInput !== true) return;
+function rootBoundaryIdentityReasons(record, roles, reasons) {
+  const metadata = record.kind === "raw-property-observation" && record.metadataSourceInput;
+  if (!metadata && (record.kind !== "validator" || record.rawObjectInput !== true)) return;
   const identity = (facts) =>
     JSON.stringify(facts.identities.map(({ owner, producer }) => ({ owner, producer })));
   if ([roles.transform, roles.output].some((facts) => identity(facts) !== identity(roles.input)))
-    reasons.push("mismatched-object-validator-producer");
+    reasons.push(
+      metadata ? "mismatched-metadata-source-producer" : "mismatched-object-validator-producer",
+    );
 }
 
 function signatureReasons(record, roles) {
@@ -121,7 +129,7 @@ function signatureReasons(record, roles) {
   diagnosticIdentityReasons(record, roles, reasons);
   rawReaderIdentityReasons(record, roles, reasons);
   canonicalDecoderIdentityReasons(record, roles, reasons);
-  objectValidatorIdentityReasons(record, roles, reasons);
+  rootBoundaryIdentityReasons(record, roles, reasons);
   const output = roles.output.signatures[0]?.result.kind;
   if (record.kind === "validator" && ["unknown", "any"].includes(output))
     reasons.push("unchecked-validator-output");
@@ -161,30 +169,36 @@ function proofFacts(subject, resolver, record) {
   });
 }
 
+function propertyObservationSlots(resolver, record, roles) {
+  if (record.metadataSourceInput)
+    return resolver.metadataSourceFacts(roles.input.identities[0]).slots;
+  return resolver
+    .propertyObservationFacts(roles.input.identities[0], {
+      rawObjectInput: record.rawObjectInput,
+      additionalObservationForms: record.additionalObservationForms,
+      directRawCheckerInputs: record.directRawCheckerInputs,
+    })
+    .slots.map((slot) =>
+      slot.observationRoots
+        ? {
+            ...slot,
+            observationRoots: slot.observationRoots.map((root) => ({
+              ...root,
+              recordId: record.id,
+              proofAssertions: structuredClone(record.proofAssertions),
+            })),
+          }
+        : slot,
+    );
+}
+
 function responsibilitySlots(resolver, record, roles) {
   if (roles.input.identities.length !== 1 || roles.output.identities.length !== 1)
     throw new TypeError("ambiguous-responsibility-producer");
   if (record.kind === "raw-own-property-reader")
     return [resolver.rawReaderFacts(roles.input.identities[0]).slot];
   if (record.kind === "raw-property-observation")
-    return resolver
-      .propertyObservationFacts(roles.input.identities[0], {
-        rawObjectInput: record.rawObjectInput,
-        additionalObservationForms: record.additionalObservationForms,
-        directRawCheckerInputs: record.directRawCheckerInputs,
-      })
-      .slots.map((slot) =>
-        slot.observationRoots
-          ? {
-              ...slot,
-              observationRoots: slot.observationRoots.map((root) => ({
-                ...root,
-                recordId: record.id,
-                proofAssertions: structuredClone(record.proofAssertions),
-              })),
-            }
-          : slot,
-      );
+    return propertyObservationSlots(resolver, record, roles);
   if (record.kind === "typed-parameter-recheck")
     return resolver.typedRecheckFacts(roles.input.identities[0], record.input.parameterIndex).slots;
   if (record.kind === "raw-canonical-json-decoder")
@@ -247,15 +261,25 @@ function typedOrCanonicalConsumer(resolver, record, roles) {
       );
 }
 
+function propertyObservationConsumer(resolver, record, roles, reasons) {
+  const binding = record.metadataSourceInput
+    ? resolver.metadataSourceBinding(
+        roles.consumer.identities[0],
+        resolver.metadataSourceConsumer(record.metadataSourceInput.companion).identities[0],
+        roles.transform.identities[0],
+        record.owner,
+      )
+    : resolver.observationBinding(record.consumer, roles.transform.identities[0]);
+  if (!binding.bound) reasons.push("unsupported-property-observation-consumer");
+  return binding;
+}
+
 function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   if (consumerReason || reasons.length) return null;
   if (record.kind === "raw-own-property-reader")
     return rawReaderConsumer(resolver, record, roles, reasons);
-  if (record.kind === "raw-property-observation") {
-    const binding = resolver.observationBinding(record.consumer, roles.transform.identities[0]);
-    if (!binding.bound) reasons.push("unsupported-property-observation-consumer");
-    return binding;
-  }
+  if (record.kind === "raw-property-observation")
+    return propertyObservationConsumer(resolver, record, roles, reasons);
   if (record.kind === "public-parser")
     return publicParserConsumer(resolver, record, roles, reasons);
   if (["typed-parameter-recheck", "raw-canonical-json-decoder"].includes(record.kind))
@@ -332,7 +356,9 @@ function assessRecord(subject, resolver, record, files) {
 
 function qualifiedAdaptationSlot(assessment, slot, assessments) {
   if (
-    (slot.capturedUnknownPredicate || slot.rawObjectValidatorInput) &&
+    (slot.capturedUnknownPredicate ||
+      slot.rawObjectValidatorInput ||
+      slot.rawMetadataSourceInput) &&
     assessment.semantic !== "qualified"
   )
     return false;

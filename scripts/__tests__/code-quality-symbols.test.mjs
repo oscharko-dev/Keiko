@@ -24,6 +24,7 @@ import {
   createConsumerSeamFixture,
   createObservationOptionsFixture,
   createObjectValidatorFixture,
+  createMetadataSourceFixture,
   createDirectObservationCheckerFixture,
   createResponsibilityFixture,
   createEnforcementFixture,
@@ -3438,4 +3439,65 @@ describe("optional raw typeof operands (#3918)", () => {
     );
     own.resolver.assertCurrent();
   });
+});
+
+describe("raw metadata source facts and bounded consumers (#3918)", () => {
+  it("binds the source root only and requires both real incoming public consumers", async () => {
+    const own = createMetadataSourceFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    const first = own.resolver.metadataSourceConsumer(own.record.consumer).identities[0];
+    const second = own.resolver.metadataSourceConsumer(own.record.metadataSourceInput.companion)
+      .identities[0];
+    const facts = own.resolver.metadataSourceFacts(producer);
+    expect(facts.slots).toHaveLength(1);
+    expect(facts.slots[0]).toMatchObject({
+      index: 0,
+      rule: "anti-slop/no-object-parameters",
+      rawMetadataSourceInput: true,
+    });
+    const text = readFileSync(join(own.root, producer.producer.path), "utf8");
+    expect(text.slice(facts.slots[0].start, facts.slots[0].end)).toBe("object");
+    expect(own.resolver.consumerCalls(first, producer, "alpha").bound).toBe(false);
+    const binding = own.resolver.metadataSourceBinding(first, second, producer, "alpha");
+    expect(binding).toMatchObject({
+      bound: true,
+      status: "ready",
+      implementations: [first, second],
+    });
+    expect(binding.calls).toHaveLength(1);
+    expect(() => own.resolver.metadataSourceBinding(first, first, producer, "alpha")).toThrow(
+      "unsupported-metadata-source-consumers",
+    );
+  });
+
+  it.each(["wrong-source", "wrong-target"])(
+    "withholds an unsupported %s signature",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const producer = own.resolver.resolveExport(own.record.input).identities[0];
+      expect(() => own.resolver.metadataSourceFacts(producer)).toThrow(
+        "unsupported-metadata-source-boundary",
+      );
+    },
+  );
+
+  it.each(["third-caller", "callback-escape", "unbound-second"])(
+    "keeps %s outside the closed pair",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const producer = own.resolver.resolveExport(own.record.input).identities[0];
+      const first = own.resolver.metadataSourceConsumer(own.record.consumer).identities[0];
+      const second = own.resolver.metadataSourceConsumer(own.record.metadataSourceInput.companion)
+        .identities[0];
+      expect(own.resolver.metadataSourceBinding(first, second, producer, "alpha").bound).toBe(
+        false,
+      );
+    },
+  );
 });

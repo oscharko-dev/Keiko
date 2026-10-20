@@ -359,8 +359,8 @@ function qualifyPublicEntry(compiler, context, source, references, request, fact
     throw new TypeError("mismatched-public-declaration-producer");
 }
 
-function resolveProofConsumer(compiler, request) {
-  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+function resolveProofConsumer(compiler, request, proof = true) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, proof);
   const module = context.checker.getSymbolAtLocation(source);
   const symbol = context.checker
     .getExportsOfModule(module)
@@ -2147,7 +2147,7 @@ function consumerIndexTarget(compiler, source, node) {
   return runtimeCallable(callable) ? rawCallableTarget(compiler, source, node, callable) : null;
 }
 
-function consumerStateIndex(compiler, implementation) {
+function consumerStateIndex(compiler, implementation, companion = null) {
   const nodes = sourceNodes(compiler, implementation.source);
   const root = {
     ...implementation,
@@ -2159,6 +2159,17 @@ function consumerStateIndex(compiler, implementation) {
   };
   root.key = root.identity.producer.start;
   const states = new Map([[root.key, root]]);
+  if (companion) {
+    const key = companion.identity.producer.start;
+    states.set(key, {
+      ...root,
+      ...companion,
+      key,
+      declaration: companion.callable,
+      incoming: [],
+      outgoing: [],
+    });
+  }
   for (const node of nodes) {
     const target = consumerIndexTarget(compiler, root.source, node);
     if (!target || exportedDeclaration(target.declaration)) continue;
@@ -2187,15 +2198,15 @@ function consumerWitnessKeys(compiler, states, reachable, producer) {
     .map((state) => state.key);
 }
 
-function consumerContributingKeys(root, states, reachable, witnesses) {
-  const keys = new Set(witnesses).add(root.key);
+function consumerContributingKeys(root, states, reachable, witnesses, roots = new Set([root.key])) {
+  const keys = new Set([...witnesses, ...roots]);
   for (const key of keys)
     for (const edge of states.get(key).incoming)
       if (reachable.has(edge.state)) keys.add(edge.state);
   return keys;
 }
 
-function consumerWitnessStates(root, index, keys) {
+function consumerWitnessStates(root, index, keys, roots = new Set([root.key])) {
   if (keys.size > root.compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
   const states = new Map(
     [...keys].map((key) => {
@@ -2205,15 +2216,30 @@ function consumerWitnessStates(root, index, keys) {
   );
   const complete = new Set();
   for (const key of states.keys()) assertConsumerAcyclic(states, key, new Set(), complete);
-  return { root, states, qualified: qualifiedRawStates(root, states) };
+  return { root, states, qualified: qualifiedRawStates(root, states, roots) };
 }
 
-function consumerStates(compiler, implementation, producer) {
-  const { root, states } = consumerStateIndex(compiler, implementation);
-  const reachable = consumerReachableKeys(root, states);
-  const witnesses = consumerWitnessKeys(compiler, states, reachable, producer);
-  const keys = consumerContributingKeys(root, states, reachable, witnesses);
-  return consumerWitnessStates(root, states, keys);
+function consumerStates(compiler, implementation, producer, companion = null) {
+  const { root, states } = consumerStateIndex(compiler, implementation, companion);
+  const roots = new Set([root.key]);
+  if (companion) roots.add(companion.identity.producer.start);
+  const witnessesByRoot = [];
+  const reachable = new Set();
+  for (const key of roots) {
+    const reached = consumerReachableKeys(states.get(key), states);
+    witnessesByRoot.push(consumerWitnessKeys(compiler, states, reached, producer));
+    for (const reachedKey of reached) reachable.add(reachedKey);
+  }
+  const witnesses = witnessesByRoot.flat();
+  const keys = consumerContributingKeys(root, states, reachable, witnesses, roots);
+  const graph = consumerWitnessStates(root, states, keys, roots);
+  if (!companion) return graph;
+  return {
+    ...graph,
+    witnessesByRoot: witnessesByRoot.map((entries) =>
+      entries.filter((key) => graph.qualified.has(key)),
+    ),
+  };
 }
 
 function knownConsumerTarget(state, expression, states) {
@@ -3715,6 +3741,127 @@ function propertyObservationFacts(compiler, identity, options = {}) {
   };
 }
 
+function metadataTargetReference(state, annotation) {
+  return (
+    annotation &&
+    ts.isTypeReferenceNode(annotation) &&
+    ts.isIdentifier(annotation.typeName) &&
+    !annotation.typeArguments?.length &&
+    state.context.checker.getSymbolAtLocation(annotation.typeName) ===
+      state.context.checker.getSymbolAtLocation(state.callable.typeParameters[0].name)
+  );
+}
+
+function metadataSourceCallable(callable) {
+  return (
+    typedFunctionDeclaration(callable) &&
+    exportedDeclaration(callable) &&
+    !callable.asteriskToken &&
+    !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+    callable.typeParameters?.length === 1 &&
+    callable.parameters.length === 2
+  );
+}
+
+function metadataSourceSignature(state) {
+  const callable = state.callable;
+  const parameter = callable.typeParameters?.[0];
+  return (
+    metadataSourceCallable(callable) &&
+    parameter.constraint?.kind === ts.SyntaxKind.ObjectKeyword &&
+    !parameter.default &&
+    observationParameter(callable.parameters[0], ts.SyntaxKind.ObjectKeyword) &&
+    observationParameter(callable.parameters[1], ts.SyntaxKind.TypeReference) &&
+    metadataTargetReference(state, callable.parameters[1].type) &&
+    metadataTargetReference(state, callable.type)
+  );
+}
+
+function metadataTargetType(state, signature) {
+  const { checker } = state.context;
+  const parameter = state.callable.typeParameters[0];
+  const target = checker.getTypeAtLocation(parameter);
+  return (
+    signature.typeParameters?.length === 1 &&
+    !signature.thisParameter &&
+    signature.typeParameters[0] === target &&
+    checker.getTypeAtLocation(state.callable.parameters[1].type) === target &&
+    checker.getTypeAtLocation(state.callable.type) === target &&
+    checker.getReturnTypeOfSignature(signature) === target
+  );
+}
+
+function metadataSourceFacts(compiler, identity) {
+  const state = { ...declarationCallable(compiler, identity), identity };
+  const signatures = state.context.checker.getTypeAtLocation(state.callable).getCallSignatures();
+  if (
+    !metadataSourceSignature(state) ||
+    signatures.length !== 1 ||
+    !metadataTargetType(state, signatures[0])
+  )
+    throw new TypeError("unsupported-metadata-source-boundary");
+  const slot = annotationSlot(
+    state.context,
+    state.source,
+    state.callable.parameters[0].type,
+    identity,
+    "parameter",
+    0,
+  );
+  compiler.assertCurrent();
+  return {
+    identity,
+    slots: [{ ...slot, rule: "anti-slop/no-object-parameters", rawMetadataSourceInput: true }],
+  };
+}
+
+function metadataConsumerPair(compiler, primary, companion, owner) {
+  const first = consumerImplementation(compiler, primary);
+  const second = consumerImplementation(compiler, companion);
+  const production = (identity) =>
+    compiler.state.subject.inventory.files.some(
+      (file) => file.path === identity.producer.path && file.production,
+    );
+  if (
+    first.identity.owner !== owner ||
+    second.identity.owner !== owner ||
+    !production(first.identity) ||
+    !production(second.identity) ||
+    first.source !== second.source ||
+    sameProducer(first.identity, second.identity) ||
+    !exportedDeclaration(first.callable) ||
+    !exportedDeclaration(second.callable)
+  )
+    throw new TypeError("unsupported-metadata-source-consumers");
+  return { first, second };
+}
+
+function metadataSourceBinding(compiler, primary, companion, producer, owner) {
+  if (producer.owner !== owner) throw new TypeError("foreign-responsibility-owner");
+  const { first, second } = metadataConsumerPair(compiler, primary, companion, owner);
+  const graph = consumerStates(compiler, first, producer, second);
+  const [firstWitnesses, secondWitnesses] = graph.witnessesByRoot;
+  const witnesses = new Set([...firstWitnesses, ...secondWitnesses]);
+  const calls = [...witnesses].flatMap((key) => {
+    const state = graph.states.get(key);
+    return state.calls
+      .filter((call) => canonicalCall(compiler, state.context, call.expression, producer))
+      .map((call) => ({
+        path: state.identity.producer.path,
+        start: call.getStart(),
+        end: call.end,
+      }));
+  });
+  const bound = firstWitnesses.length > 0 && secondWitnesses.length > 0;
+  compiler.assertCurrent();
+  return {
+    implementations: [first.identity, second.identity],
+    calls,
+    bound,
+    status: bound ? "ready" : "incomplete",
+  };
+}
+
 function objectValidatorSignature(callable) {
   return (
     typedFunctionDeclaration(callable) &&
@@ -3961,6 +4108,10 @@ function validationBoundaryOperations(compiler) {
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     parserBinding: (request, producer) => parserBinding(compiler, request, producer),
     objectValidatorFacts: (identity) => objectValidatorFacts(compiler, identity),
+    metadataSourceFacts: (identity) => metadataSourceFacts(compiler, identity),
+    metadataSourceConsumer: (request) => resolveProofConsumer(compiler, request, false),
+    metadataSourceBinding: (primary, companion, producer, owner) =>
+      metadataSourceBinding(compiler, primary, companion, producer, owner),
   };
 }
 

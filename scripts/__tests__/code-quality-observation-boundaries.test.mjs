@@ -13,6 +13,8 @@ import {
   createObservationOptionsFixture,
   createObjectValidatorFixture,
   objectValidatorRecord,
+  metadataSourceRecord,
+  createMetadataSourceFixture,
   createDirectObservationCheckerFixture,
   responsibilityPolicy,
   createRawHelperEnforcementFixture,
@@ -373,4 +375,102 @@ describe("optional raw typeof responsibility slots (#3918)", () => {
       ),
     );
   });
+});
+
+describe("raw metadata source responsibility (#3918)", () => {
+  it("closes the opt-in to one root rule and one additional owned consumer", () => {
+    const record = metadataSourceRecord();
+    expect(validatePolicy(responsibilityPolicy([record]))).toEqual([]);
+    for (const change of [
+      (entry) => {
+        delete entry.metadataSourceInput.companion;
+      },
+      (entry) => {
+        entry.metadataSourceInput.companion.owner = "beta";
+      },
+      (entry) => {
+        entry.metadataSourceInput.extra = true;
+      },
+      (entry) => {
+        entry.rawObjectInput = true;
+      },
+      (entry) => {
+        entry.rules.push("anti-slop/no-unknown-returns");
+      },
+      (entry) => {
+        entry.kind = "validator";
+      },
+    ]) {
+      const invalid = structuredClone(record);
+      change(invalid);
+      expect(validatePolicy(responsibilityPolicy([invalid]))).not.toEqual([]);
+    }
+  });
+
+  it("requires the explicit metadata-source boundary instead of legacy observer grants", async () => {
+    const own = createMetadataSourceFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const ready = assessPolicyResponsibilities(subject, own.policy);
+    expect(ready.counts).toMatchObject({ ready: 1, pending: 1 });
+    expect(ready.assessments[0].slots).toHaveLength(1);
+    expect(ready.assessments[0].slots[0].rawMetadataSourceInput).toBe(true);
+    const absent = structuredClone(own.policy);
+    delete absent.responsibilities[0].metadataSourceInput;
+    expect(assessPolicyResponsibilities(subject, absent).counts.ready).toBe(0);
+  });
+
+  it("keeps pending tagged observations out of both adaptation dispatch paths", () => {
+    // Constructed dispatch reports only. The non-object rule isolates both dispatch paths
+    // from the separate object-measurement grammar; it grants no native metadata-source slot.
+    for (const kind of ["raw-property-observation", "public-parser"]) {
+      const finding = {
+        path: "owner.ts",
+        rule: "anti-slop/no-known-value-widening",
+        line: 1,
+        column: 1,
+      };
+      const slot = { ...finding, rawMetadataSourceInput: true };
+      const assessment = {
+        id: "metadata",
+        kind,
+        structural: "ready",
+        semantic: "pending",
+        slots: [slot],
+      };
+      if (kind === "public-parser") slot.contributingResponsibilityIds = [assessment.id];
+      expect(
+        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+          .violations,
+      ).toEqual([finding]);
+      assessment.semantic = "qualified";
+      expect(
+        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+          .violations,
+      ).toEqual([]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each(["valid", "dropped"])(
+    "requires genuine public transport proofs for %s implementation",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant);
+      await installSemanticFixtureTools(own);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
+      if (variant === "dropped") {
+        await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+          "semantic-proof-execution-failed",
+        );
+        return;
+      }
+      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
+      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+      expect(
+        qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
+      ).toBe(true);
+    },
+  );
 });
