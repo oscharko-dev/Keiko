@@ -1335,6 +1335,17 @@ canonical registration or persistence authority; the physical writer still reval
 This option grants neither private helper parameters nor call-result origins, descriptor transport,
 or shared raw carriers. It is a proved boundary responsibility, not an implementation-body theorem.
 
+The additional `ownedPredicateStage: true` opt-in is confined to this same raw-object validator
+responsibility. After fresh qualification of the same six selected public/physical proofs and its
+real mandatory-event consumer, it may add only the canonical private `completeRegistrationShape`
+object input (1089:43), retaining the public `activityLogEventRegistration` root (1123:10).
+The existing `rawObjectInput` option alone remains root-only. The stage proves the exact private
+predicate/signature/reference relation; it is not a predicate-body or implementation-effect theorem.
+The raw registration producer (992), predicate body and other nine object roles remain ungranted.
+No typed-primitive, reflection, dictionary, widening, call-result, persistence or quota authority
+follows. Declaration alone does not qualify either slot: current canonical/native correspondence,
+the same bound consumer and completed parent proofs remain required.
+
 ### Workflow handoff request public admission
 
 The `workflow-handoff-request-public-parser` responsibility binds only the unknown input of

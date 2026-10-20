@@ -6284,6 +6284,7 @@
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "validator",
       "rawObjectInput": true,
+      "ownedPredicateStage": true,
       "rules": ["anti-slop/no-object-parameters"],
       "input": {
         "consumerPath": "packages/keiko-activity-log/src/server-logger.ts",
