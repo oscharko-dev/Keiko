@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4725a19ab54ebf8fde05d47214bdc9bedc0b292ebe0c1a1fd71f0f2b3f363032",
+    "catalogDigest": "0fd243384ec4e5eab995d54d06cb7943ee3639c15370d4c30ed6ff2ee6527d3c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -28304,8 +28304,8 @@
         "failureClasses": ["process-stall", "memory-pressure"],
         "proofIds": ["process.heartbeat.resources", "process.heartbeat.event-loop"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:90",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1276"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:91",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1277"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28433,8 +28433,8 @@
         "failureClasses": ["process-startup", "install-mode-probe-failed"],
         "proofIds": ["process.started.runtime", "process.started.configuration"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:118",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1401"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:119",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1402"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37302,8 +37302,8 @@
         "failureClasses": ["legacy-update-audit-import"],
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:218",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1665"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:219",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1677"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -91310,13 +91310,13 @@
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:93",
+      "site": "packages/keiko-cli/src/ui.ts:94",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:121",
+      "site": "packages/keiko-cli/src/ui.ts:122",
       "package": "keiko-cli"
     },
     {
@@ -91430,7 +91430,7 @@
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:221",
+      "site": "packages/keiko-cli/src/ui.ts:222",
       "package": "keiko-cli"
     },
     {

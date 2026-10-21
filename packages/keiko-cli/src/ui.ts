@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
 import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -1547,10 +1548,7 @@ async function reconcileAfterListen(
     if (!serverMatchesExpectedBinding(context.server, context.parsed.port)) {
       throw new Error("Portable update startup recovery observed an unexpected listener binding.");
     }
-    const result = await context.startupRecovery.reconcile({
-      phase: "post-listen",
-      current: context.current,
-    });
+    const result = await awaitStartupRecoveryCompletion(context.startupRecovery, context.current);
     context.handlerDeps.updateSession?.refreshDurableProjection?.();
     if (result.status !== "ready") {
       throw startupRecoveryRequiredError(
@@ -1569,6 +1567,20 @@ async function reconcileAfterListen(
     }
     throw error;
   }
+}
+
+async function awaitStartupRecoveryCompletion(
+  recovery: UpdateStartupRecoveryPort,
+  current: UpdateStartupRecoveryCurrent,
+): Promise<StartupRecoveryResult> {
+  let result = await recovery.reconcile({ phase: "post-listen", current });
+  while (result.status === "ready" && result.completionDeadline !== undefined) {
+    const remaining = result.completionDeadline - Date.now();
+    if (remaining <= 0) return { status: "recovery-required", reason: "interrupted" };
+    await delay(Math.min(250, remaining));
+    result = await recovery.reconcile({ phase: "post-listen", current });
+  }
+  return result;
 }
 
 // The #3532 evidence hooks a real launch threads into the lifecycle: the heartbeat re-evaluates

@@ -406,6 +406,10 @@ The coordinator requires that directory to remain real, canonical and available 
 the successor; it does not silently select the install folder as the user's workspace. Streaming
 progress stores its phase at the lifecycle level and only bounded byte counts inside `progress`.
 The closed runtime-state codec remains strict and rejects unknown byte-counter fields.
+After the successor publishes verification, startup keeps readiness closed while the native
+coordinator completes cleanup under the plan's original cleanup deadline. Recovery then settles
+the completed receipt chain and refreshes the session projection before reporting the app ready.
+Verification alone must not leave the update indefinitely awaiting a second restart to settle.
 
 The Linux native generation implementation uses an atomically held `clone3` PID handle for a
 new user/PID namespace init; the outer owner remains outside that generation. The init verifies

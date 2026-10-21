@@ -647,6 +647,50 @@ describe("runUiCli", () => {
     expect(extraOf(event).recoveryReason).toBe("persistence-failed");
   });
 
+  it("waits for late native cleanup before reporting the updated application ready", async () => {
+    const { io } = captureIo();
+    const order: string[] = [];
+    let postListenCalls = 0;
+    const server = Object.assign(fakeServer({}), {
+      once(): Server {
+        return this as unknown as Server;
+      },
+      removeListener(): Server {
+        return this as unknown as Server;
+      },
+      address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+    });
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: {
+          write: (event): void => {
+            if (event.op === "process.started") order.push("started");
+          },
+        },
+        createServer: () => server,
+        updateStartupRecovery: {
+          reconcile: ({ phase }) => {
+            if (phase === "pre-listen") return Promise.resolve({ status: "ready" as const });
+            postListenCalls += 1;
+            order.push(postListenCalls === 1 ? "verified" : "cleanup-complete");
+            return Promise.resolve({
+              status: "ready" as const,
+              ...(postListenCalls === 1 ? { completionDeadline: Date.now() + 1000 } : {}),
+            });
+          },
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(order).toEqual(["verified", "cleanup-complete", "started"]);
+  });
+
   it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {
     const { io } = captureIo();
     const order: string[] = [];
