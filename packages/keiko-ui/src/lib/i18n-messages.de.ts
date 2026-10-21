@@ -606,6 +606,10 @@ export const DE_MESSAGES = {
     "Das Chat-Grounding ist nach einer Zeitüberschreitung blockiert. Lade den Chat neu, bevor du es erneut versuchst.",
   "chat.grounding.connectSourceFailed":
     "Keiko konnte diese Quelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
+  "chat.grounding.sourceUpdatePending":
+    "Verbundene Quellen werden aktualisiert. Dein Entwurf bleibt erhalten.",
+  "chat.grounding.sourceUpdateFailed":
+    "Die Quellen konnten nicht aktualisiert werden. Verbinde die Quelle vor dem Senden erneut; dein Entwurf bleibt erhalten.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.grounding.gitChangeSavedRefreshUnavailable":
@@ -644,22 +648,8 @@ export const DE_MESSAGES = {
   "footer.windowAction": "{action} {title}-Fenster{suffix}",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",
-  "updates.notice.aria": "Keiko-Update-Hinweis",
-  "updates.notice.title": "Update verfügbar",
-  "updates.notice.criticalTitle": "Kritisches Update verfügbar",
-  "updates.notice.releaseUnavailableTitle": "Update-Prüfung nicht verfügbar",
-  "updates.notice.body":
-    "Version {version} kann geprüft werden. Keiko installiert sie nicht automatisch.",
-  "updates.notice.releaseUnavailableBody":
-    "Keiko konnte die Update-Download-Informationen gerade nicht prüfen. Es wird nichts installiert.",
-  "updates.notice.portableBody":
-    "Version {version} ist bereit. Öffne Updates und klicke auf Update, wenn du bereit bist.",
-  "updates.notice.portableSetupBody":
-    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
-  "updates.notice.portableExternallyManagedBody":
-    "Diese Keiko-Installation wird außerhalb der App verwaltet. Öffne Updates für Details.",
-  "updates.notice.review": "Update prüfen",
-  "updates.notice.notNow": "Nicht jetzt",
+  "updates.notice.loadFailed":
+    "Der Update-Hinweis konnte nicht geladen werden. Öffne Updates zum Prüfen.",
   "updates.versionUnknown": "unbekannt",
 
   "updates.status.current": "Keiko ist aktuell",

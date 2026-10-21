@@ -59,6 +59,15 @@ describe("workflowJobNames", () => {
     ]);
   });
 
+  it("recognizes only the explicit lifecycle namespace guard", () => {
+    const expression =
+      "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'inactive PR - ci' }}";
+    expect(workflowJobNames("jobs:\n  aggregate:\n    name: " + expression)).toEqual([
+      "ci",
+      "inactive PR - ci",
+    ]);
+  });
+
   it("treats a name line with only whitespace after the colon as an empty name (quirk-preserving)", () => {
     // `unquoteYamlScalar` trims its input, so a `name:` line with nothing but trailing
     // whitespace after the colon still counts as "matched" (an empty job name) rather than

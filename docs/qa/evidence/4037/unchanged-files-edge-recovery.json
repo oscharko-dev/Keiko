@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "classification": "Scoped source-lifecycle fix; final visible replay and overall acceptance remain open",
+  "sourceParent": "b3a792b6e182a97b5304d8b9b75ebd43dc375802",
+  "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f",
+  "sources": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "ef982932c0d30f7165b5afdc86350bb19e74c0d5a7d70665fd3779e0dc418fdb"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "sha256": "7edc1d6938ebe12b1873c7bf3dfeb9dedca7be4f72dba1e506348e9150cf8e6e"
+    },
+    {
+      "path": "docs/adr/ADR-0057-context-status-panel-and-chat-compaction-wiring.md",
+      "sha256": "fcc15971e553d20a7771ee439ac12f24292d088b8d578bd88e7770b5f2e8c328"
+    },
+    {
+      "path": "docs/qa/evidence/4037/README.md",
+      "sha256": "3e8cafb33baac28def560d46f16c778069426b89a3a56398b650678d32598b8a"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.tsx",
+      "sha256": "374d6e344dc5202b017792cb1c3e5a5aac352aa85644ef6f0e18efc1bd27c033"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.workspace-scope-sync.test.tsx",
+      "sha256": "1e4a97413b8c2bea965cec7f1c0fc1ff55e0755341af7500fc4b80fb91e2ade7"
+    }
+  ],
+  "failureFirst": {
+    "before": {
+      "failed": 1,
+      "passed": 59,
+      "logSha256": "9c7c497e21b9bd4fca49b6c59329f43e6d8821ec356c615e4037f378a120887c"
+    },
+    "afterScopeCases": 65,
+    "existingAssertionsWeakened": false,
+    "intermediateRepresentationFailureRetained": true
+  },
+  "finalUiSuite": {
+    "passed": 10808,
+    "existingSkipped": 1,
+    "suites": 562
+  },
+  "independentExactFunctionControls": {
+    "beforePassed": 12,
+    "afterPassed": 17,
+    "total": 17,
+    "reportSha256": "9dd13b81a34f6b4454032846bebafbe5f044cf0afb468c3e3dc2972196a846af",
+    "actualBrowserOrModelAcceptance": false
+  },
+  "observedUi53": {
+    "assetFiles": 301,
+    "separateBrowserApproval": true,
+    "draftReloadAndRevocationObserved": true,
+    "sameDraftAndUniqueChatPrivatelyJoinedByHash": true,
+    "unavailableUpdateStatusObserved": true,
+    "java": "failed-unrequested-source-intent-cancellation",
+    "userSends": 1,
+    "finalAssistantReplies": 0,
+    "physicalTaskAttempts": 2,
+    "firstCompletionTokens": 1536,
+    "interruptedContinuationCap": 6656,
+    "interruptedOutputExposure": "unknown-reserve-cap",
+    "react": "undispatched",
+    "taskWitnessesConfiguredInProxy": false,
+    "actualTaskAttribution": "correlated BFF dispatch, selected-skill digest and persisted history",
+    "terminalRetentionManifestSha256": "1dd4e442252e1cc3629cf9fad3e73f6d419eb4d078bb4bb83e96f4d065fcd282"
+  },
+  "builtUiProvenanceSha256": "5a1e2730be64cfb89fd8bc95cd98c6e1d0fbbe0c86b073e1135ab4559792190c",
+  "gates": [
+    {
+      "name": "ui-typecheck",
+      "command": ["npm", "run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"],
+      "exitCode": 0,
+      "receiptSha256": "9bf009e5b3b8482025968c16543eb31d49b05a34b8a53aa490f60b423495d1dd",
+      "logSha256": "bec09a74b9b71b5348d1fe72720400ca5afb55d241d0fcca59f0b7046c31fd4e",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "ui-lint",
+      "command": ["npm", "run", "lint", "--workspace", "@oscharko-dev/keiko-ui"],
+      "exitCode": 0,
+      "receiptSha256": "42cb8cba7704aebc113685b4a1b1f8841f3914d55fc5c7c13f8292b392649bc5",
+      "logSha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "ui-coverage",
+      "command": ["npm", "run", "test:coverage:ui"],
+      "exitCode": 0,
+      "receiptSha256": "a79500a645a0aae3901c3cc9194f269a20e6f56524facf2abd97bc57d83d53f4",
+      "logSha256": "1aef45651d45a475aa1d124a1848df064efe94b2ac7be1361fc97efbe0b26e87",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "ui-build",
+      "command": ["npm", "run", "build:ui"],
+      "exitCode": 0,
+      "receiptSha256": "501399c06e29e361949d96ca02b828a9dcf0138bc50c0a796f35ff038933ada7",
+      "logSha256": "0b1508ddc39905a0c370176240b3a57cc249685355e88f986ff170abbe625443",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "op-catalog",
+      "command": ["npm", "run", "generate:op-catalog"],
+      "exitCode": 0,
+      "receiptSha256": "d9affd4bca5250bd2eee61c7e3e3dde580012495188f06c75b1d08edb32225e8",
+      "logSha256": "98b6a3c3452a5ad75edf44df17c2f64f040eb1e4c9dabde653394ef0f88a8282",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "editor-evidence",
+      "command": ["npm", "run", "check:editor-release-evidence"],
+      "exitCode": 0,
+      "receiptSha256": "0d4f4dc269db8bbeefd26ca6dc4915aadaca01b2c507a97219802402d3623c95",
+      "logSha256": "4fbebddfd6c8f111327a91d30fdbd65299f85a4d5e12d5f4c39c66ca5894097f",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "sonar",
+      "command": ["npm", "run", "gates:sonar"],
+      "exitCode": 0,
+      "receiptSha256": "b8cbda1ef3f20c1b47a579750f1ae49e4e4bd6f9896b5e519d9125488f118552",
+      "logSha256": "03ae504d17dbd0553d61b9b7fb13d55639c82b13c901069d98e1df77e00b21b7",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    },
+    {
+      "name": "activity-log",
+      "command": ["npm", "run", "check:activity-log"],
+      "exitCode": 0,
+      "receiptSha256": "1f5ca4a4a4657e641cfed7a6d2e4ea195085ab3de819ef9406dfa0992c42a314",
+      "logSha256": "07dd892ee06bc47f7a58beca55b1e35586c07ea55b83f3be57f335c045789d98",
+      "sourceFreezeSha256": "f56f733be3a92dc3c7b80acd85b6f9cf1de4da49d105e9d07b000eafbbe3677f"
+    }
+  ],
+  "remaining": [
+    "Fixed-source visible no-op replay with before/after workspace observations",
+    "Updater production launch/worker/signal ownership and genuine packaged version transitions/recovery/SSD",
+    "Full independent-browser and recursive-source acceptance",
+    "Skill efficacy/profile/held-out acceptance after updater and retrieval",
+    "Final exact-head CI/review and authorized dev integration"
+  ]
+}

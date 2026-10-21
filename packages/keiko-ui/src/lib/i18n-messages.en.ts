@@ -589,6 +589,9 @@ export const EN_MESSAGES = {
     "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
   "chat.grounding.connectSourceFailed":
     "Keiko could not connect that source. Check that it is still available and try again.",
+  "chat.grounding.sourceUpdatePending": "Updating connected sources. Your draft is preserved.",
+  "chat.grounding.sourceUpdateFailed":
+    "Could not update connected sources. Reconnect the source before sending; your draft is preserved.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
   "chat.grounding.gitChangeSavedRefreshUnavailable":
@@ -626,22 +629,7 @@ export const EN_MESSAGES = {
   "footer.windowAction": "{action} {title} window{suffix}",
   "settings.title": "Settings",
   "settings.language.compactLabel": "Language",
-  "updates.notice.aria": "Keiko update notification",
-  "updates.notice.title": "Update available",
-  "updates.notice.criticalTitle": "Critical update available",
-  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
-  "updates.notice.body":
-    "Version {version} is ready to review. Keiko will not install it automatically.",
-  "updates.notice.releaseUnavailableBody":
-    "Keiko could not verify update download information right now. It will not install anything.",
-  "updates.notice.portableBody":
-    "Version {version} is ready. Open updates, then click Update when you are ready.",
-  "updates.notice.portableSetupBody":
-    "Portable setup is required before Keiko can use in-app updates.",
-  "updates.notice.portableExternallyManagedBody":
-    "This Keiko install is managed outside the app. Open updates for details.",
-  "updates.notice.review": "Review update",
-  "updates.notice.notNow": "Not now",
+  "updates.notice.loadFailed": "The update notice could not be loaded. Open Updates to check.",
   "updates.versionUnknown": "unknown",
 
   "updates.status.current": "Keiko is up to date",

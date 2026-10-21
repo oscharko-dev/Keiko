@@ -92,6 +92,13 @@ process/request/model-call boundaries, read a Keiko-code stack frame without a h
 directory layout, and scaffold a red-then-green regression test — all without any customer content
 ever appearing in the artifact.
 
+Source projection adds optional, typed counts on the existing `chat.response.streamed` operation:
+projection revision, source regions, depth/size/syntax refusals, and pending/published character-block
+observations. `search.connected-context.evidence-details` identifies the projection revision within its existing field grant. Parser
+errors containing source text never become diagnostics; unavailable source follows existing read
+failure and uncertainty evidence. These fields do not prove compilation, model quality, UI copying,
+or durable persistence: each claim still requires its own actual execution evidence.
+
 **Non-goals.** This epic does not log prompts, responses, document text, secrets, absolute
 filesystem paths, or any other customer content — content-shape and counts only, never bodies. It
 does not introduce runtime source maps, OpenTelemetry, or a second logging/tracing subsystem; every
@@ -421,6 +428,26 @@ the event, and the physical sink repeats validation immediately before serializa
 check closes post-construction mutation and protects JavaScript callers that did not pass through
 the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
 echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
+
+Client update presentation uses the existing `client.update-notice.presented` operation with
+closed `noticeKind` and `presentation` (`shown`, `dismissed`, `suppressed`), the actual
+`updateAvailable` flag and `blockerCount`, and the existing request correlation. Availability kinds
+must agree with the flag; a no-signal result may only be suppressed. Immediate user dismissals,
+including opening Updates and dismissing a local load-failure fallback, record their own bounded
+presentation transition; restoring a stored dismissal remains a separate observation. No release
+report, message body, path, version guess or private warning is admitted as presentation evidence.
+
+Files source intents use the existing `client.files-scope.decision` operation's closed
+`intent-send-cancelled` decision and the admitted intent correlation. This records cancellation
+against the controller that actually owns the conversation, including an unpublished root fallback
+and regeneration. Navigation alone does not cancel captured canonical Voice work, and this client
+observation is not a substitute for server persistence acknowledgement or terminal settlement.
+Portable preflight and status record `update.install-mode.detected` with closed mode/reason/target
+and measured duration, never roots or package bodies. Browser secret rotation records the actual
+remaining `cookieMaxAgeSeconds` on the existing `coding-app-session.rotated` operation; changing a
+secret does not extend approved absolute authority. The generated registry remains authoritative
+for exact enums, obligations and executable proofs; these producers retain the existing writer,
+segmented store and reader ownership under ADR-0179.
 
 Every generated operation schema includes required `completeness` and `loss` contracts. The event
 constructor supplies the safe defaults `complete` and `none`, while a producer that observed
@@ -1713,6 +1740,10 @@ segment is orphaned when:
 - its owner has exited, or its pid now belongs to this process;
 - it is older than two segment windows and unwritten for one (pid reuse);
 - it is this instance's own abandoned segment.
+
+The `same-process` recovery reason requires both the process id and instance id to match.
+A matching instance id alone does not establish ownership: an active segment held by another
+live process remains foreign and prevents replacement of the shared store policy.
 
 Recovery seals the file as it is: a partial final line is kept and reported (`tailState:
 "truncated"`, `truncatedBytes`), and valid lines are never rewritten. An interrupted seal whose seal

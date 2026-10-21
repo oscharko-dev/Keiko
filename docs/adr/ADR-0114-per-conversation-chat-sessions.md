@@ -60,6 +60,43 @@ windows.
    window aborts and disposes only that instance. Cold bootstrap requests and chat-mutation
    notifications remain shared and ref-counted, avoiding N identical network bootstraps while
    preserving per-window mutable state.
+   A shared window's accepted creation identity also reaches the server. The existing private
+   UiStore atomically binds that opaque identity and project to one conversation (schema 46),
+   so independent browser coordinators and delivery retries cannot create duplicate conversations.
+   Retries retain the accepted identity; an explicit new conversation receives a new identity.
+   Legacy unbound windows use their stable window identity. Changed creation parameters conflict,
+   while an omitted model remains an automatic choice independent of later default election.
+   Project aliases resolve through the existing read-only workspace root/manifest index to the
+   original registered project path before durable replay and accepted persistence. Filesystem
+   canonical spelling alone does not replace that stored project identity. A denied fresh request
+   does not register or update a project. Existing project names survive alias-based creation.
+   A registered requested path and its mapped stored path must still resolve to their recorded root
+   reference. Chat and project registration share this read-only check. Missing or retargeted stored
+   aliases fail closed with `PROJECT_IDENTITY_CHANGED` before replay or project mutation and require
+   explicit reconnect; they cannot redirect a new conversation to another physical root. This coherence
+   check grants no governed root authority and does not require a durable-object identity for
+   ordinary model-only chat. Existing creation-intent and workspace-root denial events record closed
+   refusal reasons under the request correlation.
+   V15 intentionally leaves older projects without workspace membership. Ordinary Chat preserves
+   their exact existing lexical project identity, including when another registered root reaches
+   the same directory; it neither redirects their history nor creates membership or trust. Explicit
+   project registration retains its existing canonical registration and metadata migration behavior.
+   Recovery returns the originally accepted conversation before current model admission. After an
+   asynchronous readiness join, it rechecks durable acceptance and parameter conflicts before new
+   model admission; a concurrent acceptance does not become a new request. Genuinely new requests
+   still require the unchanged model guards. An explicit model remains part of the intent,
+   and deletion retains a tombstone rather than resurrecting a conversation. This identity grants
+   no browser session, project access or draft authority. The existing Activity Log records only
+   the closed creation decision, completeness and loss state under the request correlation.
+   Pending window snapshots preserve the same closed, secret-checked creation reference across
+   independently connected browsers. Generating a persistable reference uses bounded secure
+   draws; exhaustion fails before window creation and records a body-free client diagnostic.
+   The same pending snapshot retains the originating automatic/explicit model choice. Independent
+   hosts forward that choice through the existing creation owner; local catalog changes cannot
+   change its meaning. A new incomplete or unsafe snapshot stays visibly blocked, with no legacy
+   election fallback. Accepted bindings clear pending identity and selection together. Legacy calls
+   retain their local readiness refusal; captured requests use the existing backend replay before
+   fresh admission, which retains its original model and authority checks.
    Unsent text is additionally saved per `chatId` in the existing private UiStore (schema 44),
    through authenticated draft reads and revision-checked writes. Reload restores only that
    conversation's text; a conversation switch does not erase another conversation's saved draft.
@@ -73,6 +110,14 @@ windows.
    chat window waits for private draft acknowledgement and refuses unresolved conflicts or staged
    attachments. A final synchronous readiness check preserves edits made during asynchronous
    connection teardown; acknowledged unbinds still remove their corresponding visible connections.
+   The existing window-local draft mutation revision also identifies Composer acknowledgements.
+   Published native edits carry their returned revision through the settled session slice; a new
+   external revision can therefore clear the same empty string even when React never rendered the
+   intermediate native text. An exact local acknowledgement preserves newer native input, while
+   an older acknowledgement cannot replace a newer revision. Conversation replacement resets that
+   binding. This transient revision is separate from the server's persisted compare-and-set revision
+   and carries no draft text into evidence or browser storage. External resynchronization uses the
+   existing body-free Composer activity event.
 2. **D2 — Global shell session.** `AppShell` retains one application session for catalog, project,
    history, and shell consumers. Nested window providers shadow it for all ChatWindow descendants.
    A window never claims or mutates another window's active conversation state.

@@ -399,11 +399,26 @@
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(6rem, 1fr) minmax(0, auto);
   border-end-start-radius: inherit;
   border-end-end-radius: inherit;
   overflow: hidden;
   background: transparent;
+}
+
+/* Readiness can reflow without moving controls in the separate composer grid row. */
+.cmpSessionContent {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* Keep a usable transcript line below its padding when readiness expands. */
+  grid-template-rows: minmax(0, auto) minmax(3rem, 1fr);
+  overflow: clip;
+}
+
+.cmpSessionContent > :first-child {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sessionStream {
@@ -568,6 +583,9 @@
   border-end-end-radius: inherit;
   width: min(100% - 2 * var(--space-5), 760px);
   min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
   justify-self: center;
   padding: var(--space-2) 0 var(--space-4);
   background: transparent;

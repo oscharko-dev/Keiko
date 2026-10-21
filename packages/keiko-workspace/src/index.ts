@@ -88,7 +88,11 @@ export {
   type DiscoveryResult,
 } from "./discovery.js";
 
-export { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
+export {
+  discoverWorkspacePaths,
+  isDocumentBasenameShorthand,
+  matchesDocumentBasenameStem,
+} from "./workspacePathDiscovery.js";
 export {
   executionControlledWorkspaceFs,
   StructuralExecutionStoppedError,
@@ -334,3 +338,16 @@ export {
   SUPPORTED_MIME_PREFIXES,
   extractDocumentContext,
 } from "./document-extraction.js";
+
+export {
+  withoutQueryPresentationInstructions,
+  skipPresentationWhitespace,
+  presentationTokenEnd,
+  spacedPresentationTokenEnd,
+} from "./repoSearchPresentation.js";
+export {
+  mapUnquotedRepositoryFilePaths,
+  normalizeUnquotedFilePathToken,
+} from "./repoSearchQueryPaths.js";
+
+export { hasSourceAdviceAttribution, isSourceAdviceNoun } from "./repoSearchSourceDescriptors.js";

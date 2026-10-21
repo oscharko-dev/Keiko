@@ -567,15 +567,19 @@ async function restartNextChild() {
   });
 }
 
+function requestReadiness(url, fetchImpl = globalThis.fetch) {
+  return fetchImpl(url, { cache: "no-store", signal: globalThis.AbortSignal.timeout(5000) });
+}
+
 async function fetchOk(url, validate = async () => true) {
-  const response = await globalThis.fetch(url, { cache: "no-store" });
+  const response = await requestReadiness(url);
   if (!response.ok) return `HTTP ${String(response.status)}`;
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
 export async function probeApiReadiness(url, fetchImpl = globalThis.fetch) {
   try {
-    const response = await fetchImpl(url, { cache: "no-store" });
+    const response = await requestReadiness(url, fetchImpl);
     if (!response.ok) {
       return { result: `HTTP ${String(response.status)}`, allowSameOriginMicrophone: false };
     }

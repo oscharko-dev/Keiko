@@ -1416,7 +1416,41 @@ static void test_pipe_writes_are_deadline_bounded(void) {
   free(payload);
 }
 
+static void test_ui_identity_records(void) {
+  static const struct { const char *content; int expected; } cases[] = {
+    {"12345\n0123456789abcdef0123456789abcdef\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nother-capability\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nextra\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1", 0},
+    {"12346\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 0},
+    {"12345\nffffffffffffffffffffffffffffffff\nbrowser-open-v1\n", 0},
+  };
+  /* This single-invocation fixture keeps its three large fixed path buffers off the stack. */
+  static wchar_t root[TEST_PATH_CAP], path[TEST_PATH_CAP], other[TEST_PATH_CAP];
+  keiko_coordinator_context context = {0};
+  test_create_root(root);
+  assert(test_join(path, root, L"\\ui.pid"));
+  assert(test_join(other, root, L"\\ui.actual"));
+  context.state_dir = root;
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    test_write(path, cases[i].content);
+    assert(keiko_coordinator_windows_ui_identity(&context, GetTickCount64() + 1000u) == cases[i].expected);
+    assert(DeleteFileW(path));
+  }
+  test_write(path, cases[1].content);
+  assert(!keiko_coordinator_windows_ui_identity(&context, GetTickCount64() - 1u));
+  assert(CreateHardLinkW(other, path, NULL));
+  assert(!keiko_coordinator_windows_ui_identity(&context, GetTickCount64() + 1000u));
+  assert(DeleteFileW(other));
+  assert(DeleteFileW(path));
+  assert(RemoveDirectoryW(root));
+}
+
 int wmain(void) {
+  test_ui_identity_records();
   test_coordinator_pins_local_managed_root();
   test_directory_owner_policy();
   test_copy_walk_budget_is_bounded();

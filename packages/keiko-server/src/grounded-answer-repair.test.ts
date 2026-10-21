@@ -21,6 +21,61 @@ function context(content: string, numeric = false): GroundedRepairContext {
 
 describe("citation repair dispatch eligibility", () => {
   it.each([
+    "```java\nclass ExampleTest {}\n```",
+    " \n```tsx\nrender(<Example />);\n```\n ",
+    "```ts\nconst first = 1;\n```\n\n~~~java\nclass Second {}\n~~~",
+    "`example()`",
+  ])(
+    "does not dispatch prose annotations for a code-only source projection: %s",
+    async (content) => {
+      const ctx = context(content, true);
+      const repair = vi.fn((): Promise<GroundedAnswerPayload> => Promise.resolve("Unused."));
+      const result = await repairGroundedAnswer({ ...ctx, invokeRepair: repair });
+      expect(repair).not.toHaveBeenCalled();
+      expect(result.disposition).toBe("skipped-capability");
+      expect(result.answer).toBe(ctx.answer);
+      expect(result.answer.usage).toEqual({ promptTokens: 17, completionTokens: 7 });
+    },
+  );
+
+  it("applies a bounded citation annotation without asking the model to copy generated code", async () => {
+    const content = "The feature returns true.\n\n```ts\nconst feature = true;\n```";
+    const ctx = context(content, true);
+    const repair = vi.fn((): Promise<GroundedAnswerPayload> =>
+      Promise.resolve({
+        content: JSON.stringify({
+          insertions: [{ after: "The feature returns true.", marker: "[1]" }],
+        }),
+        usage: { promptTokens: 11, completionTokens: 5 },
+      }),
+    );
+    const result = await repairGroundedAnswer({ ...ctx, invokeRepair: repair });
+    expect(result.disposition).toBe("applied");
+    expect(result.answer.content).toBe(
+      "The feature returns true. [1]\n\n```ts\nconst feature = true;\n```",
+    );
+    expect(result.answer.usage).toEqual({ promptTokens: 28, completionTokens: 12 });
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
+  it("propagates malformed annotation evidence while retaining the completed repair's spend", async () => {
+    const ctx = context("The feature returns true.", true);
+    const result = await repairGroundedAnswer({
+      ...ctx,
+      invokeRepair: (): Promise<GroundedAnswerPayload> =>
+        Promise.resolve({
+          content: '{"insertions":[',
+          usage: { promptTokens: 11, completionTokens: 5 },
+        }),
+    });
+    expect(result.disposition).toBe("failed");
+    expect(result.failure).toBeInstanceOf(SyntaxError);
+    expect(result.answer.content).toBe(ctx.answer.content);
+    expect(result.answer.usage).toEqual({ promptTokens: 28, completionTokens: 12 });
+    expect(result.answer.completedSynthesisCallCount).toBe(2);
+  });
+
+  it.each([
     { length: 131_072, astral: false, numeric: false, calls: 1 },
     { length: 131_073, astral: false, numeric: false, calls: 0 },
     { length: 131_072, astral: true, numeric: false, calls: 1 },

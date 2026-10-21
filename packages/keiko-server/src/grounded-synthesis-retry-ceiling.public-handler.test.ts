@@ -490,6 +490,22 @@ async function configuredProviderTurn(
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
   it.each(["single", "plural"])(
+    "preserves code and uncited uncertainty without a prose-only repair (%s)",
+    async (sourceMode) => {
+      const content = "```ts\nexpect(feature()).toBe(true);\n```";
+      const requests = installProvider([content, CITED]);
+      const { deps, chatId } = configuredRuntime(0);
+      if (sourceMode === "plural") connectPluralFolders(deps, chatId);
+      const result = await handleGroundedAsk(route(chatId), deps);
+      expect(requests).toHaveLength(1);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ content, citationBehaviour: "never", citations: [] });
+      const answer = result.body as GroundedAnswer;
+      expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
+    },
+  );
+
+  it.each(["single", "plural"])(
     "keeps %s caller input refusal distinct after one charged adopted-window attempt",
     async (sourceMode) => {
       const requests = installProvider([OVERFLOW, CITED]);

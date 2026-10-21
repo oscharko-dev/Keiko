@@ -1,0 +1,225 @@
+{
+  "classification": "Failed prospective workflow qualification on the KNOWN credit-hold regression fixture. No workflow/postfeedback acceptance or benefit credit.",
+  "ledgerSha256": "b2172a591bb7cf016e1e27946adcbd38d054750540b7bb5bf4f2e4a3fa162a94",
+  "predeclaredSha256": "0d0d4ba2d2f2221302a948efd7e9c58add300e17b528f3f0e696a59ba72cccfd",
+  "sourceManifestSha256": "8de708475c52d9fa73cbf0d3fbf5a45286b73b2d8e7f45b90985fd2f1d32c019",
+  "sourceFiles": 2093,
+  "sourceFilesStable": true,
+  "headStable": true,
+  "statusStable": true,
+  "physicalCalls": 52,
+  "physicalCaseCalls": 23,
+  "cases": [
+    {
+      "id": "react-feedback-v5-gwt-skill-1",
+      "selected": true,
+      "status": "observation-contract-failed",
+      "chargedTotal": {
+        "input": 20303,
+        "output": 6952
+      },
+      "phases": [
+        {
+          "phase": "initial",
+          "contract": true,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 12345,
+            "output": 4096
+          }
+        },
+        {
+          "phase": "feedback",
+          "contract": false,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 7958,
+            "output": 2856
+          }
+        }
+      ]
+    },
+    {
+      "id": "react-feedback-v5-gwt-control-1",
+      "selected": false,
+      "status": "observation-contract-failed",
+      "chargedTotal": {
+        "input": 24678,
+        "output": 8192
+      },
+      "phases": [
+        {
+          "phase": "initial",
+          "contract": true,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 9747,
+            "output": 4096
+          }
+        },
+        {
+          "phase": "feedback",
+          "contract": false,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 14931,
+            "output": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "react-feedback-v5-gwt-control-2",
+      "selected": false,
+      "status": "observation-contract-failed",
+      "chargedTotal": {
+        "input": 25730,
+        "output": 8192
+      },
+      "phases": [
+        {
+          "phase": "initial",
+          "contract": true,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 10016,
+            "output": 4096
+          }
+        },
+        {
+          "phase": "feedback",
+          "contract": false,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 15714,
+            "output": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "react-feedback-v5-gwt-skill-2",
+      "selected": true,
+      "status": "observation-contract-failed",
+      "chargedTotal": {
+        "input": 29664,
+        "output": 8192
+      },
+      "phases": [
+        {
+          "phase": "initial",
+          "contract": true,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 12086,
+            "output": 4096
+          }
+        },
+        {
+          "phase": "feedback",
+          "contract": false,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 17578,
+            "output": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "react-feedback-v5-gwt-skill-3",
+      "selected": true,
+      "status": "observation-contract-failed",
+      "chargedTotal": {
+        "input": 31375,
+        "output": 8192
+      },
+      "phases": [
+        {
+          "phase": "initial",
+          "contract": true,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 12499,
+            "output": 4096
+          }
+        },
+        {
+          "phase": "feedback",
+          "contract": false,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 18876,
+            "output": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "react-feedback-v5-gwt-control-3",
+      "selected": false,
+      "status": "observation-contract-failed",
+      "chargedTotal": {
+        "input": 26100,
+        "output": 8192
+      },
+      "phases": [
+        {
+          "phase": "initial",
+          "contract": true,
+          "baselineEligible": false,
+          "mutationTrialsDispatched": 0,
+          "charged": {
+            "input": 9726,
+            "output": 4096
+          }
+        },
+        {
+          "phase": "feedback",
+          "contract": false,
+          "baselineEligible": true,
+          "mutationTrialsDispatched": 8,
+          "charged": {
+            "input": 16374,
+            "output": 4096
+          }
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 1,
+  "issue": 4037,
+  "phaseCount": 12,
+  "nonCaseCalls": 29,
+  "initialRawBaselineEligible": 0,
+  "feedbackRawBaselineEligible": 1,
+  "rawMutationTrialsDispatched": 8,
+  "rawMutationAssertionDetections": 4,
+  "creditedMutationResults": 0,
+  "baseSkillSha256": "3d9625ee530bd949863f8285e37fd4928d14d3d70aca42d256280d70dd602fcc",
+  "constraints": {
+    "initialOutputAllocation": 4096,
+    "totalCaseOutputGrant": 8192,
+    "totalCaseInputGrant": 118784,
+    "actualCumulativeCountsWithinOriginalGrants": true,
+    "globalCapIncludingReadinessClaimed": false,
+    "firstPassComparableWithOriginal8192Request": false
+  },
+  "protocolFailures": [
+    "Feedback configured only provider-inline input capability; canonical top-level capability retained118784. All narrower feedback input grants were unenforced, although actual cumulative usage remained within the original grants.",
+    "All eleven physical feedback requests failed the original contiguous component marker. Independent retrieval replay explained material-preserving chunking with only a trailing empty line omitted; this does not reconstruct or recredit the original physical request bodies.",
+    "A separately observed extractor-refusal branch would incorrectly offer non-compiler feedback. That branch was not exercised by any of these twelve generated phases and receives no retroactive change."
+  ],
+  "independentReview": "Auditor independently joined every final ledger/physical call, all2093 source bytes, driver/bridge hashes, actual canonical admission and usage, extracted code, compiler/subject/reporter and mutation results.",
+  "nextMethod": "Before any new inference, prospectively commission canonical remaining-input configuration and actual admission, fail-closed extractor refusal, and material source identity/range observations. No customer skill or model-specific prompt change follows from this failed measurement."
+}

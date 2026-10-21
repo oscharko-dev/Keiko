@@ -120,6 +120,14 @@ function assertCanonical(result: Awaited<ReturnType<typeof retrieve>>, source = 
     : expectActivityLogProof("search.connected-context.completed.line", formatted);
   expect(line).toHaveProperty("correlationId", CORRELATION);
   expect(line).toMatchObject(event?.extra ?? {});
+  const evidence = result.log.events.find(
+    (entry) => entry.op === "search.connected-context.evidence-details",
+  );
+  const evidenceLine = expectActivityLogProof(
+    "search.connected-context.evidence-details.line",
+    formatActivityLogProofLine(evidence ?? {}),
+  );
+  expect(evidenceLine).toMatchObject({ correlationId: CORRELATION });
   expect(result.log.lines().join("\n")).not.toContain(result.output.pack.scope.workspaceRoot);
 }
 
@@ -226,6 +234,11 @@ describe("ring and listing decision evidence", () => {
       augmentationSkipped: false,
     });
     expect(result.source?.extra?.overviewListingFallback).toBe("not-evaluated");
+    const evidence = result.log.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidence?.extra).toMatchObject({ activityDetailStatus: "unavailable" });
+    expect(evidence?.extra).not.toHaveProperty("sourceDescriptorPathCount");
     assertCanonical(result);
   });
 

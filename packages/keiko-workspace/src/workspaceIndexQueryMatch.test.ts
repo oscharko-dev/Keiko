@@ -8,6 +8,21 @@ const BASE = {
 };
 
 describe("persisted query-group identity", () => {
+  it("retains only the closed source-description witness alongside an identified query", () => {
+    const best = [{ ...BASE.best[0], sourceDescriptorMatch: true }];
+    expect(normalizeWorkspaceIndexQueryMatch({ ...BASE, best })).toEqual({ ...BASE, best });
+  });
+  it.each([false, 0, "true", null])(
+    "rejects a malformed source-description witness: %s",
+    (sourceDescriptorMatch) => {
+      expect(
+        normalizeWorkspaceIndexQueryMatch({
+          ...BASE,
+          best: [{ ...BASE.best[0], sourceDescriptorMatch }],
+        }),
+      ).toBeUndefined();
+    },
+  );
   it("keeps a bounded group bitset and drops unknown payload fields", () => {
     const best = [{ ...BASE.best[0], queryGroupKey: "3" }];
     const result = normalizeWorkspaceIndexQueryMatch({

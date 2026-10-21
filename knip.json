@@ -12,6 +12,7 @@
   "workspaces": {
     ".": {
       "playwright": false,
+      "ignoreDependencies": ["java-parser"],
       "entry": [
         "src/**/*.ts!",
         "scripts/*.mjs!",

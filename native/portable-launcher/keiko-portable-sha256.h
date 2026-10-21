@@ -153,7 +153,7 @@ static void keiko_sha256_compress(keiko_sha256 *context, const unsigned char blo
       0x1e376c08u, 0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
       0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u, 0x90befffau, 0xa4506cebu, 0xbef9a3f7u,
       0xc67178f2u};
-  uint32_t schedule[64];
+  uint32_t schedule[64] = {0};
   uint32_t a;
   uint32_t b;
   uint32_t c;

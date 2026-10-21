@@ -40,6 +40,7 @@ import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
 import { AutonomySettings } from "./AutonomySettings";
+import { BrowserApprovalSettings } from "../../browser/BrowserApprovalSettings";
 import { OPEN_EDITOR_SETTINGS_EVENT } from "./settingsPanelEvents";
 import type {
   ConversationIneligibilityReason,
@@ -2025,6 +2026,7 @@ export function SettingsPanel({
         {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
           <div className="set-list">
+            <BrowserApprovalSettings />
             <AutonomySettings root={root} />
             <div className="set-sec-h">
               <div>

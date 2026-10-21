@@ -1,11 +1,89 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "browserApproval.title": "Connect this browser",
+  "browserApproval.close": "Close",
+  "browserApproval.notice":
+    "Connect this browser to save private drafts and use protected features.",
+  "browserApproval.open": "Connect browser",
+  "browserApproval.description":
+    "Approve this browser from a browser already connected to this Keiko installation.",
+  "browserApproval.launcherFallback":
+    "You can also open Keiko from its launcher to connect a browser.",
+  "browserApproval.remember": "Remember this browser for up to 30 days on this installation",
+  "browserApproval.request": "Request approval",
+  "browserApproval.working": "Connecting…",
+  "browserApproval.compare": "Compare this code with the request in your connected browser.",
+  "browserApproval.code": "Browser comparison code",
+  "browserApproval.instructions":
+    "In your connected browser, open Settings → Security → Browser approvals. Approve only the request whose code matches this one.",
+  "browserApproval.expiresSoon":
+    "This request expires after five minutes. Keep this window open until approval completes.",
+  "browserApproval.waiting": "Waiting for approval…",
+  "browserApproval.failed":
+    "The browser connection could not be verified. Retry without closing your unsaved work.",
+  "browserApproval.retry": "Retry",
+  "browserApproval.unavailable":
+    "This browser could not be connected. Retry or open Keiko from its launcher.",
+  "browserApproval.expired":
+    "This request is no longer available. Create a new request if this browser still needs approval.",
+  "browserApproval.success.session": "This browser is connected for the current session.",
+  "browserApproval.success.stored":
+    "This browser is connected. Its approved key was saved in this browser profile for future connections until approval expires or is revoked.",
+  "browserApproval.success.unconfirmed":
+    "This browser is connected for the current session. Remembering it for future connections could not be confirmed.",
+  "browserApproval.manage": "Browser approvals",
+  "browserApproval.manageDescription":
+    "Approve only requests you started, after comparing both codes. Revoking an approval also ends its active sessions.",
+  "browserApproval.refresh": "Refresh",
+  "browserApproval.pendingRequests": "Pending requests",
+  "browserApproval.noRequests": "No pending requests.",
+  "browserApproval.approvals": "Approved browsers",
+  "browserApproval.noApprovals": "No browser approvals.",
+  "browserApproval.managementUnavailable":
+    "Connect this browser before managing other browser approvals.",
+  "browserApproval.compared": "I have compared the codes in both browsers and they match",
+  "browserApproval.allowOnce": "Allow this session",
+  "browserApproval.allowRemembered": "Allow and remember for up to 30 days",
+  "browserApproval.remembered": "Remembered browser",
+  "browserApproval.sessionOnly": "Session approval",
+  "browserApproval.fingerprint": "Key fingerprint: {fingerprint}",
+  "browserApproval.expires": "Expires: {time}",
+  "browserApproval.lastUsed": "Last used: {time}",
+  "browserApproval.revoke": "Revoke approval",
+  "browserApproval.forget": "Forget this browser's remembered connection",
+  "browserApproval.forgetDescription":
+    "Forget automatic connections from this browser profile. To end active sessions as well, revoke the approval below.",
+  "browserApproval.forgotten":
+    "The remembered connection was removed from this browser profile. The current session and server approval are unchanged.",
+  "updates.notice.aria": "Keiko update notification",
+  "updates.status.portableSetupRequired": "Portable setup required",
+  "updates.status.portableExternallyManaged": "Updates managed by your organization",
+  "updates.notice.title": "Update available",
+  "updates.notice.criticalTitle": "Critical update available",
+  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
+  "updates.notice.body":
+    "Version {version} is ready to review. Keiko will not install it automatically.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko could not verify update download information right now. It will not install anything.",
+  "updates.notice.portableBody":
+    "Version {version} is ready. Open updates, then click Update when you are ready.",
+  "updates.notice.portableSetupBody":
+    "Portable setup is required before Keiko can use in-app updates.",
+  "updates.notice.portableExternallyManagedBody":
+    "This Keiko install is managed outside the app. Open updates for details.",
+  "updates.notice.review": "Review update",
+  "updates.notice.actionTitle": "Update settings need attention",
+  "updates.notice.actionBody":
+    "Open updates to review the required action. No newer version has been confirmed.",
+  "updates.notice.reviewDetails": "Review details",
+  "updates.notice.notNow": "Not now",
   "chat.draft.attachmentsUnsaved":
     "Send or remove the staged attachments before closing this chat. They have not been saved.",
   "chat.draft.loading": "Loading saved draft…",
   "chat.draft.saved": "Draft saved privately.",
   "chat.draft.unsaved": "Draft changes are not saved yet.",
   "chat.draft.saving": "Saving draft…",
-  "chat.draft.unavailable": "Draft not saved. Open Keiko from its launcher.",
+  "chat.draft.unavailable":
+    "Draft not saved. Connect this browser using the browser notice above, or open Keiko from its launcher. Keep this window open.",
   "chat.draft.failed": "This draft could not be saved. Keep this window open and retry.",
   "chat.draft.conflict":
     "Another window changed the saved draft. Keep this draft to replace it, or use the saved draft to replace this text.",
@@ -2089,8 +2167,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "updates.error.title": "Update status unavailable",
   "updates.error.load": "Could not load update status from the local Keiko backend.",
   "updates.window.kicker": "Governed update",
-  "updates.status.portableSetupRequired": "Portable setup required",
-  "updates.status.portableExternallyManaged": "Updates managed by your organization",
   "updates.primary.title": "Recommended action",
   "updates.primary.available": "Review the state impact, then install when you are ready.",
   "updates.primary.portableAvailable":

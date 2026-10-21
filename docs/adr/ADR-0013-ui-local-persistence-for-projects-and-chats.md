@@ -326,6 +326,37 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
+#### Durable chat creation intents (schema 46, issues #4040/#4043)
+
+The existing private UiStore retains `chat_creation_intents` in the same transactional database.
+One framed digest identifies the project and opaque creation request; a second binds the initial
+title, requested model choice and branch. An omitted model is distinct from every explicit model;
+the model originally elected for that automatic request belongs to the accepted chat result.
+A replay recovers that result before current model admission, even if the default changed or is
+now unavailable. Genuinely new creation retains its original model admission guards.
+Pending Chat windows retain the same bounded, opaque creation request through browser-local and
+shared workspace serialization. Independently connected browsers therefore replay the same intent
+instead of substituting a window fallback. Persistence applies the canonical request-id grammar
+and the unchanged secret-shape heuristic. The browser generates a fresh secure id outside that
+heuristic, using at most 32 draws; exhaustion reports a body-free diagnostic before a window is
+created. An accepted chat binding removes the pending request. Legacy unbound windows retain
+their existing stable window identity; this reference grants no session or source authority.
+New pending windows also capture the originating automatic or explicit model selection through
+the existing session selection owner. A restored host forwards that same choice; its local model
+catalog or selected conversation cannot reinterpret the request. Automatic selection still omits
+`modelId`, and explicit selection retains the exact original id. The private server replay and
+fresh readiness/authority guards remain authoritative. Legacy absence preserves existing behavior;
+incomplete or unsafe new snapshots retain a closed unavailable marker and a visible, logged refusal
+instead of falling back to a local election. Unsafe explicit selections refuse before window
+acceptance. A successful canonical binding clears the pending identity and model metadata together.
+A `BEGIN IMMEDIATE` transaction inserts the conversation and
+intent together, or returns the existing conversation without reverting subsequent edits.
+Conflicting parameters and closed or deleted targets are refused. The nullable chat reference
+uses `ON DELETE SET NULL`, retaining a tombstone after chat or project deletion. The table stores
+only those two digests and the chat reference, with no new copy of user text or browser authority.
+The forward migration preserves existing conversations and drafts. Older readers continue to
+reject a newer schema; this migration alone does not establish updater rollback compatibility.
+
 #### Private Markdown instruction library (issue #4023)
 
 Schema v42 adds `markdown_skills` and `markdown_skill_revisions` to this same private UI
@@ -527,9 +558,12 @@ or authentication credential. The BFF accepts only capability registry entries w
 can be written. A registry id can retain one trailing `@region` qualifier (letters, digits and
 hyphens), as regional OpenAI-compatible gateways require. This does not admit email domains,
 repeated qualifiers or credential-bearing URLs, and the existing length bound still applies.
-The `short_result` column (chat messages) is passed through
-`deepRedactStrings(value, redactor)` before persistence, using the same `UiHandlerDeps.redactor`
-the BFF already applies to live payloads (ADR-0011 D9). No reasoning traces, no evidence
+The `short_result` column (chat messages) is redacted and truncated before persistence.
+Grounded answer metadata uses the existing `deepRedactStrings(value, redactor)` on string
+leaves before JSON serialization. A free-text redactor must never consume serialized JSON:
+escaped quotes in code or quoted assignments can otherwise corrupt its structure. Retrieval
+activity validation still runs before and after that redaction. The BFF uses the same
+redactor for live payloads (ADR-0011 D9). No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is

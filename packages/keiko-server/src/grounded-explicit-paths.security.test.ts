@@ -318,6 +318,63 @@ describe("explicit-path trust boundary", () => {
 });
 
 describe("bounded explicit basename discovery", () => {
+  it("contains document-name shorthand in an exact files selection without traversal", async () => {
+    const allowed = "backend/README.md";
+    writeFixture(allowed, "Accepted values are three through eleven.\n");
+    writeFixture("backend/CONTRIBUTING.md", PRIVATE_BODY);
+    writeFixture("outside/README.md", PRIVATE_BODY);
+    const reads: string[] = [];
+    const fs = watchedFs(reads);
+    const iterate = vi.spyOn(fs, "iterateDirectory");
+    const result = await retrieve("Read the README requirements.", {
+      kind: "files",
+      relativePaths: [allowed],
+      fs,
+    });
+    expect(result.output.pack.files.map((file) => file.scopePath)).toEqual([allowed]);
+    expect(iterate).not.toHaveBeenCalled();
+    expect(reads).not.toContain(join(root, "outside/README.md"));
+    expect(reads).not.toContain(join(root, "backend/CONTRIBUTING.md"));
+    expect(
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
+    ).toMatchObject({ explicitPathAdmittedCount: 1, basenameDiscoveryMatchCount: 1 });
+    expect(JSON.stringify(result)).not.toContain(PRIVATE_BODY);
+  });
+
+  it("keeps the document-name shorthand within the original one-file grant", async () => {
+    const result = await retrieve("Read the README requirements.", {
+      fs: memFs(root, {
+        "a/README.md": "First accepted contract.\n",
+        "b/ReadMe.txt": "Second accepted contract.\n",
+      }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
+    });
+    expect(result.output.pack.files).toHaveLength(1);
+    expect(result.output.pack.usage.filesRead).toBe(1);
+    expect(result.output.pack.uncertainty.some((marker) => marker.kind === "budget-clipped")).toBe(
+      true,
+    );
+    expect(result.output.pack.omitted).toContainEqual(
+      expect.objectContaining({ reason: "budget-exhausted" }),
+    );
+  });
+
+  it("refuses escaping and denied document-name aliases before reading their bodies", async () => {
+    writeFileSync(join(outside, "requirements.md"), PRIVATE_BODY);
+    writeFixture(".env", PRIVATE_BODY);
+    symlinkSync(join(outside, "requirements.md"), join(root, "README.md"));
+    symlinkSync(join(root, ".env"), join(root, "CONTRIBUTING.md"));
+    const reads: string[] = [];
+    const result = await retrieve("Read README and CONTRIBUTING.", { fs: watchedFs(reads) });
+    expect(result.output.pack.files).toEqual([]);
+    expect(reads).not.toContain(join(outside, "requirements.md"));
+    expect(reads).not.toContain(join(root, "README.md"));
+    expect(reads).not.toContain(join(root, "CONTRIBUTING.md"));
+    expect(reads).not.toContain(join(root, ".env"));
+    expect(JSON.stringify(result)).not.toContain(PRIVATE_BODY);
+  });
+
   it.each(["probe.ts", "package-lock.json"])(
     "caps discovery of %s at ninety-six matches",
     async (name) => {

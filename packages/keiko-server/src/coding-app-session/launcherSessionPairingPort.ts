@@ -102,8 +102,9 @@ export function createLauncherSessionPairingPort(
   // whose issuedAtMs is more than `freshnessMs` from wall in either direction, an id can only be
   // replayed inside that window. Pair each id with its own expiry (`issuedAtMs + freshnessMs`)
   // and evict entries whose window has elapsed before the cap gate — no anti-replay strength is
-  // given up because a would-be replay outside the window was already denied by `isFresh`.
+  // given up only while observed time cannot rewind into a window whose entries were evicted.
   const consumedRequestIds = new Map<string, number>();
+  let latestObservedMs = Number.NEGATIVE_INFINITY;
   // Strict `<` matches `isFresh`'s inclusive `age <= freshnessMs` — at the exact boundary the
   // original attestation is still admissible, so we must NOT evict its entry yet. #3099 P2
   // follow-up to KEIKO-0460.
@@ -116,6 +117,10 @@ export function createLauncherSessionPairingPort(
     attest: (attestation: SessionPairingAttestation): SessionPairingDecision => {
       if (!isWellFormedSessionPairingAttestation(attestation)) return SESSION_PAIRING_DENIED;
       const nowMs = now();
+      // A backward or invalid clock cannot restore authority to a pruned, consumed claim.
+      // Refuse until wall time catches up; retain existing sessions and all freshness bounds.
+      if (!Number.isFinite(nowMs) || nowMs < latestObservedMs) return SESSION_PAIRING_DENIED;
+      latestObservedMs = nowMs;
       // #3099 R3 KfQ Major: prune at the top of every attest so stale entries clear even when
       // subsequent traffic is a stream of stale-only replays that never reaches the admit path
       // — otherwise a burst of stale attestations could hoard the ~4k slots and lock a future

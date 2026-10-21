@@ -43,6 +43,7 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { connectedScopeFingerprint, isConnectedScopeFingerprint } from "./workspaceScopeIdentity";
 
 function addPosition(
@@ -75,6 +76,7 @@ function initialWindowCfg(type: WindowType, cfg: AppWindow["cfg"] | undefined): 
 }
 
 interface MutateArgs {
+  readonly onWindowAllocated?: ((window: AppWindow) => void) | undefined;
   readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly zc: RefObject<number>;
@@ -284,10 +286,24 @@ function makeRestore(
     });
 }
 
+export function fitInitialWindowSize(
+  size: { readonly w: number; readonly h: number; readonly min: { w: number; h: number } },
+  vp: ViewportWorld,
+): { readonly w: number; readonly h: number } {
+  const fitted = {
+    w: Math.max(size.min.w, Math.min(size.w, vp.w - 32)),
+    h: Math.max(size.min.h, Math.min(size.h, vp.h - 32)),
+  };
+  if (fitted.w !== size.w || fitted.h !== size.h) {
+    reportClientDiagnostic("Workspace window fitted to available space.", {
+      composerActivity: "workspace-viewport-fitted",
+    });
+  }
+  return fitted;
+}
+
 function fallbackRestoreGeometry(type: WindowType, vp: ViewportWorld): SnapPrev {
-  const def = WIN_TYPES[type];
-  const w = Math.min(def.w, Math.max(def.min.w, vp.w - 32));
-  const h = Math.min(def.h, Math.max(def.min.h, vp.h - 32));
+  const { w, h } = fitInitialWindowSize(WIN_TYPES[type], vp);
   return {
     x: vp.x + Math.max(16, Math.round((vp.w - w) / 2)),
     y: vp.y + Math.max(16, Math.round((vp.h - h) / 2)),
@@ -333,7 +349,7 @@ function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
     });
 }
 
-interface NewWindowAllocationArgs {
+interface NewWindowAllocationArgs extends Pick<MutateArgs, "onWindowAllocated"> {
   readonly cfg: AppWindow["cfg"] | undefined;
   readonly defaultH: number;
   readonly defaultMinH: number;
@@ -352,29 +368,36 @@ function allocateNewWindow(args: NewWindowAllocationArgs): {
   // Keep live UI state inside the same trust boundary enforced by local persistence and the BFF.
   // Existing singleton/per-identity windows are focused before this allocation is attempted.
   if (args.list.length >= MAX_WORKSPACE_WINDOWS) return { id: null, windows: args.list };
-  const { x, y } = addPosition(args.vp, args.defaultW, args.defaultH, args.list.length, 40);
+  const { w, h } = fitInitialWindowSize(
+    {
+      w: args.defaultW,
+      h: args.defaultH,
+      min: { w: args.defaultMinW, h: args.defaultMinH },
+    },
+    args.vp,
+  );
+  const { x, y } = addPosition(args.vp, w, h, args.list.length, 40);
   const typeDefinition = WIN_TYPES[args.type];
   const id =
     typeDefinition.singleton === true
       ? args.type
       : nextWindowId(args.type, args.list, args.zc.current + 1);
+  const window: AppWindow = {
+    id,
+    type: args.type,
+    x,
+    y,
+    w,
+    h,
+    z: ++args.zc.current,
+    cfg: initialWindowCfg(args.type, args.cfg),
+    max: false,
+    zoom: 1,
+  };
+  args.onWindowAllocated?.(window);
   return {
     id,
-    windows: [
-      ...args.list,
-      {
-        id,
-        type: args.type,
-        x,
-        y,
-        w: Math.max(args.defaultW, args.defaultMinW),
-        h: Math.max(args.defaultH, args.defaultMinH),
-        z: ++args.zc.current,
-        cfg: initialWindowCfg(args.type, args.cfg),
-        max: false,
-        zoom: 1,
-      },
-    ],
+    windows: [...args.list, window],
   };
 }
 
@@ -495,6 +518,7 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         }
       }
       const allocation = allocateNewWindow({
+        onWindowAllocated: args.onWindowAllocated,
         cfg,
         defaultH,
         defaultMinH,
@@ -576,44 +600,44 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
       };
     }
     const t = WIN_TYPES.editor;
-    const { x, y } = addPosition(vp, t.w, t.h, currentWins.length, 40);
+    const { w, h } = fitInitialWindowSize(t, vp);
+    const { x, y } = addPosition(vp, w, h, currentWins.length, 40);
     const id = `editor-${Date.now().toString(36)}`;
     const result: OpenEditorFileResult = { ok: true, windowId: id };
     setWins((ws) => {
       const list = ws ?? [];
-      return [
-        ...list,
-        {
-          id,
-          type: "editor",
-          x,
-          y,
-          w: Math.max(t.w, t.min.w),
-          h: Math.max(t.h, t.min.h),
-          z: ++zc.current,
-          cfg: {
-            root: normalizedRoot,
-            ...(isManagedTaskWorkspaceRoot(normalizedRoot)
-              ? {}
-              : { rootBinding: "coding-repository" }),
-            file: normalizedPath,
-            openFiles: [normalizedPath],
-            layoutJson: serializeEditorLayoutStateV2(
-              createEditorLayoutStateV2({
-                root: normalizedRoot,
-                file: normalizedPath,
-                openFiles: [normalizedPath],
-                defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
-                minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
-                maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
-              }),
-            ),
-            ...reveal,
-          },
-          max: false,
-          zoom: 1,
+      const window: AppWindow = {
+        id,
+        type: "editor",
+        x,
+        y,
+        w,
+        h,
+        z: ++zc.current,
+        cfg: {
+          root: normalizedRoot,
+          ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+            ? {}
+            : { rootBinding: "coding-repository" }),
+          file: normalizedPath,
+          openFiles: [normalizedPath],
+          layoutJson: serializeEditorLayoutStateV2(
+            createEditorLayoutStateV2({
+              root: normalizedRoot,
+              file: normalizedPath,
+              openFiles: [normalizedPath],
+              defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+              minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+              maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+            }),
+          ),
+          ...reveal,
         },
-      ];
+        max: false,
+        zoom: 1,
+      };
+      args.onWindowAllocated?.(window);
+      return [...list, window];
     });
     return result;
   };
@@ -655,12 +679,20 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
         windowLimitReached = true;
         return list;
       }
-      const { x, y } = addPosition(vp, t.w, t.h, list.length, 28);
-      const geometry = { x, y, w: t.w, h: t.h };
-      return [
-        ...list,
-        { id: type, type, ...geometry, z: nextWorkspaceZ(list, zc), cfg: {}, max: false, zoom: 1 },
-      ];
+      const { w, h } = fitInitialWindowSize(t, vp);
+      const { x, y } = addPosition(vp, w, h, list.length, 28);
+      const geometry = { x, y, w, h };
+      const window = {
+        id: type,
+        type,
+        ...geometry,
+        z: nextWorkspaceZ(list, zc),
+        cfg: {},
+        max: false,
+        zoom: 1,
+      };
+      args.onWindowAllocated?.(window);
+      return [...list, window];
     });
     if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
   };
@@ -1194,13 +1226,17 @@ function chatBindingTarget(
   chatWindowId: string | null,
   conversationId: string | undefined,
   winById: (id: string) => AppWindow | undefined,
+  sourceWindowId: string,
 ): ChatBindingTarget | undefined {
   if (chatWindowId === null) return undefined;
   const chatWindow = winById(chatWindowId);
   return {
     conversationId,
+    sourceWindowId,
     projectPath: chatProjectPath(chatWindow),
-    isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
+    isCurrent: (): boolean =>
+      winById(sourceWindowId) !== undefined &&
+      chatConversationId(winById(chatWindowId)) === conversationId,
   };
 }
 
@@ -1835,7 +1871,12 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       chatConversationIdAtBind,
       connectorScope,
       gitChangeSelection,
-      bindingTarget: chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById),
+      bindingTarget: chatBindingTarget(
+        chatWindowId,
+        chatConversationIdAtBind,
+        winById,
+        fromId === chatWindowId ? toId : fromId,
+      ),
       // With the duplicate-guard above, a Git↔Chat attempt that reaches this point never had a
       // prior connection between the pair. `hadGitConnectionBeforeBind` therefore stays false
       // for the Git case and always reflects a first-time bind.

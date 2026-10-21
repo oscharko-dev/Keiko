@@ -157,6 +157,8 @@ export interface EvidenceAtomMetrics {
   readonly gitChurn?: number | undefined;
   /** Same-query lexical group identity, never a source-content or authority certificate. */
   readonly lexicalQueryGroupKey?: string | undefined;
+  /** Fresh lexical relevance for a complete user-requested source description, never authority. */
+  readonly sourceDescriptorMatch?: true | undefined;
 }
 
 /** Canonical, body-free bitset of at least two query groups; at most 128 groups. */
@@ -939,6 +941,11 @@ function validateEvidenceAtomMetrics(
     metrics.lexicalQueryGroupKey !== undefined &&
       !isLexicalQueryGroupKey(metrics.lexicalQueryGroupKey),
     "atom.metrics.lexicalQueryGroupKey invalid",
+  );
+  pushIf(
+    reasons,
+    metrics.sourceDescriptorMatch !== undefined && metrics.sourceDescriptorMatch !== true,
+    "atom.metrics.sourceDescriptorMatch invalid",
   );
 }
 

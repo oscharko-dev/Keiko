@@ -182,19 +182,3 @@ export function draftsForImpact(
     .stores.map((store) => draftForStore(store, localKnowledge))
     .filter((draft): draft is ActionDraft => draft !== undefined);
 }
-
-export function restartDraft(store: UpdateStateStore): ActionDraft {
-  return {
-    actionId: actionId("restart", store),
-    kind: "restart",
-    store,
-    remediation: "restart-required",
-    required: true,
-    canRun: false,
-    canDefer: false,
-    userApprovalRequired: false,
-    featureIds: featureIdsFor(store),
-    scopeCounts: { stores: 1, artifacts: 0, retainedEntries: 0 },
-    message: messageFor("restart", store),
-  };
-}

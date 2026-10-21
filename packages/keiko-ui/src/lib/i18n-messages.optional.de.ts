@@ -1,13 +1,92 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
-
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "browserApproval.title": "Diesen Browser verbinden",
+  "browserApproval.close": "Schließen",
+  "browserApproval.notice":
+    "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
+  "browserApproval.open": "Browser verbinden",
+  "browserApproval.description":
+    "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",
+  "browserApproval.launcherFallback":
+    "Du kannst Keiko auch über den Launcher öffnen, um einen Browser zu verbinden.",
+  "browserApproval.remember": "Diesem Browser auf dieser Installation bis zu 30 Tage vertrauen",
+  "browserApproval.request": "Freigabe anfordern",
+  "browserApproval.working": "Verbindung wird hergestellt…",
+  "browserApproval.compare":
+    "Vergleiche diesen Code mit der Anfrage in deinem verbundenen Browser.",
+  "browserApproval.code": "Browser-Vergleichscode",
+  "browserApproval.instructions":
+    "Öffne im verbundenen Browser Einstellungen → Sicherheit → Browser-Freigaben. Gib nur die Anfrage frei, deren Code mit diesem übereinstimmt.",
+  "browserApproval.expiresSoon":
+    "Diese Anfrage läuft nach fünf Minuten ab. Lass dieses Fenster geöffnet, bis die Freigabe abgeschlossen ist.",
+  "browserApproval.waiting": "Warten auf Freigabe…",
+  "browserApproval.failed":
+    "Die Browser-Verbindung konnte nicht bestätigt werden. Versuche es erneut, ohne ungespeicherte Arbeit zu schließen.",
+  "browserApproval.retry": "Erneut versuchen",
+  "browserApproval.unavailable":
+    "Dieser Browser konnte nicht verbunden werden. Versuche es erneut oder öffne Keiko über den Launcher.",
+  "browserApproval.expired":
+    "Diese Anfrage ist nicht mehr verfügbar. Erstelle eine neue Anfrage, falls dieser Browser noch eine Freigabe benötigt.",
+  "browserApproval.success.session": "Dieser Browser ist für die aktuelle Sitzung verbunden.",
+  "browserApproval.success.stored":
+    "Dieser Browser ist verbunden. Sein freigegebener Schlüssel wurde in diesem Browserprofil für weitere Verbindungen gespeichert, bis die Freigabe abläuft oder widerrufen wird.",
+  "browserApproval.success.unconfirmed":
+    "Dieser Browser ist für die aktuelle Sitzung verbunden. Das Speichern für spätere Verbindungen konnte nicht bestätigt werden.",
+  "browserApproval.manage": "Browser-Freigaben",
+  "browserApproval.manageDescription":
+    "Gib nur selbst gestartete Anfragen nach Vergleich beider Codes frei. Ein Widerruf beendet auch die zugehörigen aktiven Sitzungen.",
+  "browserApproval.refresh": "Aktualisieren",
+  "browserApproval.pendingRequests": "Offene Anfragen",
+  "browserApproval.noRequests": "Keine offenen Anfragen.",
+  "browserApproval.approvals": "Freigegebene Browser",
+  "browserApproval.noApprovals": "Keine Browser-Freigaben.",
+  "browserApproval.managementUnavailable":
+    "Verbinde diesen Browser, bevor du andere Browser-Freigaben verwaltest.",
+  "browserApproval.compared":
+    "Ich habe die Codes in beiden Browsern verglichen; sie stimmen überein",
+  "browserApproval.allowOnce": "Diese Sitzung erlauben",
+  "browserApproval.allowRemembered": "Erlauben und bis zu 30 Tage vertrauen",
+  "browserApproval.remembered": "Gespeicherte Browser-Freigabe",
+  "browserApproval.sessionOnly": "Sitzungsfreigabe",
+  "browserApproval.fingerprint": "Schlüssel-Fingerabdruck: {fingerprint}",
+  "browserApproval.expires": "Läuft ab: {time}",
+  "browserApproval.lastUsed": "Zuletzt verwendet: {time}",
+  "browserApproval.revoke": "Freigabe widerrufen",
+  "browserApproval.forget": "Gespeicherte Verbindung dieses Browsers vergessen",
+  "browserApproval.forgetDescription":
+    "Vergiss automatische Verbindungen aus diesem Browserprofil. Um auch aktive Sitzungen zu beenden, widerrufe die Freigabe unten.",
+  "browserApproval.forgotten":
+    "Die gespeicherte Verbindung wurde aus diesem Browserprofil entfernt. Die aktuelle Sitzung und die Freigabe auf dem Server bleiben bestehen.",
+  "updates.notice.aria": "Keiko-Update-Hinweis",
+  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
+  "updates.notice.title": "Update verfügbar",
+  "updates.notice.criticalTitle": "Kritisches Update verfügbar",
+  "updates.notice.releaseUnavailableTitle": "Update-Prüfung nicht verfügbar",
+  "updates.notice.body":
+    "Version {version} kann geprüft werden. Keiko installiert sie nicht automatisch.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko konnte die Update-Download-Informationen gerade nicht prüfen. Es wird nichts installiert.",
+  "updates.notice.portableBody":
+    "Version {version} ist bereit. Öffne Updates und klicke auf Update, wenn du bereit bist.",
+  "updates.notice.portableSetupBody":
+    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
+  "updates.notice.portableExternallyManagedBody":
+    "Diese Keiko-Installation wird außerhalb der App verwaltet. Öffne Updates für Details.",
+  "updates.notice.review": "Update prüfen",
+  "updates.notice.actionTitle": "Update-Einstellungen prüfen",
+  "updates.notice.actionBody":
+    "Öffne Updates, um die erforderliche Aktion zu prüfen. Eine neuere Version wurde nicht bestätigt.",
+  "updates.notice.reviewDetails": "Details prüfen",
+  "updates.notice.notNow": "Nicht jetzt",
   "chat.draft.attachmentsUnsaved":
     "Sende oder entferne die vorgemerkten Anhänge, bevor du diesen Chat schließt. Sie sind noch nicht gespeichert.",
   "chat.draft.loading": "Gespeicherter Entwurf wird geladen…",
   "chat.draft.saved": "Entwurf privat gespeichert.",
   "chat.draft.unsaved": "Die Änderungen am Entwurf sind noch nicht gespeichert.",
   "chat.draft.saving": "Entwurf wird gespeichert…",
-  "chat.draft.unavailable": "Entwurf nicht gespeichert. Keiko über den Launcher öffnen.",
+  "chat.draft.unavailable":
+    "Entwurf nicht gespeichert. Verbinde diesen Browser über den Browser-Hinweis oben oder öffne Keiko über den Launcher. Lass dieses Fenster geöffnet.",
   "chat.draft.failed":
     "Dieser Entwurf konnte nicht gespeichert werden. Lass dieses Fenster geöffnet und versuche es erneut.",
   "chat.draft.conflict":
@@ -2161,8 +2240,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "updates.error.title": "Update-Status nicht verfügbar",
   "updates.error.load": "Update-Status konnte nicht vom lokalen Keiko-Backend geladen werden.",
   "updates.window.kicker": "Gesteuertes Update",
-  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
-  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.primary.title": "Empfohlene Aktion",
   "updates.primary.available": "Prüfe die Statusauswirkungen und installiere, wenn du bereit bist.",
   "updates.primary.portableAvailable":

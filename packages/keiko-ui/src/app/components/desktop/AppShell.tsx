@@ -9,7 +9,7 @@ import {
 import type { ClientFilesScopeDecision } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
 // Installs the browser transport for reportClientDiagnostic at module scope, so a diagnostic
 // raised during hydration or an early boot crash is delivered rather than only buffered.
@@ -73,6 +73,13 @@ import {
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { secureRandomId } from "@/lib/secure-random";
+import { isSecretShapedString } from "./hooks/isSecretShapedString";
+import {
+  chatCreationModelConfig,
+  isPersistableChatCreationModelId,
+  type ChatCreationModelChoice,
+} from "./hooks/chatCreationModelChoice";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -102,7 +109,14 @@ import { WINDOW_LAUNCHER_TYPES, COMMAND_TOOL_TYPES, type Command } from "./works
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
-import { chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
+import {
+  beginChatScopeTransition,
+  chatScopeSourceTransition,
+  chatWindowRuntimeTarget,
+  releaseFailedChatScopeTransition,
+  releaseObsoleteFailedChatScopeTransitions,
+  releaseDetachedFailedChatScopeTransitions,
+} from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
 import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
@@ -127,25 +141,56 @@ function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): 
   const next = cloneCfg(cfg);
   delete next["projectPath"];
   delete next["selectionHandoffId"];
+  delete next["newChatModelSelection"];
+  delete next["newChatModelId"];
   const configuredProjectPath = validProjectPath(cfg["projectPath"]);
   const selectedProjectPath = validProjectPath(activeProjectPath);
   const projectPath = configuredProjectPath ?? selectedProjectPath;
   return projectPath === undefined ? next : { ...next, projectPath };
 }
 
+function newChatCreationRequestId(): string {
+  for (let draw = 0; draw < 32; draw += 1) {
+    const id = secureRandomId("chat");
+    if (!isSecretShapedString(id)) return id;
+  }
+  return refuseChatCreation("Chat creation identity allocation failed.");
+}
+
+function refuseChatCreation(
+  message: string,
+  errorKind: "internal" | "unavailable" = "internal",
+): never {
+  const error = new TypeError(message);
+  reportClientDiagnostic(error.message, {
+    correlationId: newClientCorrelationId(),
+    kind: "other",
+    errorKind,
+    errorEvidence: clientErrorEvidence(error),
+  });
+  throw error;
+}
+
 export function prepareNewWindowCfg(
   type: WindowType,
   cfg: Cfg,
-  newChatRequestId = crypto.randomUUID(),
+  newChatRequestId?: string,
   activeProjectPath?: string,
+  creationModelChoice?: ChatCreationModelChoice,
 ): Cfg {
-  return type === "chat"
-    ? {
-        ...normalizedNewChatCfg(cfg, activeProjectPath),
-        chatId: undefined,
-        newChatRequestId,
-      }
-    : cfg;
+  if (type !== "chat") return cfg;
+  if (
+    creationModelChoice?.kind === "explicit" &&
+    !isPersistableChatCreationModelId(creationModelChoice.modelId)
+  ) {
+    refuseChatCreation("Chat creation model selection cannot be persisted.", "unavailable");
+  }
+  return {
+    ...normalizedNewChatCfg(cfg, activeProjectPath),
+    chatId: undefined,
+    newChatRequestId: newChatRequestId ?? newChatCreationRequestId(),
+    ...chatCreationModelConfig(creationModelChoice),
+  };
 }
 
 function preventGatewaySetupDismissal(event: SyntheticEvent<HTMLDialogElement>): void {
@@ -270,11 +315,38 @@ const Palette = dynamic(() => import("./modals/Palette").then((mod) => mod.Palet
   loading: () => null,
 });
 
+function unavailableStartupNotice(
+  error: unknown,
+  moduleLoadFailure: "browser-approval" | "update-startup",
+): () => null {
+  reportClientDiagnostic("Startup notice module could not load.", {
+    kind: "other",
+    errorKind: "unavailable",
+    correlationId: newClientCorrelationId(),
+    moduleLoadFailure,
+    errorEvidence: clientErrorEvidence(error),
+  });
+  return (): null => null;
+}
+
+// Optional startup notices retain their diagnostic without removing an already mounted desktop.
+export const BrowserApprovalNotice = dynamic(
+  () =>
+    import("./browser/BrowserApprovalNotice")
+      .then((module) => module.BrowserApprovalNotice)
+      .catch((error: unknown) => unavailableStartupNotice(error, "browser-approval")),
+  { ssr: false, loading: () => null },
+);
+const BROWSER_APPROVAL_NOTICE = <BrowserApprovalNotice compact />;
+
 // Issue #1207 (ADR-0042 D3.6) — the startup update notice renders nothing until its own preflight
 // resolves, and it is gated on a workspace that has already loaded, so neither it nor the release
 // copy catalog it carries belongs in the initial desktop paint.
-const UpdateStartupNotice = dynamic(
-  () => import("./update/UpdateStartupNotice").then((mod) => mod.UpdateStartupNotice),
+export const UpdateStartupNotice = dynamic(
+  () =>
+    import("./update/UpdateStartupNotice")
+      .then((mod) => mod.UpdateStartupNotice)
+      .catch((error: unknown) => unavailableStartupNotice(error, "update-startup")),
   { ssr: false, loading: () => null },
 );
 
@@ -538,9 +610,30 @@ function currentFilesOwnedScope(
     : restored;
 }
 
+function filesScopeOwnerKey(
+  chatWindowId: string,
+  target: ChatBindingTarget | undefined,
+  scope: ChatConnectedScope | undefined,
+): string | undefined {
+  const fingerprint = scope === undefined ? undefined : connectedScopeFingerprint(scope);
+  if (target?.sourceWindowId === undefined || fingerprint === undefined) return undefined;
+  return `${chatWindowId}:${target.sourceWindowId}:${fingerprint}`;
+}
+
 interface FilesPatchAcknowledgement {
+  persistenceEntered?: boolean;
   chat?: Chat;
   scope?: ChatConnectedScope;
+}
+
+interface ConfirmedGroundingChat {
+  readonly chat: Chat;
+  readonly correlationId: string | undefined;
+}
+
+interface FilesAcknowledgementEvidence {
+  readonly confirmed: ConfirmedGroundingChat | undefined;
+  readonly fingerprints: Map<string, string | undefined>;
 }
 
 function captureCanonicalFilesAcknowledgement(
@@ -548,10 +641,12 @@ function captureCanonicalFilesAcknowledgement(
   chat: Chat,
   scopes: readonly ChatConnectedScope[],
   nextScope: ChatConnectedScope,
-): void {
+  correlationId: string,
+): ConfirmedGroundingChat {
   acknowledgement.chat = chat;
   const acceptedScope = scopes.find((scope) => isScopeConnected([scope], nextScope));
   if (acceptedScope !== undefined) acknowledgement.scope = acceptedScope;
+  return { chat, correlationId: acceptedScope === undefined ? undefined : correlationId };
 }
 
 function sameScopeSnapshot(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
@@ -605,10 +700,12 @@ function captureFilesPatchAcknowledgement(
   submitted: readonly ChatConnectedScope[],
   requested: ChatConnectedScope,
   chat: Chat,
-): void {
+): boolean {
   acknowledgement.chat = chat;
   const accepted = canonicalFilesPatchScope(submitted, requested, chat);
-  if (accepted !== undefined) acknowledgement.scope = accepted;
+  if (accepted === undefined) return false;
+  acknowledgement.scope = accepted;
+  return true;
 }
 
 function acknowledgeFilesScope(input: {
@@ -681,10 +778,17 @@ function filesBindingTargetIsCurrent(
   const edgePresent = connections.some(
     (edge) => edge.id === connection.id && edge.a === connection.a && edge.b === connection.b,
   );
-  const currentId =
-    chatIdFromWindow(windows?.find((win) => win.id === chatWindowId)) ??
-    chatWindowRuntimeTarget(chatWindowId)?.conversationId;
+  const currentId = mountedChatConversationId(windows, chatWindowId);
   return edgePresent && currentId === conversationId;
+}
+
+function mountedChatConversationId(
+  windows: readonly AppWindow[] | null | undefined,
+  windowId: string,
+): string | undefined {
+  const window = windows?.find((candidate) => candidate.id === windowId);
+  if (window?.type !== "chat") return undefined;
+  return chatIdFromWindow(window) ?? chatWindowRuntimeTarget(windowId)?.conversationId;
 }
 
 function pruneReleasedFilesConnections(
@@ -712,6 +816,82 @@ function pruneFilesAcknowledgements<T>(
   for (const key of acknowledgements.keys()) {
     if (!liveEdges.has(key.split("\u0000")[0] ?? "")) acknowledgements.delete(key);
   }
+}
+
+function captureFullFilesAcknowledgement(
+  connection: Connection,
+  conversationId: string,
+  bound: ChatConnectedScope,
+  acknowledgements: Map<string, ChatConnectedScope>,
+  correlations: Map<string, string>,
+  evidence: FilesAcknowledgementEvidence | undefined,
+): void {
+  const edgeKey = `${connection.id}\u0000${conversationId}`;
+  if (evidence === undefined || acknowledgements.has(edgeKey)) return;
+  const confirmed = evidence.confirmed;
+  if (
+    confirmed?.correlationId === undefined ||
+    confirmed.chat.id !== conversationId ||
+    !isConnectedScopeFingerprint(connection.boundScopeFingerprint) ||
+    connectedScopeFingerprint(bound) !== connection.boundScopeFingerprint
+  )
+    return;
+  const candidates = effectiveScopes(confirmed.chat).filter(
+    (scope) => connectedScopeFingerprint(scope) === connection.boundScopeFingerprint,
+  );
+  if (candidates.length !== 1) return;
+  acknowledgeFilesScope({
+    correlationId: confirmed.correlationId,
+    edgeKey,
+    connectionId: connection.id,
+    chat: confirmed.chat,
+    nextScope: bound,
+    connections: [connection],
+    scopes: acknowledgements,
+    fingerprints: evidence.fingerprints,
+    correlations,
+  });
+}
+
+function retainUnchangedFilesConnection(
+  connection: Connection,
+  conversationId: string,
+  nextScope: ChatConnectedScope,
+  acknowledgements: Map<string, ChatConnectedScope>,
+  correlations: Map<string, string>,
+  api: WorkspaceApi,
+  evidence?: FilesAcknowledgementEvidence,
+): boolean {
+  if (chatScopeSourceTransition(conversationId, connection.id) === "failed") return false;
+  const bound = boundScopeOf(connection);
+  if (bound !== null && connectedScopeKey(bound) === connectedScopeKey(nextScope)) {
+    captureFullFilesAcknowledgement(
+      connection,
+      conversationId,
+      bound,
+      acknowledgements,
+      correlations,
+      evidence,
+    );
+    return true;
+  }
+  const key = `${connection.id}\u0000${conversationId}`;
+  const acknowledged = acknowledgements.get(key);
+  if (
+    connection.boundScopeElided !== true ||
+    acknowledged === undefined ||
+    !isConnectedScopeFingerprint(connection.boundScopeFingerprint) ||
+    connectedScopeFingerprint(acknowledged) !== connection.boundScopeFingerprint ||
+    connectedScopeKey(acknowledged) !== connectedScopeKey(nextScope)
+  )
+    return false;
+  reportFilesScopeDecision(
+    newClientCorrelationId(),
+    { decision: "automatic-suppressed" },
+    correlations.get(key),
+  );
+  api.updateConnBoundScope(connection.id, acknowledged);
+  return true;
 }
 
 function automaticFilesAmbiguityIdentity(
@@ -927,6 +1107,11 @@ interface ChatMutationAttempt {
 
 type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
 
+type FilesScopeIntentInput = Pick<
+  FilesScopeRequest,
+  "chatWindowId" | "chatKey" | "target" | "connectionId" | "nextScope"
+> & { readonly acknowledgement: FilesPatchAcknowledgement };
+
 function latestGroundingChat(
   sessionChat: Chat | undefined,
   confirmed: Chat | undefined,
@@ -1107,6 +1292,7 @@ async function persistCurrentChatScopes<T>(
     readonly expectedIdentity?: string | undefined;
     readonly chat?: Chat;
     readonly refreshed?: (chat: Chat) => void;
+    readonly observed?: (chat: Chat) => void;
   },
 ): Promise<Chat | undefined> {
   const { remember, expectedIdentity } = confirmation;
@@ -1121,6 +1307,7 @@ async function persistCurrentChatScopes<T>(
     confirmation.chat === undefined
       ? await mutation()
       : await withGroundingScopeRefresh(confirmation.chat, mutation, refresh);
+  confirmation.observed?.(response.chat);
   remember(response.chat);
   if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) return response.chat;
   try {
@@ -1189,8 +1376,8 @@ async function serializeChatMutation<T>(
   chatKey: string,
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
   surface: GroundingMutationSurface = "files",
+  correlationId = newClientCorrelationId(),
 ): Promise<T> {
-  const correlationId = newClientCorrelationId();
   assertMutationQueueAvailable(queue, chatKey, correlationId, surface);
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
@@ -1246,6 +1433,7 @@ function recoverMutationQueue(
   const block = queue.blocked.get(chatKey);
   if (block?.correlationId !== correlationId) return;
   queue.blocked.delete(chatKey);
+  releaseObsoleteFailedChatScopeTransitions();
   reportMutationQueueDecision(
     correlationId,
     block.surface,
@@ -1691,11 +1879,15 @@ function AppShellInner(): ReactNode {
     },
     [t],
   );
-  const confirmedGroundingChatsRef = useRef(new Map<string, Chat>());
-  const rememberGroundingChat = useCallback((chat: Chat): void => {
+  const confirmedGroundingChatsRef = useRef(new Map<string, ConfirmedGroundingChat>());
+  const rememberGroundingChat = useCallback((chat: Chat, correlationId?: string): void => {
     const previous = confirmedGroundingChatsRef.current.get(chat.id);
-    if (previous === undefined || chat.updatedAt >= previous.updatedAt) {
-      confirmedGroundingChatsRef.current.set(chat.id, chat);
+    if (previous === undefined || chat.updatedAt >= previous.chat.updatedAt) {
+      confirmedGroundingChatsRef.current.set(chat.id, {
+        chat,
+        correlationId:
+          correlationId ?? (previous?.chat === chat ? previous.correlationId : undefined),
+      });
     }
   }, []);
   const publishRefreshedGroundingChat = useCallback((chat: Chat): void => {
@@ -1723,7 +1915,7 @@ function AppShellInner(): ReactNode {
       const sessionChat =
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
-      const confirmed = confirmedGroundingChatsRef.current.get(chatId);
+      const confirmed = confirmedGroundingChatsRef.current.get(chatId)?.chat;
       const chat = latestGroundingChat(sessionChat, confirmed);
       if (chat !== undefined && !refresh) return chat.status === "closed" ? undefined : chat;
       const projectPath =
@@ -1736,8 +1928,8 @@ function AppShellInner(): ReactNode {
         const response = await fetchChats(projectPath, correlationId, chatId);
         if (!chatLookupTargetIsCurrent(target)) return undefined;
         if (chatLookupRequiresMountedWindow(target)) {
-          const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
-          if (chatIdFromWindow(currentWindow) !== chatId) return undefined;
+          if (mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) !== chatId)
+            return undefined;
         }
         const resolved = response.chats.find((candidate) => candidate.id === chatId);
         if (resolved === undefined || resolved.status === "closed") return undefined;
@@ -1753,10 +1945,18 @@ function AppShellInner(): ReactNode {
     blocked: new Map(),
     tails: new Map(),
   });
+  const groundingOwnerMountedRef = useRef(true);
+  useLayoutEffect((): (() => void) => {
+    groundingOwnerMountedRef.current = true;
+    return (): void => {
+      groundingOwnerMountedRef.current = false;
+      queueMicrotask(releaseObsoleteFailedChatScopeTransitions);
+    };
+  }, []);
   const groundingMutationKey = useCallback(
     (chatWindowId: string, target?: ChatLookupTarget): string =>
       target?.conversationId ??
-      chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
+      mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) ??
       `window:${chatWindowId}`,
     [],
   );
@@ -1767,9 +1967,11 @@ function AppShellInner(): ReactNode {
       current: readonly ChatConnectedScope[],
       attempt: ChatMutationAttempt,
       target: ChatBindingTarget | undefined,
+      acknowledgement: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
       rememberGroundingChat(chat);
       if (ownedScope === null) return true;
+      acknowledgement.persistenceEntered = true;
       const persisted = await persistCurrentChatScopes(
         target,
         attempt,
@@ -1865,8 +2067,14 @@ function AppShellInner(): ReactNode {
       reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
-        captureCanonicalFilesAcknowledgement(acknowledgement, chat, canonicalScopes, nextScope);
-        rememberGroundingChat(chat);
+        const confirmed = captureCanonicalFilesAcknowledgement(
+          acknowledgement,
+          chat,
+          canonicalScopes,
+          nextScope,
+          attempt.correlationId,
+        );
+        rememberGroundingChat(confirmed.chat, confirmed.correlationId);
         publishRefreshedGroundingChat(chat);
         return true;
       }
@@ -1880,7 +2088,14 @@ function AppShellInner(): ReactNode {
           : removeConnectedScope(canonicalScopes, ownedScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isScopeConnected(current, nextScope)) {
-        return retainConnectedFilesScope(chat, ownedScope, current, attempt, target);
+        return retainConnectedFilesScope(
+          chat,
+          ownedScope,
+          current,
+          attempt,
+          target,
+          acknowledgement,
+        );
       }
       const cap = totalSourceCap(groundingLimits);
       if (current.length + lkScopes.length >= cap) {
@@ -1894,6 +2109,7 @@ function AppShellInner(): ReactNode {
       if (next === current) {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
+      acknowledgement.persistenceEntered = true;
       const persisted = await persistCurrentChatScopes(
         target,
         attempt,
@@ -1901,10 +2117,17 @@ function AppShellInner(): ReactNode {
         effectiveScopes(chat),
         next,
         updateChatConnectedScopes,
-        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
+        {
+          remember: rememberGroundingChat,
+          expectedIdentity: chat.groundingScopeIdentity,
+          observed: (observedChat): void => {
+            if (captureFilesPatchAcknowledgement(acknowledgement, next, scope, observedChat)) {
+              rememberGroundingChat(observedChat, attempt.correlationId);
+            }
+          },
+        },
       );
       if (persisted === undefined) return false;
-      captureFilesPatchAcknowledgement(acknowledgement, next, scope, persisted);
       session.replaceChat(persisted);
       setSourceConnectionNotice(null);
       // Epic #532 unification — also record the green edge as a governed reads-context
@@ -1955,7 +2178,7 @@ function AppShellInner(): ReactNode {
           edgeKey,
           connectionId,
           nextScope: acknowledgement.scope ?? nextScope,
-          chat: acknowledgement.chat ?? confirmedGroundingChatsRef.current.get(chatKey),
+          chat: acknowledgement.chat ?? confirmedGroundingChatsRef.current.get(chatKey)?.chat,
           connections: wsConnectionsForBindingRef.current,
           scopes: acknowledgedFilesScopesRef.current,
           fingerprints: acknowledgedFilesFingerprintsRef.current,
@@ -1965,6 +2188,53 @@ function AppShellInner(): ReactNode {
       return accepted;
     },
     [replaceFilesScopeNow],
+  );
+  const beginFilesIntent = useCallback(
+    (
+      binding: FilesScopeIntentInput,
+    ): ReturnType<typeof beginChatScopeTransition> & { readonly requireRecovery: () => void } => {
+      const { chatWindowId, chatKey, target, connectionId, nextScope, acknowledgement } = binding;
+      const sourceId =
+        connectionId ?? `bind:${chatWindowId}:${target?.sourceWindowId ?? chatWindowId}`;
+      const initial =
+        connectionId === undefined && chatScopeSourceTransition(chatKey, sourceId) === undefined;
+      let recoveryRequired = false;
+      let refusedBeforeWrite = false;
+      const transition = beginChatScopeTransition(
+        chatKey,
+        sourceId,
+        (): boolean =>
+          !refusedBeforeWrite &&
+          (recoveryRequired ||
+            groundingMutationQueueRef.current.blocked.has(chatKey) ||
+            (groundingOwnerMountedRef.current &&
+              (target?.isCurrent() ?? true) &&
+              mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) === chatKey)),
+        (): string | undefined =>
+          filesScopeOwnerKey(
+            chatWindowId,
+            target,
+            acknowledgement.scope ?? (recoveryRequired ? undefined : nextScope),
+          ),
+      );
+      return {
+        ...transition,
+        settle(accepted): void {
+          // A clean initial refusal leaves no changed source or edge requiring recovery.
+          refusedBeforeWrite =
+            !accepted &&
+            initial &&
+            !acknowledgement.persistenceEntered &&
+            !recoveryRequired &&
+            !groundingMutationQueueRef.current.blocked.has(chatKey);
+          transition.settle(accepted);
+        },
+        requireRecovery(): void {
+          recoveryRequired = true;
+        },
+      };
+    },
+    [],
   );
   const replaceFilesScope = useCallback(
     async (
@@ -1976,38 +2246,48 @@ function AppShellInner(): ReactNode {
       automatic = false,
       acknowledgement?: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
+      const chatKey = groundingMutationKey(chatWindowId, target);
+      const observed = acknowledgement ?? {};
+      const binding = {
+        chatWindowId,
+        nextScope,
+        previousScope,
+        target,
+        connectionId,
+        automatic,
+        chatKey,
+        acknowledgement: observed,
+      };
+      const transition = beginFilesIntent(binding);
+      let accepted = false;
       try {
-        const chatKey = groundingMutationKey(chatWindowId, target);
         const edgeKey = connectionId === undefined ? undefined : `${connectionId}\u0000${chatKey}`;
         const request = Symbol();
         if (automatic && edgeKey !== undefined)
           automaticFilesRequestsRef.current.set(edgeKey, request);
-        return await serializeChatMutation(
+        accepted = await serializeChatMutation(
           groundingMutationQueueRef.current,
           chatKey,
           (attempt): Promise<boolean> =>
             applyFilesScopeRequest({
-              chatWindowId,
-              nextScope,
-              previousScope,
+              ...binding,
               attempt,
-              target,
-              connectionId,
-              automatic,
               edgeKey,
-              chatKey,
               request,
-              ...(acknowledgement === undefined ? {} : { acknowledgement }),
             }),
           "files",
+          transition.correlationId,
         );
+        return accepted;
       } catch (error: unknown) {
-        return rejectForConnectionFailure(
-          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
-        );
+        const key = groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed");
+        if (key === "chat.grounding.recoveryRequired") transition.requireRecovery();
+        return rejectForConnectionFailure(t(key));
+      } finally {
+        transition.settle(accepted);
       }
     },
-    [groundingMutationKey, rejectForConnectionFailure, applyFilesScopeRequest, t],
+    [beginFilesIntent, groundingMutationKey, rejectForConnectionFailure, applyFilesScopeRequest, t],
   );
   const handleScopeBind = useCallback(
     async (
@@ -2025,9 +2305,17 @@ function AppShellInner(): ReactNode {
         false,
         acknowledgement,
       );
+      const ownerKey = filesScopeOwnerKey(chatWindowId, target, acknowledgement.scope);
+      if (accepted && ownerKey !== undefined && target?.isCurrent()) {
+        releaseDetachedFailedChatScopeTransitions(
+          groundingMutationKey(chatWindowId, target),
+          ownerKey,
+          new Set(wsConnectionsForBindingRef.current.map((edge) => edge.id)),
+        );
+      }
       return accepted ? (acknowledgement.scope ?? scope) : false;
     },
-    [replaceFilesScope],
+    [groundingMutationKey, replaceFilesScope],
   );
   const unbindFilesScopeNow = useCallback(
     async (input: FilesScopeUnbindInput, attempt: ChatMutationAttempt): Promise<boolean> => {
@@ -2097,22 +2385,40 @@ function AppShellInner(): ReactNode {
       target?: ChatUnbindTarget,
       connectionId?: string,
     ): Promise<boolean> => {
+      const chatKey = groundingMutationKey(chatWindowId, target);
+      const transition =
+        connectionId === undefined
+          ? undefined
+          : beginChatScopeTransition(
+              chatKey,
+              connectionId,
+              (): boolean =>
+                groundingMutationQueueRef.current.blocked.has(chatKey) ||
+                (groundingOwnerMountedRef.current &&
+                  wsConnectionsForBindingRef.current.some((edge) => edge.id === connectionId) &&
+                  mountedChatConversationId(wsWinsForBindingRef.current, chatWindowId) === chatKey),
+            );
+      let accepted = false;
       try {
-        return await serializeChatMutation(
+        accepted = await serializeChatMutation(
           groundingMutationQueueRef.current,
-          groundingMutationKey(chatWindowId, target),
+          chatKey,
           (attempt) =>
             retryGroundingScopeIntent(
               () => unbindFilesScopeNow({ chatWindowId, scope, target, connectionId }, attempt),
               attempt,
             ),
           "files",
+          transition?.correlationId,
         );
+        return accepted;
       } catch (error: unknown) {
         if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
         return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "scope.disconnect.error")),
         );
+      } finally {
+        transition?.settle(accepted);
       }
     },
     [groundingMutationKey, rejectForConnectionFailure, unbindFilesScopeNow, t],
@@ -2266,7 +2572,7 @@ function AppShellInner(): ReactNode {
           (currentChatSessionRef.current.activeChat?.id === chatId
             ? currentChatSessionRef.current.activeChat
             : undefined),
-        confirmedGroundingChatsRef.current.get(chatId),
+        confirmedGroundingChatsRef.current.get(chatId)?.chat,
       ),
     [],
   );
@@ -2410,11 +2716,23 @@ function AppShellInner(): ReactNode {
   wsConnectionsForBindingRef.current = ws.conns;
   const forgetUnownedFilesConnection = useCallback((): void => {
     if (unownedFilesConnectionId === null) return;
+    const connection = ws.conns.find((edge) => edge.id === unownedFilesConnectionId);
+    if (connection === undefined) return;
+    const chatWindowId =
+      connection.boundChatWindowId ??
+      [connection.a, connection.b].find((id) => ws.winsById.get(id)?.type === "chat");
+    const chatId =
+      chatWindowId === undefined ? undefined : mountedChatConversationId(ws.wins, chatWindowId);
+    if (
+      chatWindowId === undefined ||
+      !releaseFailedChatScopeTransition(chatId ?? groundingMutationKey(chatWindowId), connection.id)
+    )
+      return;
     ws.api.removeConn(unownedFilesConnectionId, { unbind: false });
     reportFilesScopeDecision(newClientCorrelationId(), { decision: "released" });
     setUnownedFilesConnectionId(null);
     setSourceConnectionNotice(null);
-  }, [unownedFilesConnectionId, ws.api]);
+  }, [unownedFilesConnectionId, ws.api, ws.conns, ws.wins, ws.winsById, groundingMutationKey]);
 
   // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
   // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,
@@ -2425,7 +2743,7 @@ function AppShellInner(): ReactNode {
   const workspaceLinkRevision = useLinkRevision(ws.wins, ws.conns);
   const chatConversationIdsRef = useRef<ReadonlyMap<string, string | undefined>>(new Map());
   const changedChatWindowIdsRef = useRef<ReadonlySet<string>>(new Set());
-  useEffect((): void => {
+  useLayoutEffect((): void => {
     if (ws.wins === null) {
       changedChatWindowIdsRef.current = new Set();
       return;
@@ -2451,23 +2769,39 @@ function AppShellInner(): ReactNode {
     // must not retrigger this ownership transition scan.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceLinkRevision, ws.api]);
+  const retainCurrentFilesConnection = (
+    conn: Connection,
+    conversationId: string,
+    scope: ChatConnectedScope,
+  ): boolean =>
+    retainUnchangedFilesConnection(
+      conn,
+      conversationId,
+      scope,
+      acknowledgedFilesScopesRef.current,
+      acknowledgedFilesCorrelationsRef.current,
+      ws.api,
+      {
+        confirmed: confirmedGroundingChatsRef.current.get(conversationId),
+        fingerprints: acknowledgedFilesFingerprintsRef.current,
+      },
+    );
   const rebindFilesConnection = (conn: Connection): void => {
     const a = ws.winsById.get(conn.a);
     const b = ws.winsById.get(conn.b);
     if (a === undefined || b === undefined) return;
     const chatWindowId = chatWindowIdOf(conn, a, b);
     if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) return;
-    const visibleScope = filesChatBindScope(a, b, Date.now());
-    if (visibleScope === null) return;
+    const nextScope = filesChatBindScope(a, b, Date.now());
+    if (nextScope === null) return;
     const chatWindow = a.type === "chat" ? a : b;
-    const nextScope = visibleScope;
-    const previousScope = boundScopeOf(conn);
-    if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) return;
     const conversationId =
       chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
     if (conversationId === undefined) return;
+    if (retainCurrentFilesConnection(conn, conversationId, nextScope)) return;
     const target: ChatBindingTarget = {
       conversationId,
+      sourceWindowId: a.type === "files" ? a.id : b.id,
       projectPath:
         persistedChatProjectPath(chatWindow) ??
         runtimeProjectPathForChat(chatWindowId, conversationId),
@@ -2480,7 +2814,7 @@ function AppShellInner(): ReactNode {
           conversationId,
         ),
     };
-    void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id, true).then(
+    void replaceFilesScope(chatWindowId, nextScope, boundScopeOf(conn), target, conn.id, true).then(
       (accepted) =>
         applyAcknowledgedFilesConnection(
           accepted,
@@ -2492,8 +2826,9 @@ function AppShellInner(): ReactNode {
         ),
     );
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (ws.wins === null) return;
+    releaseObsoleteFailedChatScopeTransitions();
     reconcileFilesAcknowledgementFingerprints(
       ws.conns,
       acknowledgedFilesScopesRef.current,
@@ -2604,6 +2939,7 @@ function AppShellInner(): ReactNode {
         windowCfg,
         undefined,
         session.activeProject?.path,
+        session.creationModelChoice,
       );
       const createdId = ws.api.add(current, targetWindowCfg);
       if (
@@ -2624,7 +2960,7 @@ function AppShellInner(): ReactNode {
         focusCreatedWindow(createdId);
       }
     },
-    [pending, session.activeProject?.path, ws.api],
+    [pending, session.activeProject?.path, session.creationModelChoice, ws.api],
   );
   const closeDialog = useCallback((): void => {
     setPending(null);
@@ -2809,6 +3145,7 @@ function AppShellInner(): ReactNode {
                     {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
                     <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
                     <Header
+                      notice={BROWSER_APPROVAL_NOTICE}
                       layoutLocked={ws.layoutLocked}
                       onToggleLayoutLock={ws.api.toggleLayoutLock}
                       onTileAll={ws.api.tileAll}

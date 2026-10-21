@@ -1,0 +1,3354 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-18T18:34:54.486374+00:00",
+  "classification": "bounded observations; no epic acceptance or native current-head qualification",
+  "boundaries": [
+    "Raw prompts, source bodies, answers, credentials and provider locations remain outside the checkout.",
+    "Old runtime source identities and skill digests are retained; these runs do not qualify later implementation or skill revisions.",
+    "HTTP success, persistence and accounting do not establish semantic correctness.",
+    "Mutation credit requires unchanged generated tests to compile and pass the correct subject first.",
+    "Missing semantic/profile review is not a pass; native N+1/compaction, large-scale/freshness/pressure/gateway and original-history replay remain separate.",
+    "The failed React v4 generation and missing execution are retained in the denominator.",
+    "status is frozen at generation return; executionStatus and variants carry the subsequent restricted-execution outcome. Neither establishes final semantic/profile qualification.",
+    "physicalAttempts counts case-bound answer requests only. Setup readiness probes are reported separately and cannot be counted as answer attempts."
+  ],
+  "runs": [
+    {
+      "id": "generation-revised-v3",
+      "classification": "native local model through actual product API; controlled offline generated-code execution",
+      "sourceHead": "7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8",
+      "sourceDiffDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixture": "orchard-orders-v1",
+      "fixtureDigest": "937297337df5a30d4c91df356ea69d6e1eaa39f3495e8372628c18d1caa5f019",
+      "model": "gemma-4-31b-it",
+      "contextWindow": 131072,
+      "physicalOutputGrant": 8192,
+      "skillDigests": {
+        "java": "e6f04bb6231b2a976936e26518fcf1ae421c37aa4ee175d02b66e22604472965",
+        "react": "04719620acb6af52f90252eefe422638dce06c9abdb290274cefffc97d0deebd"
+      },
+      "sandbox": {
+        "images": {
+          "java": "maven@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320",
+          "react": "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
+        },
+        "offline": true,
+        "unchangedGeneratedTests": true,
+        "timeoutSeconds": 120,
+        "maxOutputBytes": 2000000
+      },
+      "cases": [
+        {
+          "id": "java-skill-1",
+          "kind": "java",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 122225,
+          "citationCount": 9,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "f5553960f4f711410f42291d15c95a15ba57ee61e7d35f293fe684cb3c3e6fda",
+          "outputBytes": 4362,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 2711,
+            "skillTokens": 2515,
+            "expectedSkillTokens": 2515,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7562,
+            "skillTokens": 2515,
+            "expectedSkillTokens": 2515,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "930c15a278faa8ad9436b05da17fab645646606fe906c3902d7797f52808118d",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 3,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 14,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "930c15a278faa8ad9436b05da17fab645646606fe906c3902d7797f52808118d"
+            },
+            {
+              "variant": "threshold",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "930c15a278faa8ad9436b05da17fab645646606fe906c3902d7797f52808118d"
+            },
+            {
+              "variant": "upper-limit",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "930c15a278faa8ad9436b05da17fab645646606fe906c3902d7797f52808118d"
+            },
+            {
+              "variant": "rounding",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "930c15a278faa8ad9436b05da17fab645646606fe906c3902d7797f52808118d"
+            }
+          ],
+          "detectedMutants": ["threshold", "upper-limit", "rounding"],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "java-control-1",
+          "kind": "java",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 129187,
+          "citationCount": 3,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "af82d1dcbf499f428cda7a79dcdb9e44cdc387d16be3e4e226bdbdcdf70ea47e",
+          "outputBytes": 3668,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 5727,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "d38cdf5c19c08b7c549cafbc78092b0c51eb21f61bef6af6d033f0ce152d985e",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 3,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 13,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "d38cdf5c19c08b7c549cafbc78092b0c51eb21f61bef6af6d033f0ce152d985e"
+            },
+            {
+              "variant": "threshold",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "d38cdf5c19c08b7c549cafbc78092b0c51eb21f61bef6af6d033f0ce152d985e"
+            },
+            {
+              "variant": "upper-limit",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "d38cdf5c19c08b7c549cafbc78092b0c51eb21f61bef6af6d033f0ce152d985e"
+            },
+            {
+              "variant": "rounding",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "d38cdf5c19c08b7c549cafbc78092b0c51eb21f61bef6af6d033f0ce152d985e"
+            }
+          ],
+          "detectedMutants": ["threshold", "upper-limit", "rounding"],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "java-skill-2",
+          "kind": "java",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 122934,
+          "citationCount": 4,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "b6ffcf762071eb2ea306599cc010831c516e8981a6b545f4531678e266e01b76",
+          "outputBytes": 5079,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 2711,
+            "skillTokens": 2515,
+            "expectedSkillTokens": 2515,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7801,
+            "skillTokens": 2515,
+            "expectedSkillTokens": 2515,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "8211c54e06d436c7d4059e8e216326d515ebecfb63942418da81b062d0dd81a6",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 3,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 15,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "8211c54e06d436c7d4059e8e216326d515ebecfb63942418da81b062d0dd81a6"
+            },
+            {
+              "variant": "threshold",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "8211c54e06d436c7d4059e8e216326d515ebecfb63942418da81b062d0dd81a6"
+            },
+            {
+              "variant": "upper-limit",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "8211c54e06d436c7d4059e8e216326d515ebecfb63942418da81b062d0dd81a6"
+            },
+            {
+              "variant": "rounding",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "8211c54e06d436c7d4059e8e216326d515ebecfb63942418da81b062d0dd81a6"
+            }
+          ],
+          "detectedMutants": ["threshold", "upper-limit", "rounding"],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "java-control-2",
+          "kind": "java",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 99613,
+          "citationCount": 3,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "f28e7219781c2a52f0c2c619d48715a0632a3d30562f9570d1231719b5f1f9c9",
+          "outputBytes": 3763,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 5759,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "4bfa643e16c6e84a732016418b9352b0576bfcfe0c293da1b04101c03608149f",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 3,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 10,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4bfa643e16c6e84a732016418b9352b0576bfcfe0c293da1b04101c03608149f"
+            },
+            {
+              "variant": "threshold",
+              "exitCode": 1,
+              "tests": 10,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4bfa643e16c6e84a732016418b9352b0576bfcfe0c293da1b04101c03608149f"
+            },
+            {
+              "variant": "upper-limit",
+              "exitCode": 1,
+              "tests": 10,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4bfa643e16c6e84a732016418b9352b0576bfcfe0c293da1b04101c03608149f"
+            },
+            {
+              "variant": "rounding",
+              "exitCode": 1,
+              "tests": 10,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4bfa643e16c6e84a732016418b9352b0576bfcfe0c293da1b04101c03608149f"
+            }
+          ],
+          "detectedMutants": ["threshold", "upper-limit", "rounding"],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "java-skill-3",
+          "kind": "java",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 125289,
+          "citationCount": 10,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "faa7efc9a2a5792c67395ded0ed3cb1a508a040e870933979e3eb3af00c7a195",
+          "outputBytes": 3962,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 2711,
+            "skillTokens": 2515,
+            "expectedSkillTokens": 2515,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7429,
+            "skillTokens": 2515,
+            "expectedSkillTokens": 2515,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "dcf3da4784cff396acb0abb80c0db0579e5f0a2716023dbf7c8957d6a8ee0335",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 3,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 14,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "dcf3da4784cff396acb0abb80c0db0579e5f0a2716023dbf7c8957d6a8ee0335"
+            },
+            {
+              "variant": "threshold",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "dcf3da4784cff396acb0abb80c0db0579e5f0a2716023dbf7c8957d6a8ee0335"
+            },
+            {
+              "variant": "upper-limit",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "dcf3da4784cff396acb0abb80c0db0579e5f0a2716023dbf7c8957d6a8ee0335"
+            },
+            {
+              "variant": "rounding",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "dcf3da4784cff396acb0abb80c0db0579e5f0a2716023dbf7c8957d6a8ee0335"
+            }
+          ],
+          "detectedMutants": ["threshold", "upper-limit", "rounding"],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "java-control-3",
+          "kind": "java",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 90989,
+          "citationCount": 8,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "feee8faa658ac718e63bf4dbbc069afceb315afaaf7bacfed97060847dd24d3a",
+          "outputBytes": 3822,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 5778,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "0dcdf06b6e921c70cc4bb9d669f82b01e5f5ec16e1ac78505a2681152679f03f",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 3,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 11,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0dcdf06b6e921c70cc4bb9d669f82b01e5f5ec16e1ac78505a2681152679f03f"
+            },
+            {
+              "variant": "threshold",
+              "exitCode": 1,
+              "tests": 11,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0dcdf06b6e921c70cc4bb9d669f82b01e5f5ec16e1ac78505a2681152679f03f"
+            },
+            {
+              "variant": "upper-limit",
+              "exitCode": 1,
+              "tests": 11,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0dcdf06b6e921c70cc4bb9d669f82b01e5f5ec16e1ac78505a2681152679f03f"
+            },
+            {
+              "variant": "rounding",
+              "exitCode": 1,
+              "tests": 11,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0dcdf06b6e921c70cc4bb9d669f82b01e5f5ec16e1ac78505a2681152679f03f"
+            }
+          ],
+          "detectedMutants": ["threshold", "upper-limit", "rounding"],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "react-skill-1",
+          "kind": "react",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 112444,
+          "citationCount": 5,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "e2e4a28f003f5de6f787fca1d18f2a007d06e66da0b24882de7a05b0dae68378",
+          "outputBytes": 4342,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3186,
+            "skillTokens": 2990,
+            "expectedSkillTokens": 2990,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 6959,
+            "skillTokens": 2990,
+            "expectedSkillTokens": 2990,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 9,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45"
+            },
+            {
+              "variant": "accept-exponent",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45"
+            },
+            {
+              "variant": "reject-upper-limit",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45"
+            },
+            {
+              "variant": "pending-enabled",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45"
+            },
+            {
+              "variant": "alter-result",
+              "exitCode": 0,
+              "tests": 9,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45"
+            },
+            {
+              "variant": "retry-stale-error",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "914ad2648074333cb5c75023d5dae02c731ddfe30c5d6f0f3afa1c842a303d45"
+            }
+          ],
+          "detectedMutants": [
+            "accept-exponent",
+            "reject-upper-limit",
+            "pending-enabled",
+            "retry-stale-error"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-control-1",
+          "kind": "react",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 99232,
+          "citationCount": 5,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "496e1a06814afc38295c2dcf33ffe127c1f930464baa75db203815c6f761ccbe",
+          "outputBytes": 4384,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 4812,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "f2b897b16cd1f468436aa35577d546860f02e03b917094c10015d556771039fd",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 5,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "f2b897b16cd1f468436aa35577d546860f02e03b917094c10015d556771039fd"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-2",
+          "kind": "react",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 273330,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "f9893ca51ad923e697cae1fc4af337e0dd1bebf25072437057d8f0ac3e030b2e",
+          "outputBytes": 5556,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3186,
+            "skillTokens": 2990,
+            "expectedSkillTokens": 2990,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7282,
+            "skillTokens": 2990,
+            "expectedSkillTokens": 2990,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 9,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b"
+            },
+            {
+              "variant": "accept-exponent",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b"
+            },
+            {
+              "variant": "reject-upper-limit",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b"
+            },
+            {
+              "variant": "pending-enabled",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b"
+            },
+            {
+              "variant": "alter-result",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b"
+            },
+            {
+              "variant": "retry-stale-error",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "0bae4e5fe3be86cd544b28b46647c9e5572471b527383f17968189fab2dcd41b"
+            }
+          ],
+          "detectedMutants": [
+            "accept-exponent",
+            "reject-upper-limit",
+            "pending-enabled",
+            "alter-result",
+            "retry-stale-error"
+          ],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "react-control-2",
+          "kind": "react",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 215024,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "8960cae78af64163c74b6b3ff3d09fbc324c535477b963c7917c1470f5a06f7f",
+          "outputBytes": 4325,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 4792,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "dc59d9ca4d41bed03e88f3f783d9494391b00c3b98126ae564dcc269bf7bbe45",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 5,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "dc59d9ca4d41bed03e88f3f783d9494391b00c3b98126ae564dcc269bf7bbe45"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-3",
+          "kind": "react",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 160250,
+          "citationCount": 6,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "674409cf3e93658072d4a11c288056f552f3a5dfc8324779b4ef024c89cb65aa",
+          "outputBytes": 5361,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3186,
+            "skillTokens": 2990,
+            "expectedSkillTokens": 2990,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7217,
+            "skillTokens": 2990,
+            "expectedSkillTokens": 2990,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "308dd63d0db600f28bd18f3a3f4643e0c60c1dbd7b5694bdae5184e5a47d472f",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 8,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "308dd63d0db600f28bd18f3a3f4643e0c60c1dbd7b5694bdae5184e5a47d472f"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-control-3",
+          "kind": "react",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 297546,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "aa972ec3130bff28245a4a025f40607f09eea657d9a7f669f2a5403d94860c6e",
+          "outputBytes": 4246,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 4766,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "87f5d1aac96b0589686cc664e9f361ca5195d2f1a1a495457454b6ad6e5998a0",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 4,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "87f5d1aac96b0589686cc664e9f361ca5195d2f1a1a495457454b6ad6e5998a0"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        }
+      ]
+    },
+    {
+      "id": "generation-react-v4",
+      "classification": "native local model through actual product API; controlled offline generated-code execution",
+      "sourceHead": "7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8",
+      "sourceDiffDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixture": "orchard-orders-v1",
+      "fixtureDigest": "937297337df5a30d4c91df356ea69d6e1eaa39f3495e8372628c18d1caa5f019",
+      "model": "gemma-4-31b-it",
+      "contextWindow": 131072,
+      "physicalOutputGrant": 8192,
+      "skillDigests": {
+        "java": "e6f04bb6231b2a976936e26518fcf1ae421c37aa4ee175d02b66e22604472965",
+        "react": "12c13f7d561a548b8b2cd3fa10a1c94b94c7a15e18be84989ce7436a7e2b4e7d"
+      },
+      "sandbox": {
+        "images": null,
+        "offline": null,
+        "unchangedGeneratedTests": null,
+        "timeoutSeconds": null,
+        "maxOutputBytes": null
+      },
+      "cases": [
+        {
+          "id": "react-skill-1",
+          "kind": "react",
+          "selected": true,
+          "repetition": 1,
+          "status": "failed",
+          "durationMs": 129450,
+          "httpStatus": 400,
+          "errorClass": "Error",
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3351,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": null,
+            "inputBudget": null,
+            "estimatedInputTokens": null,
+            "skillTokens": null,
+            "expectedSkillTokens": null,
+            "accounted": null
+          },
+          "executionStatus": "not-executed",
+          "generatedTestDigest": null,
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": null,
+          "variants": [],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
+        },
+        {
+          "id": "react-control-1",
+          "kind": "react",
+          "selected": false,
+          "repetition": 1,
+          "status": "failed",
+          "durationMs": 25,
+          "httpStatus": 400,
+          "errorClass": "Error",
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": null,
+            "inputBudget": null,
+            "estimatedInputTokens": null,
+            "skillTokens": null,
+            "expectedSkillTokens": null,
+            "accounted": null
+          },
+          "executionStatus": "not-executed",
+          "generatedTestDigest": null,
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": null,
+          "variants": [],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
+        },
+        {
+          "id": "react-skill-2",
+          "kind": "react",
+          "selected": true,
+          "repetition": 2,
+          "status": "failed",
+          "durationMs": 26,
+          "httpStatus": 400,
+          "errorClass": "Error",
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3351,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": null,
+            "inputBudget": null,
+            "estimatedInputTokens": null,
+            "skillTokens": null,
+            "expectedSkillTokens": null,
+            "accounted": null
+          },
+          "executionStatus": "not-executed",
+          "generatedTestDigest": null,
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": null,
+          "variants": [],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
+        },
+        {
+          "id": "react-control-2",
+          "kind": "react",
+          "selected": false,
+          "repetition": 2,
+          "status": "failed",
+          "durationMs": 23,
+          "httpStatus": 400,
+          "errorClass": "Error",
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": null,
+            "inputBudget": null,
+            "estimatedInputTokens": null,
+            "skillTokens": null,
+            "expectedSkillTokens": null,
+            "accounted": null
+          },
+          "executionStatus": "not-executed",
+          "generatedTestDigest": null,
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": null,
+          "variants": [],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
+        },
+        {
+          "id": "react-skill-3",
+          "kind": "react",
+          "selected": true,
+          "repetition": 3,
+          "status": "failed",
+          "durationMs": 25,
+          "httpStatus": 400,
+          "errorClass": "Error",
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3351,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": null,
+            "inputBudget": null,
+            "estimatedInputTokens": null,
+            "skillTokens": null,
+            "expectedSkillTokens": null,
+            "accounted": null
+          },
+          "executionStatus": "not-executed",
+          "generatedTestDigest": null,
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": null,
+          "variants": [],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
+        },
+        {
+          "id": "react-control-3",
+          "kind": "react",
+          "selected": false,
+          "repetition": 3,
+          "status": "failed",
+          "durationMs": 24,
+          "httpStatus": 400,
+          "errorClass": "Error",
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": null,
+            "inputBudget": null,
+            "estimatedInputTokens": null,
+            "skillTokens": null,
+            "expectedSkillTokens": null,
+            "accounted": null
+          },
+          "executionStatus": "not-executed",
+          "generatedTestDigest": null,
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": null,
+          "variants": [],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false,
+          "physicalAttempts": 0
+        }
+      ],
+      "setupReadinessAttempts": 1,
+      "setupReadinessHttpStatuses": [500]
+    },
+    {
+      "id": "generation-react-v5",
+      "classification": "native local model through actual product API; controlled offline generated-code execution",
+      "sourceHead": "7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8",
+      "sourceDiffDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixture": "orchard-orders-v1",
+      "fixtureDigest": "937297337df5a30d4c91df356ea69d6e1eaa39f3495e8372628c18d1caa5f019",
+      "model": "gemma-4-31b-it",
+      "contextWindow": 131072,
+      "physicalOutputGrant": 8192,
+      "skillDigests": {
+        "java": "e6f04bb6231b2a976936e26518fcf1ae421c37aa4ee175d02b66e22604472965",
+        "react": "12c13f7d561a548b8b2cd3fa10a1c94b94c7a15e18be84989ce7436a7e2b4e7d"
+      },
+      "sandbox": {
+        "images": {
+          "java": "maven@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320",
+          "react": "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
+        },
+        "offline": true,
+        "unchangedGeneratedTests": true,
+        "timeoutSeconds": 120,
+        "maxOutputBytes": 2000000
+      },
+      "cases": [
+        {
+          "id": "react-skill-1",
+          "kind": "react",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 155300,
+          "citationCount": 5,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "11acbcfa53e87d4638759941f756da4b340bb9e4e83c51720862b102b740df96",
+          "outputBytes": 5165,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3351,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7317,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 9,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc"
+            },
+            {
+              "variant": "accept-exponent",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc"
+            },
+            {
+              "variant": "reject-upper-limit",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc"
+            },
+            {
+              "variant": "pending-enabled",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc"
+            },
+            {
+              "variant": "alter-result",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc"
+            },
+            {
+              "variant": "retry-stale-error",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "bce889e525318d8ecf45df29eb1e15272395e4ff9565a19ccdf63e14f52965fc"
+            }
+          ],
+          "detectedMutants": [
+            "accept-exponent",
+            "reject-upper-limit",
+            "pending-enabled",
+            "alter-result",
+            "retry-stale-error"
+          ],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "react-control-1",
+          "kind": "react",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 115672,
+          "citationCount": 3,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "96139b0cfdc594ecb734cb0f2ec233355293bb747210760cb6c42175d50c69e6",
+          "outputBytes": 4666,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 4906,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "c129f616f6b6b2d98a0b711841c9e85fc61a693f45ddd54cd89238eca3fc8b53",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 5,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "c129f616f6b6b2d98a0b711841c9e85fc61a693f45ddd54cd89238eca3fc8b53"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-2",
+          "kind": "react",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 234651,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "7f56cb366e6f815adc06d19d25f566c8bd8daf14fc49f628473887e41d8faefb",
+          "outputBytes": 4956,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3351,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7247,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "2e9210821ed5ca1f4f68583b81e327ec13becd3727267730c4319710c8360756",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e9210821ed5ca1f4f68583b81e327ec13becd3727267730c4319710c8360756"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-control-2",
+          "kind": "react",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 267754,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "751d30454b3f7b1b846df9035f0ac0a0faaf1a0efd5290e1c1ff13209c058797",
+          "outputBytes": 4075,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 4709,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "869bf786794fbe0c7d6c1c6a6e4099c163233d17bf0abc1a76388e605d23d288",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 4,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "869bf786794fbe0c7d6c1c6a6e4099c163233d17bf0abc1a76388e605d23d288"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-3",
+          "kind": "react",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 141964,
+          "citationCount": 5,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "522838070e31285a0c0d2f21f6076605f9f1608b8cfb29ae55bbf95eb59a4129",
+          "outputBytes": 5709,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3351,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7498,
+            "skillTokens": 3155,
+            "expectedSkillTokens": 3155,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 9,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1"
+            },
+            {
+              "variant": "accept-exponent",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1"
+            },
+            {
+              "variant": "reject-upper-limit",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1"
+            },
+            {
+              "variant": "pending-enabled",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1"
+            },
+            {
+              "variant": "alter-result",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1"
+            },
+            {
+              "variant": "retry-stale-error",
+              "exitCode": 1,
+              "tests": 9,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "ad384bf43772c416645ebf2650ad9c27933fad370851239513121f839094d0d1"
+            }
+          ],
+          "detectedMutants": [
+            "accept-exponent",
+            "reject-upper-limit",
+            "pending-enabled",
+            "alter-result",
+            "retry-stale-error"
+          ],
+          "allDeclaredMutantsDetected": true
+        },
+        {
+          "id": "react-control-3",
+          "kind": "react",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 239190,
+          "citationCount": 6,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "ac1518b1ceaa158421901e48db8bb048cf1d5265919f43f9d9b6f3661d40450e",
+          "outputBytes": 4497,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 4849,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "3e1120b4da83b50695cbc7b45e70e9600b46e3ddb6c79f0dbd078f661fed2567",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 5,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "3e1120b4da83b50695cbc7b45e70e9600b46e3ddb6c79f0dbd078f661fed2567"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        }
+      ]
+    },
+    {
+      "id": "generation-fulfillment-heldout-v2",
+      "classification": "native local model through actual product API; controlled offline generated-code execution",
+      "sourceHead": "7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8",
+      "sourceDiffDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixture": "fulfillment-heldout-v1",
+      "fixtureDigest": "1bdbc003ea9ef5e016a400b0cfbd61a635b313e9779bda91496137852cc92d7b",
+      "model": "gemma-4-31b-it",
+      "contextWindow": 131072,
+      "physicalOutputGrant": 8192,
+      "skillDigests": {
+        "java": "7d38db9bc207171f2c5b3f65a04f6a3125ee1bdae316fb521b1e2df451e5e82e",
+        "react": "609627834fa4edf53bd1e115014a3349c2a17a94b5288a0d023d7ebff4941a75"
+      },
+      "sandbox": {
+        "images": {
+          "java": "maven@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320",
+          "react": "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
+        },
+        "offline": true,
+        "unchangedGeneratedTests": true,
+        "timeoutSeconds": 120,
+        "maxOutputBytes": 2000000
+      },
+      "cases": [
+        {
+          "id": "java-skill-1",
+          "kind": "java",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 153068,
+          "citationCount": 4,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "650ffb2576517506b256f31ec7b48751f2b046100f83afb6e7e02e2e334559b8",
+          "outputBytes": 7041,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 2719,
+            "skillTokens": 2523,
+            "expectedSkillTokens": 2523,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 9978,
+            "skillTokens": 2523,
+            "expectedSkillTokens": 2523,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 15,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4"
+            },
+            {
+              "variant": "expiry-boundary",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4"
+            },
+            {
+              "variant": "quantity-upper",
+              "exitCode": 0,
+              "tests": 15,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4"
+            },
+            {
+              "variant": "normalization",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4"
+            },
+            {
+              "variant": "exact-stock",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 0,
+              "errors": 3,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4"
+            },
+            {
+              "variant": "reservation-time",
+              "exitCode": 1,
+              "tests": 15,
+              "failures": 2,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "00609e71ebacc18d33015859842201767373796a27a464ae959adc2e58d23ff4"
+            }
+          ],
+          "detectedMutants": [
+            "expiry-boundary",
+            "normalization",
+            "exact-stock",
+            "reservation-time"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "java-control-1",
+          "kind": "java",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 329716,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "b469f0d8bc337b77b4381a509b3d3ea9460446d24515fdcc99524bc633c6e301",
+          "outputBytes": 6284,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 8113,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 12,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703"
+            },
+            {
+              "variant": "expiry-boundary",
+              "exitCode": 1,
+              "tests": 12,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703"
+            },
+            {
+              "variant": "quantity-upper",
+              "exitCode": 0,
+              "tests": 12,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703"
+            },
+            {
+              "variant": "normalization",
+              "exitCode": 1,
+              "tests": 12,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703"
+            },
+            {
+              "variant": "exact-stock",
+              "exitCode": 1,
+              "tests": 12,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703"
+            },
+            {
+              "variant": "reservation-time",
+              "exitCode": 1,
+              "tests": 12,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "eb2cd3e06a8daa110b0e7b07cd67ba8586dfb5af7534246f2082e04e5befe703"
+            }
+          ],
+          "detectedMutants": [
+            "expiry-boundary",
+            "normalization",
+            "exact-stock",
+            "reservation-time"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "java-skill-2",
+          "kind": "java",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 175392,
+          "citationCount": 7,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "dfceb1f8b15b59ec2ae378714a07e9afdcd6c984c62dc4437054f98955d55087",
+          "outputBytes": 7869,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 2719,
+            "skillTokens": 2523,
+            "expectedSkillTokens": 2523,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 10254,
+            "skillTokens": 2523,
+            "expectedSkillTokens": 2523,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 14,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6"
+            },
+            {
+              "variant": "expiry-boundary",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6"
+            },
+            {
+              "variant": "quantity-upper",
+              "exitCode": 0,
+              "tests": 14,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6"
+            },
+            {
+              "variant": "normalization",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6"
+            },
+            {
+              "variant": "exact-stock",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 1,
+              "errors": 2,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6"
+            },
+            {
+              "variant": "reservation-time",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "2e48f6e6572794ec39a24d23a4287ae668d495639a6bb2eff3dcc489d9c92bd6"
+            }
+          ],
+          "detectedMutants": [
+            "expiry-boundary",
+            "normalization",
+            "exact-stock",
+            "reservation-time"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "java-control-2",
+          "kind": "java",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 290005,
+          "citationCount": 10,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "d2782842c3bc43b414426e87497e8a2a0b40d38f58255f43450b66328bbfcafe",
+          "outputBytes": 7651,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 8569,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 13,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e"
+            },
+            {
+              "variant": "expiry-boundary",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e"
+            },
+            {
+              "variant": "quantity-upper",
+              "exitCode": 0,
+              "tests": 13,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e"
+            },
+            {
+              "variant": "normalization",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e"
+            },
+            {
+              "variant": "exact-stock",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 0,
+              "errors": 3,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e"
+            },
+            {
+              "variant": "reservation-time",
+              "exitCode": 1,
+              "tests": 13,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "adad3e79d465f4521d6ca10dd9820746d54d7ce1bf2b275ed21ce6e69ef3695e"
+            }
+          ],
+          "detectedMutants": [
+            "expiry-boundary",
+            "normalization",
+            "exact-stock",
+            "reservation-time"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "java-skill-3",
+          "kind": "java",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 190196,
+          "citationCount": 3,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "2bf830a18976238d08e605c4404ea6b5403c46b5073a8ad71b5acea2d01b6ecb",
+          "outputBytes": 6959,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 2719,
+            "skillTokens": 2523,
+            "expectedSkillTokens": 2523,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 9951,
+            "skillTokens": 2523,
+            "expectedSkillTokens": 2523,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 14,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149"
+            },
+            {
+              "variant": "expiry-boundary",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149"
+            },
+            {
+              "variant": "quantity-upper",
+              "exitCode": 0,
+              "tests": 14,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149"
+            },
+            {
+              "variant": "normalization",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149"
+            },
+            {
+              "variant": "exact-stock",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 0,
+              "errors": 4,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149"
+            },
+            {
+              "variant": "reservation-time",
+              "exitCode": 1,
+              "tests": 14,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5dd50b78cc779e210f29ad4a05637dafecb2db39ed4a293a2afbe4fa903be149"
+            }
+          ],
+          "detectedMutants": [
+            "expiry-boundary",
+            "normalization",
+            "exact-stock",
+            "reservation-time"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "java-control-3",
+          "kind": "java",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 316763,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "e2e514dd35f6ddf2ee661db9b2b6eb7a98e7a2bc6d9cf0c590ffc6ff72cff924",
+          "outputBytes": 5752,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7936,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 5,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 8,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9"
+            },
+            {
+              "variant": "expiry-boundary",
+              "exitCode": 1,
+              "tests": 8,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9"
+            },
+            {
+              "variant": "quantity-upper",
+              "exitCode": 0,
+              "tests": 8,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9"
+            },
+            {
+              "variant": "normalization",
+              "exitCode": 1,
+              "tests": 8,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9"
+            },
+            {
+              "variant": "exact-stock",
+              "exitCode": 1,
+              "tests": 8,
+              "failures": 0,
+              "errors": 1,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9"
+            },
+            {
+              "variant": "reservation-time",
+              "exitCode": 1,
+              "tests": 8,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "4c49c1737799fa6a5be618b0f47d8e4a583d42bb143ccf455d0b6532f1df25a9"
+            }
+          ],
+          "detectedMutants": [
+            "expiry-boundary",
+            "normalization",
+            "exact-stock",
+            "reservation-time"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-1",
+          "kind": "react",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 140564,
+          "citationCount": 4,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "bd7e24e32d813f54e347535823c744b551db3515e5ef247e91b41d34db3a754f",
+          "outputBytes": 7099,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3422,
+            "skillTokens": 3226,
+            "expectedSkillTokens": 3226,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 10179,
+            "skillTokens": 3226,
+            "expectedSkillTokens": 3226,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 6,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 6,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            },
+            {
+              "variant": "stale-success",
+              "exitCode": 1,
+              "tests": 6,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            },
+            {
+              "variant": "stale-error",
+              "exitCode": 0,
+              "tests": 6,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            },
+            {
+              "variant": "stale-ready",
+              "exitCode": 0,
+              "tests": 6,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            },
+            {
+              "variant": "append-result",
+              "exitCode": 1,
+              "tests": 6,
+              "failures": 3,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            },
+            {
+              "variant": "abort-replacement",
+              "exitCode": 1,
+              "tests": 6,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            },
+            {
+              "variant": "abort-unmount",
+              "exitCode": 1,
+              "tests": 6,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "27784d58d407c30986913029b65c888ebe7f978781b587ca21ec87eeb684d4b8"
+            }
+          ],
+          "detectedMutants": [
+            "stale-success",
+            "append-result",
+            "abort-replacement",
+            "abort-unmount"
+          ],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-control-1",
+          "kind": "react",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-pending",
+          "durationMs": 213740,
+          "citationCount": 2,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "2fdbdf3aeb0155fdbd911ff4384fc397406bb22efdf57d792840f0605e18fc06",
+          "outputBytes": 5678,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7389,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "f2f9265f2138842c61821a64a4084f36519c4c9c33656a9b7a3384d607e8c226",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 6,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 20,
+              "tests": null,
+              "failures": null,
+              "errors": null,
+              "skipped": null,
+              "compiledAndExecuted": false,
+              "generatedSha256": "f2f9265f2138842c61821a64a4084f36519c4c9c33656a9b7a3384d607e8c226"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-2",
+          "kind": "react",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 162071,
+          "citationCount": 8,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "c4d97dd687664480b5d337c69a794307425e5c63e1d97ad92ce85bf04560688a",
+          "outputBytes": 8701,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3422,
+            "skillTokens": 3226,
+            "expectedSkillTokens": 3226,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 10713,
+            "skillTokens": 3226,
+            "expectedSkillTokens": 3226,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "151c9cea315d0ab0869aa9f0cc150f95811d6f451151e09147f714602a765d80",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 6,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 20,
+              "tests": null,
+              "failures": null,
+              "errors": null,
+              "skipped": null,
+              "compiledAndExecuted": false,
+              "generatedSha256": "151c9cea315d0ab0869aa9f0cc150f95811d6f451151e09147f714602a765d80"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-control-2",
+          "kind": "react",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-pending",
+          "durationMs": 267413,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "57567086a0f3aa1f459652c1a73fcdcc761b441ce5049cb0bc0cad27ae85f1e4",
+          "outputBytes": 6515,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7671,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "b89b4c4a9219a67d0f11f6f4bcc9658d81dd13aba1d835ceab2f9b594e132653",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 6,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 20,
+              "tests": null,
+              "failures": null,
+              "errors": null,
+              "skipped": null,
+              "compiledAndExecuted": false,
+              "generatedSha256": "b89b4c4a9219a67d0f11f6f4bcc9658d81dd13aba1d835ceab2f9b594e132653"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-skill-3",
+          "kind": "react",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 147955,
+          "citationCount": 2,
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "fcd022efa1c3e1d7d43dd4b65eba597ae9333be986e7db8e37a48d04316fe7d7",
+          "outputBytes": 7417,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 3422,
+            "skillTokens": 3226,
+            "expectedSkillTokens": 3226,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 10288,
+            "skillTokens": 3226,
+            "expectedSkillTokens": 3226,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "5fae2d67e38ed2e435eae89ff85c38ee4aabdc94296cec2ed9d854d64999e22f",
+          "correctSubjectPassed": false,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 6,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 1,
+              "tests": 6,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "5fae2d67e38ed2e435eae89ff85c38ee4aabdc94296cec2ed9d854d64999e22f"
+            }
+          ],
+          "detectedMutants": [],
+          "allDeclaredMutantsDetected": false
+        },
+        {
+          "id": "react-control-3",
+          "kind": "react",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-pending",
+          "durationMs": 335886,
+          "citationCount": 0,
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "a7f06d1b24a0e130fe577da52152d57e3de60e17a0bcf385e49b68bb80260ffd",
+          "outputBytes": 5976,
+          "beforeContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 196,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "afterContext": {
+            "window": 131072,
+            "inputBudget": 118784,
+            "estimatedInputTokens": 7491,
+            "skillTokens": 0,
+            "expectedSkillTokens": 0,
+            "accounted": true
+          },
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61",
+          "correctSubjectPassed": true,
+          "semanticAndProfileReview": "pending",
+          "declaredMutantCount": 6,
+          "variants": [
+            {
+              "variant": "correct",
+              "exitCode": 0,
+              "tests": 7,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            },
+            {
+              "variant": "stale-success",
+              "exitCode": 1,
+              "tests": 7,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            },
+            {
+              "variant": "stale-error",
+              "exitCode": 0,
+              "tests": 7,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            },
+            {
+              "variant": "stale-ready",
+              "exitCode": 0,
+              "tests": 7,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            },
+            {
+              "variant": "append-result",
+              "exitCode": 0,
+              "tests": 7,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            },
+            {
+              "variant": "abort-replacement",
+              "exitCode": 1,
+              "tests": 7,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            },
+            {
+              "variant": "abort-unmount",
+              "exitCode": 1,
+              "tests": 7,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "compiledAndExecuted": true,
+              "generatedSha256": "02acd5b2bf6e71a51eb774f8643f42478d574c736a44a403531806a362155b61"
+            }
+          ],
+          "detectedMutants": ["stale-success", "abort-replacement", "abort-unmount"],
+          "allDeclaredMutantsDetected": false
+        }
+      ]
+    },
+    {
+      "id": "generation-reservation-unit-v1",
+      "classification": "fresh predeclared synthetic Spring service unit fixture; completed twelve-case matched comparison, no final skill acceptance or superiority; not missing historical replay",
+      "sourceHead": "3fdde3b4774938dbae167c4be33841fcc3781f1a",
+      "sourceDiffDigest": "f9795a0ff342fb5b2e762c08a2d8e80f72efd65eda43cf60fd5639183b2ed25f",
+      "fixture": "reservation-unit-heldout-v1",
+      "fixtureDigest": "393739f00a85ed679104a3ff1f5594375126d1c209cc57dc588a47ed4c5184c0",
+      "model": "gemma-4-31b-it",
+      "contextWindow": 131072,
+      "physicalOutputGrant": 8192,
+      "inputGrant": 118784,
+      "providerTimeoutMs": 1365000,
+      "providerMaxRetries": 1,
+      "transportTimeoutMs": 2760000,
+      "repetitions": 3,
+      "pairedControls": true,
+      "profileMatchedControls": true,
+      "profiles": [
+        {
+          "id": "aaa",
+          "names": "English camelCase method names describing expected behavior",
+          "structure": "Arrange/Act/Assert with explicit Arrange, Act and Assert sections",
+          "skillDigest": "0447b2fbcef56878ea0f2be5e963fb0170e6c1da809f73b82da0bdc8d2136ae4",
+          "questionDigest": "283e86b78ca71c1de5693f7bbc24dba236580e0fa350a803cbd03c1e869676f6"
+        },
+        {
+          "id": "gwt",
+          "names": "English given_context_when_action_then_outcome snake_case method names",
+          "structure": "Given/When/Then with explicit Given, When and Then sections",
+          "skillDigest": "f279bdfc8daffd309106d4ad07227c57703e1031b3839bc35b79896f54f15a65",
+          "questionDigest": "c15490f9d8f5103b5c70e61ba9c9de56813bc48172f0014f3ecb90b048dda647"
+        }
+      ],
+      "cases": [
+        {
+          "id": "java-aaa-skill-1",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "ff3f447863795ef2da0067f4d3a92bbed4ff45f2c32fe01cd3c2a64987231de7",
+          "outputBytes": 9127,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "eb2671031dbfd0833a50656003bf8ea93f8712f9bd494639b7bde6005d9cf506",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2888
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          },
+          "profileFailure": "eleven-test-methods-violate-camelCase"
+        },
+        {
+          "id": "java-aaa-control-1",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "a196349d6b67e75d23e5c6a125f16d6f34a3b800c5cfa15679011d614c0b9aaf",
+          "outputBytes": 8147,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "6a360f370e8cdeff6172baf8e3922f06d40a32c6b76e5979d9942af2d199fe3a",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 15,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-control-2",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "304e2d4f75ef73f0ce2aa34c19d23348cdb1f398ea751fc95ec0b55e47dadd85",
+          "outputBytes": 7722,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "8fae640735c976db31e9d616a6bbb974e250c2cb43ff7bd8c748d1be0ad1fb37",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-skill-2",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "2f27afc4b64d3c6aabc6ec16c02e0490e3393d1791607255047104b4cd2e795e",
+          "outputBytes": 8139,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "6983fa53567d115145ef805b963ca7c4525458f1c559e322c6b3c2bf1451457d",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2888
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 22,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-skill-3",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "ace6d8360f876ae67db470ec76df7b810d7937773116b05abaf9563feb6aab51",
+          "outputBytes": 8060,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "03efe75896fb1a62240a9a84a9e0566b1261ff30128fd5d9593926f4ef97405d",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2888
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 20,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-aaa-control-3",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "f2fd73f6ae89fe36b7df70ae8c10626f6f2b029700e0e382c60b245fc82dfdaf",
+          "outputBytes": 6861,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "77cf4fc727796d0a3ea0d4fb970927b39fe415909797196b2ac0b74a45fdbb20",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-skill-1",
+          "profile": "gwt",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "9a49d9afea1cb10226654ee89e649aba5816b9aa247b2d713319b1a29ba0de26",
+          "outputBytes": 6490,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "3967eb41cb4206cbb29fd4b47ef3d5972d2922e849ac88726526419c9dee551d",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2889
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 18,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-control-1",
+          "profile": "gwt",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "7b99f61b4eae836b5a12cc1dbd74332cd01416c197d44c59de6f93ca5a5e21e9",
+          "outputBytes": 6481,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "a2ff5dc87763e01de6b887bad16cb2408ed2a3d2351db447f89ef0f8f56e7fa4",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": ["discount-too-early"]
+          }
+        },
+        {
+          "id": "java-gwt-control-2",
+          "profile": "gwt",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "d21365dd619080c241324add53411606f41693b557a73c306399ca2b289f5159",
+          "outputBytes": 6910,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "8941b09c258d11197ccff7556e2a2c0ed97d2b2f439293f72f7b5ffd20921e7a",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-skill-2",
+          "profile": "gwt",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "aeed4a40c0f5a8dc1a74aca30c4ee01629ccb04ad1560d7c6d3ffa1738600bcd",
+          "outputBytes": 7076,
+          "executionStatus": "correct-subject-failed",
+          "generatedTestDigest": "5d5238b0482dc3d84aa26892988dedb508ee2f40f0fc63c8856325cfda62b72c",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2889
+          },
+          "correctSubject": {
+            "exitCode": 1,
+            "tests": 14,
+            "failures": 0,
+            "errors": 1,
+            "skipped": 0,
+            "baselineEligible": false
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 0,
+            "detected": [],
+            "survived": []
+          },
+          "failureClass": "invalid-blank-CsvSource-record-before-application-assertion"
+        },
+        {
+          "id": "java-gwt-skill-3",
+          "profile": "gwt",
+          "selected": true,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 1,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "0e8f71ce12819d33870185d0ddb29881ac78208525d308a796b4fc03413a5b89",
+          "outputBytes": 6171,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "3e792e5c789894283eb4c8562da650e41ea3b4e0c5d4701c3bfd10b8a5ba07f7",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 2889
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        },
+        {
+          "id": "java-gwt-control-3",
+          "profile": "gwt",
+          "selected": false,
+          "repetition": 3,
+          "status": "model-returned-execution-and-review-pending",
+          "physicalAttempts": 2,
+          "protectedSkill": true,
+          "persistedContentAgrees": true,
+          "sourceStable": true,
+          "outputDigest": "efebe12477917c55907ae06d7f58e75bddadc09176bfa91fac95514d8761ef76",
+          "outputBytes": 6008,
+          "executionStatus": "correct-subject-passed",
+          "generatedTestDigest": "b3cff4150c8e4c41c07dd2960e6167f2f3d43feb1c505626eab9ae9829b76c8e",
+          "semanticAndProfileReview": "not-qualified",
+          "contextAccounting": {
+            "beforeAndAfterAgree": true,
+            "skillTokens": 0
+          },
+          "correctSubject": {
+            "exitCode": 0,
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "baselineEligible": true
+          },
+          "declaredMutants": {
+            "planned": 6,
+            "executed": 6,
+            "detected": [
+              "reject-upper-seat-bound",
+              "discount-too-early",
+              "omit-customer-normalization",
+              "accept-expiry-equality",
+              "alter-collaborator-total",
+              "return-stale-id"
+            ],
+            "survived": []
+          }
+        }
+      ],
+      "comparison": {
+        "selectedCorrectSubjects": 5,
+        "selectedPlanned": 6,
+        "controlCorrectSubjects": 6,
+        "controlPlanned": 6,
+        "selectedExecutedDeclaredMutants": 30,
+        "selectedPlannedDeclaredMutants": 36,
+        "selectedDetectedDeclaredMutants": 30,
+        "controlExecutedDeclaredMutants": 36,
+        "controlDetectedDeclaredMutants": 35,
+        "roundingModeMutantInFrozenScore": false,
+        "roundingAcceptance": "not-qualified",
+        "completeProfileAcceptance": "not-qualified",
+        "skillAcceptance": "failed"
+      },
+      "reviewLimits": [
+        "No output is repaired or replaced. Correct-subject failure receives no mutant credit.",
+        "The last GWT control (java-gwt-control-3) uses two observed physical calls under the same cumulative8192 output grant; no actual compaction was observed.",
+        "Literal profile screens require semantic review of shared setup and combined action/assertion sections.",
+        "The missing five-seat rounding tie means whole-requirement acceptance is unproved despite six-mutant detection. Any later rounding experiment is separate.",
+        "The revised skill needs a new predeclared regression comparison and independent heldout tasks; this old run cannot qualify it."
+      ],
+      "roundingExploratory": {
+        "classification": "separate post-matrix exploratory check; original six-mutant score and denominators unchanged",
+        "predeclaredExperimentDigest": "388b860d1c2f5ad6f99487504f8202114424ef3f1f2a74fac42bdf1b4e88e408",
+        "unchangedEligibleModelOutputs": 11,
+        "roundDownDetectedByModelOutputs": 0,
+        "correctSubjectFailureExcluded": 1,
+        "manualSensitivity": {
+          "classification": "manual fixture validation only, never supplied to model",
+          "tests": 18,
+          "correctSubjectPassed": true,
+          "roundDownDetected": true,
+          "halfEvenDetected": false,
+          "limitation": "The accepted input domain provides no half-even/half-up discriminator for this price rule; no invented out-of-domain input is accepted."
+        },
+        "retainedReportIndexDigest": "aded8a2030f79ab309a374fac9e16a60224321ced42028bac9e55755898e2759",
+        "actualReportCount": 14
+      },
+      "retainedArtifactDigests": {
+        "generationLedger": "2b48f1044bcbd9849e368355b8148fe6575c0430b4e0169fd1558196d83f58bf",
+        "executionReportsIndex": "88d7778a654b735c8c0ef16c5be0590b6190d539616c581b28ba95006dbe4f3c",
+        "independentSourceAndReportJoin": "4db550052cd1d4951d285f25dc31e0c57b4c37460023d3c81f1dd18eab82448e"
+      }
+    },
+    {
+      "id": "generation-reservation-unit-v2-superseded-diagnostic",
+      "classification": "cancelled diagnostic variation after owner clarified customer skill scope; partial outcomes retained, not a completed12-case comparison",
+      "reason": "detailed framework-specific instructions superseded by concise method/convention customer skills",
+      "sourceHead": "1aed722a5fd2135c634f497d087a06853f1b546f",
+      "sourceDiffDigest": "c3f98ad9175396bdc9a910d248fc378e2e03bfc8340aafaf5dca1451f5054a96",
+      "plannedCases": 12,
+      "terminalCasesAtCancellation": 4,
+      "cancelledInFlight": 1,
+      "notDispatched": 7,
+      "completeComparison": false,
+      "skillAcceptance": "not-qualified",
+      "cases": [
+        {
+          "id": "java-aaa-skill-1",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "eb8cec18da6be5fc034126ce6eeba2782d49f44d4cbeaec1bc21cd426504cf0c",
+          "outputBytes": 6400,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-control-1",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 1,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "e36474edfd0ee612fe910314b64a054b7b61f693d24a558c46dcc01d3563a91f",
+          "outputBytes": 7167,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-skill-2",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "95aa8bdf2cca1ce16c4b896c9b4d7c973bbb85a968b74e8bdb3d5905900906d9",
+          "outputBytes": 6655,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-control-2",
+          "profile": "aaa",
+          "selected": false,
+          "repetition": 2,
+          "status": "model-returned-execution-and-review-pending",
+          "outputDigest": "3b1e481b40544d443ec0b68ace68d413ef9b4387c0afce54d62364f2434f66bf",
+          "outputBytes": 7820,
+          "physicalAttempts": 1,
+          "disposition": "retained-diagnostic-output-not-current-skill-qualification"
+        },
+        {
+          "id": "java-aaa-skill-3",
+          "profile": "aaa",
+          "selected": true,
+          "repetition": 3,
+          "status": "started",
+          "disposition": "cancelled-in-flight-final-accounting-unavailable"
+        },
+        {
+          "id": "java-aaa-control-3",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-skill-1",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-control-1",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-skill-2",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-control-2",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-skill-3",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        },
+        {
+          "id": "java-gwt-control-3",
+          "disposition": "not-dispatched-after-scope-cancellation"
+        }
+      ],
+      "currentSkillBoundary": "Neither this detailed diagnostic variation nor any surviving output qualifies the later compact customer skills. Outputs and partial execution results remain unchanged."
+    }
+  ]
+}

@@ -2061,3 +2061,36 @@ describe("update preflight route handlers", () => {
     deps.store.close();
   });
 });
+
+it("records actual blocked portable preflight classification with the request correlation", async () => {
+  const events: ServerLogEvent[] = [];
+  const deps = {
+    ...depsWith(vi.fn<typeof fetch>()),
+    activityLog: {
+      write: (event: ServerLogEvent): void => {
+        events.push(event);
+      },
+    },
+  };
+  try {
+    await runUpdatePreflight(
+      deps,
+      { currentVersion: "0.2.10", installMode: () => portableBootstrapMode() },
+      "mode-owner-preflight",
+    );
+    const event = events.find((candidate) => candidate.op === "update.install-mode.detected");
+    expect(event).toMatchObject({
+      correlationId: "mode-owner-preflight",
+      extra: {
+        source: "preflight",
+        status: "unsupported",
+        installKind: "portable-bootstrap",
+        reason: "portable-bootstrap",
+        target: "macos-arm64",
+      },
+    });
+    expect(typeof event?.extra?.durationMs).toBe("number");
+  } finally {
+    deps.store.close();
+  }
+});

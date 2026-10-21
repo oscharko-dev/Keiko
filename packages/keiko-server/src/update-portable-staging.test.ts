@@ -1,3 +1,4 @@
+import { managedRootFromPackageRoot } from "./update-portable-staging-archive.js";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -1147,4 +1148,10 @@ describe("portable update staging", () => {
     expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
     expect(localState.readRuntimeState().portableStage).toBeUndefined();
   });
+});
+
+it("Linux staging resolves the actual flat managed root", () => {
+  expect(managedRootFromPackageRoot("linux-x64", "/home/alice/.local/opt/Keiko/app")).toBe(
+    "/home/alice/.local/opt/Keiko",
+  );
 });

@@ -104,6 +104,7 @@ const MANAGED_INSTALL_RULES: Readonly<
       "app/package.json",
       "app/release-impact.catalog.json",
       "support/keiko-support.sh",
+      "runtime/native/keiko-runtime-supervisor",
     ],
     recursivePrefixes: ["app/dist/", "app/node_modules/", "runtime/node/"],
   },

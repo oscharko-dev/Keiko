@@ -1,3 +1,4 @@
+import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -1224,12 +1225,7 @@ function readPortableSetupLockOwner(path: string): PortableSetupLockOwner | unde
 }
 
 function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 interface StalePortableSetupLock {
@@ -1267,7 +1263,7 @@ function restoreClaimedPortableSetupLock(claimedPath: string, path: string): voi
 }
 
 function reclaimPortableSetupLock(path: string): boolean {
-  const claimedPath = `${path}.reclaim-${String(process.pid)}-${randomUUID()}`;
+  const claimedPath = `${path}.reclaim-${String(currentProcessId())}-${randomUUID()}`;
   let stale: StalePortableSetupLock;
   try {
     const inspected = stalePortableSetupLock(path);
@@ -1299,7 +1295,7 @@ function createPortableSetupLock(path: string): void {
   try {
     writeFileSync(
       join(path, PORTABLE_SETUP_LOCK_OWNER),
-      `${JSON.stringify({ schemaVersion: 1, pid: process.pid })}\n`,
+      `${JSON.stringify({ schemaVersion: 1, pid: currentProcessId() })}\n`,
       { encoding: "utf8", flag: "wx", mode: 0o600 },
     );
   } catch (error) {
@@ -1337,7 +1333,7 @@ function releasePortableSetupLocks(paths: readonly string[]): void {
   for (const path of [...paths].reverse()) {
     try {
       const owner = readPortableSetupLockOwner(path);
-      if (owner?.pid !== process.pid) continue;
+      if (owner?.pid !== currentProcessId()) continue;
       rmSync(join(path, PORTABLE_SETUP_LOCK_OWNER), { force: true });
       rmdirSync(path);
     } catch {

@@ -6492,7 +6492,7 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     resetServerLogger();
   });
 
-  it("forwards each provider delta to the coding runtime before the provider has finished", async () => {
+  it("publishes a complete safe public line before the provider has finished", async () => {
     resetGatewayInstanceCacheForTests();
     const upstream = drivenProviderStream();
     vi.stubGlobal(
@@ -6507,7 +6507,14 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     );
     upstream.push(sseDelta({ role: "assistant", content: "First " }));
     await vi.waitFor(() => {
-      expect(response.body()).toContain('"content":"First "');
+      expect(response.body()).toContain('"role":"assistant"');
+    });
+    // The privacy owner must retain an unresolved fragment; F2 still requires live publication
+    // of its completed safe unit before finish, rather than terminal-only concatenation.
+    expect(response.body()).not.toContain('"content":"First "');
+    upstream.push(sseDelta({ content: "public line.\n" }));
+    await vi.waitFor(() => {
+      expect(response.body()).toContain('"content":"First public line.\\n"');
     });
     upstream.push(sseDelta({ content: "second." }));
     upstream.push(sseFinish("stop"));
@@ -6517,7 +6524,7 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     expect(await pending).toBe(STREAMING);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { content: "First " },
+      { content: "First public line.\n" },
       { content: "second." },
     ]);
     expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
@@ -6752,7 +6759,7 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     );
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
-    ).toMatchObject({ outcome: "accepted", reasoningFrames: 2 });
+    ).toMatchObject({ outcome: "accepted", reasoningFrames: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("Randfall");
   });
 
@@ -6770,14 +6777,13 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     );
 
     const deltas = frameDeltas(response.body());
-    expect(deltas.slice(0, 5)).toEqual([
+    // Safe-boundary coalescing changes frame count, never channel, bytes or ordering.
+    expect(deltas.slice(0, 3)).toEqual([
       { role: "assistant" },
-      { reasoning_content: REASONING_DELTAS[0] },
-      { reasoning_content: REASONING_DELTAS[1] },
-      { content: CONTENT_DELTAS[0] },
-      { content: CONTENT_DELTAS[1] },
+      { reasoning_content: REASONING_DELTAS.join("") },
+      { content: CONTENT_DELTAS.join("") },
     ]);
-    expect(deltas[5]).toMatchObject({
+    expect(deltas[3]).toMatchObject({
       tool_calls: [{ index: 0, id: "call-q", type: "function", function: { name: "question" } }],
     });
     expect(
@@ -7389,8 +7395,7 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
     expect(bodies).toHaveLength(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
       { reasoning_content: "Briefly: " },
       { content: "Done." },
     ]);
@@ -7407,7 +7412,7 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
       outcome: "accepted",
       repairAttempted: true,
       repairOutcome: "recovered",
-      reasoningFrames: 3,
+      reasoningFrames: 2,
     });
     expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
     expect(JSON.stringify(sink.events)).not.toContain("Think ");
@@ -7430,10 +7435,8 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
+      { reasoning_content: "Think hard." },
     ]);
     // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
     expect(response.body()).toContain('"code":400');
@@ -7448,7 +7451,7 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
       outcome: "failed",
       repairAttempted: true,
       repairOutcome: "exhausted-again",
-      reasoningFrames: 4,
+      reasoningFrames: 2,
     });
     expect(JSON.stringify(sink.events)).not.toContain("Think ");
   });
@@ -7708,8 +7711,7 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
     expect(bodies).toHaveLength(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
       { reasoning_content: "Briefly: " },
       { content: "Done." },
     ]);
@@ -7726,7 +7728,7 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
       outcome: "accepted",
       repairAttempted: true,
       repairOutcome: "recovered",
-      reasoningFrames: 3,
+      reasoningFrames: 2,
     });
     expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
     expect(JSON.stringify(sink.events)).not.toContain("Think ");
@@ -7749,10 +7751,8 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
+      { reasoning_content: "Think hard." },
     ]);
     // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
     expect(response.body()).toContain('"code":400');
@@ -7773,7 +7773,7 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
       outcome: "failed",
       repairAttempted: true,
       repairOutcome: "empty-again",
-      reasoningFrames: 4,
+      reasoningFrames: 2,
     });
     expectActivityLogProof(
       "coding-sidecar.gateway.outcome.line",

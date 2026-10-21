@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded shared Activity Log process-identity repair; no native updater, skill or broader acceptance",
+  "sourceParent": "b0b7491fc106fba41abed2e9a48f686b029232d7",
+  "sourceFreeze": {
+    "artifact": "checkpoint46-source-freeze-v1.json",
+    "sha256": "5132d2d96b66c66c6cfc6ebde3848e684b9141af6aab4ef615836aee5c44f16b"
+  },
+  "repair": {
+    "owner": "Existing Activity Log store policy and orphan inspection",
+    "soleWriter": "A matching instance id alone does not make a different live PID the local writer. A same-PID predecessor and a confirmed-dead peer retain existing semantics.",
+    "orphan": "The same-process reason requires both PID and instance id. Ordinary exited, stale and current-name rules remain unchanged.",
+    "logging": "Existing activity-log.policy.conflict and activity-log.segment.recovered operations retain their registered policyResolution and ownerState evidence; no new emitter, operation, id grammar or sensitive payload."
+  },
+  "causalControls": {
+    "scope": "Actual canonical segment producer/parser and actual store-policy file I/O with explicitly injected peer liveness",
+    "before": {
+      "failed": 3,
+      "healthy": 3,
+      "log": {
+        "artifact": "checkpoint46-collision-before.log",
+        "sha256": "67b132eddcd24e66601a6d8e3889436423aee3d291315355505b892150a3a17b"
+      }
+    },
+    "after": {
+      "passed": 6,
+      "log": {
+        "artifact": "checkpoint46-collision-after.log",
+        "sha256": "ce2b3f87bde154c3b778282e7b8c7795d5b224a4ed24ed5d770d46099b745a7f"
+      }
+    }
+  },
+  "affectedVerification": {
+    "activityLogPackage": {
+      "suitesPassed": 36,
+      "testsPassed": 1323,
+      "log": {
+        "artifact": "checkpoint46-activity-package.log",
+        "sha256": "3871df04460d1da9df29f44fa0d967ffb75cd09296cd46ac306b549d7618f8ea"
+      }
+    },
+    "strictRootTypecheck": {
+      "artifact": "checkpoint46-typecheck.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    "scopedLint": {
+      "artifact": "checkpoint46-lint-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "limits": [
+    "No real updater process takeover, installed version transition, PID-namespace identity integration or customer-platform acceptance is inferred.",
+    "No skill result, protocol outcome, acceptance disposition or issue checkbox changes.",
+    "Final publication checks and any independent after-controls are separately retained."
+  ]
+}

@@ -7,6 +7,7 @@ import {
   createWorkspaceIndex,
   type WorkspaceIndex,
   type WorkspaceIndexSnapshot,
+  type WorkspaceIndexRecord,
 } from "./workspaceIndex.js";
 
 const query: RetrievalQuery = {
@@ -35,7 +36,14 @@ function scope(): SearchScope {
   };
 }
 
-function priorSubjectRevision(index: WorkspaceIndex, identity: string): WorkspaceIndex {
+function priorSubjectRevision(
+  index: WorkspaceIndex,
+  identity: string,
+  match: Omit<NonNullable<WorkspaceIndexRecord["queryMatch"]>, "queryIdentitySha256"> = {
+    best: [],
+    maxScore: 0,
+  },
+): WorkspaceIndex {
   return {
     saveSnapshot: index.saveSnapshot,
     loadSnapshot: async (key, isActive): Promise<WorkspaceIndexSnapshot | undefined> => {
@@ -48,11 +56,10 @@ function priorSubjectRevision(index: WorkspaceIndex, identity: string): Workspac
           ...(record.queryMatch === undefined
             ? {}
             : {
-                // Simulated prior-revision negative with unchanged file metadata.
+                // Frozen prior-revision match with unchanged file metadata.
                 queryMatch: {
                   queryIdentitySha256: identity,
-                  best: [],
-                  maxScore: 0,
+                  ...match,
                 },
               }),
         })),
@@ -62,6 +69,52 @@ function priorSubjectRevision(index: WorkspaceIndex, identity: string): Workspac
 }
 
 describe("repository query subject diagnostics", () => {
+  it("rejects a revision-six cached hit supplied only by output formatting", async () => {
+    const formattingQuery: RetrievalQuery = {
+      ...query,
+      text: "Explain packages/payments/src/lease-policy.ts and token budgets. Keep the answer under 200 words.",
+    };
+    const fs = memFs("/ws", { "src/years.txt": "200\n" });
+    const reads = vi.spyOn(fs, "readFileBytes");
+    const index = createWorkspaceIndex();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: null, elapsedMsMax: null };
+    const cold = await searchText(scope(), formattingQuery, limits, {
+      fs,
+      workspaceIndex: index,
+      nowMs: () => 0,
+    });
+    expect(cold.atoms).toEqual([]);
+    reads.mockClear();
+    // Actual compiled e1ccb2c7 revision-six producer, with this same query and source.
+    const prior = priorSubjectRevision(
+      index,
+      "98181445a7ec26b12946d097f6581228fb18f96dfb4dfa594979a04ad9cab37a",
+      {
+        best: [{ line: 1, startLine: 1, endLine: 1, score: 0.125 }],
+        maxScore: 0.125,
+        contentScore: 20,
+        definitionMatch: false,
+      },
+    );
+    const migrated = await searchText(scope(), formattingQuery, limits, {
+      fs,
+      workspaceIndex: prior,
+      nowMs: () => 0,
+    });
+    expect(migrated.atoms).toEqual(cold.atoms);
+    expect(migrated.workspaceIndex).toMatchObject({ indexedRecords: 1, reusedRecords: 0 });
+    expect(reads).toHaveBeenCalledOnce();
+    reads.mockClear();
+    const warm = await searchText(scope(), formattingQuery, limits, {
+      fs,
+      workspaceIndex: index,
+      nowMs: () => 0,
+    });
+    expect(warm.atoms).toEqual(cold.atoms);
+    expect(warm.workspaceIndex?.reusedRecords).toBe(1);
+    expect(reads).not.toHaveBeenCalled();
+  });
+
   it.each([null, 20])(
     "observes removed clauses on streamed and bounded scans: %s",
     async (maxFilesScanned) => {

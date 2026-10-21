@@ -1,3 +1,8 @@
+import { mapUnquotedRepositoryFilePaths } from "./repoSearchQueryPaths.js";
+import {
+  querySourceDescriptors,
+  matchesQuerySourceDescriptor,
+} from "./repoSearchSourceDescriptors.js";
 // Pure match strategies and the query fingerprint used by the repo-search facade (Issue #179).
 // Kept separate from repoSearch.ts to hold the file-length cap and to make every matcher
 // independently testable.
@@ -28,6 +33,8 @@ import {
 } from "./repoSearchSourceClassification.js";
 
 export interface LineMatcher {
+  readonly matchWithoutSourceDescriptor?: LineMatcher["match"] | undefined;
+  readonly matchesSourceDescriptor?: ((line: string) => boolean) | undefined;
   readonly queryGroupCount?: number | undefined;
   readonly matchedQueryGroups?: ((line: string) => readonly number[]) | undefined;
   readonly citationDirectiveClauseCount?: number | undefined;
@@ -94,7 +101,7 @@ export function queryIdentityFor(
           matchingSettings: {
             ...matchingSettings,
             ...(query.kind === "natural-language" && interpretation === undefined
-              ? { subjectNormalizationRevision: 6 }
+              ? { subjectNormalizationRevision: 7 }
               : {}),
           },
         }),
@@ -398,7 +405,10 @@ const memoizedContentTerms: (key: string) => readonly string[] = memoizeByString
 const memoizedContentTermGroups: (key: string) => readonly (readonly string[])[] =
   memoizeByStringKey(8, (key: string): readonly (readonly string[])[] => {
     const caseSensitive = key.startsWith("s");
-    const queryText = naturalLanguageSubjectText(key.slice(2));
+    const subject = naturalLanguageSubjectText(key.slice(2));
+    const queryText = /["'`“”‘’«»]/u.test(subject)
+      ? subject
+      : mapUnquotedRepositoryFilePaths(subject, (_term, raw) => " ".repeat(raw.length));
     const groups = naturalLanguageContentGroups(
       expandedQueryTermGroups(queryText, caseSensitive),
       caseSensitive,
@@ -857,7 +867,7 @@ export function buildMatcher(
     return buildLiteralMatcher(query, interpretation.terms);
   }
   if (query.kind === "natural-language") {
-    return buildNaturalLanguageMatcher(query);
+    return withSourceDescriptors(buildNaturalLanguageMatcher(query), query);
   }
   if (query.kind === "exact-symbol") {
     return buildExactSymbolMatcher(query);
@@ -866,6 +876,20 @@ export function buildMatcher(
     return buildRegexMatcher(query);
   }
   throw new RepoSearchInvalidQueryError(`unsupported query kind: ${query.kind}`);
+}
+
+function withSourceDescriptors(matcher: LineMatcher, query: RetrievalQuery): LineMatcher {
+  const descriptors = querySourceDescriptors(query.text, query.caseSensitive);
+  if (descriptors.length === 0) return matcher;
+  const matches = (line: string): boolean =>
+    matchesQuerySourceDescriptor(line, descriptors, query.caseSensitive);
+  return {
+    ...matcher,
+    matchWithoutSourceDescriptor: matcher.match,
+    matchesSourceDescriptor: matches,
+    match: (line, sourceLine): number =>
+      Math.max(matcher.match(line, sourceLine), matches(line) ? 1 : 0),
+  };
 }
 
 // Anchored filename patterns support `*`, `**`, `?`, and literal characters. Each input

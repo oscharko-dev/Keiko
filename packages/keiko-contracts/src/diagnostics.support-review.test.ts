@@ -13,6 +13,14 @@ const prepared = {
   loss: "none",
 };
 const closed = [
+  {
+    updateNotice: {
+      blockerCount: 0,
+      noticeKind: "portable-setup-required",
+      presentation: "shown",
+      updateAvailable: false,
+    },
+  },
   { supportReportPreparation: prepared },
   { filesScopeDecision: { decision: "restored" } },
   { supportReportDelivery: "manual" },

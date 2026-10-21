@@ -12,6 +12,7 @@ const EVIDENCE_RECORDS = [
 
 export const UPDATE_UI_SOURCE_PATHS = Object.freeze([
   "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
+  "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
   "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
@@ -19,6 +20,9 @@ export const UPDATE_UI_SOURCE_PATHS = Object.freeze([
   "packages/keiko-ui/src/lib/api.ts",
   "packages/keiko-ui/src/lib/i18n-messages.de.ts",
   "packages/keiko-ui/src/lib/i18n-messages.en.ts",
+  "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
+  "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
+  "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
 ]);
 
 export const UPDATE_UI_HARNESS_PATHS = Object.freeze([

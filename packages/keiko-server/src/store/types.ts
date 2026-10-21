@@ -11,6 +11,7 @@
 // the literal specifier so the extension must match exactly.
 import type { CodingHistoryStore } from "./codingHistory.js";
 import type { MarkdownSkillStore } from "./markdownSkills.js";
+import type { BrowserApprovalStore } from "./browserApprovals.js";
 import type {
   Project,
   Chat,
@@ -36,6 +37,17 @@ import type {
 // id, which the evidence of the chat's reference id joins (#3557 review). Never on the wire.
 export interface StoreCreateChatOptions extends CreateChatOptions {
   readonly correlationId?: string | undefined;
+  readonly creationRequestId?: string | undefined;
+  readonly automaticModelSelection?: boolean | undefined;
+}
+
+export interface ChatCreationIntent {
+  readonly requestId: string;
+  readonly projectPath: string;
+  readonly title: string;
+  readonly requestedModelId: string | undefined;
+  readonly branchLabel: string | undefined;
+  readonly correlationId: string | undefined;
 }
 export type {
   Project,
@@ -111,15 +123,17 @@ export type ChatTurnCompletion =
 
 export interface UiStore {
   readonly markdownSkills: MarkdownSkillStore;
+  readonly browserApprovals?: BrowserApprovalStore | undefined;
   readonly codingHistory?: CodingHistoryStore | undefined;
   readonly listProjects: () => readonly Project[];
-  readonly createProject: (path: string, name?: string) => Project;
+  readonly createProject: (path: string, name?: string, correlationId?: string) => Project;
   readonly reconnectProject: (path: string) => Project;
   readonly updateProject: (path: string, patch: UpdateProjectPatch) => Project;
   readonly deleteProject: (path: string) => void;
 
   readonly listChats: (projectPath: string, limit?: number) => readonly Chat[];
   readonly findChatById: (id: string) => Chat | undefined;
+  readonly replayChatCreation: (intent: ChatCreationIntent) => Chat | undefined;
   readonly readChatDraft: (id: string) => ChatDraft;
   readonly updateChatDraft: (id: string, update: ChatDraftUpdate) => ChatDraft;
   readonly createChat: (

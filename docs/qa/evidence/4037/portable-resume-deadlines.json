@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "classification": "POSIX resume admission and actual transaction engine policy with real private KHP/files/image/gate. Controlled clocks, inert process and receipt ports. No real BFF, signed ES, Windows, x64 or packaged-update qualification.",
+  "parentHead": "1df1384e51580eaeb5193cd9dbbe1a3590d635f8",
+  "sourceFiles": [
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "2b6777683bea40224666387871d32da708919502549e2aa6d8895d218286411d"
+    },
+    {
+      "path": "tests/fixtures/portable-resume-deadline.c",
+      "sha256": "82e9a75ffa0bd9bdb75c1fbff472a7324be380ca07572e4c45a235215d824314"
+    },
+    {
+      "path": "packages/keiko-server/src/update-portable-resume-deadline.test.ts",
+      "sha256": "2b1a03aa0d587673ffb3dc2aed25fce058578e95d820d0df6d37239a7fea4fca"
+    }
+  ],
+  "beforeRuntimeSha256": "999b2752eaf3e4fcba071a22dbcc2d5281ec7b55a0bb1fdf0cebf19a7d28ff51",
+  "sameFinalFixtureBytesBeforeAndAfter": true,
+  "phaseValuesChanged": false,
+  "casesPerPlan": 13,
+  "planLayouts": ["macos-arm64", "linux-x64"],
+  "before": {
+    "failed": 6,
+    "passed": 20,
+    "exitCode": 1,
+    "logSha256": "d8d4945d458acb2b81c340c19b8b1c32347f2a8f23ab78adeba35c3e0f104a71"
+  },
+  "afterMacosArm64Workspace": {
+    "passed": 26,
+    "failed": 0,
+    "exitCode": 0,
+    "logSha256": "0b9832e23ec13fea1010d20a85b047d46425c85dc98dc1e1d290dc50ff5b71d0"
+  },
+  "afterLinuxArm64Root": {
+    "passed": 26,
+    "failed": 0,
+    "exitCode": 0,
+    "durationSeconds": 11.19,
+    "platform": "linux/arm64",
+    "image": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+    "rootSourceReadOnly": true,
+    "network": "none",
+    "capabilities": "none",
+    "qualification": "Actual POSIX resume and transaction engine with real KHP/files/image/gate; controlled clocks and transaction ports; both plan layouts; not x64, signed runtime, real BFF rollback or packaged update acceptance.",
+    "logSha256": "658830bd0a854bc637d66d7289b65c8109d49fb028719afa8f0240af34d2b456"
+  },
+  "nativeMacosGate": {
+    "exitCode": 0,
+    "logSha256": "b20bacdbe33ae6775347dd969a873bc75bce37d88cb13d18313ce21dbdc530c3",
+    "realSignedEndpointSecurityQualified": false
+  },
+  "retainedSetupFailure": {
+    "failed": 7,
+    "passed": 19,
+    "cause": "One compile-time linux target was used for both layouts. Each layout now compiles separately.",
+    "observation": "Initial failed tool output and this count/cause summary remain. Its working log was overwritten by the later causal run; no original raw-log digest is claimed."
+  },
+  "productionEvidence": "Existing restored-start/restored-verify hash-chained native receipts and server reconciliation remain unchanged; resume admission alone does not prove settled recovery."
+}

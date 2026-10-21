@@ -841,7 +841,7 @@ export async function readFilesTree(
   }
   const listed = await listTreeEntries(target.realRoot, target.relativePath, target.path, redactor);
   return {
-    root: target.root,
+    root: target.realRoot,
     path: target.relativePath,
     entries: listed.entries,
     truncated: listed.truncated,

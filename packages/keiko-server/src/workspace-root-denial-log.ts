@@ -22,6 +22,7 @@ import { processServerLogSink } from "./process-log-sink.js";
 export type WorkspaceRootDenialReason =
   | "denied-locus"
   | "ordinary-root-unavailable"
+  | "ordinary-root-identity"
   | "credential-shaped-root"
   | "managed-root-session-authority-missing"
   | "managed-authority-unavailable"
@@ -55,6 +56,7 @@ const WORKSPACE_ROOT_DENIED_OPERATION = defineActivityLogOperation({
       values: [
         "denied-locus",
         "ordinary-root-unavailable",
+        "ordinary-root-identity",
         "credential-shaped-root",
         "managed-root-session-authority-missing",
         "managed-authority-unavailable",

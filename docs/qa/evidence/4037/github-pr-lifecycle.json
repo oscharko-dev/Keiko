@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "classification": "native GitHub job-name and lifecycle-admission fixture; not the full product CI matrix or merge-candidate qualification",
+  "productSourceHead": "86d6c674d4a1405fc09e20556f1e01e5984c50a2",
+  "productWorkflowSha256": "bdf9ed05cea03952634908988134e7ee2d0c6f21ed5d3f31134e18ba247202e9",
+  "fixtureWorkflowSha256": "f0c35dffc42b8431256e54d65438d28c95935fc24c9acc99f80455c867490b99",
+  "fixtureRepository": "oscharko/keiko-ci-lifecycle-20261018-0946",
+  "fixtureHeadSha": "4e8174c73e333cb58b058abc4c1af14785e972b7",
+  "copiedExpressions": {
+    "ui": {
+      "name": "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui' }}",
+      "if": "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}"
+    },
+    "build-scan-sbom-smoke": {
+      "name": "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'Build, scan, SBOM, smoke' || 'inactive PR - Build, scan, SBOM, smoke' }}",
+      "if": "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}"
+    },
+    "ci": {
+      "name": "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'inactive PR - ci' }}",
+      "if": "${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}"
+    }
+  },
+  "stages": [
+    {
+      "stage": "open",
+      "runId": 39116621651,
+      "attempt": 1,
+      "headSha": "4e8174c73e333cb58b058abc4c1af14785e972b7",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "ui",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build, scan, SBOM, smoke",
+          "conclusion": "success"
+        },
+        {
+          "name": "ci",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "stage": "closed-metadata-edit",
+      "runId": 39116719423,
+      "attempt": 1,
+      "headSha": "4e8174c73e333cb58b058abc4c1af14785e972b7",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui'",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'Build, scan, SBOM, smoke' || 'inactive PR - Build, scan, SBOM, smoke'",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'inactive PR - ci'",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "stage": "closed-event-rerun",
+      "runId": 39116719423,
+      "attempt": 2,
+      "headSha": "4e8174c73e333cb58b058abc4c1af14785e972b7",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui'",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'Build, scan, SBOM, smoke' || 'inactive PR - Build, scan, SBOM, smoke'",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'inactive PR - ci'",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "stage": "reopened",
+      "runId": 39117049116,
+      "attempt": 1,
+      "headSha": "4e8174c73e333cb58b058abc4c1af14785e972b7",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "Build, scan, SBOM, smoke",
+          "conclusion": "success"
+        },
+        {
+          "name": "ui",
+          "conclusion": "success"
+        },
+        {
+          "name": "ci",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "allStagesUseSameFixtureHead": true,
+  "closedStagesPublishCanonicalRequiredNames": false,
+  "skippedNameRendering": "GitHub publishes the unexpanded job-name expression for skipped jobs; this differs from every canonical required check name.",
+  "retainedInitialProbeFailure": "The first local expectation of literal inactive false-branch labels failed. Actual platform rendering is recorded rather than treating that expectation as a platform defect.",
+  "boundaries": [
+    "The lightweight verified-tree output is a declared fixture; no product gate is bypassed or qualified.",
+    "The product candidate verifier, signed delivery, protection and required matrix remain independent.",
+    "The fixture PR is closed without merging after qualification; product issues remain open until verified dev integration."
+  ]
+}

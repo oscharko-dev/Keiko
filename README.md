@@ -90,6 +90,22 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
+## What's new in 1.2.5
+
+- **Chat and connected Files.** Source transitions hold or cancel generation until the selected scope is acknowledged. Reconnection and shared conversation creation preserve request ownership and avoid replaying accepted sends.
+- **Browser access and private drafts.** Approve another browser explicitly, optionally remember its access with expiration, and revoke it through the existing session controls. Draft acknowledgements remain bound to their originating conversation and revision.
+- **Updater status and recovery.** Setup requirements are distinguished from an available newer version. Native handoff, cancellation and recovery retain bounded process and installation ownership checks.
+- **Source fidelity and privacy.** Recursive evidence collection retains certified source relationships within existing grants. Credential redaction preserves supported code syntax, and copying an answer preserves its code formatting. Patched Vite tooling and private native-host MCP build inputs address newly reviewed security advisories.
+
+Repository skill examples for import into Chat cover [Java/Spring Boot](scripts/testing/chat-skills-lab/skills/java-spring-unit-tests.md)
+and [React/MUI/Vitest](scripts/testing/chat-skills-lab/skills/react-mui-vitest-tests.md).
+These compact instructions remain model-agnostic and reviewable. Repeatable generated-test benefit,
+installed update cycles, SSD continuity and complete browser/retrieval acceptance remain in
+[follow-up #4051](https://github.com/oscharko-dev/Keiko/issues/4051); this release does not certify them.
+The local UI store advances from V44 to V46 for browser approvals and shared Chat creation intents.
+Back up local state before upgrading; older binaries cannot read the newer schema. Existing manual
+update eligibility remains unchanged.
+
 ## What's new in 1.2.4
 
 - **Slow-gateway resilience.** Chat waits through extended response-start silence within bounded gateway deadlines, preserves unchanged drafts after cancellation and avoids duplicate conversations during model-catalog refresh.

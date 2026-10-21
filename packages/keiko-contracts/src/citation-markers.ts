@@ -382,10 +382,15 @@ class BacktickRuns {
 
   // Callers ask in increasing `from` order (the scan cursor), so the break cursor never moves back.
   private blockBreakBetween(from: number, to: number): boolean {
+    return this.contextEnd(from, Number.POSITIVE_INFINITY) < to;
+  }
+
+  /** The same monotonically scanned renderer boundary bounds advisory unresolved spans. */
+  contextEnd(from: number, limit: number): number {
     while ((this.blockBreaks[this.breakCursor] ?? Number.POSITIVE_INFINITY) < from) {
       this.breakCursor += 1;
     }
-    return (this.blockBreaks[this.breakCursor] ?? Number.POSITIVE_INFINITY) < to;
+    return Math.min(limit, this.blockBreaks[this.breakCursor] ?? limit);
   }
 }
 
@@ -400,7 +405,10 @@ export interface MarkdownCodeRange {
  * blocks and the inline code spans outside them. The one code grammar every grounded-answer reader
  * shares, so a citation marker or an assessment tag inside code is never read as one.
  */
-export function markdownCodeRanges(text: string): readonly MarkdownCodeRange[] {
+export function markdownCodeRanges(
+  text: string,
+  onUnclosedInline?: (range: MarkdownCodeRange, delimiterLength: number) => void,
+): readonly MarkdownCodeRange[] {
   const layout = renderedLayout(text);
   const runs = new BacktickRuns(text, layout.breaks);
   const ranges: MarkdownCodeRange[] = [];
@@ -414,7 +422,14 @@ export function markdownCodeRanges(text: string): readonly MarkdownCodeRange[] {
       fence += 1;
       continue;
     }
-    cursor = afterInlineCode(text, cursor, block?.start ?? text.length, runs, ranges);
+    cursor = afterInlineCode(
+      text,
+      cursor,
+      block?.start ?? text.length,
+      runs,
+      ranges,
+      onUnclosedInline,
+    );
   }
   return ranges;
 }
@@ -427,12 +442,17 @@ function afterInlineCode(
   limit: number,
   runs: BacktickRuns,
   ranges: MarkdownCodeRange[],
+  onUnclosedInline?: (range: MarkdownCodeRange, delimiterLength: number) => void,
 ): number {
   const tick = text.indexOf("`", cursor);
   if (tick === -1 || tick >= limit) return limit;
   const length = runLength(text, tick, "`");
   const close = runs.closingEnd(tick, length);
-  if (close === undefined) return tick + length;
+  if (close === undefined) {
+    // A hint is never a code range: citation readers still see unmatched runs as prose.
+    onUnclosedInline?.({ start: tick, end: runs.contextEnd(tick, limit) }, length);
+    return tick + length;
+  }
   ranges.push({ start: tick, end: close });
   return close;
 }

@@ -74,6 +74,13 @@ import {
 
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  beginChatScopeTransition,
+  clearChatScopeTransitions,
+  usePublishChatWindowRuntime,
+  registerChatWindowRuntime,
+  chatScopeTransition,
+} from "../windows/chatWindowActivity";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -136,6 +143,7 @@ vi.mock("@/lib/chat-draft-api", () => ({
 }));
 
 afterEach(() => {
+  clearChatScopeTransitions("chat-1");
   vi.useRealTimers();
   clearCanonicalVoicePageOutboxForTests();
   vi.clearAllMocks();
@@ -780,7 +788,11 @@ describe("useChatSession bootstrap", () => {
 
     let opened: Chat | undefined;
     await act(async () => {
-      opened = await result.current.openNewChat(project("/other"), "  Grounding release check  ");
+      opened = await result.current.openNewChat(
+        project("/other"),
+        "  Grounding release check  ",
+        "shared-window-intent",
+      );
     });
 
     // Relocated pin (review finding on #3221): with no chats and no user pick, the bootstrap
@@ -789,10 +801,61 @@ describe("useChatSession bootstrap", () => {
     expect(createDesktopChat).toHaveBeenCalledWith({
       title: "Grounding release check",
       projectPath: "/other",
+      creationRequestId: "shared-window-intent",
     });
     expect(opened?.id).toBe("chat-project-override");
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.messages[0]?.id).toBe("created-msg");
+  });
+
+  it.each([
+    {
+      choice: { kind: "automatic" } as const,
+      otherBrowserExplicit: true,
+      expectedModel: undefined,
+    },
+    {
+      choice: { kind: "explicit", modelId: "model-original" } as const,
+      otherBrowserExplicit: false,
+      expectedModel: "model-original",
+    },
+  ])("preserves the original creation model semantics (%j)", async (scenario) => {
+    const created = chat({ id: "chat-shared-intent", title: "Shared conversation" });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [created],
+      messages: [],
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    if (scenario.otherBrowserExplicit) {
+      act(() => result.current.setSelectedModel("chat-live"));
+    }
+    expect(result.current.creationModelChoice).toEqual(
+      scenario.otherBrowserExplicit
+        ? { kind: "explicit", modelId: "chat-live" }
+        : { kind: "automatic" },
+    );
+    await act(async () => {
+      await result.current.openNewChat(
+        project("/repo"),
+        "Shared conversation",
+        "shared-creation",
+        scenario.choice,
+      );
+    });
+    const request = vi.mocked(createDesktopChat).mock.calls.at(-1)?.[0];
+    expect(request).toEqual({
+      projectPath: "/repo",
+      title: "Shared conversation",
+      creationRequestId: "shared-creation",
+      ...(scenario.expectedModel === undefined ? {} : { modelId: scenario.expectedModel }),
+    });
   });
 
   it("omits modelId when a stale persisted selection resolved to an elected fallback", async () => {
@@ -1453,6 +1516,28 @@ describe("useChatSession conversation switch — composer isolation", () => {
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
     return rendered;
   }
+
+  it.each(["pending", "failed"] as const)(
+    "refuses sends and regeneration while a source change is %s without consuming the draft",
+    async (status) => {
+      const { result } = await setupTwoChatSession();
+      act(() => result.current.setDraft("Keep this draft until the sources are confirmed."));
+      act(() => {
+        const intent = beginChatScopeTransition("chat-1", "files-a");
+        if (status === "failed") intent.settle(false);
+      });
+      let outcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        outcome = await result.current.sendMessage({ forceBuffered: true, reportOutcome: true });
+        await result.current.regenerateMessage("assistant-1");
+      });
+      expect(outcome).toEqual({ status: "not-sent" });
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+      expect(askGrounded).not.toHaveBeenCalled();
+      expect(regenerateDesktopChat).not.toHaveBeenCalled();
+      expect(result.current.draft).toBe("Keep this draft until the sources are confirmed.");
+    },
+  );
 
   it("drops the draft and the staged attachments when another chat is opened", async () => {
     const { result } = await setupTwoChatSession();
@@ -4961,6 +5046,345 @@ describe("useChatSession canonical Voice FIFO", () => {
     }
   });
 
+  it.each([false, true])(
+    "cancels the actual captured Voice A request on an A source intent with navigation=%s",
+    async (navigate) => {
+      const chatA = chat({
+        id: "chat-a",
+        updatedAt: 2,
+        connectedScopes: [
+          { kind: "files" as const, root: "/repo", relativePaths: ["README.md"], connectedAtMs: 1 },
+        ],
+      });
+      const chatB = chat({ id: "chat-b", updatedAt: 1 });
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      const rendered = await setupVoiceQueueSession([chatA, chatB]);
+      const response = deferred<Awaited<ReturnType<typeof askGrounded>>>();
+      let signal: AbortSignal | undefined;
+      vi.mocked(askGrounded).mockImplementation((_request, currentSignal) => {
+        signal = currentSignal;
+        return response.promise;
+      });
+      const durableUser = await canonicalMessage("audit-background-voice", {
+        id: "audit-voice-user",
+        chatId: "chat-a",
+        content: "audit background voice",
+        role: "user",
+        timestamp: Date.now(),
+      });
+      vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+        Promise.resolve({ messages: chatId === "chat-a" ? [durableUser] : [] }),
+      );
+      const originalRuntime = renderHook(
+        ({ chatId }) =>
+          usePublishChatWindowRuntime(
+            "audit-voice-window",
+            { conversationId: chatId, projectPath: "/repo" },
+            undefined,
+            undefined,
+          ),
+        { initialProps: { chatId: "chat-a" } },
+      );
+      const secondRuntime = renderHook(() =>
+        usePublishChatWindowRuntime(
+          "audit-second-a-window",
+          { conversationId: "chat-a", projectPath: "/repo" },
+          undefined,
+          undefined,
+        ),
+      );
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      try {
+        act(() => {
+          delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+            canonicalVoiceTurn("audit background voice", "audit-background-voice", chatA),
+          );
+        });
+        await waitFor(() => expect(askGrounded).toHaveBeenCalledOnce());
+        expect(signal?.aborted).toBe(false);
+        if (navigate) {
+          await act(async () => rendered.result.current.openChat(chatB));
+          originalRuntime.rerender({ chatId: "chat-b" });
+        }
+        act(() => beginChatScopeTransition("chat-a", "audit-new-files"));
+        expect(signal?.aborted).toBe(true);
+        expect(diagnostics).toHaveBeenCalledWith("Keiko Files scope ownership decision.", {
+          correlationId: expect.any(String),
+          filesScopeDecision: { decision: "intent-send-cancelled" },
+        });
+      } finally {
+        clearChatScopeTransitions("chat-a");
+        response.reject(new ApiError("GROUNDING_FAILED", "Audit settlement", 500));
+        await act(async () => {
+          await delivery;
+        });
+        secondRuntime.unmount();
+        originalRuntime.unmount();
+        rendered.unmount();
+      }
+    },
+  );
+
+  it("an A source intent preserves an actual B request on the runtime displaying A", async () => {
+    const chatA = chat({
+      id: "chat-a",
+      updatedAt: 2,
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+      connectedScopes: [
+        { kind: "files" as const, root: "/repo", relativePaths: ["a.md"], connectedAtMs: 1 },
+      ],
+    });
+    const chatB = chat({
+      id: "chat-b",
+      updatedAt: 1,
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      connectedScopes: [
+        { kind: "files" as const, root: "/repo", relativePaths: ["b.md"], connectedAtMs: 1 },
+      ],
+    });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const response = deferred<Awaited<ReturnType<typeof askGrounded>>>();
+    let actualSignal: AbortSignal | undefined;
+    vi.mocked(askGrounded).mockImplementation((_request, currentSignal) => {
+      actualSignal = currentSignal;
+      return response.promise;
+    });
+    const durableUser = await canonicalMessage("audit-b-unrelated-scope", {
+      id: "audit-unrelated-b-user",
+      chatId: "chat-b",
+      content: "audit unrelated B",
+      role: "user",
+      timestamp: Date.now(),
+    });
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+      Promise.resolve({ messages: chatId === "chat-b" ? [durableUser] : [] }),
+    );
+    const published = renderHook(() =>
+      usePublishChatWindowRuntime(
+        "audit-fallback-a-window",
+        { conversationId: "chat-a", projectPath: "/repo" },
+        undefined,
+        undefined,
+      ),
+    );
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    try {
+      expect(rendered.result.current.activeChat?.id).toBe("chat-a");
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("audit unrelated B", "audit-b-unrelated-scope", chatB),
+        );
+      });
+      await waitFor(() => expect(askGrounded).toHaveBeenCalledOnce());
+      expect(vi.mocked(askGrounded).mock.calls[0]?.[0]).toMatchObject({
+        chatId: "chat-b",
+        expectedGroundingScopeIdentity: chatB.groundingScopeIdentity,
+      });
+      expect(actualSignal?.aborted).toBe(false);
+      act(() => beginChatScopeTransition("chat-a", "audit-a-files"));
+      expect(chatScopeTransition("chat-a")).toBe("pending");
+      expect(chatScopeTransition("chat-b")).toBeUndefined();
+      expect(actualSignal?.aborted).toBe(false);
+    } finally {
+      await act(async () => {
+        clearChatScopeTransitions("chat-a");
+        response.reject(new ApiError("GROUNDING_FAILED", "Audit cleanup", 500));
+        await delivery;
+      });
+      published.unmount();
+      rendered.unmount();
+    }
+  });
+
+  it("source intent reaches the unpublished root fallback after a real window unmount", async () => {
+    const chatA = chat({
+      id: "chat-a",
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+      connectedScopes: [
+        { kind: "files" as const, root: "/repo", relativePaths: ["a.md"], connectedAtMs: 1 },
+      ],
+    });
+    const root = await setupVoiceQueueSession([chatA]);
+    const originalWindow = await setupVoiceQueueSession([chatA]);
+    const first = deferred<Awaited<ReturnType<typeof askGrounded>>>();
+    const fallback = deferred<Awaited<ReturnType<typeof askGrounded>>>();
+    let fallbackSignal: AbortSignal | undefined;
+    vi.mocked(askGrounded)
+      .mockImplementationOnce((_request, signal) => {
+        signal?.addEventListener(
+          "abort",
+          () => first.reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+        return first.promise;
+      })
+      .mockImplementationOnce((_request, signal) => {
+        fallbackSignal = signal;
+        return fallback.promise;
+      });
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    let idle: Awaited<ReturnType<typeof setupVoiceQueueSession>> | undefined;
+    let published: ReturnType<typeof renderHook> | undefined;
+    try {
+      act(() => {
+        delivery = originalWindow.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("root fallback A", "audit-root-fallback", chatA),
+        );
+      });
+      await waitFor(() => expect(askGrounded).toHaveBeenCalledOnce());
+      act(() => originalWindow.unmount());
+      await waitFor(() => expect(askGrounded).toHaveBeenCalledTimes(2));
+      expect(fallbackSignal?.aborted).toBe(false);
+      expect(vi.mocked(askGrounded).mock.calls[1]?.[0]).toMatchObject({
+        chatId: "chat-a",
+        expectedGroundingScopeIdentity: chatA.groundingScopeIdentity,
+      });
+      idle = await setupVoiceQueueSession([chatA]);
+      published = renderHook(() =>
+        usePublishChatWindowRuntime(
+          "audit-idle-published-a",
+          { conversationId: "chat-a", projectPath: "/repo" },
+          undefined,
+          undefined,
+        ),
+      );
+      // Initial unmount legitimately retries without a user row. After fallback admission the
+      // actual durable row makes its subsequent cancellation terminal under the existing FIFO.
+      const durableUser = await canonicalMessage("audit-root-fallback", {
+        id: "audit-root-user",
+        chatId: "chat-a",
+        content: "root fallback A",
+        role: "user",
+        timestamp: Date.now(),
+      });
+      vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+        Promise.resolve({ messages: chatId === "chat-a" ? [durableUser] : [] }),
+      );
+      act(() => beginChatScopeTransition("chat-a", "audit-fallback-files"));
+      expect(fallbackSignal?.aborted).toBe(true);
+    } finally {
+      await act(async () => {
+        clearChatScopeTransitions("chat-a");
+        fallback.reject(new ApiError("GROUNDING_SCOPE_CHANGED", "Audit cleanup", 409));
+        await delivery;
+      });
+      published?.unmount();
+      idle?.unmount();
+      originalWindow.unmount();
+      root.unmount();
+    }
+  });
+
+  it("late A settlement preserves replacement B cancellation ownership", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const first = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const second = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    let signalA: AbortSignal | undefined;
+    let signalB: AbortSignal | undefined;
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce((_request, signal) => {
+        signalA = signal;
+        return first.promise;
+      })
+      .mockImplementationOnce((_request, signal) => {
+        signalB = signal;
+        return second.promise;
+      });
+    let deliveryA: Promise<SendMessageOutcome> | undefined;
+    let deliveryB: Promise<SendMessageOutcome> | undefined;
+    try {
+      act(() => {
+        deliveryA = rendered.result.current.sendMessage({
+          text: "replacement first A",
+          reportOutcome: true,
+        });
+      });
+      await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+      act(() => {
+        const intent = beginChatScopeTransition("chat-a", "audit-first-source");
+        intent.settle(true);
+      });
+      expect(signalA?.aborted).toBe(true);
+      await act(async () => rendered.result.current.openChat(chatB));
+      act(() => {
+        deliveryB = rendered.result.current.sendMessage({
+          text: "replacement second B",
+          reportOutcome: true,
+        });
+      });
+      await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(2));
+      expect(vi.mocked(sendDesktopChat).mock.calls[1]?.[0].chatId).toBe("chat-b");
+      expect(signalB?.aborted).toBe(false);
+      await act(async () => {
+        first.reject(new DOMException("cancelled", "AbortError"));
+        await deliveryA;
+      });
+      expect(rendered.result.current.sendStatus).toBe("contacting");
+      act(() => beginChatScopeTransition("chat-a", "audit-unrelated-source"));
+      expect(signalB?.aborted).toBe(false);
+      act(() => beginChatScopeTransition("chat-b", "audit-current-source"));
+      expect(signalB?.aborted).toBe(true);
+    } finally {
+      await act(async () => {
+        clearChatScopeTransitions("chat-a");
+        clearChatScopeTransitions("chat-b");
+        first.reject(new DOMException("cancelled", "AbortError"));
+        if (deliveryB !== undefined) second.reject(new DOMException("cancelled", "AbortError"));
+        await Promise.all([deliveryA, deliveryB]);
+      });
+      rendered.unmount();
+    }
+  });
+
+  it("regeneration cancellation ignores other chats and ordinary registry notifications", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const response = deferred<Awaited<ReturnType<typeof regenerateDesktopChat>>>();
+    let signal: AbortSignal | undefined;
+    vi.mocked(regenerateDesktopChat).mockImplementation((_request, currentSignal) => {
+      signal = currentSignal;
+      return response.promise;
+    });
+    let delivery: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    try {
+      act(() => {
+        delivery = rendered.result.current.regenerateMessage("audit-assistant");
+      });
+      await waitFor(() => expect(regenerateDesktopChat).toHaveBeenCalledOnce());
+      expect(signal?.aborted).toBe(false);
+      act(() => {
+        release = registerChatWindowRuntime("audit-regeneration-notification", {
+          conversationId: "chat-b",
+          projectPath: "/repo",
+        });
+      });
+      expect(signal?.aborted).toBe(false);
+      act(() => {
+        const other = beginChatScopeTransition("chat-b", "audit-other-files");
+        other.settle(false);
+      });
+      expect(signal?.aborted).toBe(false);
+      act(() => release?.());
+      expect(signal?.aborted).toBe(false);
+      act(() => beginChatScopeTransition("chat-a", "audit-regenerate-files"));
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      await act(async () => {
+        clearChatScopeTransitions("chat-a");
+        clearChatScopeTransitions("chat-b");
+        response.reject(new DOMException("cancelled", "AbortError"));
+        await delivery;
+      });
+      release?.();
+      rendered.unmount();
+    }
+  });
+
   it("does not surface a late grounded Voice failure in a different chat", async () => {
     const chatA = chat({
       id: "chat-a",
@@ -6102,6 +6526,15 @@ describe("review model selection admission", () => {
     expect(result.current.error).toContain("selected model is temporarily unavailable");
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(regenerateDesktopChat).not.toHaveBeenCalled();
+    expect(createDesktopChat).not.toHaveBeenCalled();
+  });
+
+  it("captures a held human choice without making it eligible for a new legacy request", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })], [chat()]);
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.creationModelChoice).toEqual({ kind: "explicit", modelId: "chat-a" });
+    await act(() => result.current.openNewChat());
     expect(createDesktopChat).not.toHaveBeenCalled();
   });
 

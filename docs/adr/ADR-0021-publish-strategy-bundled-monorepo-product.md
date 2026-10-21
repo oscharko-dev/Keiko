@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.2
+1.3
 
 ## Context
 
@@ -91,6 +91,21 @@ are also promoted at their reviewed lockfile version to the staged root manifest
 root graph remains deterministic and auditable. External peers are promoted as required or optional
 according to their peer metadata. Missing or incompatible
 locked resolutions fail staging; missing runtime surfaces fail the npm/Yarn install smoke.
+
+A reviewed exact root `overrides` pin is not inherited by a consumer installing Keiko. When that
+pin differs from a runtime dependency's declared range, staging delivers only the affected
+external ancestors of that edge, including peer-coupled ancestors, through the existing dual
+bundle/archive representation. Their existing edges to delivered siblings and pinned leaves become
+exact peers. Unchanged children remain registry dependencies and are promoted from the actual
+lockfile owner, retaining required or optional reachability; a required origin wins. The current
+exception contains five Java parser ancestors, not the complete third-party runtime closure.
+The planner accepts only exact flat pins selected by the reviewed lockfile; unsupported alias
+identity changes fail closed. Upstream source and license bytes are preserved, lifecycle scripts
+are removed from staged manifests, and installed/source manifests are never rewritten. Clean npm
+and pinned Yarn consumers must execute the real Java parser with the reviewed leaf versions,
+without consumer overrides or resolutions. The existing #3565 prohibition on bundling the complete
+external closure remains in force. The dependency decision matrix records the direct parser
+approvals and their bounded transitive license inventory.
 
 Source workspace manifests remain `private: true`, source dependencies stay pinned for ordinary npm
 workspace development, and no source file is mutated during staging. The root
@@ -178,8 +193,10 @@ publishes only the staged directory after the full `prepack` gate.
 Vendoring keeps internal packages private but still requires an auditable source and dependency
 graph. Four controls remain load-bearing:
 
-1. Every vendored package is `"private": true` and its source is reproducible from this repo's
-   commit. The registry is never consulted for internal names. Ordinary third-party dependencies
+1. Every vendored Keiko workspace is `"private": true` and its source is reproducible from this
+   repo's commit. The narrowly staged external ancestors in D1 retain their upstream identity and
+   licenses and are never published independently by Keiko. The registry is never consulted for
+   internal names. Ordinary third-party dependencies
    resolve under their reviewed manifests at the versions `package-lock.json` pins; since the
    #3130 amendment in D7, the installable-smoke gate serves those from its offline loopback
    registry rather than the public one, so gate outcomes do not depend on upstream publish timing.
@@ -369,3 +386,4 @@ version and record the reason in the Version History table below.
 | 1.0     | 2026-06-03 | Accepted bundled-monorepo publish strategy for Issue #169; resolves ADR-0020 deferred decision D7. |
 | 1.1     | 2026-08-13 | Replaced the Yarn-incompatible published bundle with isolated `file:` vendoring and mandatory npm/Yarn install proofs.               |
 | 1.2     | 2026-08-18 | Recorded that `@oscharko-dev/keiko-connectors` (ADR-0128) and `@oscharko-dev/keiko-git` (ADR-0115) joined the vendored inventory since v1.1. |
+| 1.3     | 2026-10-20 | D1/D6: selectively stage the five Java parser ancestors affected by reviewed exact root override pins; retain unchanged registry children and clarify identity/license ownership (#4037, #4046). |

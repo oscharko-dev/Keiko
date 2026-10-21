@@ -81,19 +81,48 @@ ADR adds an authority layer above them; it does not replace, relax, or re-weight
 routing facts, and no knowledge of a `runId`, ever authorizes a content read. A request that
 satisfies all four but carries no valid session is treated exactly as an unpaired stranger.
 
-### D2 — Content-bearing reads require a launcher-attested app session
+CLI startup health is instance/readiness evidence and never read authority. The health route may
+project the exact validated, non-credential launch identity from its server dependency environment.
+The shared leaf grammar is also used by CLI state and argument parsing. A fresh CLI start requires
+the selected launch identity, installed version, live owned child and a final monotonic deadline
+check. The existing startup grant bounds the whole HTTP request, including a trickling body;
+individual socket activity does not renew it. CLI duration parsing refuses non-finite or unsafe
+millisecond budgets instead of admitting an unbounded or rounded grant; representable positive
+durations keep their existing semantics. A tracked modern launch is rechecked after the probe
+against the current canonical PID tuple, liveness and process identity before it is retained as
+healthy, including headless starts. Mismatch or uncertainty preserves tracking and refuses.
+Version-only legacy inspection remains a compatibility path and does not establish native
+generation ownership or app-session authority.
 
-Read authority for content is a server-issued **app session**, established only when a pairing
+An explicitly validated `ui --launch-id` selection is retained in the effective server environment,
+including health, browser handoff and shutdown polling; a stale ambient identity cannot substitute
+for that selection. The existing Activity Log records the CLI decision with closed phase/outcome
+and launch-bound Boolean fields under the process-startup failure class, without the identity,
+PID, request URL, pairing secret or health body.
+
+### D2 — Content-bearing reads require an explicitly approved app session
+
+Read authority for content is a server-issued **app session**, initially established when a pairing
 request is approved by a server-private `SessionPairingPort`. The port's production implementation
 is bound to a trusted launcher/OS authority: it approves only a fresh, single-use, process-bound
 attestation that an arbitrary local process cannot forge because it does not hold the launcher's
 process-scoped pairing secret. The port is injected into production composition through the same
 "injected production ports, never a fallback consumer" seam that ADR-0137/#2377 established for the
 runtime start-confirmation plane. **Absence of the port is an intentional fail-closed production
-posture:** if no launcher authority is present, no session can be issued and every content read
-returns the content-free projection. The exact launcher-to-browser delivery of the attestation is
+posture:** without launcher attestation or an existing explicitly remembered browser approval,
+an unauthenticated caller cannot establish authority. Protected reads return their existing
+content-free projection. The exact launcher-to-browser delivery of the attestation is
 finalized with the UI plumbing in W1.5; the server-side authority, the session, and the channel are
 complete and independently testable through the port here.
+
+Expired single-use request IDs may be pruned only without restoring their authority after a
+clock correction. The existing pairing port retains its highest finite observed wall time and
+refuses new attestations while time is invalid or behind that observation. Equal or increasing
+time preserves the inclusive freshness boundaries and bounded replay cache. After a forward jump
+is corrected, new pairing remains unavailable until time catches up; existing sessions retain
+their own lifetime policy. Refusals use the same content-free acknowledgement and existing
+count-only denial aggregate, without exposing the clock or claim. This does not extend grants,
+renew cookies, or make a replay valid.
 
 The local-session restore route only confirms an existing valid bearer and refreshes its exact
 scoped cookie projections. Their browser Max-Age is bounded by the verified registry lifetime
@@ -107,6 +136,93 @@ missing projections after an upgrade, including the authenticated support-report
 pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
+
+#### Explicit browser approval (#4043)
+
+The same channel and session registry support approval of another browser by an already approved
+local session. The requester supplies only a public P-256 point and an explicit optional remember
+choice. A bounded five-minute request carries a random identifier and an eight-digit comparison
+code. The human compares that code in the requesting browser and in the authenticated approval
+surface. Merely knowing the request identifier or comparison code cannot issue a session: completion
+also proves possession of the exact approved private key. There is no unauthenticated launcher
+invocation, fallback bearer, browser-supplied principal, or grant of task/autonomy authority.
+
+Completion and remembered renewal use distinct, single-use challenges valid for at most sixty
+seconds. Domain-separated signed bytes bind the installation, current server instance, exact
+scheme/host/port origin, purpose, subject, random challenge identity and nonce, and issuance/expiry.
+The server accepts only canonical public coordinates and IEEE-P1363 ECDSA-SHA256 signatures.
+Consuming a challenge removes it before verification; replay, malformed input, a different origin,
+an expired request, and restart-invalidated challenges cannot mint a session. Pending requests are
+bounded to 32 together with retained completed-session metadata, and challenges to 64; a new challenge replaces the previous challenge for that subject
+and purpose. JSON uses the existing bounded pairing reader and all existing Host/Origin/CSRF and
+content guards remain mandatory. These new POST routes additionally require the exact transport
+origin, rather than the routing URL's placeholder authority.
+
+Remembering requires an explicit choice from both requester and approver. The existing private UI
+SQLite store owns schema V45: a stable random installation identity and monotone observed-time
+floor, plus at most 32 approved public keys with their exact origin, immutable approval/expiry times
+and last successful use. No private key, cookie, signature, challenge or reusable bearer is stored
+there. Expiry is at most thirty days after human approval and never slides on use. A full inventory
+refuses another remembered grant instead of evicting a valid one. A persisted observation floor
+prevents an already observed expiry from becoming usable after restart and clock rollback; invalid
+or backwards time refuses approval operations until the existing floor is reached.
+
+Remembered renewal requires a fresh challenge and a current unrevoked public approval. It issues
+ordinary process-memory sessions through the existing registry, with validity capped by both the
+usual session lifetime and the original approval deadline. Rotation, cookie repair and active
+operation protection cannot extend that deadline. Operation release irreversibly removes an
+approval-expired session even when release is its first expiry observer. Revocation synchronously
+removes the durable approval, pending completion state and every associated live session through
+the same registry. Within the single BFF owner, verification, store mutation and mint/revocation
+contain no asynchronous gap. A lost completion response can rotate its existing session with a
+fresh proof during the original request window; it cannot mint again after revocation or eviction.
+
+Management distinguishes remembered and session-only approvals explicitly. Approved session-only
+decisions are manageable during their original request window. After successful completion, their
+existing bounded request metadata remains only while the original grant and exact registry session
+are valid; no transient approval is persisted. The registry's owner-only lookup is non-touching:
+management polling cannot renew another browser's inactivity. Rotation keeps the same manageable
+session identity. Idle/absolute expiry, revocation or eviction retires its metadata and releases
+capacity, including before the request window ends. Both completion challenge issuance and proof
+still enforce the original five-minute request deadline even while live metadata remains visible.
+Revocation acknowledges an actual durable row, approved decision or associated session removal,
+and retires only matching completion/renewal challenges. The existing approval Activity Log records
+pending-request, session-only and remembered counts without identities, public points or bearers.
+
+The browser keeps a session-only private key in its mounted request controller and remembers an
+explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. The desktop
+notice starts an explicit request; Settings → Security owns comparison, session-only or remembered
+approval, expiry, last-use display and revocation. Remembering defaults off, requires both human
+choices, and is reported successful only after the IndexedDB transaction commits. Request success
+alone is insufficient; abort, blocked storage and quota failure retain an honest unconfirmed result
+without raw-key fallback. Cancelling a controller aborts its wait and prevents late UI publication;
+it does not undo a decision already accepted by the server.
+
+A remembered request commits an opaque persistence intent in that same object store before it is
+dispatched. Saving a key checks that exact intent and writes the active key in one readwrite
+transaction. Local forgetting deletes the key and intent atomically, so a delayed completion or a
+superseded request cannot recreate forgotten persistence. Failed preparation leaves ordinary
+approved access usable but cannot claim remembered storage. Existing saved-key records remain
+load-compatible; no additional database, private-key export or server authority is introduced.
+
+Fresh protected management inspection verifies access after proof. A lost proof response may leave
+an already usable cookie; a later retry first inspects that session without extending the original
+completion deadline or minting another grant. Lost approval metadata cannot establish remembered
+persistence. Browser wall-clock precision does not decide whether a challenge is current: canonical
+relative lifetime and authority bindings are checked locally, while the server owns expiry and
+single use.
+
+The complete Chrome/Safari/Firefox restart, profile and SSD journeys remain qualification
+requirements; server or browser storage controls alone do not establish their acceptance. New
+remembered state is additive, private and tied to the existing installation,
+not to its directory path; moving protected state does not grant trust to unrelated installations
+or OS users. No release version is assigned by this implementation checkpoint.
+
+Origin identity is not OS application identity. Existing cookies are not isolated by TCP port;
+neither nonextractability nor IndexedDB protects against hostile script in the same origin,
+including a local server that takes over that origin while Keiko is stopped. Current CSP and
+transport guards remain in force. This design does not promise protection from same-origin code,
+privileged OS clock/state tampering, or restoration of a revoked database from an old backup.
 
 ### D3 — The authenticated channel is a distinct transport, not a widening of the unauthenticated union
 
@@ -135,11 +251,43 @@ appears hashed.
 
 The session registry is in process memory and holds no durable bearer material, so a server restart
 invalidates every prior session by construction (restart expiry). A session additionally expires on
-explicit revocation (launcher revocation or sign-out), on inactivity past an idle bound, and on an
-absolute lifetime bound; rotation issues a fresh secret and invalidates the prior one. In every one
+explicit revocation (launcher revocation or sign-out), or when its inactivity or absolute lifetime
+limit is reached; rotation issues a fresh secret and invalidates the prior one. In every one
 of these cases the prior cookie immediately yields the content-free projection. There is exactly one
 authority per BFF process; this composes with, and does not duplicate, the single-active-run model
 of ADR-0137.
+
+Idle and absolute lifetimes use half-open intervals: equality at the deadline is expired. Every
+expiry observation removes the invalid record before denial; a later clock correction cannot
+revive it. Active operations protect only inactivity, including their final release, and never
+postpone an absolute or approval deadline.
+
+Approval expiry is coordinated through these same owners in both directions. A valid time
+observation by browser approval asks the existing registry to retire all approval-bound sessions
+whose original grant deadline has been reached. Registry inspection, direct rotation, operation
+release, cookie repair's final clock read and capacity sweeping use that same bounded retirement
+when they observe an expired approval. Healthy grants and launcher sessions remain independent;
+idle or session-absolute expiry does not revoke a still-valid remembered grant. The registry
+synchronously reports a positively observed approval expiry through its injected private-store
+port, composed from the existing `BrowserApprovalStore.observeTime`. Thus a private read cannot
+observe grant expiry and then leave the remembered key eligible for renewal after clock rollback.
+The existing Activity Log records only expired-session count, remaining registry count and a closed
+reason class on `coding-app-session.expired`, without a session/approval identity or bearer. This
+shared BFF maintenance observation uses the existing unknown-correlation sentinel. Store or sink
+failures propagate through the existing diagnostics; no failed durable write is represented as a
+successful persisted observation.
+
+Secret rotation preserves the original issuance time and absolute deadline, including repeated
+rotations. The registry rejects direct rotation of idle-expired or absolutely expired authority;
+knowing an old session id cannot revive it. A valid replacement starts a new inactivity window,
+but does not inherit an old operation lease, and releasing an old lease cannot touch the replacement.
+Snapshots, repaired cookies and replacement live streams all remain bounded by the original
+absolute lifetime. Rotated HTTP cookie projections use only that lifetime's remaining full seconds,
+clamped by the existing cookie ceiling; the registered rotation event records the actual
+`cookieMaxAgeSeconds` without bearer material. Fresh secret issuance is not fresh human approval.
+Rotation requires at least one full second of remaining original authority, matching cookie repair.
+The channel checks this before replacing the original secret and again after minting; if time crosses
+that boundary, it revokes the unusable replacement and cannot report a successful zero-age cookie.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
@@ -413,9 +561,10 @@ existence, and `CodingWorkbenchRuntimeSnapshot` carries none of it.
   reads onto the channel without inventing a second session mechanism; W1.6–W1.9 project transcript,
   plan, tool activity, and run-scoped diffs through the channel's content source.
 - The channel is runtime-neutral: the deferred Codex follow-up epic reuses it unchanged.
-- Restart expiry is free and durable-store risk is avoided, at the cost that a server restart
-  requires re-pairing — acceptable and correct for a local-first, launcher-started product; the
-  durable encrypted store is a deliberate Wave-3 decision.
+- Every live session still expires on restart. An explicitly remembered browser can establish a
+  fresh session within its original bounded approval through proof of possession; session-only
+  browsers require fresh human approval or launcher pairing. Durable public approval metadata lives
+  in the existing protected UI store, and never makes a prior cookie survive restart.
 - The existing unauthenticated status/SSE surface is unchanged and stays content-free; no existing
   route is migrated or claimed safe by this ADR (route enforcement is W1.5).
 - The channel wire types are held in `keiko-server` for this wave and promoted to `keiko-contracts`

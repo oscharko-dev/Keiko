@@ -143,6 +143,9 @@ function clientStagePostBody(
         correlationId: id,
         ...(parentId === undefined ? {} : { parentCorrelationId: parentId }),
         deletion: report.deletion,
+        ...(report.browserApproval === undefined
+          ? {}
+          : { browserApproval: report.browserApproval }),
       }
     : {
         kind: "stage",
@@ -159,6 +162,9 @@ function clientStagePostBody(
         correlationId: id,
         ...(parentId === undefined ? {} : { parentCorrelationId: parentId }),
         deletion: report.deletion,
+        ...(report.browserApproval === undefined
+          ? {}
+          : { browserApproval: report.browserApproval }),
       };
 }
 
@@ -296,6 +302,7 @@ function clientMessagePostBody(
     supportReportDelivery: meta.supportReportDelivery,
     supportReportPreparation: meta.supportReportPreparation,
     filesScopeDecision: meta.filesScopeDecision,
+    updateNotice: meta.updateNotice,
     codingRunRestore: meta.codingRunRestore,
     composerActivity: meta.composerActivity,
     composerSubmission: meta.composerSubmission,
@@ -383,6 +390,7 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.supportReportDelivery !== undefined ||
     meta.supportReportPreparation !== undefined ||
     meta.filesScopeDecision !== undefined ||
+    meta.updateNotice !== undefined ||
     meta.codingRunRestore !== undefined ||
     meta.citationActivation !== undefined ||
     meta.scopeNotice !== undefined

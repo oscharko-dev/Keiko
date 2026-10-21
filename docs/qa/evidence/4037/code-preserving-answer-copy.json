@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "4119b29c7726d5396a2f8bddd907074ddee2603f",
+  "classification": "Code-preserving Copy Answer projection repair and actual separate UI regression; not skill or overall issue acceptance",
+  "repair": [
+    "Reuse shared Markdown code ranges around the entire existing repository-evidence cleanup pipeline.",
+    "Normalize only prose; retain code literal values, indentation, punctuation and evidence-shaped strings.",
+    "Keep the existing clipboard path, citation guards and body-free answer-copy Activity Log events."
+  ],
+  "sources": [
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx",
+      "sha256": "4c53b1b12d546801db2525ff6c2afd2cf4c370885d443d76f750c88d7671a00c"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatWindow.test.tsx",
+      "sha256": "02dc70594bde40ff4b254a9099dbaf39635d54261cd689e7012b45dc9779f3b0"
+    },
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "d2744d16dfe5b36f03f6ec07b29fd550ccebb6554f3e166db0bab41bdff73da4"
+    }
+  ],
+  "causalChecks": {
+    "beforeFailed": 4,
+    "afterAffectedTestsPassed": 229,
+    "retainedAdditionalCases": 4,
+    "fullUiPassed": 10865,
+    "fullUiFailed": 0,
+    "fullUiExistingSkipped": 1
+  },
+  "independentProjectionReview": {
+    "cases": 12,
+    "receiptSha256": "a3be16d4511b404a2d6f558e4777da57fb371d5b1053a03d056c4aee96d512f8"
+  },
+  "actualUi": {
+    "classification": "Single separate model-only Gemma turn; no skill or generated-code execution claim",
+    "canonicalProjectionReceiptSha256": "990ebad2757e38e413775834c6210de4b01d95e1f23971ca5fd3329b9d26b041",
+    "codeBytes": 175,
+    "codeSha256": "82282b9c42eea9c7cf1b459bb165c7cd019ecaf6abd6c9255c9aa2ca46fe7205",
+    "ordinaryCanonicalMessage": true,
+    "wholeAnswerCodeBytesPreserved": true,
+    "literalWitnesses": 4,
+    "setupFailureRetained": true,
+    "setupFailure": "Initial helper retained an old-tab closure; this unplanned old77 turn earns no candidate79 or skill credit. The corrected candidate79 turn used explicit tab actions.",
+    "browserApproval": "Normal session-only local approval, not remembered-profile acceptance",
+    "independentJoinReceiptSha256": "66f813500a4ae48556229d3fee3aad8dfbd481465c520af79fd25a0b8fca8831",
+    "staticAssetsVerified": 301,
+    "bodyFreeCopyDiagnosticVerified": true
+  },
+  "freeze": {
+    "sourceSha256": "17d61acabc3e9e2f9f782ac37244990873b1fb0e4015bacf229d12fa73d8f246",
+    "compiledSha256": "f71bd3c08ff5cd270594d4471a78fd59c69816f785c82c7c7d0c3f132fa55ee0"
+  },
+  "checks": [
+    {
+      "label": "checkpoint79-copy-code-red-v2",
+      "receiptSha256": "91d81ed7f3a872ccd6986ad314c3584cbc5f2f618af56e8dc937098de1a36089",
+      "exitCode": 1,
+      "sourceUnchanged": true,
+      "logSha256": "b6382ec68074db848e4e9d7879cfce732568b6e54231f4c5991137749e6eb227"
+    },
+    {
+      "label": "checkpoint79-copy-code-green-v1",
+      "receiptSha256": "691f07c2c6179c4aeaa56623e4dcf442db98d8d6d7fae13a59516a3b6fd8234e",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "213ab6665c81fefa4eddc8057cce1b6265989c35f0b56b519c7011a7d7d0c76b"
+    },
+    {
+      "label": "checkpoint79-copy-typecheck-v1",
+      "receiptSha256": "bd9b62a4e1731fa4388e2e570ccfb8ce0b51c2cb262f3ffbbe0fe24e6b382ee7",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "label": "checkpoint79-copy-final-ui-typecheck-v1",
+      "receiptSha256": "44da0cc0e857ad5f2393f8e8ee7f2d5175e6d60d72b89c057ba6092c065a084e",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "bec09a74b9b71b5348d1fe72720400ca5afb55d241d0fcca59f0b7046c31fd4e"
+    },
+    {
+      "label": "checkpoint79-copy-final-ui-lint-v1",
+      "receiptSha256": "611cd487b075d467513a40f48c8da2385e12c98cf4cfa31b125ad5bb4003223d",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382"
+    },
+    {
+      "label": "checkpoint79-copy-final-format-v1",
+      "receiptSha256": "3a32e58735e03b22ff6d8b13c3d17dafc5491e73466016f768be18c3744839e3",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "label": "checkpoint79-copy-arch-v1",
+      "receiptSha256": "67a7ca632d5195215fccc668bebca9d962bf6f8e35efddb8d816afb2c66c8960",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "de99e73faae3f7c4de11f2d94cb7d18c1014c5b4ee5f57a9421ee78f65da7929"
+    },
+    {
+      "label": "checkpoint79-copy-arch-negative-v1",
+      "receiptSha256": "297eab44f1280c555ca1d8751b1ac4be4d0120014513a9a376cf85e102a03db6",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "3e024386847be2d39bc4cdb0b5829c7b2243a9bfc5887d6ec1f86e72abcff6df"
+    },
+    {
+      "label": "checkpoint79-copy-activity-v1",
+      "receiptSha256": "9f7cefad98099b26ed705ab71e2410fde03b4d2777fccf25f9332708ce74c8e5",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "d6270597198a0a6d34a751a0d75a79de02fbdcd9a6b222419b58f256adf60350"
+    },
+    {
+      "label": "checkpoint79-copy-adr-v1",
+      "receiptSha256": "a628652141f40612e833e027c367abb6b01ca8c8bdd2cb1803b3da9e27bf8a80",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "label": "checkpoint79-copy-ui-build-v1",
+      "receiptSha256": "54c591568f012398bc478cb1132de23ac2ce240d1e3d77eb76367cf7521864b1",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "a2bbedc3cc3bddeda9fb79c54de3d1920b41e1dcd9cdb9333bf0e26427e85a4f"
+    },
+    {
+      "label": "checkpoint79-copy-editor-evidence-v1",
+      "receiptSha256": "27461c97b296026e806c3f14d8caf4147925fb8c7f6f64af8bfe0e11b1f22fdb",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "4fbebddfd6c8f111327a91d30fdbd65299f85a4d5e12d5f4c39c66ca5894097f"
+    },
+    {
+      "label": "checkpoint79-copy-ui-coverage-v2",
+      "receiptSha256": "bcc057a5f760d1726626846a842490635ae9efcd4bac6798854af475bf9072a8",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "342636422ecc4d6bab3c4f11f9ea0fb48bdc8a6b868321ab2cf82e9b7bd72025"
+    },
+    {
+      "label": "checkpoint79-copy-final-sonar-v1",
+      "receiptSha256": "a243948108ca1194d8aa3df884aeee23c47f176d45d09d1bc28f888621fdac3d",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "4b32b325cc690ad50dc6e4e31b09ee556e69325ec0e4cd5e9753a7530cf08e81"
+    }
+  ],
+  "modelComparison": {
+    "classification": "Completed unchanged frozen77 React first drafts, separate from this repair",
+    "summarySha256": "a21e08fb92be30d5763233e84fbefbf4b1d910d2444cd4c39c2728b74a89ac25",
+    "withSkill": {
+      "runs": 6,
+      "correctSubjectPassed": 0
+    },
+    "withoutSkill": {
+      "runs": 6,
+      "correctSubjectPassed": 0
+    },
+    "mutationCredit": null,
+    "firstDraftsModified": false,
+    "feedbackTurns": 0
+  },
+  "limitations": [
+    "No skill benefit or complete acceptance is inferred; first-draft model failures remain failures.",
+    "Staged override closure, remaining functional/native qualification, required current-head CI/reviews and owner-authorized merge remain open."
+  ]
+}

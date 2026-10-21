@@ -92,6 +92,19 @@ operation, not a permanent group object. It must not mutate:
 - connection authority or source binding snapshots, except where the existing window geometry update
   naturally moves the visible endpoints of an already existing connection.
 
+New local windows use the actual workspace world viewport and their existing registry minima at
+all three allocation paths: generic add, tool toggle and explicit Editor open. A transient geometry
+record lets an unchanged fresh frame shrink and move within a later reduced work area, including a
+late browser-approval notice. A manual geometry change, maximize, minimize or closure relinquishes
+that automatic record. Configuration and focus alone do not. Applying a persisted, sibling or server
+snapshot retires local allocation provenance even when identifiers and geometry match. Acknowledging
+an own server PUT or ignoring an unchanged storage echo does not. Saved and externally restored frames
+are not enrolled; ordinary floating-window title-bar recovery and maximized restore geometry keep
+their existing semantics. A viewport smaller than the type minimum retains that usable minimum.
+These records do not enter persistence or grant authority. The existing registered
+`workspace-viewport-fitted` and `workspace-window-sizing-retired` client activities report fitting and
+external ownership retirement without window identifiers, configuration, paths or content.
+
 ### D3 - Marquee selection belongs to `Workspace.tsx`, not embedded windows
 
 The marquee gesture starts only on eligible empty workspace canvas space. It must not start from:

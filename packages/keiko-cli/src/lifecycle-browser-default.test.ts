@@ -25,7 +25,7 @@ import {
 import { KEIKO_START_SCRIPT } from "./init.js";
 import { defaultOpenExternal, runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
 import { createBrowserHandoffPoll } from "./ui-browser-handoff.js";
-import { KEIKO_UI_LAUNCH_ID_ENV, writeBrowserOpenRequest } from "./state-paths.js";
+import { KEIKO_UI_LAUNCH_ID_ENV, readPidRecord, writeBrowserOpenRequest } from "./state-paths.js";
 import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
@@ -196,7 +196,13 @@ function launchFixture(): {
         spawned.push(options);
         return { pid: 424_242, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
       },
-      fetchImpl: () => Promise.resolve(Response.json({ version: KEIKO_PRODUCT_VERSION })),
+      fetchImpl: () =>
+        Promise.resolve(
+          Response.json({
+            version: KEIKO_PRODUCT_VERSION,
+            launchId: readPidRecord(join(root, ".keiko", "ui.pid"))?.launchId,
+          }),
+        ),
       isProcessAlive: () => true,
       isPortAvailable: () => Promise.resolve(true),
       openExternal,
@@ -423,7 +429,9 @@ it("requires channel support even when a legacy launch identity and version matc
   ).toBe(0);
   expect(subject.spawned).toHaveLength(1);
   expect(existsSync(join(subject.root, ".keiko", "ui.browser-open"))).toBe(false);
-  const line = formatActivityLogProofLine(subject.events[0] ?? {});
+  const line = formatActivityLogProofLine(
+    subject.events.find((event) => event.op === "cli.lifecycle.browser-handoff") ?? {},
+  );
   expect(JSON.parse(line)).toMatchObject({
     outcome: "restart-required",
     reason: "channel-unsupported",
@@ -435,18 +443,26 @@ it("records the verified identity refusal with its real formatter fields", async
   const subject = launchFixture();
   await runLifecycleCli("start", ["--no-open"], io, {}, subject.deps);
   subject.events.length = 0;
-  await runLifecycleCli(
-    "start",
-    [],
-    io,
-    {},
-    { ...subject.deps, verifyLaunchIdentity: () => false },
+  expect(
+    await runLifecycleCli(
+      "start",
+      [],
+      io,
+      {},
+      { ...subject.deps, verifyLaunchIdentity: () => false },
+    ),
+  ).toBe(1);
+  const line = formatActivityLogProofLine(
+    subject.events.find((event) => event.op === "cli.lifecycle.health") ?? {},
   );
-  const line = formatActivityLogProofLine(subject.events[0] ?? {});
-  expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+  expectActivityLogProof("cli.lifecycle.health.decision", line);
   expect(JSON.parse(line)).toMatchObject({
-    outcome: "restart-required",
-    reason: "identity-unverified",
-    level: "info",
+    phase: "tracked",
+    outcome: "identity-mismatch",
+    launchBound: false,
+    errorKind: "conflict",
+    level: "warn",
   });
+  expect(existsSync(join(subject.root, ".keiko", "ui.pid"))).toBe(true);
+  expect(subject.spawned).toHaveLength(1);
 });

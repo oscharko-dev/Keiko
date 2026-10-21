@@ -542,3 +542,31 @@ describe("readPairingBody (fail-closed body reader)", () => {
     expect(await readPairingBody(erroring)).toBeUndefined();
   });
 });
+
+it("rotation cookies retain the original remaining absolute lifetime", () => {
+  let now = 0;
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry({
+      now: () => now,
+      idleTtlMs: 1_000_000,
+      absoluteTtlMs: 500_000,
+    }),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new TypeError("Synthetic pairing must succeed");
+  now = 450_000;
+  const activityLog = createBufferedServerLogSink();
+  const logDeps = { ...deps(channel), activityLog };
+  const events = activityLog.events;
+  const projections = handleCodingAppSessionRotate(
+    ctx(`${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+    logDeps,
+  ).headers?.["Set-Cookie"];
+  if (typeof projections === "string" || projections === undefined)
+    throw new TypeError("Expected rotated cookies");
+  const active = projections.filter((projection) => !projection.includes("Max-Age=0"));
+  expect(active).toHaveLength(APP_SESSION_ACTIVE_COOKIE_COUNT);
+  for (const cookie of active) expect(/(?:^|; )Max-Age=(\d+)/u.exec(cookie)?.[1]).toBe("50");
+  expect(events[0]?.extra).toMatchObject({ cookieMaxAgeSeconds: 50 });
+});

@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "classification": "Checkpoint37 bounded actual-source owned-child waits, safe caller cleanup and precise verified-public-digest scanner disposition. Not complete native updater, signed Endpoint Security, skill or final-head acceptance.",
+  "parentHead": "047b9d8c31d0377a94c2321ec678c57910f0f8e5",
+  "sources": [
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_supervisor.c",
+      "sha256": "0d7dd2a8bb4f838192b8b1268b141de9a9a2784d14cf79452832c0ec04d03a13"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "79baf7f5084e416b50140e9b9aa6c7e0d75b02d1833b245157c84677cc543d57"
+    },
+    {
+      "path": "scripts/__tests__/macos-supervisor-owned-wait.test.mjs",
+      "sha256": "bfb02bae05e3d2273fbd6a91285658dde170d3d25eaad18b6a8b909f4e17eca2"
+    },
+    {
+      "path": "scripts/__tests__/macos-supervisor-cleanup.test.mjs",
+      "sha256": "649bcdff1572bf472d9efadbc1f0bbada10935180d6e971cb8e8f588e98ef379"
+    },
+    {
+      "path": "scripts/__tests__/coordinator-owned-wait.test.mjs",
+      "sha256": "09ca275a6a5d163ae32ff73f750a6234ada76a226538ab07702f64045857214d"
+    },
+    {
+      "path": "scripts/__tests__/coordinator-child-cleanup.test.mjs",
+      "sha256": "da108fb4a89584eb57118bd6a97fd7bf221de2049f50abdcfceee134a09cfc9e"
+    },
+    {
+      "path": "tests/fixtures/macos-supervisor-owned-wait.c",
+      "sha256": "4d225f080f9faa55541ba5d5c46eadc926a8a56830d31ba09ce34b24559ddd00"
+    },
+    {
+      "path": "tests/fixtures/macos-owned-wait-main.c",
+      "sha256": "3f8632b4ab0de5b62db4d64272e033da4b3afbdd690dbc57c4650e7ceb7abda4"
+    },
+    {
+      "path": "tests/fixtures/coordinator-owned-wait.c",
+      "sha256": "ca077bea9b319f5657ebc2dd29d0cfcd9f6c031c804c708ac3cdee4723127b6a"
+    },
+    {
+      "path": "tests/fixtures/coordinator-child-cleanup.c",
+      "sha256": "e99da766785820e0d583013f030403eade7455ea5da72df104a367ab16442901"
+    },
+    {
+      "path": "scripts/__tests__/support/macos-owned-wait-fixture.mjs",
+      "sha256": "18f0149cd4599865002f76faae824a546115fdc354da0350ba2fcbda8f30b3c9"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h",
+      "sha256": "e6839786a97fd03ef157d9dffc5660fd98cfee995be532229396520a5c00afed"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "sha256": "f2e5f0d5804365c6b345b8174a28dbb9c80946b3b9deb3e6b65c11f513bcb51e"
+    },
+    {
+      "path": "scripts/__tests__/gitleaks-config.test.mjs",
+      "sha256": "5896d0c664b07854b59bee838fb5daa96ec8712f474329da4a1129ccf6e230a8"
+    }
+  ],
+  "ownedChildReap": {
+    "originalSourceSha256": "338c7485de1e79ef5092392af4a728beedb68e4c0822c15d9d001f53811a6eb1",
+    "initialFailureFirst": {
+      "failed": 8,
+      "healthy": 4,
+      "afterPassed": 12,
+      "beforeLogSha256": "73b10fff58ec470b2d507833f05548b94b25fe43e66c1e9e15b65c6511b43210",
+      "afterLogSha256": "80192daf0f3102620c8d9eaef8e1871266df2c4bbf4939f7f26b73f5efabd9e2"
+    },
+    "expandedRetainedSource": {
+      "failed": 9,
+      "healthy": 6,
+      "classification": "Exact retained original C source with expanded current fixture; original initial run is unchanged.",
+      "receiptSha256": "c08dca5558c82f209a457e46e5ecef3eea21e8010a6b83753d4b7979c1c82ce4"
+    },
+    "linuxImage": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+    "linuxConstraints": "Offline, nonroot, all capabilities dropped, no-new-privileges, read-only source/root, bounded resources, private executable tmpfs for trusted compiled fixture.",
+    "retainedEnvironmentFailure": "Initial default tmpfs refused fixture execution with EACCES; zero product verdicts, retained separately.",
+    "logging": "A refused wait cannot send KRS1 REAPED. The existing caller routes failure through ERROR_TREE_OBSERVE and the existing update observation path. No new logging channel.",
+    "limits": "Monitor/spawn responses are inert in the caller controls. Three supervisor controls use actual owned children. These checks do not prove immutable generation membership, signed Endpoint Security operation, actual packaged updates or SSD state continuity.",
+    "intermediateMacOS": {
+      "passed": 15,
+      "logSha256": "5bca1c3ec3fb1482133bfec37e49e114122f3d0903a8f0c068bd8e275553091d"
+    },
+    "intermediateLinux": {
+      "classification": "Actual macOS supervisor source compiled in Linux ARM64 CI userland; inert monitor/selected POSIX ports plus real kernel owned-child controls. Not macOS Endpoint Security qualification.",
+      "platform": "linux",
+      "arch": "arm64",
+      "node": "v24.18.0",
+      "passed": 15,
+      "sourceSha256": "bb94afa4fd3321db7a3d542d9be5d06a94c1d8cbab55718ebc94e7e2a2828030",
+      "fixtureSha256": "002098e997aacdf809f37a27154ad54789732dec46edcd3888977250e1625c63"
+    },
+    "currentFunctionalOwners": {
+      "macOS": {
+        "passed": 56,
+        "logSha256": "ff9b53ffade9fc456401299f46d0a2129d09db94cc3333599344ec6e65523de8"
+      },
+      "linux": {
+        "scope": "Actual POSIX/macOS owners with inert time/spawn/monitor/signal ports and 3 real kernel owned-child controls; not generation containment or Endpoint Security qualification",
+        "platform": "linux",
+        "arch": "arm64",
+        "node": "v24.18.0",
+        "passed": 56,
+        "sources": [
+          {
+            "path": "native/runtime-supervisor/macos/keiko_runtime_supervisor.c",
+            "sha256": "0d7dd2a8bb4f838192b8b1268b141de9a9a2784d14cf79452832c0ec04d03a13"
+          },
+          {
+            "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+            "sha256": "79baf7f5084e416b50140e9b9aa6c7e0d75b02d1833b245157c84677cc543d57"
+          },
+          {
+            "path": "tests/fixtures/macos-supervisor-owned-wait.c",
+            "sha256": "4d225f080f9faa55541ba5d5c46eadc926a8a56830d31ba09ce34b24559ddd00"
+          },
+          {
+            "path": "tests/fixtures/macos-owned-wait-main.c",
+            "sha256": "3f8632b4ab0de5b62db4d64272e033da4b3afbdd690dbc57c4650e7ceb7abda4"
+          },
+          {
+            "path": "tests/fixtures/coordinator-owned-wait.c",
+            "sha256": "ca077bea9b319f5657ebc2dd29d0cfcd9f6c031c804c708ac3cdee4723127b6a"
+          },
+          {
+            "path": "tests/fixtures/coordinator-child-cleanup.c",
+            "sha256": "e99da766785820e0d583013f030403eade7455ea5da72df104a367ab16442901"
+          },
+          {
+            "path": "scripts/__tests__/support/macos-owned-wait-fixture.mjs",
+            "sha256": "18f0149cd4599865002f76faae824a546115fdc354da0350ba2fcbda8f30b3c9"
+          }
+        ]
+      },
+      "macOSNativeQuality": {
+        "result": "pass",
+        "logSha256": "385b70fc8beca92cebc4e78f605ab4fb3fc3ab31fc5f6fbc0f91fb0a54fd7dd0"
+      },
+      "classification": "Actual supervisor wait/main and coordinator wait/reconcile/probe; inert external ports, with three separate real-kernel owned-child controls. Neither Endpoint Security nor whole-generation containment is qualified."
+    },
+    "consumedIdentity": {
+      "failureFirstSourceSha256": "bb94afa4fd3321db7a3d542d9be5d06a94c1d8cbab55718ebc94e7e2a2828030",
+      "failed": 5,
+      "healthy": 4,
+      "afterPassed": 9,
+      "receiptSha256": "97661c8e1eb32ed49cb0b7188149f8cc0fd8c894209ef11f8cf6dcbb6f710179",
+      "invariant": "Consume owned identity before subsequent proof validation; a late wait, clock failure or response-write failure never permits signalling a reusable PID. A still-owned pending child retains bounded cleanup."
+    },
+    "coordinatorCallers": {
+      "originalHeaderSha256": "e66a508a72dc715e861025ae396e70cdf58b7fbb2611a639a8bb64431389ce60",
+      "originalFailed": 11,
+      "originalHealthy": 10,
+      "intermediateFailed": 8,
+      "intermediateHealthy": 13,
+      "afterPassed": 21,
+      "receiptSha256": "d05046bf29d9f522c46fb25304dce934820194d666dafbbe0bbf96acfa1a2c94",
+      "scope": "Actual complete coordinator header and unchanged adjacent headers, real private hash/pipe preparation; spawn/time/wait/signal ports inert. Includes refused late completion, pre-spawn clock failure, already-reaped identity, nonzero status, healthy success, malformed response and bounded still-owned cleanup."
+    },
+    "coordinatorWait": {
+      "beforeFailed": 4,
+      "beforeHealthy": 7,
+      "afterPassed": 11,
+      "beforeLogSha256": "c90563ff9a47566d867c2a8e1f28b29a7865ca0a179539ff4c3e464970e717a1",
+      "invariant": "The actual shared clock governs strict pre/post wait expiry. Stop, failed-start, reconcile and probe callers retain consumed identity state; the probe reuses the same wait and bounded cleanup owner."
+    }
+  },
+  "scanner": {
+    "version": "8.30.1",
+    "platform": "darwin-arm64",
+    "classification": "Native scanner archive verified against official release checksums and binary/archive bytes; same version and rule as CI Linux. Matched values remain private.",
+    "before": {
+      "findings": 1,
+      "exitCode": 1,
+      "rule": "generic-api-key",
+      "path": "docs/qa/evidence/4037/browser-approval-client.json",
+      "line": 241
+    },
+    "cause": "The field is the verified public source SHA-256, not key material.",
+    "disposition": "AND of exact known digest, complete field line, anchored path and original rule. No whole-file, arbitrary-hash, credential or commit exemption.",
+    "history": {
+      "base": "babee4b4cf5ede0d4eb8a7cec3ddf96493fee652",
+      "head": "047b9d8c31d0377a94c2321ec678c57910f0f8e5",
+      "findings": 0,
+      "exitCode": 0,
+      "reportSha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    "configUnitFailureFirst": {
+      "failed": 1,
+      "healthy": 21,
+      "afterPassed": 22
+    },
+    "retainedCandidateFailure": "The first exact-line candidate missed the scanner location prefix newline. The same historical range still failed. A sensitivity test reproduced that mismatch before the bounded optional leading newline was added.",
+    "lineProducer": "https://github.com/gitleaks/gitleaks/blob/v8.30.1/detect/location.go",
+    "positiveControls": [
+      {
+        "case": "verified-digest",
+        "exitCode": 0,
+        "findings": 0,
+        "rules": [],
+        "passed": true,
+        "redactedReportSha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+      },
+      {
+        "case": "other-digest",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "b38135cc732813c3133cb9811fb8affdd78577ab08660258d58b7e4b3af724db"
+      },
+      {
+        "case": "private-field",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "442e1a55536aaa81de5be6843de88e7f5949172f6823b512e43f89a24738aafa"
+      },
+      {
+        "case": "other-field-public-digest",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "78f7ea7bd3c1f2069de4a3f63b28edf2d774dd664eafa2e0d2805ca156d62aeb"
+      },
+      {
+        "case": "appended-secret",
+        "exitCode": 1,
+        "findings": 2,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "ff82eb63d35a3f05556c53d73693a50d80d18337a429ac678f331468b6ffd692"
+      },
+      {
+        "case": "other-line-secret",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "e9d3f22f719b970d24f68d726c7921b65a9d63561f16e06da774b8d47d6e53c9"
+      },
+      {
+        "case": "suffix-path",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "428417979d77b7e047fd1b72e37fdec74d965466318c91bbd699d71dc99fce50"
+      },
+      {
+        "case": "prefix-path",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["generic-api-key"],
+        "passed": true,
+        "redactedReportSha256": "4bc7f74637670d653c3a6e0ed60b8ec238353bcdcd7bc82111d1e572c0decc3d"
+      },
+      {
+        "case": "other-rule",
+        "exitCode": 1,
+        "findings": 1,
+        "rules": ["jwt"],
+        "passed": true,
+        "redactedReportSha256": "8eb17bf3352e242d400051dabfc59123ada406625a74db9aeff693a7aa3ed477"
+      }
+    ],
+    "squashEquivalent": "Pending final checkpoint tree; not inferred from history or independent audit."
+  },
+  "remaining": "Native Linux/macOS generation ownership, genuine packaged updates/recovery/restart/SSD, skills, full browser/search/source criteria and exact-head checks/reviews/merge remain open."
+}

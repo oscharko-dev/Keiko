@@ -62,6 +62,11 @@ import {
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  fitAutomaticWindow,
+  useAutomaticWindowSizing,
+  type AutomaticWindowSizing,
+} from "./workspaceWindowSizing";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
@@ -886,6 +891,7 @@ function usePanZoom({
 }
 
 interface UseHydrateArgs {
+  readonly retireAutomaticGeometry: () => void;
   readonly worldVP: () => ViewportWorld | null;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
@@ -1291,6 +1297,7 @@ function applyPersistedWorkspaceSnapshot(
 }
 
 function useHydrate({
+  retireAutomaticGeometry,
   worldVP,
   wsRef,
   setWins,
@@ -1308,8 +1315,9 @@ function useHydrate({
     // hydrated snapshot so an immediate cross-tab storage event echoing this exact
     // value is recognised as a no-op (before the debounced local persist runs).
     lastAppliedSerializedRef.current = serializePersistedSnapshot(snapshot);
+    retireAutomaticGeometry();
     applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
-  }, [wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef]);
+  }, [wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef, retireAutomaticGeometry]);
 }
 
 interface UseStorageSyncArgs {
@@ -1381,6 +1389,7 @@ function useWorkspaceStorageSync({
 }
 
 interface UseServerSyncArgs {
+  readonly retireAutomaticGeometry: () => void;
   readonly worldVP: () => ViewportWorld | null;
   readonly wins: AppWindow[] | null;
   readonly conns: readonly Connection[];
@@ -1391,6 +1400,7 @@ interface UseServerSyncArgs {
 }
 
 function useWorkspaceServerSync({
+  retireAutomaticGeometry,
   worldVP,
   wins,
   conns,
@@ -1483,11 +1493,12 @@ function useWorkspaceServerSync({
         revisionRef.current = serverSnapshot.revision;
       }
       suppressNextPersistRef.current = true;
+      retireAutomaticGeometry();
       const fitted = applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
       // A local viewport adaptation is presentation, not a new shared-layout mutation.
       lastAcknowledgedSnapshotRef.current = serializePersistedSnapshot(fitted);
     },
-    [worldVP, setWins, setConns, zc, suppressNextPersistRef],
+    [worldVP, setWins, setConns, zc, suppressNextPersistRef, retireAutomaticGeometry],
   );
 
   useEffect(() => {
@@ -1794,6 +1805,7 @@ function useKeyboardCtrls({
 }
 
 interface UseFitMaximizedArgs {
+  readonly automatic: AutomaticWindowSizing;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly viewRef: CurrentRef<View>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
@@ -1827,7 +1839,20 @@ export function fitWindowsToViewport(
   return next.every((w, i) => w === wins[i]) ? wins : next;
 }
 
-function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void {
+function fitCurrentWorkspaceWindows(
+  windows: AppWindow[] | null,
+  viewport: ViewportWorld,
+  geometries: Map<string, SnapPrev>,
+): AppWindow[] | null {
+  if (windows === null) return windows;
+  const fitted = windows.map(
+    (window) =>
+      fitAutomaticWindow(window, viewport, geometries) ?? fitWindowToViewport(window, viewport),
+  );
+  return fitted.every((window, index) => window === windows[index]) ? windows : fitted;
+}
+
+function useFitMaximized({ wsRef, viewRef, setWins, automatic }: UseFitMaximizedArgs): void {
   useEffect(() => {
     const el = wsRef.current;
     if (el === null || typeof ResizeObserver === "undefined") return;
@@ -1840,13 +1865,13 @@ function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void
         w: r.width / v.zoom,
         h: r.height / v.zoom,
       };
-      setWins((ws) => (ws === null ? ws : fitWindowsToViewport(ws, vp)) as AppWindow[] | null);
+      setWins((ws) => fitCurrentWorkspaceWindows(ws, vp, automatic.geometries.current));
     });
     ro.observe(el);
     return () => {
       ro.disconnect();
     };
-  }, [wsRef, viewRef, setWins]);
+  }, [wsRef, viewRef, setWins, automatic]);
 }
 
 function useConnectionPrune(
@@ -2115,6 +2140,7 @@ export function useWorkspace(
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
   const { setWins, wins, winsReadyRef, winsRef } = useWorkspaceWindowState();
+  const automaticSizing = useAutomaticWindowSizing(wins);
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
     focusedWindowId: null,
     selectedWindowIds: [],
@@ -2233,8 +2259,9 @@ export function useWorkspace(
   const lastAppliedSerializedRef = useRef<string | null>(null);
   const suppressNextLocalPersistRef = useRef(false);
   const beforeApplyRemote = useCallback((): void => {
+    automaticSizing.retire();
     suppressNextServerPersistRef.current = true;
-  }, []);
+  }, [automaticSizing]);
 
   const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
   selectionRef.current = selection;
@@ -2315,7 +2342,15 @@ export function useWorkspace(
     setView,
   });
 
-  useHydrate({ wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef });
+  useHydrate({
+    wsRef,
+    worldVP,
+    setWins,
+    setConns,
+    zc,
+    lastAppliedSerializedRef,
+    retireAutomaticGeometry: automaticSizing.retire,
+  });
   useWorkspaceStorageSync({
     worldVP,
     setWins,
@@ -2326,6 +2361,7 @@ export function useWorkspace(
     suppressNextLocalPersistRef,
   });
   useWorkspaceServerSync({
+    retireAutomaticGeometry: automaticSizing.retire,
     worldVP,
     wins,
     conns,
@@ -2374,7 +2410,7 @@ export function useWorkspace(
   }, [conns, wins]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef, isLayoutLocked });
-  useFitMaximized({ wsRef, viewRef, setWins });
+  useFitMaximized({ wsRef, viewRef, setWins, automatic: automaticSizing });
 
   // Issue #1580 — the WorkspaceApi object and all of its action closures are the
   // props that flow into every WindowFrame and the ConnectionsLayer. Built fresh
@@ -2388,13 +2424,14 @@ export function useWorkspace(
   const mutations = useMemo(
     () =>
       makeMutations({
+        onWindowAllocated: automaticSizing.remember,
         onWindowLimitReached: stableWindowLimitReached,
         setWins,
         zc,
         worldVP,
         winsRef,
       }),
-    [setWins, stableWindowLimitReached, worldVP, winsRef],
+    [setWins, stableWindowLimitReached, worldVP, winsRef, automaticSizing],
   );
   const focusWindow = useCallback<WorkspaceApi["focus"]>(
     (id) => {

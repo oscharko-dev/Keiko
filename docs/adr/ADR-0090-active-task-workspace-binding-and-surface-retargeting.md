@@ -137,7 +137,27 @@ history is bounded, preserves Back/Forward across explicitly selected roots and
 resets when a task-bound root switches. Files titles use the resolved root and an
 empty Editor shows its project root, so neither can label another root as the
 selected project. Navigation and directory reads emit body-free client stage
-lifecycle evidence through the existing Activity Log. Explicit Editor root changes
+lifecycle evidence through the existing Activity Log.
+Directory responses identify their guarded canonical root, including when the selected path is
+a symbolic alias. Re-resolving an unchanged alias to a different root invalidates outstanding
+child reads, cached entries, selection and directory navigation before publishing the new root.
+This also applies when a child response discovers the replacement before the next root response.
+The first canonical observation may come from a child; ordinary initial normalization preserves
+the selected directory. A new root read cannot reuse an in-flight read from the preceding identity.
+Per-directory ownership rejects older listings even when the canonical root is unchanged, and
+unmounting invalidates outstanding reads before they can publish a root or selection. Ownership
+entries are released after settlement; ordinary identical reads remain shared across windows.
+The existing Files scope-decision Activity Log records root normalization/replacement and
+superseded reads without paths or contents, under the producing directory read's correlation.
+When a human explicitly forgets a failed ambiguous Files edge while retaining canonical Chat
+sources, only that edge's failed admission hold is released. Pending mutations refuse this recovery
+action, and independent source holds remain unchanged. Release evidence uses the original intent
+correlation on the existing body-free Files scope-decision log.
+While the Chat window remains mounted, its published runtime conversation identity is authoritative
+when the persisted cfg id is absent. Source refresh revalidates that identity after asynchronous
+lookup, and failed-edge recovery releases the hold under the same conversation id. A closed or
+retargeted window cannot reuse an old runtime identity.
+Explicit Editor root changes
 reuse project registration and require current workspace membership before committing
 the canonical root, including ordinary folders without Git, so local history retains
 its identity checks. A failed connection preserves the previous editor and its buffers.
@@ -732,3 +752,12 @@ implementation team rather than silently resolved:
 ## Date
 
 2026-06-26
+
+
+Initial Files binding uses the same Chat admission registry before an acknowledged edge exists,
+with stable Files/Chat window identity so a failed gesture can be retried. A failed equal-root
+return performs fresh canonical reconciliation rather than trusting the old edge snapshot.
+Settled obsolete owners release only their own failed intent; pending requests, timeout-blocked
+queues, failed compensation and independent source holds remain protected. Late successful
+compensation uses the existing queue recovery to retire an obsolete hold. Unmount cleanup is
+scoped to the original owner and does not discard another mounted owner's intent.

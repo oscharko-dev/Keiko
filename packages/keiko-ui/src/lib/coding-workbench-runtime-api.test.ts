@@ -26,6 +26,13 @@ import {
 
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
 
+// Keep start replay assertions scoped to their owning transport; browser renewal is tested separately.
+vi.mock("./browser-approval-client", () => ({
+  createLocalBrowserApprovalClient: vi
+    .fn()
+    .mockReturnValue({ restore: vi.fn().mockResolvedValue(false) }),
+}));
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,

@@ -7,6 +7,7 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
+import { deepRedactStrings } from "@oscharko-dev/keiko-security";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import type {
   ChatAssistantResponseVersion,
@@ -327,7 +328,7 @@ function processGroundedAnswer(
   assertGroundedAnswerRetrievalActivity(raw, () =>
     invalidRequest("Grounded answer retrieval activity is invalid."),
   );
-  const redacted = redactString(JSON.stringify(raw));
+  const redacted = JSON.stringify(deepRedactStrings(raw, redactString));
   let parsed: unknown;
   try {
     parsed = JSON.parse(redacted) as unknown;

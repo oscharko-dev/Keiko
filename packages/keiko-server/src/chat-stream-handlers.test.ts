@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleSendDesktopChatStream,
@@ -4758,9 +4758,9 @@ describe("concurrent chat stream bulkhead", () => {
     const model: ModelPort = {
       call: () => Promise.resolve(normalizedResponse("buffered")),
       async *callStream(): AsyncGenerator<GatewayStreamChunk> {
-        yield { type: "delta", token: "hi" };
+        yield { type: "delta", token: "Ready.\n" };
         await gate;
-        yield { type: "done", response: normalizedResponse("done") };
+        yield { type: "done", response: normalizedResponse("Ready.\n") };
       },
     };
     const d = deps(model);
@@ -4921,4 +4921,80 @@ describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0
     expect(closed).toHaveLength(1);
     expect(closed[0]?.correlationId).toBe("corr-chat-stream-early-failure");
   });
+});
+
+async function nativeStreamResponse(
+  d: UiHandlerDeps,
+  body: Record<string, unknown>,
+): Promise<string> {
+  const server = createServer({ highWaterMark: 1024 }, (req, res) => {
+    void handleSendDesktopChatStream(routeContext(req, res), d).then(
+      (outcome) => {
+        if (outcome === STREAMING) return;
+        res.writeHead(outcome.status);
+        res.end(JSON.stringify(outcome.body));
+      },
+      (error: unknown) => res.destroy(error instanceof Error ? error : new Error("handler failed")),
+    );
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("missing native listener");
+    const response = await fetch(
+      `http://127.0.0.1:${address.port.toString()}/api/desktop/chat/stream`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(3000),
+        headers: { "content-type": "application/json" },
+      },
+    );
+    expect(response.status).toBe(200);
+    return await response.text();
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error === undefined) resolve();
+        else reject(error);
+      });
+    });
+  }
+}
+
+it("publishes a complete code block larger than the real HTTP high-water mark to a fast client", async () => {
+  const chatId = seedChat();
+  const source =
+    "```typescript\n" +
+    Array.from(
+      { length: 64 },
+      (_, index) => `const marker${index.toString()} = "public-value";`,
+    ).join("\n") +
+    "\n```\n";
+  expect(Buffer.byteLength(source)).toBeGreaterThan(1024);
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse(source)),
+    async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+      yield { type: "delta", token: source };
+      await Promise.resolve();
+      yield { type: "done", response: normalizedResponse(source) };
+    },
+  };
+  const body = await nativeStreamResponse(deps(model), {
+    chatId,
+    projectPath: projectDir,
+    modelId: CHAT_MODEL,
+    content: "Generate complete tests",
+  });
+  const records = parseSse([body]);
+  const tokens = records.filter((record) => record.event === "token");
+  expect(tokens.length).toBeGreaterThan(1);
+  expect(tokens.map((record) => (record.data as { text: string }).text).join("")).toBe(source);
+  expect(records.filter((record) => record.event === "done")).toHaveLength(1);
+  expect(store.listMessages(chatId).find((message) => message.role === "assistant")?.content).toBe(
+    source,
+  );
 });

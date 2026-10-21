@@ -182,6 +182,29 @@ stale source mutation or run against newly connected sources. The grounded path 
 scope before committing its answer. Legacy requests without a precondition still undergo the
 existing grounding-mode and access checks; absence is not a matching-identity claim.
 
+Connected Files navigation establishes a client admission hold before its serialized scope update
+is acknowledged. The existing Chat window runtime cancels the affected conversation immediately;
+typed, spoken and regeneration dispatches cannot consume the previous authority while any source
+intent is pending or failed. Holds contain only per-source ownership tokens and lifecycle state,
+not another scope list. Only the current token's successful acknowledgement releases its hold;
+independent sources and superseded responses cannot release one another. Failed intent survives
+Chat window changes until a successful source retry/disconnection or deletion of that chat.
+The composer preserves drafts and displays localized pending/failure status. Existing
+`client.files-scope.decision` evidence joins `intent-pending`, `intent-applied`, `intent-failed`
+and `intent-send-refused` to the mutation correlation without paths, prompts or answers.
+
+A privacy-elided workspace replay is not itself a new source intent. For the same conversation and
+connection, an existing canonical acknowledgement may restore the local edge representation when
+its valid persisted fingerprint and scope both match the visible Files selection. This restoration
+does not PATCH the chat, fetch a new source list or cancel its response. Missing or changed proof,
+actual navigation and failed transitions retain the normal admission/recovery path; another source's
+pending or failed hold remains intact. The existing `automatic-suppressed` scope decision links to
+the original acknowledgement correlation without recording source paths. A newly created full
+Files edge must retain that receipt before its first privacy-elided replay. The existing confirmed
+Chat cache carries the correlation only after canonical source acknowledgement; the edge ledger
+accepts it only for the same conversation and a unique canonical scope matching the bound
+fingerprint. An unproven, newer or equal-time replacement Chat does not inherit that receipt.
+
 Git-change description authority is independent of source connectivity. Buffered and streaming
 turns require authority for the exact active comparison and return 409
 `GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED` when admission fails. Ordinary chat regeneration rejects

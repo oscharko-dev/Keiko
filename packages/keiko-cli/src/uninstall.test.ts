@@ -1260,11 +1260,11 @@ describe("runUninstallCli — running server guard", () => {
       },
     };
     const c = makeIo();
-    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
-    // The symlink must never be followed: classifyPid reports "absent" for an unreadable/refused
-    // pid file, so ensureServerStoppable finds nothing to stop and never signals anything.
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    // Unreadable ownership supplies no terminal proof. Retain state and never signal the target.
     expect(killed).toEqual([]);
     expect(aliveCalls).toBe(0);
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
     expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
   });
 });

@@ -98,6 +98,20 @@ manifest-size and sensitive-path checks. The patched recursive OSV scan and prod
 audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
 to accommodate this update.
 
+On 2026-10-20 the exact OSV Scanner 2.6.0 recursive gate identified
+[GHSA-gfr2-rv44-r23c](https://github.com/advisories/GHSA-gfr2-rv44-r23c) and
+[GHSA-vfgh-jcmw-g37q](https://github.com/advisories/GHSA-vfgh-jcmw-g37q) in the runtime
+`markdown-it` 14.3.2 resolution beneath `prosemirror-markdown`. Both identify compatible 14.3.3
+as patched. The targeted lock update changes only that package's version, archive URL and
+integrity. A clean exact-lock install confirms CommonJS resolution to 14.3.3 from root, UI and
+ProseMirror contexts, while the Composer's existing CommonMark `html: false` setting remains disabled.
+The default-parser reference-definition denial of service is relevant to browser Composer
+availability; the HTML-specific parser option is not enabled on this consumer. Both defects are
+patched without enabling HTML or changing parser options. The same recursive scanner then reports
+zero unwaived findings, and all 74 existing Composer/parser controls pass. Existing waiver IDs,
+expiry dates and reachability limits remain unchanged. Earlier qualification records retain their
+original dependency inputs; current release qualification is repeated for the patched resolution.
+
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query
@@ -206,10 +220,11 @@ or peer graph).
 | `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
 | `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
 | `@babel/preset-env`           | root                  | 8.0.5   | current        | Dependabot #3545; reviewed Babel bug-fix rollup, including destructuring, block-scoping, Safari array bounds, and parser correctness fixes.                                                                                                                                                                  |
-| `vite`                        | keiko-ui              | 8.3.0   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                              |
+| `vite`                        | keiko-ui              | 8.3.3   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                              |
 | `vitest`                      | root                  | 4.1.11  | major-deferred | #3474 reverts the Vitest 5 adoption for the mutation lane: Stryker 10 with Vitest 5.0.0 reports zero killed mutants despite a covering dry run, making the security mutation evidence meaningless. 4.1.11 is the patched Vitest 4 line with a clean audit result and working Stryker/Vitest instrumentation. |
 | `vitest`                      | keiko-ui              | 4.1.11  | major-deferred | Kept exactly aligned with the root because workspace-local Vitest drift previously produced peer-invalid `npm ls` output. The next Vitest major move must first prove non-zero Stryker kills on the security mutation scope.                                                                                 |
 | `@vitest/coverage-v8`         | root                  | 4.1.11  | major-deferred | Exact peer match for Vitest 4.1.11. Vitest 5 coverage stays deferred with the Vitest major because the security mutation runner, not the coverage package alone, is the blocking evidence path (#3474).                                                                                                      |
+| `@vitest/utils`               | root                  | 4.1.11  | major-deferred | Direct test-only declaration of the already resolved Vitest serializer used by the generated-test qualification reporter regression. The serializer and resolved dependency tree stay on the same reviewed Vitest 4 line; no unlisted transitive import or weakened dead-code gate.                          |
 | `autoprefixer`                | keiko-ui              | 10.6.1  | current        | Dependabot #3590 (consolidated 2026-09-25); minor release on the 10.x line.                                                                                                                                                                                                                                  |
 | `@types/react`                | keiko-ui              | 19.3.0  | current        | Kept exactly aligned with React 19.3 and `@types/react-dom` across the UI and editor workspaces.                                                                                                                                                                                                             |
 | `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.                                                                                                                                                                                                                             |
@@ -520,3 +535,49 @@ otherwise. It touches more than twenty files across five kinds of change:
 
 No product runtime behaviour, published surface, or state store changes; the only source edit under
 `packages/` is a corrected comment.
+
+### Source projection runtime dependencies (#4040)
+
+The security boundary lazily loads the existing TypeScript 6.0.3 API and YAML 2.9.1 parser only
+when their formats require them. Java ownership uses java-parser 3.0.1 (Apache-2.0) and its CST;
+no source is compiled or executed during redaction. Global overrides resolve both lodash variants
+to 4.18.1: upstream 4.17.21 and the earlier 4.17.23 correction remain affected by
+[GHSA-r5fr-rjxr-66jc](https://github.com/advisories/GHSA-r5fr-rjxr-66jc) and
+[GHSA-f23m-r3pf-42rh](https://github.com/advisories/GHSA-f23m-r3pf-42rh).
+The initial scoped overrides failed the actual product graph resolution check and were replaced
+by global overrides. The assembled root also declares the same Java parser runtime: npm 11.16.0
+does not propagate these overrides into the workspace-only parser graph. Merely replacing the
+locked files leaves invalid dependency edges. The root declaration gives the existing parser graph
+the root override set without adding another installed package. Actual npm resolution, supplier audit and release gates must pass before
+adoption; the earlier isolated sandbox audit alone is insufficient.
+Knip cannot observe this root lock-resolution requirement as an import. Its exact root workspace
+ignores only `java-parser`; the security workspace dependency and imports remain checked. This
+exception does not permit an unused runtime parser or alter the resolved graph. The actual
+workspace-only and invalid-edge attempts remain retained alongside passing `npm ls` and the
+production supplier audit.
+
+| Dependency    | Scope            | Resolved version | Disposition |
+| ------------- | ---------------- | ---------------- | ----------- |
+| `java-parser` | `root`           | `3.0.1`          | current     |
+| `java-parser` | `keiko-security` | `3.0.1`          | current     |
+| `typescript`  | `keiko-security` | `6.0.3`          | current     |
+| `yaml`        | `keiko-security` | `2.9.1`          | current     |
+| `lodash`      | `root`           | `4.18.1`         | current     |
+| `lodash-es`   | `root`           | `4.18.1`         | current     |
+
+### Security repair 2026-10-20: Vite and native MCP client
+
+PR #4046's required OSV scan reported two newly reviewed advisories on its published repair head.
+The root Vite override and UI declaration now pin 8.3.3 for
+[GHSA-698v-4r3x-3vcv](https://github.com/advisories/GHSA-698v-4r3x-3vcv).
+The native service host's existing selective client/core overrides now pin 2.3.0 for
+[GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw);
+the client requires core exactly 2.3.0. Its default redirect restriction remains enabled.
+Both canonical npm locks are regenerated. Resolver-required Rolldown bindings, OXC types and the
+native core's Zod patch remain visible in the lock diff. MCP's new Apache-2.0 metadata is already
+within the approved license set; no waiver or license exception changes.
+
+The original native provider/host compatibility tests, patched Vite test/build lanes, dependency
+currency/hygiene, supply-chain checks and a fresh scan qualify these exact inputs. Historical native
+source-lock evidence keeps its original binding. The earlier full coverage attempt on the preceding
+head was stopped after the security failure and receives no full-suite acceptance credit.

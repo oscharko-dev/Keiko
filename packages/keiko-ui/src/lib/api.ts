@@ -182,6 +182,7 @@ import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   isDesktopChatStreamEvent,
   type ChatContextStatusWire,
+  type DesktopChatCreateRequestWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
   type ConversationAttachmentUploadResponseWire,
@@ -1401,11 +1402,7 @@ export async function patchChatMessage(
 // Desktop canvas V1 — real chat through the existing model gateway
 // ---------------------------------------------------------------------------
 
-export interface CreateDesktopChatInput {
-  projectPath?: string;
-  title?: string;
-  modelId?: string;
-}
+export type CreateDesktopChatInput = DesktopChatCreateRequestWire;
 
 export async function createDesktopChat(
   input: CreateDesktopChatInput = {},

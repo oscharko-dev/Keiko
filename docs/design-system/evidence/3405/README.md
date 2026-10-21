@@ -29,6 +29,12 @@ same Node 24.18.0 runtime. All eight unchanged tests passed; only `11-progress-s
 PNG bytes, and the three JSON records now bind the updated English/German message sources.
 The evidence freshness check passed. This remains updater fixture evidence, not Chat scope proof.
 
+The source-intent repair for #4040 regenerated the original producer again on 2026-10-18
+using Node 24.18.0. All eight unchanged Chromium cases passed in 46.7 seconds, including
+the real-BFF outage case. Two PNGs changed bytes (`10-responsive-manual-path.png` and
+`11-progress-state.png`); the three JSON records now bind the current message catalogs.
+The evidence freshness gate passed. This remains updater evidence, not Chat acceptance.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -72,3 +78,53 @@ Production-signed release qualification is tracked separately in the
 [repair ledger](../../../qa/built-in-updater-repair-3405.md).
 
 Historical #1696 screenshots and JSON remain in [their original directory](../1696/README.md).
+
+## Customer updater presentation — #4047
+
+The startup notice uses availability-specific headings and distinguishes a required portable setup
+from a confirmed newer version. Its notice-only translations follow the already-lazy widget into
+the existing optional catalog. The original freshness producer now binds eleven UI sources,
+including both optional catalogs and their translation owner; four harness inputs remain separate.
+Three failure-first controls demonstrate that changing any newly bound translation source was
+previously missed. The original eight-case browser producer plus the new setup-only reload/details regression
+regenerated all 17 original artifacts on macOS arm64 with pinned Node 24.18.0. The nine
+Chromium cases passed in 54.6 seconds, including real-BFF outage and the normal/critical
+setup-only reload/details checks. All three records bind 11 UI sources and 4 harness inputs;
+`10-responsive-manual-path.png`, `11-progress-state.png`, and
+`13-reconnecting-state-mocked.png` changed PNG bytes. The unchanged numerical freshness and
+Editor isolation gates pass. This remains UI/fixture evidence; actual signed package replacement,
+restart and SSD qualification are separate #4047 obligations.
+
+The subsequent #4047 repair preserves the unchanged startup import-boundary control: the thin
+preflight/dismissal controller loads its optional-catalog view only when a visible notice is
+admitted. A current or suppressed report does not load that view. The original control reproduced
+locally as 1 failure/3 healthy controls before the repair and all four pass afterwards. Two existing
+UI lint suppressions were removed. The final nine-case producer passed in 47.3 seconds and binds
+12 UI sources, including the deferred presentation, plus the same four harness inputs. All 17
+artifacts were regenerated through the original producer with tracked evidence enabled; only
+`10-responsive-manual-path.png`, `11-progress-state.png`, and
+`13-reconnecting-state-mocked.png` changed screenshot bytes in this increment. This still qualifies UI and the declared BFF recovery fixture, not native replacement.
+
+A rejected optional notice-view import is contained locally. The failure-first control uses the
+installed Next.js App Router loader and the real shell boundary, rather than the different Pages
+loader that plain test resolution selects. It reproduces one desktop-loss failure with one healthy
+suppressed-current control before repair. The repaired path records body-free failure evidence,
+keeps the workspace mounted, and offers the existing Updates entry and dismissal using core
+translations. The final three owning suites pass 77 cases, complete UI coverage passes 10,694 cases
+(one existing skip), and the original nine-case browser producer passes again in 1.3 minutes.
+
+The immediate-dismissal correction for #4047 then adds four failure-first action controls. The
+common dismissal owner emits the existing presentation transition when the action occurs,
+including the optional-view load-failure fallback. Its three owning suites pass 80 cases and
+complete UI coverage passes 10,697 cases with one existing skip. The original nine-case browser
+producer passes in 1.4 minutes and regenerates the same 17 artifacts, binding the same twelve UI
+sources and four harness inputs. This does not establish native package replacement or restart.
+
+The browser-approval integration for #4043 regenerated these updater artifacts again on
+2026-10-19 using the original nine-case producer and Node 24.18.0. All nine cases passed
+in 1.1 minutes after the final Sonar repairs, including the real-BFF outage and setup-only
+notification controls.
+All 17 artifacts were regenerated; 12 screenshot files changed bytes, while the three JSON
+records bind the current twelve UI sources and four harness inputs. The evidence freshness
+gate passes. This is updater presentation and declared BFF recovery evidence; native package
+replacement, process-generation ownership and SSD qualification remain separate obligations.

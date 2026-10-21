@@ -217,6 +217,53 @@ The macOS supervisor never substitutes a shell, inherited session, or process gr
 The qualification fixture creates descendants across fork and exec, exercises stop and abrupt
 control-channel loss, and requires the system extension to prove zero live descendants.
 
+Reconciliation cannot infer an empty tree from an unknown handle or a lost in-memory session
+inventory. Unknown and non-owner handles receive the same observation refusal, while an existing
+live owner retains its distinct already-active response. Only the existing observed zero-live
+path may emit an empty-tree proof; monitor restart or missing state does not establish it.
+
+The monitor establishes a per-client sequence baseline before accepting ARM. It reads Apple's
+`global_seq_num` only when the message version exposes it (version four or later), and subsequent
+events must advance by exactly one. Missing, repeated, reversed or exhausted sequence values,
+or unavailable sequence fields, irreversibly invalidate that monitor instance's observation
+authority. The existing count-only diagnostic records the closed failure reason and counters;
+active clients receive the existing observation-error response. Every zero-live reply site is
+guarded, including stop and disconnect, and new ARM requests refuse after loss. A subsequent
+apparently contiguous event cannot restore the missing inventory. Startup cannot overwrite an
+observed failed state with active. Routine event tracking and unrelated exec policy retain their
+existing behavior; this refusal does not prove that an unobserved descendant was terminated.
+Native recovery, generation transfer and real Endpoint Security qualification remain separate
+requirements, including after monitor restart.
+
+Stop and socket EOF are not event-queue barriers. An armed session with no observed root retains
+its pending ownership; it cannot emit ZERO_LIVE merely because the current inventory is empty.
+Root observation or the matching supervisor EXIT, together with intact event continuity, establishes
+the observation boundary. A disconnected session is retired only after that supervisor EXIT and
+the final observed descendant EXIT, including failed-spawn sessions that never produced a child.
+
+Observed process membership copies audit tokens and matches PID plus PID version. NOTIFY_EXEC
+updates the stored pre-exec identity to its actual post-exec target before further fork, exec or
+exit handling. Every stop, late-fork and inventory-exhaustion signal uses the token-bound libproc
+SPI, with no numeric-PID fallback. ESRCH is not exit evidence: it may mean an exec notification is
+pending. Other signaling refusals invalidate the session's proof; both decisions have bounded,
+body-free native diagnostics. The SPI is private and subject to OS compatibility qualification;
+current-SDK linkage and a fixture-owned kernel signal test do not qualify every supported OS.
+Initial peer admission captures one credential-checked audit token and verifies its code/team
+before waiting for a frame. That preflight may reject but cannot authorize allocation. After the
+complete bounded frame arrives, the same exact token is checked again and passed to allocation.
+The public `kSecGuestAttributeAudit` CFData binds both Security guest checks to PID plus PID version;
+a numeric-PID lookup or a later token lookup cannot substitute another generation. Missing or
+stale identity, invalid signature and foreign-team code refuse through the existing diagnostic.
+The first frame has a total five-second monotonic deadline, including fragmented reads and EINTR;
+SO_RCVTIMEO alone is an inactivity timer and cannot establish that bound. Later session control
+reads retain their existing long-lived behavior. The connection-slot limit is unchanged.
+A fixture-owned actual kernel-token code lookup confirms generation refusal on the measured host
+only; it does not qualify signed Endpoint Security integration on every supported system.
+LOCAL_PEERTOKEN supplies a current PID token, not an immutable connect-time peer certificate.
+Existing credentials and code admission remain required, and full peer-lifetime authentication
+remains a separate qualification requirement. ARM refuses an identity still owned by another
+session; this safety refusal does not implement working update-generation ownership transfer.
+
 The activation manager submits exactly Keiko's bundled extension through Apple's SystemExtensions
 framework and keeps the request alive while local-user approval is pending. After system-extension
 activation, the monitor reports a closed `needs-full-disk-access` state when `es_new_client`

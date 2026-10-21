@@ -237,9 +237,9 @@ describe("portable manual review harness", () => {
     expect(manifest.runtimeActivation.trustAnchor).toBe("sigstore-qualification-receipt");
     expect(manifest.runtimeQualification.backend).toBe("linux-namespace-gateway");
     expect(supervisor).toMatchObject({
-      executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
-      source: { path: "packages/keiko-sandbox/src" },
-      protocol: { requestMagic: "none", responseMagic: "none" },
+      executablePath: "runtime/native/keiko-runtime-supervisor",
+      source: { path: "native/runtime-supervisor" },
+      protocol: { requestMagic: "KRP1", responseMagic: "KRS1" },
     });
   });
 
