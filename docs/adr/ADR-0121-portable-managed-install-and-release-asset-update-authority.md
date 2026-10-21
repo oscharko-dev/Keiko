@@ -410,6 +410,9 @@ After the successor publishes verification, startup keeps readiness closed while
 coordinator completes cleanup under the plan's original cleanup deadline. Recovery then settles
 the completed receipt chain and refreshes the session projection before reporting the app ready.
 Verification alone must not leave the update indefinitely awaiting a second restart to settle.
+Durable terminal settlement also releases the matching session's existing file lock, including
+an ordinary native successor without a separate crash-recovery ownership descriptor. A descriptor,
+when present, still requires its exact ownership identity before the session lock is released.
 
 The Linux native generation implementation uses an atomically held `clone3` PID handle for a
 new user/PID namespace init; the outer owner remains outside that generation. The init verifies

@@ -247,11 +247,17 @@ function createRecoveryReadActivation(
   };
 }
 
-function releaseRecoveredOwnership(options: ProductionPortableHandoffRuntimeOptions): void {
-  if (options.recoveryOwnership === undefined) return;
-  if (!releaseStateDirUpdateSessionLockForRecovery(options.stateDir, options.recoveryOwnership)) {
+function releaseRecoveredOwnership(
+  options: ProductionPortableHandoffRuntimeOptions,
+  sessionId: string,
+): void {
+  if (
+    options.recoveryOwnership !== undefined &&
+    !releaseStateDirUpdateSessionLockForRecovery(options.stateDir, options.recoveryOwnership)
+  ) {
     fail("portable recovery ownership changed before release");
   }
+  options.sessionLock.release(sessionId);
 }
 
 function persistTerminalRecovery(input: {
@@ -274,7 +280,7 @@ function persistTerminalRecovery(input: {
     activationWal: settled ? undefined : input.activationWal,
     recovery: recoveryState(input.now, input.sessionId, settled ? "settled" : "reconciling"),
   });
-  if (settled) releaseRecoveredOwnership(input.options);
+  if (settled) releaseRecoveredOwnership(input.options, input.sessionId);
 }
 
 function persistActiveRecovery(input: {
@@ -301,7 +307,7 @@ function persistActiveRecovery(input: {
     activationWal: settled ? undefined : input.activationWal,
     recovery: recoveryState(input.now, input.sessionId, settled ? "settled" : "reconciling"),
   });
-  if (settled) releaseRecoveredOwnership(input.options);
+  if (settled) releaseRecoveredOwnership(input.options, input.sessionId);
 }
 
 function persistRecoveredActivation(
@@ -359,7 +365,7 @@ function settleRestoredActivation(
         portableActivationId: activationWal.activationId,
         status: "failed",
       });
-      releaseRecoveredOwnership(options);
+      releaseRecoveredOwnership(options, sessionId);
     });
 }
 
