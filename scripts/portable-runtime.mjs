@@ -2267,8 +2267,8 @@ function forbiddenPayloadReference(value, path, part) {
   return (
     value.includes(`${part}/`) ||
     value.includes(`${part}\\`) ||
-    value.endsWith(`/${part}`) ||
-    value.endsWith(`\\${part}`)
+    value.includes(`/${part}`) ||
+    value.includes(`\\${part}`)
   );
 }
 

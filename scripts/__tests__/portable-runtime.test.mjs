@@ -2192,6 +2192,9 @@ describe("validatePortableManifest", () => {
       ".keiko/provider-credentials.vault",
       "config/provider-credentials.vault",
       "config\\provider-credentials.vault",
+      "config/provider-credentials.vault,",
+      "(config\\provider-credentials.vault).",
+      "config/provider-credentials.vault-backup",
       "https://user:pass@example.com/config",
     ]) {
       entry.releaseNoteBullets = [value];
