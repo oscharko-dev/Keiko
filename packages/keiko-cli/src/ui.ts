@@ -1574,10 +1574,12 @@ async function awaitStartupRecoveryCompletion(
   current: UpdateStartupRecoveryCurrent,
 ): Promise<StartupRecoveryResult> {
   let result = await recovery.reconcile({ phase: "post-listen", current });
+  let pollDelayMs = 250;
   while (result.status === "ready" && result.completionDeadline !== undefined) {
     const remaining = result.completionDeadline - Date.now();
     if (remaining <= 0) return { status: "recovery-required", reason: "interrupted" };
-    await delay(Math.min(250, remaining));
+    await delay(Math.min(pollDelayMs, remaining));
+    pollDelayMs = Math.min(pollDelayMs * 2, 5_000);
     result = await recovery.reconcile({ phase: "post-listen", current });
   }
   return result;

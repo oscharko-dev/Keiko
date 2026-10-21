@@ -691,6 +691,42 @@ describe("runUiCli", () => {
     expect(order).toEqual(["verified", "cleanup-complete", "started"]);
   });
 
+  it("closes without reporting startup when native cleanup has already expired", async () => {
+    const { io } = captureIo();
+    const sink = createRecordingSink();
+    const close = vi.fn((callback?: () => void) => callback?.());
+    const server = Object.assign(fakeServer({}), {
+      removeListener(): Server {
+        return this as unknown as Server;
+      },
+      address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+      close,
+    });
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          activityLog: sink,
+          createServer: () => server,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) =>
+              Promise.resolve({
+                status: "ready" as const,
+                ...(phase === "post-listen" ? { completionDeadline: 0 } : {}),
+              }),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "PORTABLE_UPDATE_RECOVERY_INTERRUPTED" });
+    expect(close).toHaveBeenCalledOnce();
+    expect(sink.events.some(({ op }) => op === "process.started")).toBe(false);
+  });
+
   it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {
     const { io } = captureIo();
     const order: string[] = [];

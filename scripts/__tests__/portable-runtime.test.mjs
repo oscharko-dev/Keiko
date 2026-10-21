@@ -2190,6 +2190,8 @@ describe("validatePortableManifest", () => {
       "sk-testCredential123456789",
       "/Users/customer/private.json",
       ".keiko/provider-credentials.vault",
+      "config/provider-credentials.vault",
+      "config\\provider-credentials.vault",
       "https://user:pass@example.com/config",
     ]) {
       entry.releaseNoteBullets = [value];

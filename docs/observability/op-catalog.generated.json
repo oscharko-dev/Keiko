@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0fd243384ec4e5eab995d54d06cb7943ee3639c15370d4c30ed6ff2ee6527d3c",
+    "catalogDigest": "bbae66cb4bc7c89febfa2a5b488f9344ce0ae66fc760ec5ae009dc68c8fea3e9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37303,7 +37303,7 @@
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:219",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1677"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1679"]
       },
       {
         "contractKind": "activity-log-operation",

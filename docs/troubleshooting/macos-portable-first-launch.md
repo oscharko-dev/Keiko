@@ -25,9 +25,11 @@ attested` after the bundle was moved to `/Applications` by hand before the first
    staging (ADR-0163 D9), which turns the verdict into the normal unidentified-developer approval.
 2. The portable launcher required the Endpoint Security activation manager to report `active`
    before starting the server. An unsigned evaluation install can never load that extension, so
-   the requirement was an impossible precondition and the launch exited silently. The launcher now
-   asks the platform whether the install carries a release signature and waives activation for
-   unsigned installs (`waived-unsigned`), keeping the strict requirement for signed ones.
+   the requirement was an impossible precondition and the launch exited silently. Application
+   startup and portable updates now use the native application lifecycle helper independently of
+   Endpoint Security activation and Apple Team ID. The separate optional Endpoint Security Coding
+   backend retains its own signing and activation requirements; application startup does not
+   qualify that backend.
 3. Portable setup refused to attest a bundle already sitting at the managed install location.
    Setup now adopts a same-path bundle in place when no install registration exists and the bundle
    passes full validation; the refusal remains for a bundle that fails validation or conflicts
