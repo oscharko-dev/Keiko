@@ -171,7 +171,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 ]);
 
 const SECRET_PATTERNS = Object.freeze([
-  /sk-[\w-]{8,}/iu,
+  /(?<![\w-])sk-[\w-]{8,}/iu,
   /ghp_\w{8,}/iu,
   /github_pat_\w{82}/iu,
   /npm_[^\W_]{36}/iu,
@@ -2250,8 +2250,21 @@ function scanForbiddenString(value, path, failures) {
     push(failures, path, "contains secret-like or private-path text");
   }
   for (const part of FORBIDDEN_PATH_PARTS) {
-    if (value.includes(part)) push(failures, path, `contains forbidden payload reference ${part}`);
+    if (forbiddenPayloadReference(value, path, part))
+      push(failures, path, `contains forbidden payload reference ${part}`);
   }
+}
+
+function forbiddenPayloadReference(value, path, part) {
+  // A signed catalog describes public store names and release notes. These fields
+  // do not select payload files. Credentials, private paths and relative state
+  // paths remain forbidden, as do unknown fields and every artifact/path field.
+  const publicCatalogText =
+    /^manifest\.releaseImpact\.catalog\.entries\[\d+\]\.(?:id|userVisibleSummary|releaseNoteBullets\[\d+\]|review\.rationale|affectedStateStores\[\d+\]|stateImpact\[\d+\]\.(?:store|description)|breakingException\.(?:rationale|warningText)|correctionRationale)$/u.test(
+      path,
+    );
+  if (!publicCatalogText) return value.includes(part);
+  return value.includes(`${part}/`) || value.includes(`${part}\\`);
 }
 
 function normalizedValidationOptions(options) {

@@ -310,7 +310,7 @@ static int keiko_handoff_receive(keiko_runtime_owner *owner) {
  * reserves a further 10 minutes for start/verification/restoration. Anchor that
  * tail to the original grant, never to the time a response happens to arrive. */
 static int keiko_handoff_cleanup_grant(const keiko_app_handoff *handoff, uint64_t now) {
-  const uint64_t tail = UINT64_C(10) * 60u * 1000u;
+  const uint64_t tail = keiko_khp_phase_tail(KEIKO_KHP_CLEANUP_AT);
   return now < handoff->cleanup_deadline && handoff->deadline <= UINT64_MAX - tail &&
          handoff->cleanup_deadline <= handoff->deadline + tail;
 }

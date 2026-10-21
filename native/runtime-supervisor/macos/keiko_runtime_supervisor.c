@@ -226,7 +226,9 @@ static int probe_monitor(void) {
   return available ? 0 : ERROR_MONITOR_UNAVAILABLE;
 }
 
+#if defined(__APPLE__)
 #include "keiko_app_runtime.h"
+#endif
 
 int main(int argc, char **argv) {
   struct launch_request request = {0};
@@ -234,9 +236,11 @@ int main(int argc, char **argv) {
   int monitor = -1;
   pid_t root = -1;
   int result = 1;
+#if defined(__APPLE__)
   if (argc == 2 && strcmp(argv[1], "--probe-app-runtime") == 0) return keiko_app_probe();
   if (argc == 2 && strcmp(argv[1], "--app-runtime") == 0) return keiko_app_runtime(0);
   if (argc == 2 && strcmp(argv[1], "--app-owner-report") == 0) return keiko_app_runtime(1);
+#endif
   if (argc == 2 && strcmp(argv[1], "--probe-monitor") == 0) return probe_monitor();
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile(argv[2]);
   if (argc != 1 || !read_launch_request(&request)) {

@@ -426,6 +426,48 @@
         "native-static-analysis",
         "kernel-generation-boundary"
       ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-control-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-handoff-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-envelope-posix.h",
+      "language": "c",
+      "platforms": ["macos", "linux"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-parent-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-runtime-owner-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_app_runtime.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_process_scope.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
     }
   ]
 }

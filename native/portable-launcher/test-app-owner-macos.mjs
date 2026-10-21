@@ -17,6 +17,7 @@ import {
 
 const [launcher, helper, fixture] = process.argv.slice(2, 5).map((path) => realpathSync(path));
 const stopBeforeCommit = process.argv[5] === "--stop-before-commit";
+const maximumGrant = process.argv[5] === "--maximum-grant";
 assert.equal(process.platform, "darwin");
 const state = realpathSync(mkdtempSync(join(tmpdir(), "keiko-macos-owner-")));
 const launchId = "0123456789abcdef0123456789abcdef";
@@ -27,7 +28,9 @@ const owner = spawn(
   {
     env: {
       KEIKO_UI_START_DEADLINE_MS: String(process.hrtime.bigint() / 1000000n + 5000n),
-      KEIKO_UI_COMMIT_DEADLINE_MS: String(process.hrtime.bigint() / 1000000n + 10000n),
+      KEIKO_UI_COMMIT_DEADLINE_MS: String(
+        process.hrtime.bigint() / 1000000n + (maximumGrant ? 1500000n : 10000n),
+      ),
     },
     stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
   },

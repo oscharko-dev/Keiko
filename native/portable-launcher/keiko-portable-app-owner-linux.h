@@ -81,7 +81,8 @@ static int keiko_app_owner_select(keiko_runtime_owner *owner,
   if (selected != NULL) {
     if (!keiko_positive_u64(selected, UINT64_MAX, &absolute) ||
         absolute < owner->commit_deadline ||
-        absolute - owner->started_at > KEIKO_COORDINATOR_MAX_CONTROL_MS) return 0;
+        absolute - owner->started_at >
+          KEIKO_COORDINATOR_MAX_CONTROL_MS + keiko_khp_phase_tail(KEIKO_KHP_CLEANUP_AT)) return 0;
     owner->commit_deadline = absolute;
   }
   owner->state = keiko_app_owner_move(keiko_coordinator_open_directory_path(owner->state_path));

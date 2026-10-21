@@ -180,9 +180,11 @@ static void keiko_coordinator_u32le(unsigned char *value, uint32_t number) {
 static int keiko_coordinator_deadline(const keiko_coordinator_context *context,
                                       unsigned int field, uint64_t *deadline) {
   uint64_t wall, now_wall = keiko_coordinator_wall_ms(), now = keiko_tree_now_ms();
+  /* Match the production plan's phase offsets beyond its bounded admission grant. */
+  uint64_t tail = keiko_khp_phase_tail(field);
   if (now_wall == UINT64_MAX || now == UINT64_MAX ||
       !keiko_khp_decimal_value(context->plan.field[field], UINT64_C(9007199254740991), &wall) ||
-      wall <= now_wall || wall - now_wall > KEIKO_COORDINATOR_MAX_CONTROL_MS) return 0;
+      wall <= now_wall || wall - now_wall > KEIKO_COORDINATOR_MAX_CONTROL_MS + tail) return 0;
   *deadline = now + (wall - now_wall);
   return *deadline >= now;
 }

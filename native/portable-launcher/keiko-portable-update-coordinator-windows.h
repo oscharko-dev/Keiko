@@ -350,13 +350,14 @@ static int keiko_coordinator_windows_deadline(
   uint64_t wall_deadline;
   uint64_t wall_now = keiko_coordinator_windows_wall_ms();
   uint64_t monotonic_now = (uint64_t)GetTickCount64();
+  uint64_t tail = keiko_khp_phase_tail((unsigned int)field);
   if (!keiko_khp_decimal_value(
           context->plan.field[field],
           UINT64_C(9007199254740991),
           &wall_deadline
       ) ||
       wall_now == UINT64_MAX || wall_deadline <= wall_now ||
-      wall_deadline - wall_now > KEIKO_COORDINATOR_MAX_CONTROL_MS ||
+      wall_deadline - wall_now > KEIKO_COORDINATOR_MAX_CONTROL_MS + tail ||
       monotonic_now > UINT64_MAX - (wall_deadline - wall_now)) return 0;
   *deadline_ms = monotonic_now + (wall_deadline - wall_now);
   return 1;

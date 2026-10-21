@@ -1796,6 +1796,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/update-preflight-impact",
   "keiko-server/update-preflight-portable-assets",
   "keiko-server/update-preflight-portable-evidence",
+  "keiko-server/update-preflight-portable-impact",
   "keiko-server/update-preflight-portable-shared",
   "keiko-server/update-preflight-registry",
   "keiko-server/update-preflight-report",

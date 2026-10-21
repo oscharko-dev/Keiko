@@ -866,6 +866,21 @@ static void test_native_cleanup_grant_is_anchored(void) {
   assert(!keiko_handoff_cleanup_grant(&handoff, 1u));
 }
 
+static void test_native_production_phase_offsets(void) {
+  keiko_coordinator_context context = {0};
+  char wall[32];
+  uint64_t deadline;
+  const unsigned int fields[] = {KEIKO_KHP_START_AT, KEIKO_KHP_VERIFY_AT, KEIKO_KHP_CLEANUP_AT};
+  for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+    uint64_t maximum = KEIKO_COORDINATOR_MAX_CONTROL_MS + keiko_khp_phase_tail(fields[i]);
+    snprintf(wall, sizeof(wall), "%llu", (unsigned long long)(keiko_coordinator_wall_ms() + maximum));
+    context.plan.field[fields[i]] = wall;
+    assert(keiko_coordinator_deadline(&context, fields[i], &deadline));
+    snprintf(wall, sizeof(wall), "%llu", (unsigned long long)(keiko_coordinator_wall_ms() + maximum + 10000u));
+    assert(!keiko_coordinator_deadline(&context, fields[i], &deadline));
+  }
+}
+
 int main(int argc, char **argv) {
   char path[64];
   if (argc > 2 && strcmp(argv[1], "--test-stop-poll") == 0) {
@@ -894,6 +909,7 @@ int main(int argc, char **argv) {
 #endif
   test_ui_identity_deadline();
   test_native_cleanup_grant_is_anchored();
+  test_native_production_phase_offsets();
   test_port_probe_matches_runtime_rebinding();
   test_control_write_deadline();
   test_ui_identity_records();

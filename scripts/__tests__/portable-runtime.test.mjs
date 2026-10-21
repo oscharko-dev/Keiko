@@ -2172,6 +2172,36 @@ describe("validatePortableManifest", () => {
     expect(failures).toContain("releaseImpact.packageManagerOutput: uses a forbidden manifest key");
   });
 
+  it("accepts public catalog store descriptions while rejecting private data in that catalog", () => {
+    const candidate = manifest();
+    candidate.releaseImpact.catalog = {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: "public-local-knowledge-update",
+          affectedStateStores: ["local-knowledge", "task-workspaces"],
+          releaseNoteBullets: ["Updates the documented keiko.config.json settings."],
+        },
+      ],
+    };
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    const entry = candidate.releaseImpact.catalog.entries[0];
+    for (const value of [
+      "sk-testCredential123456789",
+      "/Users/customer/private.json",
+      ".keiko/provider-credentials.vault",
+      "https://user:pass@example.com/config",
+    ]) {
+      entry.releaseNoteBullets = [value];
+      expect(validatePortableManifest(candidate).join("\n")).toMatch(
+        /contains (?:secret-like|forbidden)/u,
+      );
+    }
+    entry.releaseNoteBullets = [];
+    entry.rawPayload = "local-knowledge";
+    expect(validatePortableManifest(candidate).join("\n")).toContain("forbidden payload reference");
+  });
+
   it("rejects rollback eligibility and unverified platform signatures", () => {
     const candidate = manifest();
     candidate.updateEligibility.rollbackSupported = true;
