@@ -35,6 +35,10 @@ import {
 import { stageWindowsPortableRootFiles } from "../stage-portable-runtime.mjs";
 import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
+import {
+  readZipArchiveUncompressedSize,
+  writeZipArchiveFromDirectory,
+} from "../lib/zip-archive.mjs";
 import { qualificationReceiptFor } from "../qualify-windows-runtime-release.mjs";
 import {
   USEARCH_RUNTIME_MANIFEST,
@@ -1020,13 +1024,18 @@ describe("Windows portable PE signing inventory", () => {
     };
 
     await rebindArchive(stage, manifest, {
-      create(_sourceRoot, _entryName, archivePath) {
-        writeFileSync(archivePath, "signed archive fixture");
+      create(sourceRoot, entryName, archivePath) {
+        writeZipArchiveFromDirectory(join(sourceRoot, entryName), archivePath, {
+          rootName: entryName,
+        });
       },
     });
 
     expect(manifest.artifact.sha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(manifest.artifact.sha256).not.toBe("0".repeat(64));
+    expect(manifest.artifact.uncompressedSizeBytes).toBe(
+      readZipArchiveUncompressedSize(join(stage, manifest.artifact.assetName)),
+    );
     expect(manifest.provenance.packagedAppTreeSha256).not.toBe("0".repeat(64));
     expect(manifest.releaseImpact.reviewedBinding.archiveSha256).toBe(manifest.artifact.sha256);
   });
@@ -1109,11 +1118,10 @@ describe("Windows portable PE signing inventory", () => {
       `${JSON.stringify({ subjectDigest: "0".repeat(64) })}\n`,
     );
     write(executablePath, signedBytes);
-    const create = vi.fn((_sourceRoot, _entryName, archivePath) => {
-      writeFileSync(
-        archivePath,
-        Buffer.concat([readFileSync(executablePath), readFileSync(sbomPath)]),
-      );
+    const create = vi.fn((sourceRoot, entryName, archivePath) => {
+      writeZipArchiveFromDirectory(join(sourceRoot, entryName), archivePath, {
+        rootName: entryName,
+      });
     });
 
     await rebindArchive(stage, manifest, { create });

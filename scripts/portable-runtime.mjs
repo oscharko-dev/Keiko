@@ -540,6 +540,14 @@ function validateArtifact(manifest, failures, options) {
   if (numberAt(artifact, "sizeBytes", "artifact", failures) === 0) {
     push(failures, "artifact.sizeBytes", "must be greater than 0");
   }
+  const expanded = artifact?.uncompressedSizeBytes;
+  if (!Number.isSafeInteger(expanded) || expanded <= 0 || expanded > 2 ** 31) {
+    push(
+      failures,
+      "artifact.uncompressedSizeBytes",
+      "must be a positive safe integer at most 2 GiB",
+    );
+  }
   digestAt(artifact, "sha256", "artifact", failures, options);
   if (stringAt(artifact, "archiveFormat", "artifact", failures) !== "zip") {
     push(failures, "artifact.archiveFormat", "must be zip");

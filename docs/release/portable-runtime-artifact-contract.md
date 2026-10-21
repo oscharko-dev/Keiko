@@ -477,6 +477,7 @@ required contract vocabulary.
     "assetName": "keiko-windows-x64.zip",
     "archiveFormat": "zip",
     "sizeBytes": 12345678,
+    "uncompressedSizeBytes": 23456789,
     "sha256": "64-hex-artifact-digest"
   },
   "provenance": {

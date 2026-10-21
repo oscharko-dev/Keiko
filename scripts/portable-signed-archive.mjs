@@ -12,6 +12,7 @@ import {
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
 
 export class PortableSignedArchiveError extends Error {}
 
@@ -288,6 +289,7 @@ export async function rebindExistingSignedArchive(
   const provenanceText = rebindProvenance(stageRoot, manifest, archiveSha256);
   manifest.artifact.sha256 = archiveSha256;
   manifest.artifact.sizeBytes = statSync(archivePath).size;
+  manifest.artifact.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
   manifest.provenance.provenanceStatementSha256 = sha256(provenanceText);
   rebindReviewedBinding(manifest, archiveSha256);
   writeFileSync(

@@ -39,6 +39,7 @@ import {
 import {
   extractZipArchiveEntries,
   readZipArchiveEntryNames,
+  readZipArchiveUncompressedSize,
   writeZipArchiveFromDirectory,
 } from "./lib/zip-archive.mjs";
 import {
@@ -2130,6 +2131,7 @@ function manifestArtifact(_options, target, digests) {
     assetName: target.assetName,
     archiveFormat: "zip",
     sizeBytes: digests.sizeBytes,
+    uncompressedSizeBytes: digests.uncompressedSizeBytes,
     sha256: digests.assetSha256,
   };
 }
@@ -2449,6 +2451,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
         nodeArchiveSha256: staged.nodeArchiveSha256,
         provenanceSha256,
         sizeBytes: statSync(assetPath).size,
+        uncompressedSizeBytes: readZipArchiveUncompressedSize(assetPath),
         tarballSha256: await sha256File(tarball),
       },
       staged.sidecarRuntimes,

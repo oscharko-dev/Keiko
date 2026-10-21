@@ -28,6 +28,7 @@ import {
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
+import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
 import { qualificationReceiptFor as linuxQualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
 import { qualificationReceiptFor as macosQualificationReceiptFor } from "./qualify-macos-runtime-release.mjs";
 
@@ -621,6 +622,7 @@ async function loadTarget(options, target) {
   const manifest = readJson(manifestPath, `${target.platformTarget} manifest`);
   if (
     statSync(archivePath).size !== manifest.artifact?.sizeBytes ||
+    readZipArchiveUncompressedSize(archivePath) !== manifest.artifact?.uncompressedSizeBytes ||
     (await sha256File(archivePath)) !== manifest.artifact?.sha256
   )
     fail(`${target.platformTarget} archive bytes do not match the manifest`);
