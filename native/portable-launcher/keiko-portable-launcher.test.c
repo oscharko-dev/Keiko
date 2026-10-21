@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <signal.h>
@@ -7,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/wait.h>
 
 static unsigned int coordinator_cleanup_kills;
 static const char *coordinator_pending_ack_link;
@@ -28,6 +30,15 @@ static int coordinator_delay_ui_compare;
 static int coordinator_stop_poll_test;
 static int coordinator_force_stop_tick;
 static int coordinator_stop_tick_observed;
+static int coordinator_waitid_error;
+static int coordinator_test_waitid(idtype_t type, id_t id, siginfo_t *info, int options) {
+  if (coordinator_waitid_error != 0) {
+    errno = coordinator_waitid_error;
+    coordinator_waitid_error = 0;
+    return -1;
+  }
+  return waitid(type, id, info, options);
+}
 static int coordinator_test_poll(struct pollfd *fds, nfds_t count, int timeout) {
   if (coordinator_force_stop_tick && timeout == 50) {
     coordinator_force_stop_tick = 0;
@@ -68,12 +79,14 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 #define memcmp coordinator_test_memcmp
 #define read coordinator_test_read
 #define poll coordinator_test_poll
+#define waitid coordinator_test_waitid
 #define usleep coordinator_test_usleep
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
 #undef read
 #undef poll
+#undef waitid
 #undef usleep
 #undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
@@ -881,6 +894,15 @@ static void test_native_production_phase_offsets(void) {
   }
 }
 
+static void test_native_child_observation_interruption(void) {
+#if defined(__APPLE__)
+  coordinator_waitid_error = EINTR;
+  assert(!keiko_macos_handoff_exited(123));
+#else
+  (void)coordinator_test_waitid;
+#endif
+}
+
 int main(int argc, char **argv) {
   char path[64];
   if (argc > 2 && strcmp(argv[1], "--test-stop-poll") == 0) {
@@ -910,6 +932,7 @@ int main(int argc, char **argv) {
   test_ui_identity_deadline();
   test_native_cleanup_grant_is_anchored();
   test_native_production_phase_offsets();
+  test_native_child_observation_interruption();
   test_port_probe_matches_runtime_rebinding();
   test_control_write_deadline();
   test_ui_identity_records();

@@ -21,8 +21,11 @@ static int keiko_owner_root_exited(const keiko_runtime_owner *owner) {
 static int keiko_macos_handoff_exited(pid_t child) {
   siginfo_t info = {0};
   if (child <= 0) return 0;
-  return waitid(P_PID, (id_t)child, &info, WEXITED | WNOHANG | WNOWAIT) != 0 ||
-         info.si_pid == child;
+  int result = waitid(P_PID, (id_t)child, &info, WEXITED | WNOHANG | WNOWAIT);
+  /* An interrupted observation is not terminal proof. Process the helper's ready
+   * reply before observing again, otherwise its coordinator can wait for our proof. */
+  if (result != 0) return errno == EINTR ? 0 : 1;
+  return info.si_pid == child;
 }
 
 static int keiko_owner_spawn(keiko_runtime_owner *owner, const char *helper,
