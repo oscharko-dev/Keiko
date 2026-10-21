@@ -256,6 +256,15 @@ the flat root launcher, setup manifest and runtime supervisor; macOS uses its ap
 Current and candidate setup lookup follow that same grammar before layout validation. This path
 resolution grants no release trust, platform verification waiver or native handoff acceptance.
 
+On macOS, a missing Apple Developer ID does not prevent native-copy preparation. After the
+existing managed-registration and plan validation, both the current executable and its private
+copy must match the plan's exact current launcher or supervisor SHA-256. The existing bounded,
+nonblocking descriptor reader rejects changed identities, symlinks, additional hard links and
+digest mismatches. This is copy identity within an already admitted installation; a caller-supplied
+digest alone does not admit an installation or a candidate. When the release carries an Apple
+identity, its existing strict identity checks remain additional verification. No positive Apple
+signing or notarization evidence is fabricated for an unsigned release.
+
 Handoff digest, native-copy, plan, receipt and verification-acknowledgement reads open descriptors
 nonblocking before validating regular-file type, link count, identity and byte bounds. A FIFO
 replacement cannot prevent those checks or make an elapsed deadline unreachable. Directory

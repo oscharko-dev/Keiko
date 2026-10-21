@@ -24,6 +24,14 @@ npm run arch:check:negative
 
 See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area gate table.
 
+### Portable update trust
+
+Portable updates must work without an Apple Developer subscription (ADR-0121 D7). On macOS,
+native handoff copies from an admitted managed installation are checked against the exact current
+artifact digests in the validated plan. Keep the managed-registration, release-signature,
+candidate, containment and process-ownership checks intact. Optional Apple signature evidence must
+remain truthful and cannot become a hidden prerequisite for an unsigned update.
+
 ### Activity Log runtime changes
 
 Source redaction uses the shared security owner to preserve language syntax while masking credential

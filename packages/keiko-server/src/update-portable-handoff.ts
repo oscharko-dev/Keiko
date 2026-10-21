@@ -69,6 +69,7 @@ export interface PortableHandoffCoordinatorOptions {
     readonly kind: "coordinator" | "runtime-supervisor";
     readonly currentPath: string;
     readonly copiedPath: string;
+    readonly expectedSha256?: string | undefined;
   }) => Promise<void>;
   readonly publishCoordinatorPid: (sessionId: string, coordinatorPid: number) => boolean;
   readonly spawnFn?: SpawnFn | undefined;
@@ -596,12 +597,14 @@ async function copyAndVerifyNativeArtifacts(input: {
     kind: "coordinator",
     currentPath: current.coordinator,
     copiedPath: input.coordinator,
+    expectedSha256: input.plan.digests.currentLauncherSha256,
   });
   assertNotAborted(input.signal);
   await input.options.verifyNativeCopy({
     kind: "runtime-supervisor",
     currentPath: current.supervisor,
     copiedPath: input.supervisor,
+    expectedSha256: input.plan.digests.currentSupervisorSha256,
   });
   assertNotAborted(input.signal);
   return coordinatorSha256;

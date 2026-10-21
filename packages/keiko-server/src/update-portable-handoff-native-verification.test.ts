@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { copyFileSync, linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createPortableHandoffNativeCopyVerifier,
   PortableHandoffNativeVerificationError,
@@ -12,6 +16,27 @@ const input = {
 };
 
 describe("portable handoff native copy verification", () => {
+  it("verifies a plan-bound unsigned macOS copy without an Apple identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-copy-"));
+    try {
+      const currentPath = join(root, "launcher");
+      const copiedPath = join(root, "copy");
+      const bytes = Buffer.from("release-bound native artifact");
+      writeFileSync(currentPath, bytes, { mode: 0o700 });
+      copyFileSync(currentPath, copiedPath);
+      const verify = createPortableHandoffNativeCopyVerifier({ hostPlatform: "darwin" });
+      await expect(
+        verify({
+          kind: "coordinator",
+          currentPath,
+          copiedPath,
+          expectedSha256: createHash("sha256").update(bytes).digest("hex"),
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("uses the governed Authenticode same-publisher boundary on Windows", async () => {
     const matches = vi.fn().mockResolvedValue(true);
     const verify = createPortableHandoffNativeCopyVerifier({
@@ -22,6 +47,36 @@ describe("portable handoff native copy verification", () => {
     await expect(verify(input)).resolves.toBeUndefined();
     expect(matches).toHaveBeenCalledWith(input.currentPath, input.copiedPath);
   });
+
+  it.each(["source", "copy", "digest", "missing", "symlink", "hardlink"])(
+    "rejects an unsigned macOS copy with invalid %s identity",
+    async (fault) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-native-copy-"));
+      try {
+        const currentPath = join(root, "launcher");
+        const copiedPath = join(root, "copy");
+        const bytes = Buffer.from("release-bound native artifact");
+        writeFileSync(currentPath, bytes, { mode: 0o700 });
+        if (fault === "symlink") symlinkSync(currentPath, copiedPath);
+        else if (fault === "hardlink") linkSync(currentPath, copiedPath);
+        else copyFileSync(currentPath, copiedPath);
+        if (fault === "source") writeFileSync(currentPath, "modified artifact");
+        if (fault === "copy") writeFileSync(copiedPath, "modified artifact");
+        const expectedSha256 =
+          fault === "missing"
+            ? undefined
+            : createHash("sha256")
+                .update(fault === "digest" ? "wrong" : bytes)
+                .digest("hex");
+        const verify = createPortableHandoffNativeCopyVerifier({ hostPlatform: "darwin" });
+        await expect(
+          verify({ kind: "coordinator", currentPath, copiedPath, expectedSha256 }),
+        ).rejects.toThrow();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("revalidates both byte-identical macOS executables against the release Developer ID", async () => {
     const run = vi.fn<NonNullable<PortableHandoffNativeCopyVerifierOptions["macosRun"]>>(
