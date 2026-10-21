@@ -82,7 +82,10 @@ import {
 } from "./secureWorkspaceTextReadProtocol.js";
 import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
-import type { SecureWorkspaceTextReadProcess } from "./secureWorkspaceTextReadProcess.js";
+import {
+  SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS,
+  type SecureWorkspaceTextReadProcess,
+} from "./secureWorkspaceTextReadProcess.js";
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
@@ -5943,6 +5946,8 @@ it("returns initial deadline refusal promptly while the actual raw producer rema
 });
 
 // Fixture verifier accepts this exact compiled helper, without claiming release qualification.
+// Cold native process startup uses the existing helper budget; these controls verify admission
+// accounting and reaping, while the separate deadline controls retain their short injected budgets.
 describe.skipIf(process.platform !== "darwin")(
   "original Read parent with actual native IO process",
   () => {
@@ -5999,7 +6004,7 @@ describe.skipIf(process.platform !== "darwin")(
       const admission = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
       const fixture = await startBridgeFixture(
         f.facade,
-        { maxInFlight: 1, requestDeadlineMs: 1000 },
+        { maxInFlight: 1, requestDeadlineMs: SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS },
         f.control,
       );
       try {
@@ -6066,7 +6071,7 @@ describe.skipIf(process.platform !== "darwin")(
       let runRoot = "";
       const fixture = await startBridgeFixture(
         f.facade,
-        { maxInFlight: 1, requestDeadlineMs: 1000 },
+        { maxInFlight: 1, requestDeadlineMs: SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS },
         {
           ...f.control,
           onRelease,
@@ -6085,9 +6090,12 @@ describe.skipIf(process.platform !== "darwin")(
         purpose: "native-tool-io",
       });
       try {
-        await vi.waitFor(() => {
-          expect(reached).toHaveBeenCalledOnce();
-        });
+        await vi.waitFor(
+          () => {
+            expect(reached).toHaveBeenCalledOnce();
+          },
+          { timeout: SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS },
+        );
         expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
           ok: false,
           failureCode: "runtime-reap-unproven",
