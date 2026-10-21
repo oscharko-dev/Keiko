@@ -47,14 +47,5 @@ static int keiko_owner_proc_scalar(const char *content, const char *field, pid_t
   return matches == 1;
 }
 
-static inline void keiko_scope_u64(unsigned char *bytes, uint64_t value) {
-  for (size_t i = 0; i < 8; ++i) bytes[i] = (unsigned char)(value >> (8u * i));
-}
-
-static inline uint64_t keiko_scope_read_u64(const unsigned char *bytes) {
-  uint64_t value = 0;
-  for (size_t i = 0; i < 8; ++i) value |= (uint64_t)bytes[i] << (8u * i);
-  return value;
-}
 
 #endif

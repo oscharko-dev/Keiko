@@ -74,6 +74,12 @@ clang --analyze "${runtime_flags[@]}" "$supervisor" -o /dev/null
 clang "${runtime_flags[@]}" "$fixture" -o "$scratch/runtime-qualification-fixture"
 clang --analyze "${runtime_flags[@]}" "$fixture" -o /dev/null
 
+# The application lifecycle backend requires neither an Apple account nor an ES service.
+clang "${runtime_flags[@]}" "$root/native/portable-launcher/keiko-portable-process-scope-macos.test.c" \
+  -o "$scratch/process-scope-test"
+"$scratch/process-scope-test"
+node "$runtime_root/test-app-runtime.mjs" "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture"
+
 set +e
 "$scratch/keiko-runtime-supervisor" >/dev/null 2>&1
 invalid_supervisor_status=$?

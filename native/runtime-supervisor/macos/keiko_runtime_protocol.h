@@ -58,6 +58,17 @@ static inline int keiko_bind_parent_death(int owner_handle) {
 #define read_exact keiko_read_exact
 #define write_exact keiko_write_exact
 
+static inline void keiko_scope_u64(unsigned char *bytes, uint64_t value) {
+  for (size_t i = 0; i < 8; ++i) bytes[i] = (unsigned char)(value >> (8u * i));
+}
+
+static inline uint64_t keiko_scope_read_u64(const unsigned char *bytes) {
+  uint64_t value = 0;
+  for (size_t i = 0; i < 8; ++i) value |= (uint64_t)bytes[i] << (8u * i);
+  return value;
+}
+
+
 #define KRP_VERSION 1u
 #define KRP_HEADER_BYTES 12u
 #define KRP_MAX_PACKET (128u * 1024u)
@@ -254,7 +265,7 @@ static inline void clear_environment(char **values, uint16_t count) {
   free(values);
 }
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 #include <errno.h>
 
 /* App environment is data on the private control channel, never a native loader environment. */

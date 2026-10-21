@@ -63,11 +63,11 @@ static int monitor_reply(int descriptor, struct keiko_monitor_reply *reply) {
          reply->version == KEIKO_MONITOR_VERSION;
 }
 
-static int spawn_runtime(const struct launch_request *request, pid_t *pid) {
+static int spawn_runtime_environment(const struct launch_request *request, pid_t *pid,
+                                       char **environment, short flags) {
   posix_spawn_file_actions_t actions;
   posix_spawnattr_t attributes;
   char **arguments = spawn_arguments(request);
-  char **environment = spawn_environment(request);
   int result = EINVAL;
   if (arguments == NULL || environment == NULL) goto cleanup;
   if (chdir(request->cwd) != 0) goto cleanup;
@@ -76,16 +76,31 @@ static int spawn_runtime(const struct launch_request *request, pid_t *pid) {
     posix_spawn_file_actions_destroy(&actions);
     goto cleanup;
   }
+  if (posix_spawnattr_setflags(&attributes, flags) != 0) {
+    posix_spawnattr_destroy(&attributes);
+    posix_spawn_file_actions_destroy(&actions);
+    goto cleanup;
+  }
   (void)posix_spawn_file_actions_addclose(&actions, 3);
   (void)posix_spawn_file_actions_addclose(&actions, 4);
+  if (flags != 0) {
+    if (fcntl(6, F_GETFD) >= 0) (void)posix_spawn_file_actions_addclose(&actions, 6);
+    if (fcntl(7, F_GETFD) >= 0) (void)posix_spawn_file_actions_addclose(&actions, 7);
+  }
   result = posix_spawn(
       pid, request->executable, &actions, &attributes, arguments, environment);
   posix_spawnattr_destroy(&attributes);
   posix_spawn_file_actions_destroy(&actions);
 cleanup:
   free(arguments);
-  clear_environment(environment, request->environment_count);
   return result == 0;
+}
+
+static int spawn_runtime(const struct launch_request *request, pid_t *pid) {
+  char **environment = spawn_environment(request);
+  int result = environment != NULL && spawn_runtime_environment(request, pid, environment, 0);
+  clear_environment(environment, request->environment_count);
+  return result;
 }
 
 static void consume_control(void) {
@@ -211,12 +226,17 @@ static int probe_monitor(void) {
   return available ? 0 : ERROR_MONITOR_UNAVAILABLE;
 }
 
+#include "keiko_app_runtime.h"
+
 int main(int argc, char **argv) {
   struct launch_request request = {0};
   struct keiko_monitor_reply reply;
   int monitor = -1;
   pid_t root = -1;
   int result = 1;
+  if (argc == 2 && strcmp(argv[1], "--probe-app-runtime") == 0) return keiko_app_probe();
+  if (argc == 2 && strcmp(argv[1], "--app-runtime") == 0) return keiko_app_runtime(0);
+  if (argc == 2 && strcmp(argv[1], "--app-owner-report") == 0) return keiko_app_runtime(1);
   if (argc == 2 && strcmp(argv[1], "--probe-monitor") == 0) return probe_monitor();
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile(argv[2]);
   if (argc != 1 || !read_launch_request(&request)) {
