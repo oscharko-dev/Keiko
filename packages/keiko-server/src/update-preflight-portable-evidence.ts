@@ -38,13 +38,13 @@ import {
   verifyPortableManifestSidecars,
 } from "./update-portable-sidecar-verification.js";
 import { portableManifestGenerationSchemaVerified } from "./update-portable-windows-generation.js";
+import { MAX_PORTABLE_MANIFEST_BYTES } from "./update-portable-staging-shared.js";
 
 import {
   portableImpactMetadataValid,
   portableReleaseImpactCatalog,
 } from "./update-preflight-portable-impact.js";
 
-const MAX_PORTABLE_MANIFEST_BYTES = 1_048_576;
 const MAX_CHECKSUM_BYTES = 32_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
 const PORTABLE_EVIDENCE_DEADLINE_MS = 30_000;

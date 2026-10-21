@@ -113,6 +113,33 @@ static inline void keiko_macos_classify(keiko_macos_process_scope *scope) {
   } while (changed);
 }
 
+/* Global unrelated process churn is not an application lifetime budget. Rehash to
+ * preserve open-addressing chains; retain every owned/unknown identity, including
+ * exited parents. A later child of a discarded unrelated identity stays unknown
+ * until positively classified and therefore cannot create a false zero-live proof. */
+static inline int keiko_macos_scope_reclaim(keiko_macos_process_scope *scope) {
+  keiko_macos_process_scope replacement = *scope;
+  size_t index;
+  replacement.members = (keiko_macos_scope_member *)calloc(
+      KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*replacement.members));
+  if (replacement.members == NULL) return 0;
+  replacement.count = 0;
+  for (index = 0; index < KEIKO_MACOS_SCOPE_CAPACITY; ++index) {
+    const keiko_macos_scope_member *member = &scope->members[index];
+    keiko_macos_scope_member *retained;
+    if (member->identity.unique_id == 0 ||
+        (member->membership == KEIKO_MACOS_UNRELATED &&
+         scope->epoch - member->seen > 1u)) continue;
+    retained = keiko_macos_member(&replacement, member->identity.unique_id, 1);
+    if (retained == NULL) { free(replacement.members); return 0; }
+    *retained = *member;
+  }
+  free(scope->members);
+  scope->members = replacement.members;
+  scope->count = replacement.count;
+  return 1;
+}
+
 /* Retain original-parent identities even after exit. An unseen intermediate parent never
  * becomes an assumed unrelated process: any surviving unclassified process blocks zero-live
  * proof. This deliberately refuses incomplete observations instead of losing a detached child. */
@@ -120,6 +147,8 @@ static inline int keiko_macos_scope_scan(keiko_macos_process_scope *scope, int b
   pid_t *pids;
   int bytes, index, result = 1;
   if (scope->failed || scope->epoch == UINT32_MAX) return 0;
+  if (scope->count >= KEIKO_MACOS_SCOPE_CAPACITY / 4u &&
+      !keiko_macos_scope_reclaim(scope)) { scope->failed = 1; return 0; }
   pids = (pid_t *)calloc(KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*pids));
   if (pids == NULL) return 0;
   ++scope->epoch;

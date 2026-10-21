@@ -183,6 +183,7 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
       if (response.ok && body.version === version && proof[4] === "owned") {
         assert.equal(body.retainedEnvironment, true);
         assert.equal(body.environmentDigest, sha(environmentMarker));
+        assert.equal(body.workingDirectoryDigest, sha(directory));
         assert.equal(Number(proof[1]), body.pid);
         const record = await readFile(join(stateDir, "ui.pid"), "utf8");
         assert.equal(record, `${body.pid}\n${launchId}\nbrowser-open-v1\nnative-app-v1\n`);
@@ -243,6 +244,7 @@ async function initialStart(launcher, helper, hash) {
       {
         KEIKO_HANDOFF_FIXTURE_VERSION: "1.0.0",
         KEIKO_HANDOFF_FIXTURE_DATA: environmentMarker,
+        KEIKO_UI_WORKING_DIRECTORY: directory,
         KEIKO_HANDOFF_FIXTURE_WRONG_LAUNCH: "1",
         KEIKO_HANDOFF_FIXTURE_COALESCED: coalesced ? "1" : "0",
         OPENAI_API_KEY: "fixture-placeholder",

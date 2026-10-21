@@ -15,18 +15,23 @@ import {
   streamReader,
 } from "../runtime-supervisor/protocol-harness.mjs";
 
-const [launcher, helper, fixture] = process.argv.slice(2).map((path) => realpathSync(path));
+const [launcher, helper, fixture] = process.argv.slice(2, 5).map((path) => realpathSync(path));
+const stopBeforeCommit = process.argv[5] === "--stop-before-commit";
 assert.equal(process.platform, "darwin");
 const state = realpathSync(mkdtempSync(join(tmpdir(), "keiko-macos-owner-")));
 const launchId = "0123456789abcdef0123456789abcdef";
 const digest = createHash("sha256").update(readFileSync(helper)).digest("hex");
-const owner = spawn(launcher, ["--own-app-runtime", helper, digest], {
-  env: {
-    KEIKO_UI_START_DEADLINE_MS: String(process.hrtime.bigint() / 1000000n + 5000n),
-    KEIKO_UI_COMMIT_DEADLINE_MS: String(process.hrtime.bigint() / 1000000n + 10000n),
+const owner = spawn(
+  launcher,
+  [...(stopBeforeCommit ? ["--test-stop-poll"] : []), "--own-app-runtime", helper, digest],
+  {
+    env: {
+      KEIKO_UI_START_DEADLINE_MS: String(process.hrtime.bigint() / 1000000n + 5000n),
+      KEIKO_UI_COMMIT_DEADLINE_MS: String(process.hrtime.bigint() / 1000000n + 10000n),
+    },
+    stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
   },
-  stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
-});
+);
 const exit = new Promise((resolve, reject) => {
   owner.once("error", reject);
   owner.once("exit", (code, signal) => resolve({ code, signal }));
@@ -68,20 +73,25 @@ try {
   writeFileSync(join(state, "ui.pid"), `${pid}\n${launchId}\nbrowser-open-v1\nnative-app-v1\n`, {
     mode: 0o600,
   });
-  owner.stdio[3].write(Buffer.concat([header("KRC1", 4, 32), Buffer.from(launchId)]));
-  assert.equal((await response(results)).kind, 5);
-  owner.stdio[3].end();
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(owner.exitCode, null);
-  assert.equal(process.kill(pid, 0), true);
-  process.kill(pid, "SIGTERM");
+  if (stopBeforeCommit) {
+    owner.stdio[3].write(header("KRC1", 2, 0));
+    assert.equal((await response(results)).kind, 2);
+  } else {
+    owner.stdio[3].write(Buffer.concat([header("KRC1", 4, 32), Buffer.from(launchId)]));
+    assert.equal((await response(results)).kind, 5);
+    owner.stdio[3].end();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(owner.exitCode, null);
+    assert.equal(process.kill(pid, 0), true);
+    process.kill(pid, "SIGTERM");
+  }
   assert.deepEqual(await exit, { code: 0, signal: null });
   const receipt = readFileSync(join(state, ".keiko", "ui-runtime", `${launchId}.receipt`), "utf8");
   assert.ok(receipt.endsWith("\nreaped\n"));
   for (const offset of [4, 8])
     assert.throws(() => process.kill(observed.readUInt32LE(offset), 0), { code: "ESRCH" });
   console.log(
-    "macOS app owner: PASS - durable admission, controller release, root exit and descendant cleanup",
+    `macOS app owner: PASS - ${stopBeforeCommit ? "stop survives an empty 50ms poll" : "durable admission, controller release, root exit and descendant cleanup"}`,
   );
 } finally {
   clearTimeout(timeout);

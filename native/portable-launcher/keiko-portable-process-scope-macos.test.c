@@ -81,9 +81,47 @@ static void scope_controls(void) {
   keiko_macos_scope_destroy(&scope);
 }
 
+static void churn_controls(void) {
+  keiko_macos_process_scope scope = {0};
+  uint64_t next = 10;
+  unsigned int live, unknown;
+  scope.members = calloc(KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*scope.members));
+  assert(scope.members != NULL);
+  scope.root_unique_id = 1;
+  keiko_macos_scope_member *root = keiko_macos_member(&scope, 1, 1);
+  root->membership = KEIKO_MACOS_OWNED;
+  for (unsigned int batch = 0; batch < 80; ++batch) {
+    ++scope.epoch;
+    if (scope.count >= KEIKO_MACOS_SCOPE_CAPACITY / 4u)
+      assert(keiko_macos_scope_reclaim(&scope));
+    for (unsigned int i = 0; i < 1000; ++i) {
+      keiko_macos_scope_member *member = keiko_macos_member(&scope, next++, 1);
+      assert(member != NULL);
+      member->membership = KEIKO_MACOS_UNRELATED;
+      member->seen = scope.epoch;
+    }
+  }
+  assert(next > KEIKO_MACOS_SCOPE_CAPACITY);
+  assert(keiko_macos_member(&scope, 1, 0)->membership == KEIKO_MACOS_OWNED);
+  keiko_macos_scope_member *child = keiko_macos_member(&scope, next++, 1);
+  child->identity.parent_unique_id = 1;
+  child->seen = scope.epoch;
+  keiko_macos_classify(&scope);
+  assert(child->membership == KEIKO_MACOS_OWNED);
+  keiko_macos_scope_member *unclassified = keiko_macos_member(&scope, next++, 1);
+  unclassified->identity.parent_unique_id = 10; /* Collected unrelated ancestor. */
+  unclassified->seen = scope.epoch;
+  assert(keiko_macos_scope_reclaim(&scope));
+  keiko_macos_classify(&scope);
+  assert(keiko_macos_scope_live(&scope, &live, &unknown));
+  assert(live == 1 && unknown == 1);
+  keiko_macos_scope_destroy(&scope);
+}
+
 int main(void) {
   identity_controls();
   scope_controls();
+  churn_controls();
   puts("macOS process identity, generation-bound signals and scope controls passed");
   return 0;
 }

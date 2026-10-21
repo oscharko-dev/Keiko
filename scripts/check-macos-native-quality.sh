@@ -81,6 +81,8 @@ clang "${runtime_flags[@]}" "$root/native/portable-launcher/keiko-portable-proce
 node "$runtime_root/test-app-runtime.mjs" "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture"
 node "$root/native/portable-launcher/test-app-owner-macos.mjs" "$scratch/keiko-launcher" \
   "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture"
+node "$root/native/portable-launcher/test-app-owner-macos.mjs" "$scratch/launcher-test" \
+  "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture" --stop-before-commit
 node "$root/native/runtime-supervisor/linux/app-handoff.test.mjs"
 node "$root/native/runtime-supervisor/linux/app-handoff.test.mjs" --coalesced
 node "$root/native/runtime-supervisor/linux/app-handoff.test.mjs" --restore

@@ -393,6 +393,20 @@ The updater never substitutes EOF, a missing PID or a free port for that proof. 
 credentials travel over the existing private environment packet, never the native owner environment.
 This app lifecycle is not an Endpoint Security sandbox qualification.
 
+The Darwin owner and coordinator use the same continuous, unadjusted monotonic clock as
+Node/libuv (`CLOCK_MONOTONIC_RAW`); Linux uses `CLOCK_MONOTONIC`. Admission retains its original
+15-minute maximum. The validated plan's cleanup grant is bounded by that original admission
+deadline plus its existing ten-minute restoration tail; a delayed response cannot extend it.
+The Darwin stop loop retains the original stop deadline across its 50-ms observation ticks.
+The process scope reclaims only stale unrelated identities, rehashing its bounded table while
+retaining every owned or unclassified ancestor. Unknown surviving processes still block proof.
+
+The private application environment also retains the running app's canonical working directory.
+The coordinator requires that directory to remain real, canonical and available before launching
+the successor; it does not silently select the install folder as the user's workspace. Streaming
+progress stores its phase at the lifecycle level and only bounded byte counts inside `progress`.
+The closed runtime-state codec remains strict and rejects unknown byte-counter fields.
+
 The Linux native generation implementation uses an atomically held `clone3` PID handle for a
 new user/PID namespace init; the outer owner remains outside that generation. The init verifies
 unchanged non-root ids, drops capabilities, sets no-new-privileges, and verifies non-dumpability

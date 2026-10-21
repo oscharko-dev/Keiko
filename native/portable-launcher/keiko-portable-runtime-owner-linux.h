@@ -288,7 +288,7 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
     int ready = poll(items, 6, timeout);
     if (ready < 0 && errno == EINTR) continue;
 #if defined(__APPLE__)
-    if (ready == 0 && !stopping) ready = 1; /* Observe the owned handoff child without a pidfd. */
+    if (ready == 0) ready = 1; /* A capped observation tick is not the stop deadline. */
 #endif
     if (ready == 0 && !stopping) continue;
     if (ready <= 0 || (stopping && !keiko_tree_before_deadline(stop_deadline))) return 0;

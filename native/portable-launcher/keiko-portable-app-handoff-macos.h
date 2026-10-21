@@ -18,7 +18,8 @@ static int keiko_handoff_spawn(keiko_runtime_owner *owner) {
   char state[PATH_MAX + 32], grant[80];
   uint32_t capacity = sizeof(self);
   int input[2] = {-1, -1}, response[2] = {-1, -1}, proof[2] = {-1, -1};
-  int capsule = -1, executable = -1, current = -1, initialized = 0, result = 0;
+  int capsule = -1, executable = -1, current = -1, named = -1, initialized = 0, result = 0;
+  struct stat opened, before, after, named_file;
   posix_spawn_file_actions_t actions;
   posix_spawnattr_t attributes;
   if (!keiko_app_owner_state_named(owner) ||
@@ -29,6 +30,8 @@ static int keiko_handoff_spawn(keiko_runtime_owner *owner) {
                  owner->state_path, handoff->activation) <= 0 || strlen(path) >= sizeof(path) - 1u ||
       (executable = keiko_coordinator_open_hashed_file(path, handoff->deadline, digest)) < 0 ||
       strcmp(source, digest) != 0 || strcmp(digest, handoff->coordinator) != 0 ||
+      fstat(executable, &opened) != 0 || opened.st_uid != geteuid() ||
+      (opened.st_mode & (S_IWGRP | S_IWOTH)) != 0 ||
       !keiko_owner_private_pipe(input) || !keiko_owner_private_pipe(response) ||
       !keiko_owner_private_pipe(proof) || posix_spawn_file_actions_init(&actions) != 0) goto cleanup;
   initialized = 1;
@@ -44,7 +47,13 @@ static int keiko_handoff_spawn(keiko_runtime_owner *owner) {
       !keiko_app_owner_state_named(owner) || !keiko_tree_before_deadline(handoff->deadline)) goto cleanup;
   char *const arguments[] = {path, (char *)"--coordinate-update", handoff->activation, NULL};
   char *const environment[] = {state, grant, NULL};
-  if (posix_spawn(&handoff->child, path, &actions, &attributes, arguments, environment) != 0) goto cleanup;
+  if ((named = keiko_handoff_capsule(owner, handoff->activation)) < 0 ||
+      fstat(capsule, &before) != 0 || fstat(named, &after) != 0 ||
+      !keiko_coordinator_same_directory(&before, &after) ||
+      lstat(path, &named_file) != 0 || !keiko_coordinator_same_file(&opened, &named_file) ||
+      named_file.st_uid != geteuid() || (named_file.st_mode & (S_IWGRP | S_IWOTH)) != 0 ||
+      !keiko_app_owner_state_named(owner) || !keiko_tree_before_deadline(handoff->deadline) ||
+      posix_spawn(&handoff->child, path, &actions, &attributes, arguments, environment) != 0) goto cleanup;
   handoff->control = input[1]; input[1] = -1;
   handoff->response = response[0]; response[0] = -1;
   handoff->proof = proof[1]; proof[1] = -1;
@@ -55,6 +64,7 @@ cleanup:
   if (capsule >= 0) close(capsule);
   if (executable >= 0) close(executable);
   if (current >= 0) close(current);
+  if (named >= 0) close(named);
   for (size_t i = 0; i < 2; ++i) {
     keiko_owner_close(&input[i]); keiko_owner_close(&response[i]); keiko_owner_close(&proof[i]);
   }

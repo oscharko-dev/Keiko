@@ -481,7 +481,7 @@ export function createProductionPortableHandoffRuntime(
     });
   const coordinator = createPortableHandoffCoordinator({
     stateDir: options.stateDir,
-    runtimeEnvironment: options.env,
+    runtimeEnvironment: { ...options.env, KEIKO_UI_WORKING_DIRECTORY: process.cwd() },
     securityLogSink: options.securityLogSink,
     persistPrepared: ({ sessionId, activationWal }) =>
       persistWal({ sessionId, activationWal, prepared: true }),

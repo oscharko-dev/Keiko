@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <poll.h>
 
 static unsigned int coordinator_cleanup_kills;
 static const char *coordinator_pending_ack_link;
@@ -24,12 +25,28 @@ static int coordinator_test_kill(pid_t pid, int signal_number) {
 
 static int coordinator_delay_ui_read;
 static int coordinator_delay_ui_compare;
+static int coordinator_stop_poll_test;
+static int coordinator_force_stop_tick;
+static int coordinator_stop_tick_observed;
+static int coordinator_test_poll(struct pollfd *fds, nfds_t count, int timeout) {
+  if (coordinator_force_stop_tick && timeout == 50) {
+    coordinator_force_stop_tick = 0;
+    coordinator_stop_tick_observed = 1;
+    for (nfds_t i = 0; i < count; ++i) fds[i].revents = 0;
+    return 0;
+  }
+  return poll(fds, count, timeout);
+}
 static ssize_t coordinator_test_read(int descriptor, void *buffer, size_t length) {
   if (coordinator_delay_ui_read) {
     coordinator_delay_ui_read = 0;
     assert(raise(SIGSTOP) == 0);
   }
-  return read(descriptor, buffer, length);
+  ssize_t count = read(descriptor, buffer, length);
+  if (coordinator_stop_poll_test && count == 12 &&
+      memcmp(buffer, "KRC1", 4) == 0 && ((unsigned char *)buffer)[6] == 2)
+    coordinator_force_stop_tick = 1;
+  return count;
 }
 
 static int coordinator_test_memcmp(const void *left, const void *right, size_t length) {
@@ -50,11 +67,13 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 #define KEIKO_COORDINATOR_CUTOVER_CHECKPOINT coordinator_test_cutover_checkpoint
 #define memcmp coordinator_test_memcmp
 #define read coordinator_test_read
+#define poll coordinator_test_poll
 #define usleep coordinator_test_usleep
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
 #undef read
+#undef poll
 #undef usleep
 #undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
@@ -299,6 +318,31 @@ static void cutover_fixture_clear(cutover_fixture *fixture) {
 
 /* The JS publisher fsyncs a hard-link publication before removing its temporary name.
  * Only a settled one-link acknowledgement is authority; a two-link observation may be pending. */
+static void test_native_update_retains_only_canonical_working_directory(void) {
+  cutover_fixture fixture;
+  char workspace[PATH_MAX], alias[PATH_MAX], value[PATH_MAX + 40];
+  char *environment[] = {value, NULL};
+  cutover_fixture_init(&fixture);
+  assert(join_path(workspace, sizeof(workspace), fixture.root, "/workspace") == 1);
+  assert(join_path(alias, sizeof(alias), fixture.root, "/workspace-alias") == 1);
+  assert(mkdir(workspace, 0700) == 0);
+  fixture.context.native_handoff = 1;
+  fixture.context.native_environment.count = 1;
+  fixture.context.native_environment.values = environment;
+  assert(snprintf(value, sizeof(value), "KEIKO_UI_WORKING_DIRECTORY=%s", workspace) > 0);
+  assert(strcmp(keiko_coordinator_working_directory(&fixture.context), workspace) == 0);
+  assert(symlink(workspace, alias) == 0);
+  assert(snprintf(value, sizeof(value), "KEIKO_UI_WORKING_DIRECTORY=%s", alias) > 0);
+  assert(keiko_coordinator_working_directory(&fixture.context) == NULL);
+  assert(unlink(alias) == 0);
+  assert(rmdir(workspace) == 0);
+  assert(snprintf(value, sizeof(value), "KEIKO_UI_WORKING_DIRECTORY=%s", workspace) > 0);
+  assert(keiko_coordinator_working_directory(&fixture.context) == NULL);
+  fixture.context.native_environment.count = 0;
+  assert(strcmp(keiko_coordinator_working_directory(&fixture.context), fixture.managed) == 0);
+  cutover_fixture_clear(&fixture);
+}
+
 static void test_verified_ack_waits_for_durable_publication(void) {
   cutover_fixture fixture;
   char ack[PATH_MAX], pending[PATH_MAX], content[70];
@@ -638,6 +682,9 @@ static void test_reconcile_requires_zero_live_proof(const char *self) {
   assert(keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
   context.supervisor_pid = 123;
   assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+  context.supervisor_pid = -1;
+  context.native_handoff = 1;
+  assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
 #else
   char root[] = "/tmp/keiko-coordinator-reconcile.XXXXXX";
   char source[PATH_MAX], supervisor[PATH_MAX], digest[65];
@@ -806,8 +853,27 @@ static void test_control_write_deadline(void) {
   assert(close(channel[0]) == 0 && close(channel[1]) == 0);
 }
 
+static void test_native_cleanup_grant_is_anchored(void) {
+  keiko_app_handoff handoff = {0};
+  handoff.deadline = 900000u;
+  handoff.cleanup_deadline = 1500000u;
+  assert(keiko_handoff_cleanup_grant(&handoff, 1u));
+  assert(keiko_handoff_cleanup_grant(&handoff, 1499999u));
+  assert(!keiko_handoff_cleanup_grant(&handoff, 1500000u));
+  handoff.cleanup_deadline += 1u;
+  assert(!keiko_handoff_cleanup_grant(&handoff, 100000u));
+  handoff.deadline = UINT64_MAX;
+  assert(!keiko_handoff_cleanup_grant(&handoff, 1u));
+}
+
 int main(int argc, char **argv) {
   char path[64];
+  if (argc > 2 && strcmp(argv[1], "--test-stop-poll") == 0) {
+    coordinator_stop_poll_test = 1;
+    int result = keiko_portable_launcher_product_main(argc - 1, argv + 1);
+    assert(coordinator_stop_tick_observed);
+    return result;
+  }
   if (argc == 2 && strcmp(argv[1], "--ui-identity-deadline") == 0) {
     test_ui_identity_deadline();
     return 0;
@@ -827,11 +893,13 @@ int main(int argc, char **argv) {
   assert(current_executable_path(path, 2) == 0);
 #endif
   test_ui_identity_deadline();
+  test_native_cleanup_grant_is_anchored();
   test_port_probe_matches_runtime_rebinding();
   test_control_write_deadline();
   test_ui_identity_records();
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);
+  test_native_update_retains_only_canonical_working_directory();
   test_verified_ack_waits_for_durable_publication();
   test_atomic_promote_survives_each_cutover_boundary();
   test_atomic_cutover_rejects_untrusted_states();

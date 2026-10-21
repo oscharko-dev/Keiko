@@ -306,6 +306,15 @@ static int keiko_handoff_receive(keiko_runtime_owner *owner) {
 #include "keiko-portable-app-control-macos.h"
 #endif
 
+/* The admitted start grant is at most 15 minutes. The validated production plan
+ * reserves a further 10 minutes for start/verification/restoration. Anchor that
+ * tail to the original grant, never to the time a response happens to arrive. */
+static int keiko_handoff_cleanup_grant(const keiko_app_handoff *handoff, uint64_t now) {
+  const uint64_t tail = UINT64_C(10) * 60u * 1000u;
+  return now < handoff->cleanup_deadline && handoff->deadline <= UINT64_MAX - tail &&
+         handoff->cleanup_deadline <= handoff->deadline + tail;
+}
+
 static int keiko_handoff_acceptance(keiko_runtime_owner *owner) {
   keiko_app_handoff *handoff = owner->handoff;
   if (handoff == NULL || !handoff->authorized || handoff->prepared ||
@@ -322,8 +331,7 @@ static int keiko_handoff_acceptance(keiko_runtime_owner *owner) {
     return 0;
   handoff->cleanup_deadline = keiko_scope_read_u64(handoff->acceptance + 68);
   uint64_t now = keiko_tree_now_ms();
-  if (now >= handoff->cleanup_deadline ||
-      handoff->cleanup_deadline - now > KEIKO_COORDINATOR_MAX_CONTROL_MS) return 0;
+  if (!keiko_handoff_cleanup_grant(handoff, now)) return 0;
   handoff->prepared = 1;
   keiko_owner_close(&handoff->response);
   return keiko_handoff_reply(owner, 5, 0, handoff->deadline);

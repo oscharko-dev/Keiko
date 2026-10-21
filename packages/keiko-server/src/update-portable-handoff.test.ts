@@ -27,6 +27,12 @@ import {
 
 const roots: string[] = [];
 
+// Child-transport fixtures inject the transport. Production Darwin admission requires its owner.
+vi.mock("./update-native-app-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-native-app-control.js")>()),
+  currentNativeAppControl: (): Promise<undefined> => Promise.resolve(undefined),
+}));
+
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
@@ -398,6 +404,28 @@ describe("portable handoff coordinator", () => {
     expect(controlText.slice(0, 65)).toMatch(/^[a-f0-9]{64}\n$/u);
     expect(controlText.slice(65)).toBe(encodeAppEnvironmentPacket({}).toString("utf8"));
     expect(control.writableEnded).toBe(false);
+  });
+
+  it("validates the private Mac environment before publishing or spawning a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-"));
+    roots.push(root);
+    const fixture = prepare(root);
+    const spawnFn = vi.fn();
+    const publishCoordinatorPid = vi.fn(() => true);
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      publishCoordinatorPid,
+      persistPrepared: vi.fn(() => Promise.resolve()),
+      persistAccepted: vi.fn(() => Promise.resolve()),
+      verifyNativeCopy: vi.fn(() => Promise.resolve()),
+      spawnFn,
+      runtimeEnvironment: { INVALID: "contains\u0000nul" },
+    });
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).rejects.toThrow();
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(publishCoordinatorPid).not.toHaveBeenCalled();
   });
 
   it("does not spawn when the aggregate CAS fails", async () => {

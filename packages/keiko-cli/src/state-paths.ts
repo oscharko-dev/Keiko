@@ -131,7 +131,7 @@ export function resolveContainedStateDir(
 ): string {
   const explicit = explicitStateDirSource(env, stateDirArg);
   const selected = explicit ?? { source: "default state directory", value: DEFAULT_STATE_DIR_NAME };
-  const resolved = isAbsolute(selected.value) ? selected.value : resolve(cwd, selected.value);
+  const resolved = resolve(cwd, selected.value);
   const workspaceState = resolved === resolve(cwd, DEFAULT_STATE_DIR_NAME);
   const workspaceBound = explicit === undefined || workspaceState;
   try {

@@ -341,6 +341,26 @@ static int keiko_coordinator_active_path(const keiko_coordinator_context *contex
   return keiko_khp_is_absolute_canonical_path(output);
 }
 
+static const char *keiko_coordinator_working_directory(const keiko_coordinator_context *context) {
+  static const char prefix[] = "KEIKO_UI_WORKING_DIRECTORY=";
+  if (context->native_handoff) {
+    const struct app_environment_packet *packet = &context->native_environment;
+    for (uint16_t index = 0; index < packet->count; ++index) {
+      const char *value = packet->values[index];
+      if (strncmp(value, prefix, sizeof(prefix) - 1u) == 0) {
+        char canonical[PATH_MAX];
+        const char *directory = value + sizeof(prefix) - 1u;
+        struct stat status;
+        if (!keiko_khp_is_absolute_canonical_path(directory) ||
+            realpath(directory, canonical) == NULL || strcmp(directory, canonical) != 0 ||
+            stat(directory, &status) != 0 || !S_ISDIR(status.st_mode)) return NULL;
+        return directory;
+      }
+    }
+  }
+  return context->plan.field[KEIKO_KHP_MANAGED_ROOT];
+}
+
 static int keiko_coordinator_launch_packet(const keiko_coordinator_context *context,
                                            const char *executable, int restoring,
                                            unsigned char **output,
@@ -355,6 +375,8 @@ static int keiko_coordinator_launch_packet(const keiko_coordinator_context *cont
   size_t offset = KEIKO_COORDINATOR_KRP_HEADER_BYTES + 4u;
   uint32_t payload_length;
   if (content == NULL) return 0;
+  const char *working_directory = keiko_coordinator_working_directory(context);
+  if (working_directory == NULL) { free(content); return 0; }
   memcpy(content, "KRP1", 4u);
   keiko_coordinator_u16le(content + 4u, 1u);
   keiko_coordinator_u16le(content + 6u, 1u);
@@ -368,7 +390,7 @@ static int keiko_coordinator_launch_packet(const keiko_coordinator_context *cont
                                           executable) ||
       !keiko_coordinator_append_krp_string(
           content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
-          context->plan.field[KEIKO_KHP_MANAGED_ROOT]) ||
+          working_directory) ||
       !keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
                                           argument1) ||
       !keiko_coordinator_append_krp_string(
@@ -1315,15 +1337,15 @@ static int keiko_coordinator_stop_runtime(keiko_coordinator_context *context,
 
 static int keiko_coordinator_reconcile_stopped_runtime(
     const keiko_coordinator_context *context, uint64_t deadline_ms) {
+#if defined(__linux__) || defined(__APPLE__)
+  if (context->native_handoff)
+    return context->native_stop_confirmed && keiko_successor_reaped(context, deadline_ms);
+#endif
 #if defined(__APPLE__)
   /* The same held private channel supplied zero-live proof and the owned helper was reaped.
    * A fresh process cannot reconstruct a lost observation; missing proof stays unavailable. */
   return context->app_tree_reaped && context->supervisor_pid == -1 &&
          keiko_tree_before_deadline(deadline_ms);
-#endif
-#if defined(__linux__) || defined(__APPLE__)
-  if (context->native_handoff)
-    return context->native_stop_confirmed && keiko_successor_reaped(context, deadline_ms);
 #endif
   char supervisor[KEIKO_KHP_MAX_PATH_BYTES + 1];
   char *const environment[] = {NULL};

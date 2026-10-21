@@ -141,7 +141,7 @@ export class NativeUiAdmissionError extends Error {
   }
 }
 
-/** Linux libuv and the native owner share CLOCK_MONOTONIC; sample before the remaining grant. */
+/** Match libuv's clock: MONOTONIC on Linux, MONOTONIC_RAW (continuous) on Darwin. */
 export function nativeUiStartDeadline(deadline: number): string {
   const observed = process.hrtime.bigint() / 1_000_000n;
   const remaining = Math.floor(deadline - performance.now());
@@ -211,7 +211,10 @@ function spawnNativeUiOwner(input: NativeUiStartInput): NativeUiOwner {
   let packet: Buffer, child: ChildProcess;
   let deadline: string;
   try {
-    packet = Buffer.concat([launchPacket(input), encodeAppEnvironmentPacket(input.env)]);
+    packet = Buffer.concat([
+      launchPacket(input),
+      encodeAppEnvironmentPacket({ ...input.env, KEIKO_UI_WORKING_DIRECTORY: input.cwd }),
+    ]);
     deadline = nativeUiStartDeadline(input.deadline);
     input.reserve();
     if (performance.now() >= input.deadline) throw new Error("native-ui-start-grant-expired");

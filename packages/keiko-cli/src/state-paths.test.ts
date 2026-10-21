@@ -65,6 +65,7 @@ describe("resolveStateDir", () => {
       home = makeRoot();
     const state = join(cwd, DEFAULT_STATE_DIR_NAME);
     expect(resolveContainedStateDir(cwd, { KEIKO_STATE_DIR: state }, home)).toBe(state);
+    expect(resolveContainedStateDir(cwd, { KEIKO_STATE_DIR: `${state}/` }, home)).toBe(state);
     expect(resolveContainedStateDir(cwd, {}, home, state)).toBe(state);
   });
 

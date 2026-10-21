@@ -384,17 +384,9 @@ async function cleanupFailedCoordinator(child: ChildProcess, timeoutMs: number):
   await exited;
 }
 
-function writeCoordinatorControl(
-  child: ChildProcess,
-  planSha256: string,
-  environment?: Readonly<Record<string, string | undefined>>,
-): Promise<void> {
+function writeCoordinatorControl(child: ChildProcess, packet: Buffer): Promise<void> {
   const control = child.stdin;
   if (control === null) fail("portable handoff coordinator control pipe is unavailable");
-  const packet = Buffer.concat([
-    Buffer.from(`${planSha256}\n`),
-    ...(environment === undefined ? [] : [encodeAppEnvironmentPacket(environment)]),
-  ]);
   return new Promise<void>((resolve, reject) => {
     control.write(packet, (error: Error | null | undefined) => {
       packet.fill(0);
@@ -758,10 +750,18 @@ async function beginChildCoordinator(
   input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
 ): Promise<void> {
   const { activationId } = input;
-  const child = spawnPreparedCoordinator(options, prepared.coordinator, activationId);
+  const packet = prepareCoordinatorControl(options, prepared);
+  let child: ChildProcess;
   try {
-    await acceptPreparedCoordinator(options, prepared, child, input);
+    child = spawnPreparedCoordinator(options, prepared.coordinator, activationId);
   } catch (error) {
+    packet.fill(0);
+    throw error;
+  }
+  try {
+    await acceptPreparedCoordinator(options, prepared, child, input, packet);
+  } catch (error) {
+    packet.fill(0);
     try {
       await cleanupFailedCoordinator(
         child,
@@ -786,6 +786,23 @@ async function beginChildCoordinator(
   child.unref();
 }
 
+function prepareCoordinatorControl(
+  options: PortableHandoffCoordinatorOptions,
+  prepared: Awaited<ReturnType<typeof prepareCoordinator>>,
+): Buffer {
+  const environment = prepared.target.startsWith("macos-")
+    ? encodeAppEnvironmentPacket(options.runtimeEnvironment ?? {})
+    : undefined;
+  try {
+    return Buffer.concat([
+      Buffer.from(`${prepared.planSha256}\n`),
+      ...(environment === undefined ? [] : [environment]),
+    ]);
+  } finally {
+    environment?.fill(0);
+  }
+}
+
 function spawnPreparedCoordinator(
   options: PortableHandoffCoordinatorOptions,
   coordinator: string,
@@ -804,16 +821,13 @@ async function acceptPreparedCoordinator(
   prepared: Awaited<ReturnType<typeof prepareCoordinator>>,
   child: ChildProcess,
   input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
+  packet: Buffer,
 ): Promise<void> {
   if (child.pid === undefined || !options.publishCoordinatorPid(input.sessionId, child.pid)) {
     fail("portable handoff coordinator ownership could not be published");
   }
   await Promise.all([
-    writeCoordinatorControl(
-      child,
-      prepared.planSha256,
-      prepared.target.startsWith("macos-") ? (options.runtimeEnvironment ?? {}) : undefined,
-    ),
+    writeCoordinatorControl(child, packet),
     awaitCoordinatorAcceptance(
       child,
       prepared.planSha256,

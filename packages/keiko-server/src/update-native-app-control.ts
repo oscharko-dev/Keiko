@@ -194,12 +194,18 @@ function isMacosAppRuntime(kind: ReturnType<typeof currentProcessScopeKind>): bo
 let claimed = false;
 let selected: Promise<NativeAppControl> | undefined;
 
+function localAppControl(): Promise<undefined> {
+  return process.platform === "darwin"
+    ? Promise.reject(new NativeAppControlError(false))
+    : Promise.resolve(undefined);
+}
+
 /** Only the explicitly admitted main application consumes FD8. Workers never inspect or close it. */
 export function currentNativeAppControl(launchId: string): Promise<NativeAppControl | undefined> {
   if (!isMainThread) return Promise.reject(new NativeAppControlError(false));
   const kind = currentProcessScopeKind();
   const macosApp = isMacosAppRuntime(kind);
-  if (kind === "local" && !macosApp) return Promise.resolve(undefined);
+  if (kind === "local" && !macosApp) return localAppControl();
   if (!macosApp && (kind !== "outer-native" || process.platform !== "linux"))
     return Promise.reject(new NativeAppControlError(false));
   if (!validAppLaunchId(launchId)) return Promise.reject(new NativeAppControlError(false));

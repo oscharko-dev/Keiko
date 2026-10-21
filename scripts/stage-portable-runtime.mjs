@@ -1517,6 +1517,7 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
 function writeManifest(stageRoot, manifest) {
   mkdirSync(join(stageRoot, "manifest"), { recursive: true });
   const bytes = JSON.stringify(manifest, null, 2) + "\n";
+  // Match the installed readers' MAX_PORTABLE_MANIFEST_BYTES (staging-shared owner).
   if (Buffer.byteLength(bytes) > 1_048_576)
     fail("portable manifest exceeds the installed reader limit");
   writeFileSync(join(stageRoot, "manifest", "portable-manifest.json"), bytes);

@@ -96,7 +96,7 @@ const coordinator = createPortableHandoffCoordinator({
     return true;
   },
   securityLogSink: { write: (event) => events.push(event) },
-  acceptanceTimeoutMs: 15_000,
+  // Exercise the real maximum/default grant; a clock-domain offset must not reject it.
   nativeControl: process.env.KEIKO_HANDOFF_FIXTURE_COALESCED === "1" ? nativeControl : undefined,
 });
 
@@ -117,6 +117,7 @@ function fixtureState() {
     environmentDigest: createHash("sha256")
       .update(process.env.KEIKO_HANDOFF_FIXTURE_DATA ?? "")
       .digest("hex"),
+    workingDirectoryDigest: createHash("sha256").update(process.cwd()).digest("hex"),
   };
 }
 
