@@ -49,40 +49,65 @@ describe.skipIf(process.platform === "win32")("actual coordinator child cleanup"
     return JSON.parse(result.stdout);
   }
 
-  describe.each(["reconcile", "probe"])("%s owner", (owner) => {
-    it.each([
-      ["wait completes at expiry", 1],
-      ["wait completes after expiry", 2],
-      ["clock fails after consuming the child", 3],
-      ["child was already reaped", 4],
-      ["child returns a failure status", 7],
-    ])("refuses proof without signalling a released identity when %s", (_name, scenario) => {
-      expect(run(owner, scenario)).toMatchObject({ admitted: 0, kills: 0, unsafeKills: 0 });
-    });
+  // Darwin reconciliation requires proof retained by the original native owner;
+  // only Linux uses the legacy spawned reconcile child. Probe ownership is shared.
+  describe.each(process.platform === "darwin" ? ["probe"] : ["reconcile", "probe"])(
+    "%s owner",
+    (owner) => {
+      it.each([
+        ["wait completes at expiry", 1],
+        ["wait completes after expiry", 2],
+        ["clock fails after consuming the child", 3],
+        ["child was already reaped", 4],
+        ["child returns a failure status", 7],
+      ])("refuses proof without signalling a released identity when %s", (_name, scenario) => {
+        expect(run(owner, scenario)).toMatchObject({ admitted: 0, kills: 0, unsafeKills: 0 });
+      });
 
-    it.each([
-      ["deadline was already reached", 6],
-      ["clock is unavailable before spawn", 8],
-    ])("does not dispatch when %s", (_name, scenario) => {
-      expect(run(owner, scenario)).toMatchObject({ admitted: 0, waits: 0, spawned: 0, kills: 0 });
-    });
+      it.each([
+        ["deadline was already reached", 6],
+        ["clock is unavailable before spawn", 8],
+      ])("does not dispatch when %s", (_name, scenario) => {
+        expect(run(owner, scenario)).toMatchObject({ admitted: 0, waits: 0, spawned: 0, kills: 0 });
+      });
 
-    it("preserves a successful completion", () => {
-      expect(run(owner, 0)).toMatchObject({ admitted: 1, kills: 0, unsafeKills: 0, waits: 1 });
-    });
+      it("preserves a successful completion", () => {
+        expect(run(owner, 0)).toMatchObject({ admitted: 1, kills: 0, unsafeKills: 0, waits: 1 });
+      });
 
-    it("bounds cleanup of a still-owned child that never terminates", () => {
-      expect(run(owner, 5)).toMatchObject({ admitted: 0, kills: 1, unsafeKills: 0 });
-    });
-  });
+      it("bounds cleanup of a still-owned child that never terminates", () => {
+        expect(run(owner, 5)).toMatchObject({ admitted: 0, kills: 1, unsafeKills: 0 });
+      });
+    },
+  );
 
-  it("retains owned cleanup after a malformed reconcile response", () => {
-    expect(run("reconcile", 9)).toMatchObject({ admitted: 0, kills: 1, unsafeKills: 0 });
-  });
-  it.each(["reconcile", "probe"])(
+  it.skipIf(process.platform === "darwin")(
+    "retains owned cleanup after a malformed reconcile response",
+    () => {
+      expect(run("reconcile", 9)).toMatchObject({ admitted: 0, kills: 1, unsafeKills: 0 });
+    },
+  );
+  it.each(process.platform === "darwin" ? ["probe"] : ["reconcile", "probe"])(
     "retains owned cleanup after %s loses its clock before wait",
     (owner) => {
       expect(run(owner, 10)).toMatchObject({ admitted: 0, kills: 1, unsafeKills: 0 });
     },
   );
+
+  describe.skipIf(process.platform !== "darwin")("Darwin retained owner proof", () => {
+    it.each([
+      ["no retained zero-live proof", 0, 0],
+      ["retained zero-live proof and reaped helper", 11, 1],
+      ["helper still owned", 12, 0],
+      ["expired retained proof", 13, 0],
+    ])("requires original ownership when %s", (_name, scenario, admitted) => {
+      expect(run("reconcile", scenario)).toEqual({
+        admitted,
+        kills: 0,
+        unsafeKills: 0,
+        waits: 0,
+        spawned: 0,
+      });
+    });
+  });
 });

@@ -90,6 +90,18 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
+## What's new in 1.2.6
+
+- **Portable updates on macOS.** Application lifecycle and update restart no longer depend on Apple Developer membership or Endpoint Security activation. Keiko release signatures continue to authenticate update artifacts.
+- **Consecutive updates and workspace continuity.** Native cleanup finishes before startup reports ready, completed sessions release their ownership, and restart retains the selected workspace and existing state. This patch adds no database schema migration.
+- **Future release metadata.** Signed manifests carry future release impacts, and archives declare measured expanded sizes. Invalid, altered or oversized inputs remain refused.
+
+Already published 1.2.5 installations need the verified updater bootstrap before automatic updates.
+Back up local state and preserve private keys during that repair. The [repair evidence](docs/qa/portable-updater-repair-4055.md)
+distinguishes local bootstrap and fixture qualification from the live public-release SSD test,
+which remains pending deployment. Installed Windows and Linux cross-version qualification is not
+claimed by the macOS repair.
+
 ## What's new in 1.2.5
 
 - **Chat and connected Files.** Source transitions hold or cancel generation until the selected scope is acknowledged. Reconnection and shared conversation creation preserve request ownership and avoid replaying accepted sends.
