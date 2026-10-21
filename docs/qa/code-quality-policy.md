@@ -1424,6 +1424,25 @@ unchanged. No producer, raw-carrier, scalar, return, reflection, dictionary, run
 known-value grant follows. Fresh measured native correspondence is required before this optional
 pair can account for the actual marker inputs; declaration alone is not qualification.
 
+### Optional owned raw-registration transport
+
+The existing metadata-source responsibility may additionally opt into
+`ownedRegistrationTransport: true`. The finite relation derives the copier's actual raw reader
+and descriptor writer, their shared canonical registration symbol, the reader's same-reference
+non-null object return and the writer's guarded immutable hidden descriptor. It accounts only for
+the reader's first input and the writer's two object inputs. The existing copier source and optional
+refusal-marker pair remain unchanged; payload structure, function bodies, results and physical
+write admission receive no authority.
+
+The same parent retains its actual two correlation consumers and all six selected public proofs.
+Source and public copy proofs require reference identity for both healthy and malformed hidden
+registration payloads. The existing logger formatter still refuses malformed registration, and the
+physical writer independently validates canonical admission. Both adaptation paths require this
+same parent to be current, consumer-bound and semantically qualified with every selected proof
+completed. Record order, other flags, rules, scopes, caps and default behavior stay unchanged.
+Declaration alone is not qualification; fresh native correspondence and completed proofs are
+required before this optional transport accounts for actual input annotations.
+
 ### Coding repository request admission and capture
 
 The `coding-repository-request-capture-validator` responsibility connects the existing

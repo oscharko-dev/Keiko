@@ -939,6 +939,9 @@ describe("Support public registration shape admission", () => {
       const { event, operation } = fixtureEvent();
       const target = { ...event };
       expect(api.copyActivityLogEventMetadata(event, target)).toBe(target);
+      expect(Object.getOwnPropertyDescriptor(target, ACTIVITY_LOG_EVENT_REGISTRATION)?.value).toBe(
+        operation,
+      );
       expect(Object.getOwnPropertyDescriptor(target, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
         value: operation,
         enumerable: false,
@@ -950,6 +953,9 @@ describe("Support public registration shape admission", () => {
       const malformed = attachRaw(event, raw);
       const retained = { ...event };
       expect(api.copyActivityLogEventMetadata(malformed, retained)).toBe(retained);
+      expect(
+        Object.getOwnPropertyDescriptor(retained, ACTIVITY_LOG_EVENT_REGISTRATION)?.value,
+      ).toBe(raw);
       expect(Object.getOwnPropertyDescriptor(retained, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
         value: raw,
         enumerable: false,

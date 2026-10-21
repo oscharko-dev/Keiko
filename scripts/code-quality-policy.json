@@ -6436,6 +6436,7 @@
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "raw-property-observation",
       "ownedMarkerPair": true,
+      "ownedRegistrationTransport": true,
       "metadataSourceInput": {
         "companion": {
           "owner": "@oscharko-dev/keiko-contracts",
