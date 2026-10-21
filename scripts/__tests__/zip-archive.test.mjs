@@ -10,6 +10,7 @@ import yauzl from "yauzl";
 import {
   extractZipArchiveEntries,
   readZipArchiveEntries,
+  readZipArchiveUncompressedSize,
   writeZipArchiveEntries,
   writeZipArchiveFromDirectory,
 } from "../lib/zip-archive.mjs";
@@ -87,6 +88,36 @@ afterEach(() => {
 });
 
 describe("portable ZIP archive writer", () => {
+  it("measures final expanded bytes without inflating the payload", () => {
+    const archive = join(temporaryRoot(), "payload.zip");
+    writeZipArchiveEntries(archive, [
+      { name: "Keiko/one", data: Buffer.from("one") },
+      { name: "Keiko/two", data: Buffer.from("second") },
+      { name: "Keiko/empty", data: Buffer.alloc(0) },
+    ]);
+    expect(readZipArchiveUncompressedSize(archive)).toBe(9);
+    const entries = readZipArchiveEntries(archive);
+    expect(readZipArchiveUncompressedSize(archive)).toBe(
+      entries.reduce((total, entry) => total + entry.data.byteLength, 0),
+    );
+  });
+
+  it("refuses missing, empty, truncated and overflowing expanded metadata", () => {
+    const archive = join(temporaryRoot(), "payload.zip");
+    writeZipArchiveEntries(archive, [{ name: "Keiko/one", data: Buffer.from("one") }]);
+    const valid = readFileSync(archive);
+    for (const declared of [0, 2 ** 31 + 1, 0xffffffff]) {
+      const invalid = Buffer.from(valid);
+      invalid.writeUInt32LE(declared, centralDirectoryOffset(invalid) + 24);
+      writeFileSync(archive, invalid);
+      expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
+    }
+    writeFileSync(archive, valid.subarray(0, -1));
+    expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
+    writeFileSync(archive, "not a ZIP");
+    expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
+  });
+
   it("writes deterministic, directory-entry-free archives with POSIX entry names", async () => {
     const root = temporaryRoot();
     const source = join(root, "payload");
