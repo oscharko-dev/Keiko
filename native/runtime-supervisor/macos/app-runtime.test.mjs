@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import { strict as assert } from "node:assert";
 import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { encodeAppEnvironmentPacket } from "../../../packages/keiko-contracts/src/native-runtime-wire.ts";
@@ -46,10 +46,10 @@ async function qualify(controlBytes, expectedKind) {
     assert.equal(proof.kind, expectedKind);
     if (expectedKind === 2) assert.equal(proof.payload.readUInt32LE(4), 0);
     const result = await exit;
-    assert.equal(result.code, expectedKind === 2 ? 0 : 1);
     for (const offset of [4, 8]) {
       assert.throws(() => process.kill(observed.readUInt32LE(offset), 0), { code: "ESRCH" });
     }
+    return result;
   } finally {
     clearTimeout(timeout);
     control.destroy();
@@ -58,8 +58,8 @@ async function qualify(controlBytes, expectedKind) {
 }
 
 test("macOS private app lifecycle, split control, EOF and malformed control", async () => {
-  await assert.doesNotReject(qualify(header("KRC1", 2, 0), 2));
-  await assert.doesNotReject(qualify(header("KRC1", 3, 0), 2));
-  await assert.doesNotReject(qualify(undefined, 2));
-  await assert.doesNotReject(qualify(header("KRC1", 99, 0), 3));
+  assert.equal((await qualify(header("KRC1", 2, 0), 2)).code, 0);
+  assert.equal((await qualify(header("KRC1", 3, 0), 2)).code, 0);
+  assert.equal((await qualify(undefined, 2)).code, 0);
+  assert.equal((await qualify(header("KRC1", 99, 0), 3)).code, 1);
 });
