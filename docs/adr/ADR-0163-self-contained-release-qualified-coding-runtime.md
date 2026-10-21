@@ -50,14 +50,16 @@ The customer contract for this release is explicit:
 - macOS may require the local user to approve Keiko's Endpoint Security System Extension once.
 
 Apple Developer ID signing, notarization, a granted Endpoint Security entitlement, and the
-corresponding provisioning material are external release prerequisites for both portable macOS
-targets. The paid Apple Developer Program alone does not remove the system-extension approval.
+corresponding provisioning material are prerequisites of the optional Endpoint Security Coding
+backend. They are not prerequisites of the ordinary app lifecycle or portable updater, which uses
+Keiko release trust and its separate native application-owner role (ADR-0121).
+The paid Apple Developer Program alone does not remove the system-extension approval.
 Organization-managed Macs may preapprove it through MDM. Missing credentials, entitlement, user
 approval, or an active extension keep Coding Workbench unavailable; they never select the macOS
 development lane or a process-group fallback.
 
-The customer contract accepts Apple's required first-run boundary. Keiko installs the signed app at
-exactly `/Applications/Keiko.app`; macOS may request administrator authorization, System Extension
+The Endpoint Security backend accepts Apple's required first-run boundary. Its signed app lives at
+`/Applications/Keiko.app`; macOS may request administrator authorization, System Extension
 approval, and Full Disk Access once. Those dialogs are part of the first start, and MDM may
 preinstall or preapprove them. Signing and notarization establish publisher and artifact trust but
 do not suppress the System Extension or Full Disk Access consent decisions.
@@ -130,9 +132,10 @@ release bundle: assembly runs only from a stable-tag push and its own predicates
 `verified-production`.
 
 The automatic managed-install copy remains the default first launch. Windows uses its user-local
-managed root. Both macOS targets use exactly `/Applications/Keiko.app`; another macOS root is not
-release-qualified and cannot activate the Endpoint Security runtime. A downloaded artifact never
-asks the customer to select a runtime or install location.
+managed root. Both macOS targets default to `/Applications/Keiko.app`. Explicit setup may attest a
+dedicated user-owned local folder, including an external SSD, for ordinary app execution and
+portable updates. Such a location does not qualify the optional Endpoint Security Coding backend.
+A downloaded artifact never asks the customer to select a runtime or install location.
 
 ### D2 — Activation evidence is platform-anchored and component-bound
 

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { encodeAppEnvironmentPacket } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
 import {
   createPortableHandoffCoordinator,
   PortableHandoffCoordinatorError,
@@ -394,7 +395,8 @@ describe("portable handoff coordinator", () => {
       coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
     ).resolves.toMatchObject({ acceptedAt: "2023-11-14T22:13:20.000Z" });
     expect(order).toStrictEqual(["persist", "spawn", "publish", "accept"]);
-    expect(controlText).toMatch(/^[a-f0-9]{64}\n$/u);
+    expect(controlText.slice(0, 65)).toMatch(/^[a-f0-9]{64}\n$/u);
+    expect(controlText.slice(65)).toBe(encodeAppEnvironmentPacket({}).toString("utf8"));
     expect(control.writableEnded).toBe(false);
   });
 

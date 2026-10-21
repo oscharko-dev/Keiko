@@ -150,6 +150,10 @@ export function createPortableHandoffNativeCopyVerifier(
       }
       return;
     }
+    if (hostPlatform === "linux") {
+      await verifyPlanBoundCopy(input);
+      return;
+    }
     if (hostPlatform === "darwin") {
       const expectedTeamIdentifier =
         options.macosExpectedTeamIdentifier ?? macosReleaseTeamIdentifier();

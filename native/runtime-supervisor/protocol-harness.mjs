@@ -149,6 +149,8 @@ const EXPECTED_PAYLOAD_LENGTH_BY_KIND = new Map([
   [1, 0],
   [2, 8],
   [3, 2],
+  [4, 36], // Persistent application admission: root PID and launch ID.
+  [5, 32], // Durable application ownership committed.
 ]);
 
 export async function response(reader) {

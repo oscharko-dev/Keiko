@@ -29,7 +29,8 @@ import {
   publishPortableHandoffVerifiedAck,
 } from "../../../packages/keiko-server/dist/update-portable-handoff-receipts.js";
 
-bindProcessScope(createNativeProcessScope());
+if (process.platform === "darwin") process.env.KEIKO_APP_RUNTIME_OWNER = "1";
+else bindProcessScope(createNativeProcessScope());
 if (!isProcessAlive(currentProcessId()))
   throw new Error("native fixture root ownership unavailable");
 if (process.env.KEIKO_HANDOFF_FIXTURE_FAIL_BOOT === "1") process.exit(73);

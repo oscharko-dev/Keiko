@@ -16,6 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import type { Readable } from "node:stream";
 import { performance } from "node:perf_hooks";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { encodeAppEnvironmentPacket } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
 import {
   currentNativeAppControl,
   NativeAppControlError,
@@ -63,6 +64,7 @@ export interface PortableHandoffAcceptedIntent {
 
 export interface PortableHandoffCoordinatorOptions {
   readonly stateDir: string;
+  readonly runtimeEnvironment?: Readonly<Record<string, string | undefined>> | undefined;
   readonly persistPrepared: (intent: PortableHandoffPreparedIntent) => Promise<void>;
   readonly persistAccepted: (intent: PortableHandoffAcceptedIntent) => Promise<void>;
   readonly verifyNativeCopy: (input: {
@@ -382,11 +384,20 @@ async function cleanupFailedCoordinator(child: ChildProcess, timeoutMs: number):
   await exited;
 }
 
-function writeCoordinatorControl(child: ChildProcess, planSha256: string): Promise<void> {
+function writeCoordinatorControl(
+  child: ChildProcess,
+  planSha256: string,
+  environment?: Readonly<Record<string, string | undefined>>,
+): Promise<void> {
   const control = child.stdin;
   if (control === null) fail("portable handoff coordinator control pipe is unavailable");
+  const packet = Buffer.concat([
+    Buffer.from(`${planSha256}\n`),
+    ...(environment === undefined ? [] : [encodeAppEnvironmentPacket(environment)]),
+  ]);
   return new Promise<void>((resolve, reject) => {
-    control.write(`${planSha256}\n`, (error: Error | null | undefined) => {
+    control.write(packet, (error: Error | null | undefined) => {
+      packet.fill(0);
       if (error === null || error === undefined) resolve();
       else reject(new PortableHandoffCoordinatorError("portable handoff coordinator pipe failed"));
     });
@@ -418,6 +429,7 @@ async function prepareCoordinator(
   readonly planSha256: string;
   readonly intentRevision: number;
   readonly oldLaunchId: string;
+  readonly target: PortableHandoffPlan["target"];
 }> {
   const plan = readPortableHandoffPlan(options.stateDir, activationId);
   assertNotAborted(signal);
@@ -448,6 +460,7 @@ async function prepareCoordinator(
       planSha256,
       intentRevision: plan.aggregateRevision,
       oldLaunchId: plan.oldProcess.launchId,
+      target: plan.target,
     };
   } catch (error) {
     cleanupAfterPreparationFailure(plan, root, coordinator, supervisor, error);
@@ -796,7 +809,11 @@ async function acceptPreparedCoordinator(
     fail("portable handoff coordinator ownership could not be published");
   }
   await Promise.all([
-    writeCoordinatorControl(child, prepared.planSha256),
+    writeCoordinatorControl(
+      child,
+      prepared.planSha256,
+      prepared.target.startsWith("macos-") ? (options.runtimeEnvironment ?? {}) : undefined,
+    ),
     awaitCoordinatorAcceptance(
       child,
       prepared.planSha256,

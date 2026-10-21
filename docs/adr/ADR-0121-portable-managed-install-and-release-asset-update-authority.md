@@ -126,9 +126,10 @@ self-update manual-only.
 ### D3 — First-run install state is separate from `.keiko`
 
 First run expands the portable archive into a dedicated managed install folder. Windows remains
-user-local under `%LOCALAPPDATA%\Programs\Keiko`. The two release-qualified macOS targets install
-at exactly `/Applications/Keiko.app`, because Apple's Endpoint Security activation contract
-requires the containing app to run from `/Applications`.
+user-local under `%LOCALAPPDATA%\Programs\Keiko`. The macOS default is
+`/Applications/Keiko.app`; explicit setup may attest a dedicated user-owned local folder,
+including an external SSD. The ordinary app and updater lifecycle does not depend on Endpoint
+Security activation. Its optional Coding sandbox remains subject to its separate platform rules.
 
 That folder is distinct from `.keiko`, which remains the runtime-state root for governed local state
 such as update recovery, redacted evidence, and other Keiko-owned runtime data. Portable install
@@ -380,8 +381,17 @@ later proof or response failure. Error cleanup may signal only a still-owned chi
 same bounded wait. The POSIX coordinator retains this ownership state across stop, failed-start,
 reconciliation and monitor-probe calls. The probe shares the same wait/cleanup owner, refuses an
 expired or unavailable monotonic clock before spawning and checks expiry after wait completion.
-These checks do not establish immutable generation membership or replace Endpoint Security
-qualification.
+These legacy monitor checks do not establish immutable generation membership or replace Endpoint
+Security qualification for the Coding sandbox. The ordinary macOS application lifecycle instead
+uses the existing persistent native app-owner protocol with a separate account-free helper role.
+The helper admits a suspended direct child, records Darwin process unique IDs and original-parent
+unique IDs across exec and reparenting, and uses kernel audit-token signals to avoid PID reuse.
+Unclassified surviving processes or incomplete observation refuse zero-live proof. The persistent
+owner creates update coordinators outside the previous app generation and releases its private
+old-generation proof only after the helper reports zero live processes and is successfully reaped.
+The updater never substitutes EOF, a missing PID or a free port for that proof. Application
+credentials travel over the existing private environment packet, never the native owner environment.
+This app lifecycle is not an Endpoint Security sandbox qualification.
 
 The Linux native generation implementation uses an atomically held `clone3` PID handle for a
 new user/PID namespace init; the outer owner remains outside that generation. The init verifies

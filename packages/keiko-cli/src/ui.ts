@@ -20,7 +20,7 @@ import { createNativeProcessScope } from "@oscharko-dev/keiko-security/native-pr
 // code. Injected-test invocations skip the guard entirely.
 
 import type { Server } from "node:http";
-import { existsSync, readFileSync, unwatchFile, watchFile } from "node:fs";
+import { existsSync, fstatSync, readFileSync, unwatchFile, watchFile } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1995,7 +1995,10 @@ export async function runUiCli(
 function prepareUiProcessScope(parsed: UiCliArgs, io: CliIo): boolean {
   if (parsed.runtimeOwner === undefined) return true;
   try {
-    bindProcessScope(createNativeProcessScope());
+    if (process.platform === "darwin") {
+      if (!fstatSync(8).isSocket()) throw new Error("native app control unavailable");
+      process.env.KEIKO_APP_RUNTIME_OWNER = "1";
+    } else bindProcessScope(createNativeProcessScope());
     return true;
   } catch {
     io.err("Native runtime process identity could not be verified.\n");

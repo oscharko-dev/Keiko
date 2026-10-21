@@ -492,7 +492,7 @@ int wmain(int argc, wchar_t **argv) {
 
 #include "keiko-portable-update-coordinator.h"
 #include "keiko-portable-recovery-control.h"
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 #include "keiko-portable-runtime-owner-linux.h"
 #endif
 
@@ -567,6 +567,15 @@ static int resume_update(keiko_coordinator_context *coordinator, const char *exe
         control_type != SOCK_STREAM) return 1;
     runtime_owner = "--runtime-owner";
   }
+#elif defined(__APPLE__)
+  const char *selected_launch = getenv("KEIKO_UI_LAUNCH_ID");
+  int control_type;
+  socklen_t length = sizeof(control_type);
+  if (selected_launch == NULL || strcmp(selected_launch,
+          coordinator->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID : KEIKO_KHP_NEW_LAUNCH_ID]) != 0 ||
+      getsockopt(8, SOL_SOCKET, SO_TYPE, &control_type, &length) != 0 || control_type != SOCK_STREAM)
+    return 1;
+  runtime_owner = "--runtime-owner";
 #endif
   if (!portable_root(app_root, sizeof(app_root), executable) ||
 #if defined(__APPLE__)
@@ -590,6 +599,10 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
   if (argc == 4 && strcmp(argv[1], "--own-runtime") == 0)
     return keiko_runtime_owner_linux(argv[2], argv[3], 0);
+  if (argc == 4 && strcmp(argv[1], "--own-app-runtime") == 0)
+    return keiko_runtime_owner_linux(argv[2], argv[3], 1);
+#endif
+#if defined(__APPLE__)
   if (argc == 4 && strcmp(argv[1], "--own-app-runtime") == 0)
     return keiko_runtime_owner_linux(argv[2], argv[3], 1);
 #endif

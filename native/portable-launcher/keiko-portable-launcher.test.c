@@ -8,6 +8,14 @@
 #include <unistd.h>
 
 static unsigned int coordinator_cleanup_kills;
+static const char *coordinator_pending_ack_link;
+static int coordinator_test_usleep(unsigned int microseconds) {
+  if (coordinator_pending_ack_link != NULL) {
+    assert(unlink(coordinator_pending_ack_link) == 0);
+    coordinator_pending_ack_link = NULL;
+  }
+  return usleep(microseconds);
+}
 static const char *coordinator_cutover_failure;
 static int coordinator_test_kill(pid_t pid, int signal_number) {
   coordinator_cleanup_kills += 1u;
@@ -42,10 +50,12 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 #define KEIKO_COORDINATOR_CUTOVER_CHECKPOINT coordinator_test_cutover_checkpoint
 #define memcmp coordinator_test_memcmp
 #define read coordinator_test_read
+#define usleep coordinator_test_usleep
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
 #undef read
+#undef usleep
 #undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
 #undef KEIKO_COORDINATOR_KILL
@@ -95,6 +105,17 @@ static int reconcile_fixture(const char *activation_id) {
   return 0;
 }
 
+static int fixture_app_environment(void) {
+#if defined(__APPLE__)
+  struct app_environment_packet packet = {0};
+  int result = read_app_environment(&packet, krp_default_reader, NULL);
+  clear_app_environment(&packet);
+  return result;
+#else
+  return 1;
+#endif
+}
+
 static int supervisor_fixture(void) {
   unsigned char header[12], control[12];
   unsigned char launched[12] = {'K', 'R', 'S', '1', 1, 0, 1, 0, 0, 0, 0, 0};
@@ -110,7 +131,7 @@ static int supervisor_fixture(void) {
   payload_length = keiko_khp_read_u32(header + 8u);
   if (payload_length == 0 || payload_length > KEIKO_COORDINATOR_KRP_MAX_BYTES) return 1;
   payload = (unsigned char *)malloc(payload_length);
-  if (payload == NULL || !read_all(3, payload, payload_length) ||
+  if (payload == NULL || !read_all(3, payload, payload_length) || !fixture_app_environment() ||
       !write_all(4, launched, sizeof(launched)) || !read_all(3, control, sizeof(control)) ||
       memcmp(control, "KRC1", 4u) != 0 || !write_all(4, reaped, sizeof(reaped)))
     goto cleanup;
@@ -274,6 +295,33 @@ static void cutover_fixture_clear(cutover_fixture *fixture) {
     }
   }
   assert(rmdir(fixture->root) == 0);
+}
+
+/* The JS publisher fsyncs a hard-link publication before removing its temporary name.
+ * Only a settled one-link acknowledgement is authority; a two-link observation may be pending. */
+static void test_verified_ack_waits_for_durable_publication(void) {
+  cutover_fixture fixture;
+  char ack[PATH_MAX], pending[PATH_MAX], content[70];
+  cutover_fixture_init(&fixture);
+  assert(join_path(ack, sizeof(ack), fixture.capsule, "/verified.ack") == 1);
+  assert(join_path(pending, sizeof(pending), fixture.capsule, "/pending.ack") == 1);
+  assert(snprintf(content, sizeof(content), "KHV1%s\n", fixture.context.plan_sha256) == 69);
+  write_fixture_file(pending, content);
+  assert(chmod(pending, 0600) == 0);
+  assert(link(pending, ack) == 0);
+  coordinator_pending_ack_link = pending;
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 1);
+  assert(coordinator_pending_ack_link == NULL);
+  assert(link(ack, pending) == 0);
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, keiko_tree_now_ms() + 20u) == 0);
+  assert(unlink(pending) == 0);
+  replace_fixture_file(ack, "KHV1wrong\n");
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
+  assert(unlink(ack) == 0);
+  assert(symlink(fixture.registration, ack) == 0);
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
+  assert(unlink(ack) == 0);
+  cutover_fixture_clear(&fixture);
 }
 
 static void test_atomic_promote_survives_each_cutover_boundary(void) {
@@ -562,6 +610,11 @@ static void test_spawn_preserves_fixed_protocol_descriptors(const char *self) {
   context.plan.field[KEIKO_KHP_MANAGED_ROOT] = managed;
   context.plan.field[KEIKO_KHP_CANDIDATE_LAUNCHER] = candidate_launcher;
   context.plan.field[KEIKO_KHP_CANDIDATE_LAUNCHER_SHA256] = launcher_digest;
+#if defined(__APPLE__)
+  char environment[5] = {0};
+  context.native_environment.storage = environment;
+  context.native_environment.storage_length = sizeof(environment);
+#endif
   assert(keiko_coordinator_spawn_supervisor(&context, keiko_tree_now_ms() + 1000u, 0) == 1);
   assert(keiko_coordinator_stop_runtime(&context, keiko_tree_now_ms() + 1000u) == 1);
   assert(context.start_gate >= 0);
@@ -576,6 +629,16 @@ static void test_spawn_preserves_fixed_protocol_descriptors(const char *self) {
 }
 
 static void test_reconcile_requires_zero_live_proof(const char *self) {
+#if defined(__APPLE__)
+  (void)self;
+  keiko_coordinator_context context = {0};
+  context.supervisor_pid = -1;
+  assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+  context.app_tree_reaped = 1;
+  assert(keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+  context.supervisor_pid = 123;
+  assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+#else
   char root[] = "/tmp/keiko-coordinator-reconcile.XXXXXX";
   char source[PATH_MAX], supervisor[PATH_MAX], digest[65];
   keiko_coordinator_context context;
@@ -614,6 +677,7 @@ static void test_reconcile_requires_zero_live_proof(const char *self) {
 
   assert(unlink(supervisor) == 0);
   assert(rmdir(root) == 0);
+#endif
 }
 
 static void test_ui_identity_delayed_step(const keiko_coordinator_context *context, int compare) {
@@ -749,7 +813,8 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile_fixture(argv[2]);
-  if (argc == 1 && strstr(argv[0], "/runtime-supervisor") != NULL) return supervisor_fixture();
+  if ((argc == 1 || (argc == 2 && strcmp(argv[1], "--app-runtime") == 0)) &&
+      strstr(argv[0], "/runtime-supervisor") != NULL) return supervisor_fixture();
   assert(argc == 1);
   assert(dirname_copy(path, sizeof(path), "/tmp/Keiko.app/Contents/MacOS/keiko") == 1);
   assert(strcmp(path, "/tmp/Keiko.app/Contents/MacOS") == 0);
@@ -767,6 +832,7 @@ int main(int argc, char **argv) {
   test_ui_identity_records();
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);
+  test_verified_ack_waits_for_durable_publication();
   test_atomic_promote_survives_each_cutover_boundary();
   test_atomic_cutover_rejects_untrusted_states();
   test_registration_and_restore_are_crash_idempotent();
