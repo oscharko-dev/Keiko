@@ -779,6 +779,12 @@ expired metadata, signature failure, or metadata version below an enforced high-
 closed before download or staging. A target version must also be strictly newer than the installed
 version, so a valid older release cannot downgrade an installation.
 
+This contract covers the bundled macOS sidecar as well as the launcher. Update preflight and
+staging independently authenticate the complete manifest before accepting its exact sidecar
+digests with declared negative Apple evidence. Unsigned, expired, untrusted or modified manifests
+remain refused. Sidecar platform-signature and Coding qualification evidence stays false; accepting
+authenticated update bytes does not activate or qualify the optional Endpoint Security backend.
+
 Key ids are SHA-256 digests of the public SPKI bytes. Rotation is additive: ship a release that
 trusts old and new public keys before signing exclusively with the new private key. Removing a key
 requires a later reviewed release after the overlap. Compromise response removes the private secret,

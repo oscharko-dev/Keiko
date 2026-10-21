@@ -385,6 +385,12 @@ signing block, and the native addon — and stamps the activation document's `tr
 is rejected by the schema, and an artifact whose activation document is incoherent across those
 blocks is refused at discovery.
 
+For macOS portable updates, ADR-0121 D7 authenticates the complete release manifest and the exact
+sidecar payload independently of Apple signing. Both preflight and staging verify that signature
+before admitting declared negative Apple evidence. The unauthenticated evaluation update path
+remains refused, and this admission never turns negative platform-signature or Coding qualification
+evidence into a positive claim. The runtime activation entry point retains its separate defaults.
+
 **Exactly what is waived — and nothing else.** The lane waives the platform signature,
 notarization and platform-attestation gates. It waives nothing else:
 

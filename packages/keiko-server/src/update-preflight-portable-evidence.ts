@@ -219,6 +219,17 @@ function releaseTrustVerification(
   });
 }
 
+function manifestSidecars(
+  deps: UiHandlerDeps,
+  manifest: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): ReturnType<typeof verifyPortableManifestSidecars> {
+  return verifyPortableManifestSidecars(manifest, target, {
+    now: new Date(deps.updatePortableReleaseNow?.() ?? Date.now()),
+    trustedKeys: deps.updatePortableReleaseTrustedKeys ?? KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  });
+}
+
 function validManifestBooleans(
   manifest: Record<string, unknown>,
   nativeVerified: boolean,
@@ -334,7 +345,7 @@ function validateManifest(
     archiveSha256: sha256,
     ...releaseTrustEvidence(releaseTrust, releaseImpactCatalog),
     uncompressedSizeBytes,
-    sidecarRuntimes: verifyPortableManifestSidecars(manifest, target).summaries,
+    sidecarRuntimes: manifestSidecars(deps, manifest, target).summaries,
   };
 }
 

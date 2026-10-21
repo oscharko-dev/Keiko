@@ -449,11 +449,13 @@ function portableManifest(
 function releaseTrustedManifest(
   target: UpdatePortableTarget,
   catalog?: unknown,
+  platformSignedSidecars = true,
 ): {
   readonly manifest: Record<string, unknown>;
   readonly trustedKey: PortableReleaseTrustedKey;
 } {
   const unsigned = portableManifest(target);
+  if (!platformSignedSidecars) declareUnsignedMacosSidecars(unsigned);
   if (catalog !== undefined) {
     (unsigned.releaseImpact as Record<string, unknown>).catalog = catalog;
     (unsigned.releaseImpact as Record<string, unknown>).entryId = "0.2.11-a";
@@ -495,6 +497,28 @@ function releaseTrustedManifest(
     }),
     trustedKey: { keyId: portableReleaseTrustKeyId(publicKeyPem), publicKeyPem },
   };
+}
+
+function declareUnsignedMacosSidecars(manifest: Record<string, unknown>): void {
+  const sidecars = [sidecarRuntime("macos-arm64")];
+  manifest.sidecarRuntimes = sidecars;
+  for (const sidecar of sidecars) {
+    Object.assign(sidecar.signing as Record<string, unknown>, {
+      verificationPolicy: "evaluation",
+      verificationStatus: "evaluation-unqualified",
+      verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+      signatureVerified: false,
+      notarizationVerified: false,
+      verificationChecks: {
+        developerIdVerified: false,
+        notarizationVerified: false,
+        stapleVerified: false,
+        assessmentVerified: false,
+      },
+    });
+  }
+  const impact = manifest.releaseImpact as Record<string, Record<string, unknown>>;
+  Object.assign(impact.reviewedBinding ?? {}, { sidecarRuntimes: sidecars });
 }
 
 const ctx: RouteContext = {
@@ -730,61 +754,64 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
-  it("allows one-click updates with Keiko release trust and no platform signature", async () => {
-    const target: UpdatePortableTarget = "macos-arm64";
-    const trusted = releaseTrustedManifest(target);
-    const events: {
-      readonly op: string;
-      readonly extra?: Readonly<Record<string, unknown>> | undefined;
-    }[] = [];
-    const fetchImpl = vi.fn<typeof fetch>((input) => {
-      const url = requestUrl(input);
-      if (url.endsWith("/releases/latest")) {
-        return Promise.resolve(jsonResponse(portableRelease(target)));
-      }
-      if (url.endsWith(`${target}-portable-manifest.json`)) {
-        return Promise.resolve(textResponse(JSON.stringify(trusted.manifest)));
-      }
-      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
-        return Promise.resolve(
-          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
-        );
-      }
-      return Promise.resolve(new Response("not found", { status: 404 }));
-    });
-    const deps = depsWith(fetchImpl, {
-      activityLog: {
-        write: (event): void => {
-          events.push(event);
+  it.each([true, false])(
+    "allows release-trusted updates with platform-signed sidecars=%s",
+    async (platformSignedSidecars) => {
+      const target: UpdatePortableTarget = "macos-arm64";
+      const trusted = releaseTrustedManifest(target, undefined, platformSignedSidecars);
+      const events: {
+        readonly op: string;
+        readonly extra?: Readonly<Record<string, unknown>> | undefined;
+      }[] = [];
+      const fetchImpl = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/releases/latest")) {
+          return Promise.resolve(jsonResponse(portableRelease(target)));
+        }
+        if (url.endsWith(`${target}-portable-manifest.json`)) {
+          return Promise.resolve(textResponse(JSON.stringify(trusted.manifest)));
+        }
+        if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+          return Promise.resolve(
+            textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+          );
+        }
+        return Promise.resolve(new Response("not found", { status: 404 }));
+      });
+      const deps = depsWith(fetchImpl, {
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
         },
-      },
-      updatePortableReleaseNow: () => Date.parse("2026-09-11T08:00:00.000Z"),
-      updatePortableReleaseTrustedKeys: [trusted.trustedKey],
-    });
+        updatePortableReleaseNow: () => Date.parse("2026-09-11T08:00:00.000Z"),
+        updatePortableReleaseTrustedKeys: [trusted.trustedKey],
+      });
 
-    const report = await runUpdatePreflight(deps, {
-      currentVersion: "0.2.10",
-      bundledCatalog: baseCatalog(),
-      installMode: () => portableMode(target),
-    });
+      const report = await runUpdatePreflight(deps, {
+        currentVersion: "0.2.10",
+        bundledCatalog: baseCatalog(),
+        installMode: () => portableMode(target),
+      });
 
-    expect(report.oneClickEligible).toBe(true);
-    expect(report.portableAsset?.status).toBe("eligible");
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        op: "update.release-trust.verify",
-        extra: {
-          keyId: trusted.trustedKey.keyId,
-          metadataVersion: 987_654_321,
-          status: "succeeded",
-          target,
-          completeness: "complete",
-          loss: "none",
-        },
-      }),
-    );
-    deps.store.close();
-  });
+      expect(report.oneClickEligible).toBe(true);
+      expect(report.portableAsset?.status).toBe("eligible");
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "update.release-trust.verify",
+          extra: {
+            keyId: trusted.trustedKey.keyId,
+            metadataVersion: 987_654_321,
+            status: "succeeded",
+            target,
+            completeness: "complete",
+            loss: "none",
+          },
+        }),
+      );
+      deps.store.close();
+    },
+  );
 
   it.each([false, true])(
     "resolves future impact only from authenticated metadata (tampered: %s)",
