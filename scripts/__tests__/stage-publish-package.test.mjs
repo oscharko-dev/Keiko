@@ -113,6 +113,43 @@ function fixture() {
   return root;
 }
 
+function runtimeOverrideFixture({ optional = false, utility = false } = {}) {
+  const root = fixture();
+  updateJson(join(root, "package.json"), (manifest) => {
+    manifest.overrides = { leaf: "2.0.0" };
+    manifest.dependencies.leaf = "2.0.0";
+  });
+  updateJson(join(root, "packages/keiko-server/package.json"), (manifest) => {
+    const target = optional ? manifest.optionalDependencies : manifest.dependencies;
+    target.parent = "1.0.0";
+  });
+  const external = {
+    canvas: { version: "1.0.0" },
+    "smol-toml": { version: "1.0.0" },
+    ws: { version: "1.0.0" },
+    react: { version: "19.2.7" },
+    "react-dom": { version: "19.2.7" },
+    parent: { version: "1.0.0", dependencies: { leaf: "1.0.0" } },
+    leaf: { version: "2.0.0" },
+  };
+  if (utility) {
+    external.parent.dependencies.utility = "1.0.0";
+    external.utility = { version: "1.0.0" };
+  }
+  for (const [name, fields] of Object.entries(external)) {
+    const directory = join(root, "node_modules", name);
+    mkdirSync(directory, { recursive: true });
+    writeJson(join(directory, "package.json"), { name, main: "index.js", ...fields });
+    writeFileSync(join(directory, "index.js"), "module.exports = {};\n");
+    writeFileSync(join(directory, "LICENSE"), "Fixture license bytes.\n");
+  }
+  updateJson(join(root, "package-lock.json"), (lock) => {
+    for (const [name, fields] of Object.entries(external))
+      lock.packages[`node_modules/${name}`] = fields;
+  });
+  return root;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -140,6 +177,41 @@ describe("staged publish package", () => {
       ),
     ).toBe(true);
   });
+
+  it("projects reviewed runtime overrides into the actual staged parent archive", () => {
+    const root = runtimeOverrideFixture();
+    const before = readFileSync(join(root, "node_modules/parent/package.json"), "utf8");
+    const staged = createStagedPublishPackage({ repoRoot: root });
+    roots.push(staged.packageDir);
+    const parent = staged.vendorPackages.find((entry) => entry.name === "parent");
+    expect(parent).toBeDefined();
+    expect(parent.manifest.peerDependencies.leaf).toBe("2.0.0");
+    expect(parent.manifest.dependencies).toBeUndefined();
+    expect(
+      JSON.parse(readFileSync(join(staged.packageDir, "package.json"), "utf8")).bundleDependencies,
+    ).toContain("parent");
+    expect(readFileSync(join(root, "node_modules/parent/package.json"), "utf8")).toBe(before);
+    expect(readFileSync(join(staged.packageDir, "node_modules/parent/LICENSE"), "utf8")).toBe(
+      "Fixture license bytes.\n",
+    );
+  });
+
+  it.each([false, true])(
+    "promotes an ancestor's unchanged child with optional reachability %j",
+    (optional) => {
+      const root = runtimeOverrideFixture({ optional, utility: true });
+      const staged = createStagedPublishPackage({ repoRoot: root });
+      roots.push(staged.packageDir);
+      const manifest = JSON.parse(readFileSync(join(staged.packageDir, "package.json"), "utf8"));
+      const selected = optional ? manifest.optionalDependencies : manifest.dependencies;
+      const other = optional ? manifest.dependencies : manifest.optionalDependencies;
+      expect(selected.utility).toBe("1.0.0");
+      expect(selected.parent).toMatch(/^file:vendor\//u);
+      expect(other?.utility).toBeUndefined();
+      expect(other?.parent).toBeUndefined();
+      expect(manifest.dependencies.leaf).toBe("2.0.0");
+    },
+  );
 
   it("vendors private workspaces through archive dependencies and peer edges", () => {
     const root = fixture();

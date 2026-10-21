@@ -557,6 +557,51 @@ describe("native source claims within empty-evidence conversation responses", ()
 });
 
 describe("native marker-only repair for route paths", () => {
+  it.each(["literal", "annotation"] as const)(
+    "retains original prose and correlated refusal when %s repair splits an operator",
+    async (protocol) => {
+      const scopePath = "src/threshold.ts";
+      const original = "The threshold is >=10.";
+      const marker = `[${scopePath}:1]`;
+      const repaired =
+        protocol === "annotation"
+          ? JSON.stringify({ insertions: [{ after: "The threshold is >", marker }] })
+          : `The threshold is > ${marker}=10.`;
+      const requests: ProviderRequest[] = [];
+      const { deps, chatId } = runtime(await provider(requests, repaired, original), false);
+      const path = join(directory, "workspace", scopePath);
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "export const accepted = (value: number): boolean => value >= 10;\n");
+      const started = await startUiTestServer({
+        staticRoot: directory,
+        csp: buildCspHeader([]),
+        handlerDeps: deps,
+      });
+      servers.push(started.server);
+      const response = await ask(started.port, chatId, `Explain ${scopePath}.`, "operator-repair");
+      expect(response.status).toBe(200);
+      const answer = (await response.json()) as GroundedAnswer;
+      expect(answer.content).toBe(original);
+      expect(answer.citations).toEqual([]);
+      expect(answer.uncertainty.some((item) => item.kind === "uncited-answer")).toBe(true);
+      expect(requests).toHaveLength(2);
+      expect(deps.store.listMessages(chatId).at(-1)?.groundedAnswer).toEqual(answer);
+      expect(
+        records().find(
+          (record) =>
+            record.op === "search.connected-context.answer-details" &&
+            record.correlationId === "operator-repair",
+        ),
+      ).toMatchObject({
+        citationRepairDisposition: "rejected-content-changed",
+        synthesisCallCount: 2,
+      });
+      expect(
+        analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
+      ).toMatchObject({ classification: "supported", corruptLineCount: 0 });
+    },
+  );
+
   it.each(["app/users/[id]/page.tsx", "app/users/42/page.tsx"])(
     "authenticates and persists the unchanged answer for %s",
     async (scopePath) => {

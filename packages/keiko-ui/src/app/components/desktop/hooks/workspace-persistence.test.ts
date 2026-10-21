@@ -43,6 +43,60 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it.each([
+    { newChatModelSelection: "explicit" },
+    { newChatModelSelection: "explicit", newChatModelId: `ghp_${"A".repeat(36)}` },
+    { newChatModelSelection: "automatic", newChatModelId: "another-model" },
+  ])("keeps an invalid pending model choice visibly blocked (%j)", (snapshot): void => {
+    const pending = win({
+      id: "blocked-chat-window",
+      type: "chat",
+      cfg: { newChatRequestId: "shared-creation", ...snapshot },
+    });
+    const blocked = [
+      {
+        ...pending,
+        cfg: { newChatRequestId: "shared-creation", newChatModelSelection: "unavailable" },
+      },
+    ];
+    const saved = sanitizePersistedWindows([pending]);
+    expect(saved).toEqual(blocked);
+    expect(parsePersistedWindows(JSON.stringify(saved))).toEqual(blocked);
+  });
+
+  it("retains a pending Chat creation intent through every workspace round trip", (): void => {
+    const pending = win({
+      id: "shared-chat-window",
+      type: "chat",
+      cfg: { title: "Shared conversation", newChatRequestId: "shared-creation" },
+    });
+    const saved = sanitizePersistedWindows([pending]);
+    expect(saved).toEqual([pending]);
+    expect(parsePersistedWindows(JSON.stringify(saved))).toEqual([pending]);
+    expect(sanitizePersistedWorkspace(saved, []).wins).toEqual([pending]);
+  });
+
+  it.each([
+    "",
+    " leading-space",
+    "trailing-space ",
+    "a".repeat(161),
+    "../other",
+    "request/other",
+    "[REDACTED]",
+    "1404206d-9ab6-4bca-8853-813867352087",
+    `ghp_${"A".repeat(36)}`,
+    true,
+    42,
+    { requestId: "request-a" },
+  ])("rejects a malformed or secret-shaped Chat creation intent (%j)", (newChatRequestId): void => {
+    const pending = {
+      ...win({ id: "shared-chat-window", type: "chat" }),
+      cfg: { newChatRequestId },
+    };
+    expect(sanitizePersistedWindows([pending])[0]?.cfg).toEqual({});
+  });
+
   it("drops retired diagnostic windows on reload while preserving ordinary windows", () => {
     const chat = win({ id: "chat-kept", type: "chat" });
     const retired = { ...chat, id: "retired-diagnostics", type: "diagnostics" };

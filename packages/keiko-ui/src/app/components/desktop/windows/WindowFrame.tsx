@@ -22,6 +22,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import controlStyles from "../WorkspaceControls.module.css";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import { useOptionalChatSessionProject } from "../context/ChatSessionContext";
@@ -1442,6 +1443,7 @@ function WindowFrameImpl({
       minWidth: 0,
       minHeight: 0,
       maxWidth: contentMaxWidthForZoom(zoom),
+      maxHeight: `calc(100% / ${String(zoom)})`,
       overflow: "clip",
       transform: `scale(${String(zoom)})`,
       transformOrigin: "0 0",
@@ -1452,7 +1454,7 @@ function WindowFrameImpl({
   // on this window's stacking layer (see WorkspaceSelection.module.css
   // .selectionRing), not as extra chrome here. `data-selected` below remains
   // the source of truth for a11y and for that overlay to find this geometry.
-  const windowClassName = `window ${selectionStyles.workspaceWindow}`;
+  const windowClassName = `window ${selectionStyles.workspaceWindow} ${controlStyles.cmpViewportWindow}`;
 
   return (
     // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this named window region is keyboard

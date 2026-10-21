@@ -3479,6 +3479,79 @@
         "warningText": "Restart after installation. Back up local application state before changing versions; older binaries may not read newer schemas. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
         "verifiedCarryForward": false
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-20-keiko-1.2.5-chat-browser-updater-reliability",
+      "packageVersion": "1.2.5",
+      "releaseTag": "v1.2.5",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Harden connected Chat sources, browser approval and private drafts, updater status and native ownership, and syntax-preserving source privacy. Deliver compact model-agnostic test-generation skills with explicit qualification limits.",
+      "affectedStateStores": ["ui-store-schema", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "Forward-only SQLite migrations V45 and V46 add bounded browser approvals and shared Chat creation intents to the v1.2.4 schema V44. Existing conversations, private skills and drafts are retained. Normal startup applies the migrations. Back up local state before upgrading; older binaries cannot read the newer schema.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Registered body-free observations cover source transitions, browser approval, draft acknowledgements, native updater ownership and privacy/retrieval decisions. No source, draft, skill, prompt or answer bodies are added to diagnostics. Generated history retains the v1.2.4 registries.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "releaseNoteBullets": [
+        "Connected Chat: hold or cancel generation while Files sources change, retain acknowledged source ownership across reconnects and preserve shared conversation creation identities without replaying accepted sends.",
+        "Browser access and drafts: explicitly approve another browser, optionally remember access with expiration, and revoke access through the existing session controls. Late browser notices use the existing header without shifting navigation or covering workspace controls. Private draft acknowledgements stay bound to their conversation and revision.",
+        "Updater reliability: distinguish setup requirements from a newer available version and enforce bounded native process, installation and recovery ownership checks. Existing manual-update eligibility remains unchanged.",
+        "Source fidelity and privacy: retain certified recursive source evidence within existing grants, preserve supported code syntax while masking private literals, and preserve code formatting when copying answers. Patch Vite tooling and the private native-host build's MCP inputs for newly reviewed security advisories.",
+        "Test-generation skills: offer repository Markdown examples for import into Chat covering Java/Spring Boot and TypeScript/React/MUI/Vitest. Demonstrated repeatable skill benefit, installed update cycles, SSD continuity and complete original browser/retrieval acceptance remain in follow-up #4051; this release does not certify those outcomes.",
+        "Coding Workbench: keep repository and composer controls stable during late readiness updates, with independently scrollable status and transcript regions in narrow windows.",
+        "Markdown parsing: patch the runtime markdown-it dependency to 14.3.3 against quadratic reference-definition and inline-HTML parsing denial of service. Keep the Composer HTML-disabled parser policy unchanged."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-20",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4046",
+        "rationale": "The owner explicitly authorized protected integration, native auto-merge after required qualification and immediate release 1.2.5 after the verified dev merge. PR #4046 records that direct instruction; this is not an invented GitHub approval review or completed original epic acceptance. The entry covers the complete change set since v1.2.4: dev and that stable release resolve to the same integration base. The owner narrowed delivery scope and transferred every unfulfilled criterion to #4051. Publication still requires exact-head checks, settled review conversations, the protected merge and the governed Release workflow with verified portable artifacts."
+      },
+      "breakingException": {
+        "rationale": "Existing manual-update eligibility remains; this release does not establish native cross-platform N-1 to N canaries or SSD continuity. V45 and V46 are forward-only local migrations. No new emergency compatibility exception is introduced.",
+        "warningText": "Restart after installation. Back up local application state before changing versions; older binaries cannot read the newer schema. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
+        "verifiedCarryForward": false
+      }
     }
   ]
 }

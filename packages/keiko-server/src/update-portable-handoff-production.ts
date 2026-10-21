@@ -1,3 +1,4 @@
+import { currentProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { UpdateActivationWalState, UpdateSession } from "@oscharko-dev/keiko-contracts";
@@ -96,7 +97,7 @@ export function createPortableHandoffCurrentProcessResolver(input: {
     if (!validCurrentProcessInput(input, launchId, portText, port)) {
       fail("portable handoff current process identity is unavailable");
     }
-    const pid = input.pid ?? process.pid;
+    const pid = input.pid ?? currentProcessId();
     if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2_147_483_647) {
       fail("portable handoff current process identity is unavailable");
     }
@@ -480,6 +481,7 @@ export function createProductionPortableHandoffRuntime(
     });
   const coordinator = createPortableHandoffCoordinator({
     stateDir: options.stateDir,
+    securityLogSink: options.securityLogSink,
     persistPrepared: ({ sessionId, activationWal }) =>
       persistWal({ sessionId, activationWal, prepared: true }),
     persistAccepted: ({ sessionId, activationWal }) =>

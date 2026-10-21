@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "classification": "Unshipped Linux generation backend mechanics and shared POSIX codec; not complete updater, installed-platform or epic acceptance",
+  "sourceParent": "a49b312a30d73a1f10052154310ab19bc65bc352",
+  "sourceFreeze": {
+    "artifact": "checkpoint47-source-freeze-v6.json",
+    "sha256": "c03b3838ed7ffa145e03b7c6448c0b6ea27bc59ae267450cac58fca6ce1c62a5"
+  },
+  "implementation": {
+    "owner": "Existing KRP1/KRC1/KRS1 native supervisor and POSIX coordinator boundary",
+    "generation": "Outer process atomically owns a clone3 user/PID-namespace init pidfd. The init retains the private lease, polls while reaping, verifies non-root identities, clears capabilities/bounding capabilities, enables no-new-privileges and verifies non-dumpability before root creation.",
+    "identity": "Kernel credentials on a private startup channel bind init/root. The exact root pidfd is held before acknowledgement and execution. Child inherited descriptors are closed except existing standard streams and an explicitly supplied coordinator start gate.",
+    "retirement": "A correctly owned terminal init wait, under its original monotonic bound, supports the kernel zero-live derivation. Readiness alone is not reaping; delayed completions fail closed and consumed identities are cleared before refusal.",
+    "reuse": "One POSIX codec and existing argument/environment marshalling, including partial-allocation cleanup, serve both platforms. Its compatibility location remains inside the existing attested macOS source tree. No current macOS source-path validator is broadened.",
+    "availability": "No portable stage, runtime admission, CLI/BFF owner or coordinator handoff is enabled by this source checkpoint. Existing Linux sandbox/egress requirements and unsupported update admission remain binding."
+  },
+  "actualVerification": {
+    "frozenNativeControls": {
+      "artifact": "checkpoint47-frozen-native-controls.json",
+      "sha256": "7e90c8228bbae8c2b687113cb0d11dc3ffd4b286979ca858e7e4769f1c697fed"
+    },
+    "linuxArm64": {
+      "imageDigest": "sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+      "fixturePolicy": [
+        "network disabled",
+        "read-only root and project",
+        "unprivileged uid/gid",
+        "all capabilities dropped",
+        "no-new-privileges",
+        "explicit namespace-enabled seccomp fixture",
+        "private executable tmpfs"
+      ],
+      "kernelCasesPassed": 8,
+      "decoderRefusalsPassed": 6,
+      "deadlineControlsPassed": 9,
+      "log": {
+        "artifact": "checkpoint47-v6-native-arm.log",
+        "sha256": "94ba07887ddd308413cb562c3e2fe118d8d9b8e474ef0bb4a3ce0aa5f53f7103"
+      },
+      "cases": [
+        "split control stop",
+        "control EOF",
+        "partial control EOF",
+        "outer-owner crash",
+        "root exit",
+        "held init refuses early proof; immediate retirement after resume",
+        "actual POSIX coordinator encoder",
+        "independent sibling generations"
+      ],
+      "independentObserver": "Five live kernel pidfds held before each teardown; normal completion requires immediate all-five terminal after KRS. Owner-crash checks eventual termination separately. The held-init negative observation uses a declared 100ms window within the unchanged five-second product bound.",
+      "priorRegisteredDriverLog": {
+        "artifact": "checkpoint47-v4-native-arm.log",
+        "sha256": "de6d3371d20e32cc33e6bd778b86ce9f9037a75c7ae5bf55645ebca3ec531e86"
+      }
+    },
+    "deadlineCausality": {
+      "preservedBeforeSourceSha256": "f6914807b3fdbd0fe60eec4f6771a8ffacf92f8ad7f9122cb13c2f0bf4d60bee",
+      "beforeInputs": {
+        "artifact": "checkpoint47-deadline-before-inputs.json",
+        "sha256": "098ff4d76d7af6ce60f599e65ffa5282c3e3180188856f73d673159f6b361ea9"
+      },
+      "beforeFailed": 5,
+      "beforeHealthy": 4,
+      "beforeLog": {
+        "artifact": "checkpoint47-deadlines-frozen-before.log",
+        "sha256": "942561782cf51bb77f34a408c024b74c239720536652003f28e5b1b7cee45c1b"
+      },
+      "afterPassed": 9,
+      "afterLog": {
+        "artifact": "checkpoint47-linux-deadlines-after.log",
+        "sha256": "8f5c22ac2661816c35bc74c0fcc3ceb0ec746105b8491a9266eb1eb11bdd2810"
+      },
+      "classification": "Identical actual-function scheduling controls, including consumed identity after late wait. The final complete kernel run separately retains all nine controls on the frozen source."
+    },
+    "disabledWaitCounterexample": {
+      "sourceSha256": "86c240cd53a4ef029dfa0064e462d8dd6c7fa2c91293d2b2246081769b6d2562",
+      "expectedFailure": "The same held-init control rejects a reaped proof emitted by a private producer with its owned wait disabled. Observer cleanup retires its held generation.",
+      "log": {
+        "artifact": "checkpoint47-disabled-wait-frozen.log",
+        "sha256": "24f383d0687be8d83e1cf40bb705d60d06c1549474cc26dc809194dc1c70a28e"
+      }
+    },
+    "macos": {
+      "scope": "Full compiler/analyzer/boundary gate; not installed Endpoint Security or successive-update qualification",
+      "log": {
+        "artifact": "checkpoint47-macos-native-shared.log",
+        "sha256": "d187f09af13ddc34fc9e94b4b0ff02f1b294a8a5d8acb090b0894fb5faf33e9b"
+      }
+    },
+    "x64TranslatedKernel": {
+      "outcome": "Unqualified: clone3 returns ENOSYS 38 under local x64 userspace translation on an ARM Linux VM. This is not a successful x64 kernel qualification.",
+      "failedLog": {
+        "artifact": "checkpoint47-linux-protocol-v3-x64.log",
+        "sha256": "e38dee1900977888f3f285e6f200904702359de98c798a62004a9db474fd7f3d"
+      },
+      "numericProbeLog": {
+        "artifact": "checkpoint47-x64-clone3-probe.log",
+        "sha256": "6e4d18de718d988aa58936092c14d02e0b390a2967b906a681c8c52b9c5f5099"
+      }
+    },
+    "scopeAndReporter": {
+      "passed": 37,
+      "log": {
+        "artifact": "checkpoint47-scope-and-reporter-tests.log",
+        "sha256": "1b298755fa251d070019d6a20bc0ab6bc7743383fe4883211d268e7003c05dfe"
+      },
+      "runtimeValue": "The replacement-character assertion uses a Unicode escape with identical JavaScript value; its UTF-8 truncation check is unchanged."
+    },
+    "finalRegisteredDriver": {
+      "artifact": "checkpoint47-final-native-validation.json",
+      "sha256": "ac227d9a679afff51718c591f4a0995733ded6971e979b701f34927f0808c1b5"
+    },
+    "x64TranslatedProtocol": {
+      "compilerAnalyzerDecoderAndDeadlinePassed": true,
+      "kernelQualified": false,
+      "log": {
+        "artifact": "checkpoint47-runner-native-x64.log",
+        "sha256": "8707c39fa52573613d36550e80a464b63387e72fc2f22f01b1cff053396cf2ab"
+      }
+    },
+    "registeredTestDriver": {
+      "initialSonarRefusal": {
+        "artifact": "checkpoint47-sonar.log",
+        "sha256": "f8971d24c4f014d5bd7df9404bed403ddbee0669966717e1dfc86a3112b72a0e"
+      },
+      "repair": "The requested qualification is registered through node:test and its actual asynchronous completion status is asserted. The strict export from node:assert is the identical Node24.18 assertion object; every existing failure oracle remains. No analyzer rule or scope is suppressed.",
+      "initialMissingAssertionSonar": {
+        "artifact": "checkpoint47-sonar-registered.log",
+        "sha256": "6b83a59101285ae70fcaeaab382e6ea734abc53063e5413295f5c80b5e89e293"
+      },
+      "priorDelegatedAssertionSonar": {
+        "artifact": "checkpoint47-sonar-v4.log",
+        "sha256": "f7c1a71e0d9b094cc3a06af65b22d07fc3b8be84bfaf01847af853daeeee283a"
+      },
+      "assertionObjectIdentity": {
+        "artifact": "checkpoint47-assert-object-identity.log",
+        "sha256": "a7e622c4e65bfb28da33cff2a63d062a3c755270318a45728bf868a5f51389b9"
+      }
+    },
+    "finalRegisteredIntegrationAssertion": {
+      "artifact": "checkpoint47-v4-native-validation.json",
+      "sha256": "11a47edd168ca10c67077d2ae8fed80a0dd9c13b4cf2885d54fa199b6c4fb5d7"
+    },
+    "finalRegisteredNativeQualification": {
+      "artifact": "checkpoint47-v6-native-validation.json",
+      "sha256": "2f287b9c7d7f5fa224318489728bef905ebc6c57178ba80e8d24c71579b9f420"
+    },
+    "supplementaryShellcheck": {
+      "artifact": "checkpoint47-shellcheck-receipt.json",
+      "sha256": "4643050e540b8a30eccb1d7e784e3732304d2642d315ece7013abe5dbe0df6bf"
+    }
+  },
+  "limits": [
+    "No complete acceptance disposition or issue checkbox changes.",
+    "Initial/successor outer ownership, direct authenticated per-attempt BFF/coordinator transport, consistent host PID consumers and actual x64 installation qualification remain open.",
+    "Two actual successive installed-version updates, recovery/rollback, SSD/state continuity and the macOS ownership P1 remain open.",
+    "Compiler/analyzer/protocol/kernel scopes are explicit; neither fixture permissions nor ARM mechanics establish customer-host availability."
+  ],
+  "priorSourceFreeze": {
+    "artifact": "checkpoint47-source-freeze-v4.json",
+    "sha256": "f33902117e8a7b1596a5f38b801d459a05f409cadc0776100256e5943ae5e9c5"
+  }
+}

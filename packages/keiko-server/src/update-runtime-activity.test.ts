@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   updateLegacySnapshotImportedEvent,
   updateRuntimeActivityEvent,
+  updateRemediationLeaseEvent,
+  updateRuntimeStateWriteEvent,
   type UpdateRuntimeActivityFields,
 } from "./update-runtime-activity.js";
 import {
@@ -11,6 +13,47 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 describe("update runtime activity event", () => {
+  it.each(["written", "busy", "failed"] as const)(
+    "resolves the body-free aggregate publication proof for %s",
+    (state) => {
+      const event = updateRuntimeStateWriteEvent("state-write-proof", "write-proof-1", state);
+      const persisted = expectActivityLogProof(
+        "update.runtime.state-write.exclusive",
+        formatActivityLogProofLine(event),
+      );
+      expect(persisted).toMatchObject({
+        op: "update.runtime.state-write",
+        correlationId: "state-write-proof",
+        writeId: "write-proof-1",
+        state,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(event.level).toBe(state === "written" ? "info" : "warn");
+      expect(event.errorKind).toBe(
+        state === "written" ? undefined : state === "busy" ? "conflict" : "write-failed",
+      );
+    },
+  );
+
+  it("resolves the body-free exclusive remediation lease proof", () => {
+    const event = updateRemediationLeaseEvent("remediation-lease-proof", {
+      leaseId: "lease-proof-1",
+      actionDigest: "a".repeat(64),
+      state: "acquired",
+    });
+    const persisted = expectActivityLogProof(
+      "update.remediation.lease.exclusive",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({
+      op: "update.remediation.lease",
+      correlationId: "remediation-lease-proof",
+      state: "acquired",
+      actionDigest: "a".repeat(64),
+    });
+  });
+
   it("resolves the update.runtime.event Activity Log proof for a non-failed state", () => {
     const fields: UpdateRuntimeActivityFields = {
       eventId: "runtime-evt-preflight-0001",

@@ -14,6 +14,25 @@ static int coordinator_test_kill(pid_t pid, int signal_number) {
   return kill(pid, signal_number);
 }
 
+static int coordinator_delay_ui_read;
+static int coordinator_delay_ui_compare;
+static ssize_t coordinator_test_read(int descriptor, void *buffer, size_t length) {
+  if (coordinator_delay_ui_read) {
+    coordinator_delay_ui_read = 0;
+    assert(raise(SIGSTOP) == 0);
+  }
+  return read(descriptor, buffer, length);
+}
+
+static int coordinator_test_memcmp(const void *left, const void *right, size_t length) {
+  int result = memcmp(left, right, length);
+  if (coordinator_delay_ui_compare) {
+    coordinator_delay_ui_compare = 0;
+    assert(raise(SIGSTOP) == 0);
+  }
+  return result;
+}
+
 static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
   return coordinator_cutover_failure == NULL ||
          strcmp(coordinator_cutover_failure, checkpoint) != 0;
@@ -21,9 +40,13 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 
 #define KEIKO_COORDINATOR_KILL coordinator_test_kill
 #define KEIKO_COORDINATOR_CUTOVER_CHECKPOINT coordinator_test_cutover_checkpoint
+#define memcmp coordinator_test_memcmp
+#define read coordinator_test_read
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
+#undef read
+#undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
 #undef KEIKO_COORDINATOR_KILL
 
@@ -593,8 +616,138 @@ static void test_reconcile_requires_zero_live_proof(const char *self) {
   assert(rmdir(root) == 0);
 }
 
+static void test_ui_identity_delayed_step(const keiko_coordinator_context *context, int compare) {
+  int status = 0;
+  pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    coordinator_delay_ui_read = !compare;
+    coordinator_delay_ui_compare = compare;
+    _exit(keiko_coordinator_ui_identity(context, keiko_tree_now_ms() + 500u) ? 1 : 0);
+  }
+  assert(waitpid(child, &status, WUNTRACED) == child);
+  assert(WIFSTOPPED(status));
+  struct timespec delay = {0, 600000000};
+  while (nanosleep(&delay, &delay) == -1 && errno == EINTR) {}
+  assert(kill(child, SIGCONT) == 0);
+  assert(waitpid(child, &status, 0) == child);
+  assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+static void test_ui_identity_deadline(void) {
+  char root[] = "/tmp/keiko-ui-deadline.XXXXXX", path[PATH_MAX];
+  keiko_coordinator_context context = {0};
+  assert(mkdtemp(root) != NULL);
+  assert(join_path(path, sizeof(path), root, "/ui.pid"));
+  memcpy(context.state_dir, root, strlen(root) + 1u);
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  write_fixture_file(path, "12345\n0123456789abcdef0123456789abcdef\n");
+  test_ui_identity_delayed_step(&context, 0);
+  test_ui_identity_delayed_step(&context, 1);
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
+static void test_ui_identity_records(void) {
+  static const struct { const char *content; int expected; } cases[] = {
+    {"12345\n0123456789abcdef0123456789abcdef\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nnative-app-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v2\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nnative-app-v1\nbrowser-open-v1\n", 0},
+    {"native-app-starting-v1\n0123456789abcdef0123456789abcdef\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nother-capability\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nextra\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1", 0},
+    {"12346\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 0},
+    {"12345\nffffffffffffffffffffffffffffffff\nbrowser-open-v1\n", 0},
+  };
+  char root[] = "/tmp/keiko-ui-identity.XXXXXX", path[PATH_MAX], other[PATH_MAX];
+  keiko_coordinator_context context = {0};
+  assert(mkdtemp(root) != NULL);
+  assert(join_path(path, sizeof(path), root, "/ui.pid"));
+  assert(join_path(other, sizeof(other), root, "/ui.actual"));
+  memcpy(context.state_dir, root, strlen(root) + 1u);
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    write_fixture_file(path, cases[i].content);
+    assert(keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u) == cases[i].expected);
+    assert(unlink(path) == 0);
+  }
+  write_fixture_file(path, cases[1].content);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() - 1u));
+  assert(link(path, other) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(symlink("ui.actual", path) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(unlink(other) == 0);
+  assert(mkfifo(path, 0600) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
+static void test_port_probe_matches_runtime_rebinding(void) {
+  int server = socket(AF_INET, SOCK_STREAM, 0), client = -1, accepted = -1, enabled = 1;
+  struct sockaddr_in address = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+  socklen_t length = sizeof(address);
+  keiko_coordinator_context context = {0};
+  char port[8], eof;
+  assert(server >= 0 && setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) == 0);
+  assert(bind(server, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(server, 1) == 0);
+  assert(getsockname(server, (struct sockaddr *)&address, &length) == 0);
+  assert(snprintf(port, sizeof(port), "%u", (unsigned int)ntohs(address.sin_port)) > 0);
+  context.plan.field[KEIKO_KHP_OLD_PORT] = port;
+  assert(!keiko_coordinator_port_bindable(&context));
+  client = socket(AF_INET, SOCK_STREAM, 0);
+  assert(client >= 0 && connect(client, (struct sockaddr *)&address, sizeof(address)) == 0);
+  accepted = accept(server, NULL, NULL);
+  assert(accepted >= 0 && close(accepted) == 0);
+  assert(read(client, &eof, 1) == 0 && close(client) == 0 && close(server) == 0);
+  assert(keiko_coordinator_port_bindable(&context));
+}
+
+static void test_control_write_deadline(void) {
+  int channel[2], flags, status = 0;
+  unsigned char buffer[4096] = {0};
+  assert(pipe(channel) == 0);
+  flags = fcntl(channel[1], F_GETFL);
+  assert(flags >= 0 && fcntl(channel[1], F_SETFL, flags | O_NONBLOCK) == 0);
+  while (write(channel[1], buffer, sizeof(buffer)) > 0) {}
+  assert(errno == EAGAIN || errno == EWOULDBLOCK);
+  assert(fcntl(channel[1], F_SETFL, flags) == 0);
+  pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    int result = keiko_coordinator_write_deadline(channel[1], buffer, 1u,
+                                                  keiko_tree_now_ms() + 25u);
+    _exit(result ? 1 : 0);
+  }
+  int completed = keiko_coordinator_waitpid_deadline(&child, &status, keiko_tree_now_ms() + 1000u);
+  keiko_coordinator_dispose_child(&child);
+  assert(completed && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+  assert(pipe(channel) == 0);
+  assert(!keiko_coordinator_write_deadline(channel[1], buffer, 1u, keiko_tree_now_ms()));
+  struct pollfd available = {channel[0], POLLIN, 0};
+  assert(poll(&available, 1, 0) == 0);
+  assert(keiko_coordinator_write_deadline(channel[1], buffer, 1u, keiko_tree_now_ms() + 1000u));
+  assert(read(channel[0], buffer, 1u) == 1);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+}
+
 int main(int argc, char **argv) {
   char path[64];
+  if (argc == 2 && strcmp(argv[1], "--ui-identity-deadline") == 0) {
+    test_ui_identity_deadline();
+    return 0;
+  }
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile_fixture(argv[2]);
   if (argc == 1 && strstr(argv[0], "/runtime-supervisor") != NULL) return supervisor_fixture();
   assert(argc == 1);
@@ -608,6 +761,10 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
   assert(current_executable_path(path, 2) == 0);
 #endif
+  test_ui_identity_deadline();
+  test_port_probe_matches_runtime_rebinding();
+  test_control_write_deadline();
+  test_ui_identity_records();
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);
   test_atomic_promote_survives_each_cutover_boundary();

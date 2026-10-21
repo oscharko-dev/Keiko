@@ -6,8 +6,10 @@
 #include <bsm/libbsm.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define KEIKO_MAX_SESSIONS 16u
@@ -30,11 +33,15 @@ struct monitor_session {
   int descriptor;
   uid_t uid;
   pid_t supervisor_pid;
+  audit_token_t supervisor_token;
   char recovery_handle[KEIKO_RECOVERY_HANDLE_BYTES];
-  pid_t processes[KEIKO_MAX_PROCESSES];
+  audit_token_t processes[KEIKO_MAX_PROCESSES];
   size_t process_count;
   int stopping;
   int root_observed;
+  int supervisor_exited;
+  int observation_failed;
+  int stale_signal_observed;
 };
 
 static struct monitor_session sessions[KEIKO_MAX_SESSIONS];
@@ -43,6 +50,10 @@ static pthread_mutex_t endpoint_state_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t connection_lock = PTHREAD_MUTEX_INITIALIZER;
 static es_client_t *endpoint_client;
 static size_t connection_count;
+// Protected by sessions_lock; sequence failure is irreversible for this monitor instance.
+static uint64_t last_event_sequence;
+static int event_sequence_initialized;
+static int event_stream_failed;
 
 enum endpoint_state {
   ENDPOINT_STATE_STARTING = 1,
@@ -56,12 +67,20 @@ static enum endpoint_state endpoint_state = ENDPOINT_STATE_STARTING;
 _Static_assert(sizeof(struct keiko_monitor_request) == 44, "monitor request layout");
 _Static_assert(sizeof(struct keiko_monitor_reply) == 12, "monitor reply layout");
 
-static void kill_session_processes(const struct monitor_session *session);
+static void kill_session_processes(struct monitor_session *session);
+
+static int tree_observation_complete(const struct monitor_session *session) {
+  return event_sequence_initialized && !event_stream_failed && !session->observation_failed &&
+         (session->root_observed || session->supervisor_exited);
+}
 
 static int reply_to(struct monitor_session *session, uint16_t kind) {
   struct keiko_monitor_reply reply;
   ssize_t sent;
   if (session->descriptor < 0) return 0;
+  if (kind == KEIKO_MONITOR_ZERO_LIVE &&
+      !tree_observation_complete(session))
+    kind = KEIKO_MONITOR_ERROR;
   memset(&reply, 0, sizeof(reply));
   memcpy(reply.magic, "KES1", 4);
   reply.version = KEIKO_MONITOR_VERSION;
@@ -82,9 +101,8 @@ static int reply_to(struct monitor_session *session, uint16_t kind) {
 // "com.oscharko.keiko.runtime-monitor"'` is the read side.
 //
 // Redaction (AGENTS.md §7, evidence is body-free): pids, counts, states and error codes only.
-// Never a process command line, argv, environment or file content. Deliberately NOT wired into
-// endpoint_event(), which runs per fork/exec/exit machine-wide — logging there would recreate the
-// hot-path cost the O(n)-scan finding warns about. Decision points only.
+// Never a process command line, argv, environment or file content. Event callbacks log only the
+// first irreversible observation failure, never routine fork/exec/exit traffic. Decision points only.
 static os_log_t keiko_monitor_log_handle;
 
 static void keiko_monitor_log_init(void) {
@@ -117,6 +135,44 @@ static void set_endpoint_state(enum endpoint_state state) {
   endpoint_state = state;
   pthread_mutex_unlock(&endpoint_state_lock);
   os_log(keiko_monitor_log(), "endpoint state -> %{public}s", endpoint_state_name(state));
+}
+
+enum endpoint_sequence_failure {
+  ENDPOINT_SEQUENCE_UNAVAILABLE = 1,
+  ENDPOINT_SEQUENCE_DISCONTINUOUS = 2
+};
+
+static void invalidate_event_stream(enum endpoint_sequence_failure reason, uint32_t version,
+                                    uint64_t observed) {
+  size_t index;
+  if (event_stream_failed) return;
+  event_stream_failed = 1;
+  os_log_error(keiko_monitor_log(),
+               "endpoint sequence integrity lost: reason=%{public}u, version=%{public}u, "
+               "last=%{public}llu, observed=%{public}llu",
+               (unsigned)reason, version, (unsigned long long)last_event_sequence,
+               (unsigned long long)observed);
+  set_endpoint_state(ENDPOINT_STATE_FAILED);
+  for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
+    if (sessions[index].active) (void)reply_to(&sessions[index], KEIKO_MONITOR_ERROR);
+  }
+}
+
+static void record_endpoint_sequence(const es_message_t *message) {
+  if (event_stream_failed) return;
+  // The SDK makes global_seq_num available only from message version four.
+  if (message->version < 4) {
+    invalidate_event_stream(ENDPOINT_SEQUENCE_UNAVAILABLE, message->version, 0);
+    return;
+  }
+  if (event_sequence_initialized &&
+      (last_event_sequence == UINT64_MAX || message->global_seq_num != last_event_sequence + 1)) {
+    invalidate_event_stream(ENDPOINT_SEQUENCE_DISCONTINUOUS, message->version,
+                            message->global_seq_num);
+    return;
+  }
+  last_event_sequence = message->global_seq_num;
+  event_sequence_initialized = 1;
 }
 
 static enum endpoint_state current_endpoint_state(void) {
@@ -153,11 +209,47 @@ static int handle_valid(const char handle[KEIKO_RECOVERY_HANDLE_BYTES]) {
 static int session_contains(const struct monitor_session *session, pid_t pid) {
   size_t index;
   for (index = 0; index < session->process_count; ++index)
-    if (session->processes[index] == pid) return 1;
+    if (audit_token_to_pid(session->processes[index]) == pid) return 1;
   return 0;
 }
 
-static void kill_session_processes(const struct monitor_session *session) {
+static int same_process(audit_token_t left, audit_token_t right) {
+  return audit_token_to_pid(left) == audit_token_to_pid(right) &&
+         audit_token_to_pidversion(left) == audit_token_to_pidversion(right);
+}
+
+static size_t session_process_index(const struct monitor_session *session, audit_token_t token) {
+  size_t index;
+  for (index = 0; index < session->process_count; ++index)
+    if (same_process(session->processes[index], token)) return index;
+  return SIZE_MAX;
+}
+
+static int signal_process(audit_token_t token) {
+  // This libproc SPI validates pidversion and signals one kernel-held process reference.
+  // Its return value is errno directly. ESRCH is not an observed exit: exec also changes version.
+  return proc_signal_with_audittoken(&token, SIGKILL);
+}
+
+static void signal_session_process(struct monitor_session *session, audit_token_t token) {
+  int result = signal_process(token);
+  if (result == ESRCH) {
+    if (!session->stale_signal_observed) {
+      session->stale_signal_observed = 1;
+      os_log(keiko_monitor_log(),
+             "session token-bound signal awaits lifecycle: processes=%{public}zu",
+             session->process_count);
+    }
+    return;
+  }
+  if (result == 0 || session->observation_failed) return;
+  session->observation_failed = 1;
+  os_log_error(keiko_monitor_log(),
+               "session token-bound signal refused: result=%{public}d, processes=%{public}zu",
+               result, session->process_count);
+}
+
+static void kill_session_processes(struct monitor_session *session) {
   // KEIKO-1005: a SIGKILL fan-out is a security-relevant decision. Log the session's
   // supervisor_pid and the process count so an operator can reconstruct which supervisor
   // triggered the kill, without leaking the actual pids of the supervised runtimes.
@@ -166,7 +258,7 @@ static void kill_session_processes(const struct monitor_session *session) {
          (int)session->supervisor_pid, session->process_count);
   size_t index;
   for (index = 0; index < session->process_count; ++index)
-    (void)kill(session->processes[index], SIGKILL);
+    signal_session_process(session, session->processes[index]);
 }
 
 static int reserve_connection(void) {
@@ -189,45 +281,54 @@ static void release_connection(void *opaque) {
   pthread_mutex_unlock(&connection_lock);
 }
 
-static void session_add(struct monitor_session *session, pid_t pid) {
-  if (session_contains(session, pid)) return;
-  if (session->process_count >= KEIKO_MAX_PROCESSES) {
+static void session_add(struct monitor_session *session, audit_token_t token) {
+  if (session_process_index(session, token) != SIZE_MAX) return;
+  if (session->process_count >= KEIKO_MAX_PROCESSES ||
+      session_contains(session, audit_token_to_pid(token))) {
     os_log_error(keiko_monitor_log(),
-                 "session process budget exhausted at %{public}u; killing the session",
-                 KEIKO_MAX_PROCESSES);
+                 "session process inventory refused: processes=%{public}zu, limit=%{public}u",
+                 session->process_count, KEIKO_MAX_PROCESSES);
     session->stopping = 1;
-    (void)kill(pid, SIGKILL);
+    session->observation_failed = 1;
+    signal_session_process(session, token);
     kill_session_processes(session);
     reply_to(session, KEIKO_MONITOR_ERROR);
     return;
   }
-  session->processes[session->process_count++] = pid;
-  if (session->stopping) (void)kill(pid, SIGKILL);
-}
-
-static void session_remove(struct monitor_session *session, pid_t pid) {
-  size_t index;
-  for (index = 0; index < session->process_count; ++index) {
-    if (session->processes[index] != pid) continue;
-    session->processes[index] = session->processes[session->process_count - 1];
-    session->process_count -= 1;
-    if (session->process_count == 0) {
-      if (session->descriptor >= 0) {
-        reply_to(session, KEIKO_MONITOR_ZERO_LIVE);
-      } else {
-        memset(session, 0, sizeof(*session));
-      }
-    }
-    return;
+  session->processes[session->process_count++] = token;
+  if (session->stopping) {
+    signal_session_process(session, token);
+    if (session->observation_failed) reply_to(session, KEIKO_MONITOR_ERROR);
   }
 }
 
-static struct monitor_session *session_for_pid(pid_t pid) {
+static void complete_session_if_empty(struct monitor_session *session) {
+  if (session->process_count != 0) return;
+  if (session->descriptor >= 0 && tree_observation_complete(session)) {
+    reply_to(session, KEIKO_MONITOR_ZERO_LIVE);
+  } else if (session->descriptor >= 0 && session->observation_failed) {
+    reply_to(session, KEIKO_MONITOR_ERROR);
+  } else if (session->descriptor < 0 && session->supervisor_exited &&
+             tree_observation_complete(session)) {
+    memset(session, 0, sizeof(*session));
+  }
+}
+
+static void session_remove(struct monitor_session *session, audit_token_t token) {
+  size_t index = session_process_index(session, token);
+  if (index == SIZE_MAX) return;
+  session->processes[index] = session->processes[session->process_count - 1];
+  session->process_count -= 1;
+  complete_session_if_empty(session);
+}
+
+static struct monitor_session *session_for_process(audit_token_t token) {
   size_t index;
   for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
     struct monitor_session *session = &sessions[index];
     if (session->active &&
-        (session->supervisor_pid == pid || session_contains(session, pid)))
+        ((!session->supervisor_exited && same_process(session->supervisor_token, token)) ||
+         session_process_index(session, token) != SIZE_MAX))
       return session;
   }
   return NULL;
@@ -246,39 +347,69 @@ static struct monitor_session *session_for_handle(
 }
 
 static void stop_session(struct monitor_session *session) {
-  pid_t processes[KEIKO_MAX_PROCESSES];
-  size_t count, index;
   pthread_mutex_lock(&sessions_lock);
   session->stopping = 1;
-  count = session->process_count;
-  memcpy(processes, session->processes, count * sizeof(pid_t));
-  if (count == 0 && session->descriptor >= 0)
-    reply_to(session, KEIKO_MONITOR_ZERO_LIVE);
+  os_log(keiko_monitor_log(), "stop_session: token-bound SIGKILL fan-out to %{public}zu process(es)",
+         session->process_count);
+  kill_session_processes(session);
+  if (session->observation_failed && session->descriptor >= 0)
+    reply_to(session, KEIKO_MONITOR_ERROR);
+  else
+    complete_session_if_empty(session);
   pthread_mutex_unlock(&sessions_lock);
-  // The kill-switch fan-out is the single most consequential action this daemon takes; it was
-  // entirely unobservable. Count only, never the command lines of what was killed.
-  os_log(keiko_monitor_log(), "stop_session: SIGKILL fan-out to %{public}zu process(es)", count);
-  for (index = 0; index < count; ++index) (void)kill(processes[index], SIGKILL);
+}
+
+static void observe_session_exec(struct monitor_session *session, audit_token_t process,
+                                 audit_token_t target) {
+  if (audit_token_to_pid(target) != audit_token_to_pid(process)) {
+    if (!session->observation_failed)
+      os_log_error(keiko_monitor_log(), "session exec identity refused: processes=%{public}zu",
+                   session->process_count);
+    session->observation_failed = 1;
+    session->stopping = 1;
+    kill_session_processes(session);
+    reply_to(session, KEIKO_MONITOR_ERROR);
+  } else if (same_process(process, session->supervisor_token)) {
+    session->supervisor_token = target;
+  } else {
+    size_t index = session_process_index(session, process);
+    session->processes[index] = target;
+    if (session->stopping) {
+      signal_session_process(session, target);
+      if (session->observation_failed) reply_to(session, KEIKO_MONITOR_ERROR);
+    }
+  }
 }
 
 static void endpoint_event(es_client_t *client, const es_message_t *message) {
-  pid_t process_pid = audit_token_to_pid(message->process->audit_token);
+  audit_token_t process = message->process->audit_token;
   pthread_mutex_lock(&sessions_lock);
+  record_endpoint_sequence(message);
   if (message->event_type == ES_EVENT_TYPE_NOTIFY_FORK) {
-    pid_t child_pid = audit_token_to_pid(message->event.fork.child->audit_token);
-    struct monitor_session *session = session_for_pid(process_pid);
+    struct monitor_session *session = session_for_process(process);
     if (session != NULL) {
-      session_add(session, child_pid);
-      if (process_pid == session->supervisor_pid && !session->root_observed) {
+      session_add(session, message->event.fork.child->audit_token);
+      if (same_process(process, session->supervisor_token) && !session->root_observed) {
         session->root_observed = 1;
         reply_to(session, KEIKO_MONITOR_ROOT_OBSERVED);
       }
     }
+  } else if (message->event_type == ES_EVENT_TYPE_NOTIFY_EXEC) {
+    struct monitor_session *session = session_for_process(process);
+    if (session != NULL)
+      observe_session_exec(session, process, message->event.exec.target->audit_token);
   } else if (message->event_type == ES_EVENT_TYPE_NOTIFY_EXIT) {
-    struct monitor_session *session = session_for_pid(process_pid);
-    if (session != NULL) session_remove(session, process_pid);
+    struct monitor_session *session = session_for_process(process);
+    if (session != NULL) {
+      if (same_process(process, session->supervisor_token)) {
+        session->supervisor_exited = 1;
+        complete_session_if_empty(session);
+      } else {
+        session_remove(session, process);
+      }
+    }
   } else if (message->event_type == ES_EVENT_TYPE_AUTH_EXEC) {
-    struct monitor_session *session = session_for_pid(process_pid);
+    struct monitor_session *session = session_for_process(process);
     es_auth_result_t result =
         session != NULL && session->stopping ? ES_AUTH_RESULT_DENY : ES_AUTH_RESULT_ALLOW;
     (void)es_respond_auth_result(client, message, result, false);
@@ -299,15 +430,20 @@ static CFStringRef team_identifier_for_code(SecCodeRef code) {
   return team;
 }
 
-static int same_team_process(pid_t pid) {
+static int same_team_process(audit_token_t token) {
   SecCodeRef self = NULL, guest = NULL;
   CFStringRef self_team = NULL, guest_team = NULL;
-  CFNumberRef process = CFNumberCreate(NULL, kCFNumberIntType, &pid);
-  const void *keys[] = {kSecGuestAttributePid};
+  CFDataRef process = CFDataCreate(NULL, (const UInt8 *)&token, sizeof(token));
+  if (process == NULL) return 0;
+  const void *keys[] = {kSecGuestAttributeAudit};
   const void *values[] = {process};
   CFDictionaryRef attributes =
       CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
                          &kCFTypeDictionaryValueCallBacks);
+  if (attributes == NULL) {
+    CFRelease(process);
+    return 0;
+  }
   int matches = 0;
   if (SecCodeCopySelf(kSecCSDefaultFlags, &self) == errSecSuccess &&
       SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest) ==
@@ -333,10 +469,24 @@ static pid_t peer_pid(int descriptor) {
   return getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0 ? pid : 0;
 }
 
+// LOCAL_PEERTOKEN identifies the PID currently attributed to the socket, not its original writer.
+// Code verification and session allocation must nevertheless use one exact captured generation.
+static int peer_audit_token(int descriptor, pid_t pid, uid_t uid, audit_token_t *token) {
+  socklen_t length = sizeof(*token);
+  return getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, token, &length) == 0 &&
+         length == sizeof(*token) && audit_token_to_pid(*token) == pid &&
+         audit_token_to_euid(*token) == uid;
+}
+
 static struct monitor_session *allocate_session(int descriptor, uid_t uid,
-                                                const struct keiko_monitor_request *request) {
+                                                const struct keiko_monitor_request *request,
+                                                audit_token_t supervisor_token) {
   size_t index;
+  if (!event_sequence_initialized || event_stream_failed) return NULL;
   if (session_for_handle(request->recovery_handle) != NULL) return NULL;
+  if (audit_token_to_pid(supervisor_token) != (pid_t)request->supervisor_pid ||
+      audit_token_to_euid(supervisor_token) != uid)
+    return NULL;
   // KEIKO-0771: also refuse the ARM when another active session already owns the same
   // supervisor_pid. session_for_pid used to answer against the FIRST match it found and could
   // therefore misattribute a fork to the wrong session after an OS pid-number reuse. Fail the
@@ -344,10 +494,14 @@ static struct monitor_session *allocate_session(int descriptor, uid_t uid,
   // session claim a pid another active session already owns.
   for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
     const struct monitor_session *existing = &sessions[index];
-    if (existing->active && existing->supervisor_pid == (pid_t)request->supervisor_pid) {
+    if (existing->active &&
+        (existing->supervisor_pid == (pid_t)request->supervisor_pid ||
+         session_contains(existing, (pid_t)request->supervisor_pid))) {
       return NULL;
     }
   }
+  // Conservative numeric collision refusal also covers a post-exec token whose notification is
+  // pending. This does not authorize numeric signaling or implement update-generation transfer.
   for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
     struct monitor_session *session = &sessions[index];
     if (session->active) continue;
@@ -356,6 +510,7 @@ static struct monitor_session *allocate_session(int descriptor, uid_t uid,
     session->descriptor = descriptor;
     session->uid = uid;
     session->supervisor_pid = (pid_t)request->supervisor_pid;
+    session->supervisor_token = supervisor_token;
     memcpy(session->recovery_handle, request->recovery_handle, KEIKO_RECOVERY_HANDLE_BYTES);
     return session;
   }
@@ -366,7 +521,8 @@ static void close_session(struct monitor_session *session) {
   stop_session(session);
   pthread_mutex_lock(&sessions_lock);
   session->descriptor = -1;
-  if (session->process_count == 0) memset(session, 0, sizeof(*session));
+  // EOF is not a queue barrier: the first fork notification may still be pending.
+  complete_session_if_empty(session);
   pthread_mutex_unlock(&sessions_lock);
 }
 
@@ -385,6 +541,43 @@ enum reconcile_outcome {
   RECONCILE_ADOPTED = 2
 };
 
+static uint16_t reconcile_refusal_reply(enum reconcile_outcome outcome) {
+  // Lost or unknown session state cannot establish that its process tree is empty.
+  return outcome == RECONCILE_ALREADY_LIVE ? KEIKO_MONITOR_ALREADY_ACTIVE
+                                          : KEIKO_MONITOR_ERROR;
+}
+
+static uint64_t handshake_now_ms(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0 || now.tv_nsec < 0 ||
+      now.tv_nsec >= 1000000000 || (uint64_t)now.tv_sec > (UINT64_MAX - 999u) / 1000u)
+    return UINT64_MAX;
+  return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static int read_handshake(int descriptor, struct keiko_monitor_request *request) {
+  unsigned char *bytes = (unsigned char *)request;
+  size_t offset = 0;
+  uint64_t start = handshake_now_ms();
+  uint64_t duration = KEIKO_HANDSHAKE_TIMEOUT_SECONDS * UINT64_C(1000);
+  if (start > UINT64_MAX - duration) return 0;
+  uint64_t deadline = start + duration;
+  while (offset < sizeof(*request)) {
+    uint64_t now = handshake_now_ms();
+    if (now >= deadline) return 0;
+    struct pollfd pending = {descriptor, POLLIN | POLLHUP, 0};
+    int ready = poll(&pending, 1, (int)(deadline - now));
+    if (ready < 0 && errno == EINTR) continue;
+    if (ready <= 0 || (pending.revents & (POLLERR | POLLNVAL)) != 0 ||
+        (pending.revents & (POLLIN | POLLHUP)) == 0) return 0;
+    ssize_t count = recv(descriptor, bytes + offset, sizeof(*request) - offset, MSG_DONTWAIT);
+    if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+    if (count <= 0) return 0;
+    offset += (size_t)count;
+  }
+  return handshake_now_ms() < deadline;
+}
+
 static void *serve_client(void *opaque) {
   int descriptor = *(int *)opaque;
   struct keiko_monitor_request request;
@@ -394,11 +587,14 @@ static void *serve_client(void *opaque) {
   uid_t uid;
   gid_t gid;
   pid_t peer = peer_pid(descriptor);
+  audit_token_t peer_token;
   pthread_cleanup_push(release_connection, opaque);
   memset(&transient, 0, sizeof(transient));
   transient.descriptor = descriptor;
-  if (peer <= 0 || getpeereid(descriptor, &uid, &gid) != 0 || !same_team_process(peer) ||
-      !read_exact(descriptor, &request, sizeof(request)) || !request_valid(&request, peer)) {
+  if (peer <= 0 || getpeereid(descriptor, &uid, &gid) != 0 ||
+      !peer_audit_token(descriptor, peer, uid, &peer_token) || !same_team_process(peer_token) ||
+      !read_handshake(descriptor, &request) || !request_valid(&request, peer) ||
+      !same_team_process(peer_token)) {
     // KEIKO-0419: a rejected connection closed silently, so a same-team check failure, a short
     // read and a malformed frame were all the same non-event. The pid is what the kernel already
     // attributes to the socket; nothing further about the peer is logged.
@@ -430,7 +626,7 @@ static void *serve_client(void *opaque) {
   }
   pthread_mutex_lock(&sessions_lock);
   if (request.command == KEIKO_MONITOR_ARM) {
-    session = allocate_session(descriptor, uid, &request);
+    session = allocate_session(descriptor, uid, &request, peer_token);
   } else if (request.command == KEIKO_MONITOR_RECONCILE) {
     session = session_for_handle(request.recovery_handle);
     // KEIKO-0433: the three RECONCILE outcomes were collapsed into session/NULL, so "already
@@ -458,21 +654,18 @@ static void *serve_client(void *opaque) {
   if (session == NULL) {
     if (request.command == KEIKO_MONITOR_RECONCILE) {
       // KEIKO-1005: name the reconcile outcome so an operator can distinguish "already
-      // owned by a live connection" from "no such session" — both take this branch but with
-      // opposite meaning.
+      // owned by a live connection" from "no such session". Both refuse reconciliation;
+      // absence from this in-memory inventory never establishes an empty process tree.
       os_log(keiko_monitor_log(),
              "RECONCILE outcome=%{public}s for supervisor_pid=%{public}d",
              reconcile_outcome == RECONCILE_ALREADY_LIVE ? "ALREADY_LIVE" : "UNKNOWN_HANDLE",
              (int)peer);
-      (void)reply_to(&transient, reconcile_outcome == RECONCILE_ALREADY_LIVE
-                                     ? KEIKO_MONITOR_ALREADY_ACTIVE
-                                     : KEIKO_MONITOR_ZERO_LIVE);
+      (void)reply_to(&transient, reconcile_refusal_reply(reconcile_outcome));
     } else {
-      // KEIKO-1005: an ARM that returned NULL either lost the recovery-handle race or clashed
-      // with an existing session's supervisor_pid (KEIKO-0771). Both are refused with the same
-      // wire response; the log line separates them from a downstream diagnostic view.
+      // Unavailable observation and ownership collisions share the same wire refusal.
+      // Sequence integrity loss has its own preceding count-only diagnostic.
       os_log(keiko_monitor_log(),
-             "ARM refused (handle or supervisor_pid collision) for peer_pid=%{public}d",
+             "ARM refused (observation unavailable or ownership collision) for peer_pid=%{public}d",
              (int)peer);
       (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
     }
@@ -515,7 +708,7 @@ static int listening_socket(void) {
 
 static void *start_endpoint_security(void *opaque) {
   es_event_type_t events[] = {ES_EVENT_TYPE_NOTIFY_FORK, ES_EVENT_TYPE_AUTH_EXEC,
-                              ES_EVENT_TYPE_NOTIFY_EXIT};
+                              ES_EVENT_TYPE_NOTIFY_EXEC, ES_EVENT_TYPE_NOTIFY_EXIT};
   (void)opaque;
   for (;;) {
     es_client_t *candidate = NULL;
@@ -545,12 +738,13 @@ static void *start_endpoint_security(void *opaque) {
     }
     pthread_mutex_lock(&endpoint_state_lock);
     endpoint_client = candidate;
-    endpoint_state = ENDPOINT_STATE_ACTIVE;
+    if (endpoint_state != ENDPOINT_STATE_FAILED) endpoint_state = ENDPOINT_STATE_ACTIVE;
+    enum endpoint_state observed_state = endpoint_state;
     pthread_mutex_unlock(&endpoint_state_lock);
     // This assignment bypasses set_endpoint_state (it is already under the lock), so it needs its
     // own log line or the one transition that matters most would be the only silent one.
     os_log(keiko_monitor_log(), "endpoint state -> %{public}s",
-           endpoint_state_name(ENDPOINT_STATE_ACTIVE));
+           endpoint_state_name(observed_state));
     return NULL;
   }
 }

@@ -16,6 +16,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
@@ -206,6 +211,47 @@ describe("production portable OpenCode discovery", () => {
       expect(discoverLinux(fixture)).toBeUndefined();
     },
   );
+
+  it("binds the native Linux helper without replacing namespace gateway confinement", () => {
+    const fixture = linuxPortableInstall();
+    const native = join(fixture.root, "runtime", "native", "keiko-runtime-supervisor");
+    writeFileSync(native, SUPERVISOR);
+    const path = join(fixture.root, ".portable", "runtime-activation.json");
+    const activation = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const helpers = activation.nativeHelpers as Record<string, unknown>[];
+    const supervisor = helpers.find((helper) => helper.name === "keiko-runtime-supervisor");
+    if (supervisor === undefined) throw new TypeError("fixture supervisor is missing");
+    supervisor.executablePath = "runtime/native/keiko-runtime-supervisor";
+    writeFileSync(path, JSON.stringify(activation));
+    const bound = {
+      ...fixture,
+      receipt: { ...fixture.receipt, activationManifestSha256: sha256(readFileSync(path)) },
+    };
+    const activityLog = createBufferedServerLogSink();
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: {},
+        installRoot: bound.root,
+        platform: "linux",
+        arch: "x64",
+        attestation: { readReceipt: () => bound.receipt },
+        activityLog,
+      }),
+    ).toMatchObject({
+      nativeHelperPath: realpathSync(native),
+      qualification: { backend: "linux-namespace-gateway" },
+    });
+    const event = activityLog.events[0];
+    if (event === undefined) throw new TypeError("native helper binding log is missing");
+    expect(
+      expectActivityLogProof(
+        "portable.runtime.native-helper-bound.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ target: "linux-x64", helperSha256: sha256(SUPERVISOR) });
+    writeFileSync(native, "changed native owner");
+    expect(discoverLinux(bound)).toBeUndefined();
+  });
 
   it("emits body-free diagnostics for a rejected Linux component binding", () => {
     const fixture = linuxPortableInstall();
@@ -1199,3 +1245,49 @@ function nativeHelper(
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
+
+it("automatic Linux discovery uses the actual CLI package root without an injected installRoot", () => {
+  const fixture = linuxPortableInstall();
+  try {
+    const packageRoot = join(fixture.root, "app");
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko", version: KEIKO_PRODUCT_VERSION }),
+    );
+    expect(discoverLinux(fixture)?.target).toBe(LINUX_TARGET);
+    const result = discoverQualifiedPortableOpenCode({
+      env: { KEIKO_CLI_BIN_PATH: join(packageRoot, "dist", "bin", "keiko.js") },
+      platform: "linux",
+      arch: "x64",
+      attestation: { readReceipt: () => fixture.receipt },
+    });
+    expect(result).toMatchObject({
+      installRoot: realpathSync(fixture.root),
+      target: LINUX_TARGET,
+      qualification: { backend: "linux-namespace-gateway" },
+    });
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+it("automatic Linux discovery retains the launcher drift rejection", () => {
+  const fixture = linuxPortableInstall();
+  try {
+    const packageRoot = join(fixture.root, "app");
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko", version: KEIKO_PRODUCT_VERSION }),
+    );
+    writeFileSync(join(fixture.root, "Keiko"), "synthetic launcher drift");
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: { KEIKO_CLI_BIN_PATH: join(packageRoot, "dist", "bin", "keiko.js") },
+        platform: "linux",
+        arch: "x64",
+        attestation: { readReceipt: () => fixture.receipt },
+      }),
+    ).toBeUndefined();
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

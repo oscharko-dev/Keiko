@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "classification": "Actual unchanged Windows resume/deadline/pipe-read functions and context declarations; inert Win32/CRT/filesystem/identity/validated-plan-load ports. Actual policy execution on macOS/Linux; no real Win32, parent signing, Job Object, BFF restart or packaged update qualification.",
+  "parentHead": "edc19a899b04987895bca1c77148c6ce126b2a30",
+  "sourceFiles": [
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator-windows.h",
+      "sha256": "b5e26eafb2097b8351f7b10adece2986fe12c78994f841b66dca9aa9932efeaf"
+    },
+    {
+      "path": "scripts/__tests__/windows-resume-deadline.test.mjs",
+      "sha256": "2f4eca8eb3e3d8b6dd9e7008a53d354cd75dcb7b23673a1b8451a67012417191"
+    },
+    {
+      "path": "tests/fixtures/windows-resume-deadline.c",
+      "sha256": "171f1c47b33fe9aa0eeb27d52055023e24862409780f18ec96406f0a0467d71e"
+    }
+  ],
+  "beforeRuntimeSha256": "9ba18a1bdb7285647b90c400f56e425c94c4089ac6a34ec824cc010213f1c2f5",
+  "sameFinalFixtureBytesBeforeAndAfter": true,
+  "before": {
+    "failed": 8,
+    "passed": 12,
+    "logSha256": "8e1940fed05404fb06e20395ce1ab39c32ae40c2237cd77d226c41d99854878a"
+  },
+  "after": {
+    "failed": 0,
+    "passed": 20,
+    "logSha256": "5827043c9f6a6129fddd59b3e1ce962bb46dc1388bca58a55d17d55ffbf7f9f4"
+  },
+  "intermediatePhaseOnly": {
+    "failed": 2,
+    "passed": 18,
+    "classification": "Unpublished intermediate repair; exact entry expiry still admitted. Final fixture differs only by explicit URL import.",
+    "logSha256": "63a3e91a5d84bd90a8974fba41ae4e47dad4904a8410872ee9d46803cb894149"
+  },
+  "retainedSetupFailure": {
+    "failed": 8,
+    "passed": 12,
+    "cause": "The fixture used a bounded plan-field decimal parser for injected20digit clock values; two failures were fixture assertions. Clock injection now uses strtoull; final eight causal failures are actual policy observations.",
+    "logSha256": "f532b2b37c4c48608498026d588853d0312dbf411d9eef9dcc5c9660b2278520"
+  },
+  "withheldGate": {
+    "remainingCleanupMs": 20,
+    "beforeVirtualWaitMs": 900010,
+    "afterVirtualWaitMs": 30
+  },
+  "linux": {
+    "exitCode": 0,
+    "durationSeconds": 11.26,
+    "platform": "linux/arm64",
+    "image": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+    "rootSourcesReadOnly": true,
+    "network": "none",
+    "capabilities": "none",
+    "classification": "20 actual Windows admission/deadline/read function controls with inert platform ports, plus26 actual POSIX resume/engine controls; not actual Win32 or packaged-update qualification."
+  },
+  "linuxLogSha256": "af3a6504a3ad2fa5328274938a144a6ead507a3de55912453418c249d6dfa097",
+  "phaseValuesChanged": false,
+  "existingAuthorityChecksRetained": [
+    "image-digest",
+    "parent-image",
+    "same-volume",
+    "phase-classification",
+    "plan-load",
+    "gate-digest"
+  ],
+  "nativeWindowsLocalGate": "Unavailable on this macOS host: pwsh and a Windows runtime are absent. Exact-head Windows native CI remains required; policy controls do not substitute for it.",
+  "productionEvidence": "Existing native receipt chain and server recovery reconciliation remain authoritative. No new log vocabulary or parallel evidence stream."
+}

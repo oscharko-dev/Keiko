@@ -25,9 +25,10 @@ import type {
 } from "./hooks/useWorkspace.types";
 import { MAX_WORKSPACE_WINDOWS, sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import type { ChatCreationModelChoice } from "./hooks/chatCreationModelChoice";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
-import { registerChatWindowRuntime } from "./windows/chatWindowActivity";
+import { clearChatScopeTransitions, registerChatWindowRuntime } from "./windows/chatWindowActivity";
 import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 interface WorkspaceHookOptions {
@@ -86,6 +87,7 @@ interface TestSession {
   readonly error: string | undefined;
   readonly noEligibleModels: boolean;
   readonly selectedModel: string;
+  readonly creationModelChoice?: ChatCreationModelChoice;
   readonly replaceChat: (chat: Chat) => void;
 }
 
@@ -393,6 +395,11 @@ vi.mock("./modals/Palette", (): { readonly Palette: () => ReactNode } => {
   return { Palette: (): ReactNode => <div role="dialog" aria-label="Palette" /> };
 });
 
+// This suite owns grounding mutation diagnostics; the browser notice has its own lifecycle suite.
+vi.mock("./browser/BrowserApprovalNotice", () => ({
+  BrowserApprovalNotice: (): ReactNode => null,
+}));
+
 vi.mock("./update/UpdateStartupNotice", (): { readonly UpdateStartupNotice: () => ReactNode } => {
   mocks.updateStartupNoticeModuleLoaded();
   return {
@@ -469,8 +476,15 @@ function expectedTimeoutDiagnostic(correlationId: unknown): unknown {
   };
 }
 
+function mutationOwnerDiagnostics(): typeof reportedDiagnostics {
+  return reportedDiagnostics.filter((record) => {
+    const decision = record.meta?.filesScopeDecision;
+    return decision === undefined || decision.mutationSurface !== undefined;
+  });
+}
+
 function decisionMetadata(): ClientDiagnosticMeta[] {
-  return reportedDiagnostics.flatMap((record) =>
+  return mutationOwnerDiagnostics().flatMap((record) =>
     record.meta?.filesScopeDecision === undefined ? [] : [record.meta],
   );
 }
@@ -748,6 +762,8 @@ describe("AppShell grounding connections", () => {
   });
 
   afterEach((): void => {
+    clearChatScopeTransitions("chat-1");
+    clearChatScopeTransitions("chat-private");
     delete document.documentElement.dataset.keikoModalOpen;
     resetClientDiagnosticWriter();
     vi.useRealTimers();
@@ -1252,6 +1268,29 @@ describe("AppShell grounding connections", () => {
     expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(false);
   });
 
+  it.each([
+    [{ kind: "automatic" } as const, { newChatModelSelection: "automatic" }],
+    [
+      { kind: "explicit", modelId: "model-original" } as const,
+      { newChatModelSelection: "explicit", newChatModelId: "model-original" },
+    ],
+  ])(
+    "captures the originating session model choice on confirmation (%j)",
+    async (choice, expected): Promise<void> => {
+      const add = vi.fn<WorkspaceApi["add"]>((): string => "chat-window");
+      mocks.state.workspaceResult = workspaceResult([], [], workspaceApi({ add }));
+      const session = mocks.state.session;
+      if (session === undefined) throw new TypeError("Missing test session.");
+      mocks.state.session = { ...session, creationModelChoice: choice };
+      const user = userEvent.setup();
+      await renderMounted();
+      await user.click(await screen.findByTestId("left-rail"));
+      await user.click(await screen.findByRole("button", { name: "Confirm new chat" }));
+      expect(add).toHaveBeenCalledOnce();
+      expect(add.mock.calls[0]?.[1]).toMatchObject(expected);
+    },
+  );
+
   it("drops retained edges without unbinding when a chat window changes conversation", async (): Promise<void> => {
     const api = workspaceApi();
     const files = win("files", { root: "/repo" }, "files-window");
@@ -1372,7 +1411,7 @@ describe("AppShell grounding connections", () => {
     const correlationId = expectSharedMutationCorrelation(
       mocks.updateChatConnectedScopes.mock.calls,
     );
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat grounding mutation failed: Error",
         meta: {
@@ -1401,7 +1440,7 @@ describe("AppShell grounding connections", () => {
     const correlationId = expectSharedMutationCorrelation(
       mocks.updateChatLocalKnowledgeScopes.mock.calls,
     );
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat grounding mutation failed: Error",
         meta: {
@@ -1620,7 +1659,7 @@ describe("AppShell grounding connections", () => {
     await mocks.state.workspaceOptions?.onScopeBind?.("private-window", fileScope("/repo"));
     const parentCorrelationId = mocks.fetchChats.mock.calls[0]?.[1];
     expect(parentCorrelationId).toEqual(expect.any(String));
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat lookup failed: ChatLookupFailure",
         meta: {
@@ -1659,7 +1698,7 @@ describe("AppShell grounding connections", () => {
       mocks.fetchChats.mockRejectedValueOnce(error);
       await renderMounted();
       await mocks.state.workspaceOptions?.onScopeBind?.("private-window", fileScope("/repo"));
-      expect(reportedDiagnostics).toEqual([
+      expect(mutationOwnerDiagnostics()).toEqual([
         expect.objectContaining({
           meta: expect.objectContaining({
             correlationId: expect.any(String),
@@ -1686,7 +1725,7 @@ describe("AppShell grounding connections", () => {
 
     expect(accepted).toBe(false);
     expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat lookup failed: ChatLookupFailure",
         meta: {
@@ -1786,7 +1825,7 @@ describe("AppShell grounding connections", () => {
     await act(async () => {
       pending.resolve({ chat: chat({ connectedScopes: [fileScope("/late")], updatedAt: 3 }) });
     });
-    const decisions = reportedDiagnostics.flatMap((record) =>
+    const decisions = mutationOwnerDiagnostics().flatMap((record) =>
       record.meta?.filesScopeDecision === undefined ? [] : [record.meta],
     );
     expect(decisions.map((meta) => meta.filesScopeDecision)).toEqual([
@@ -1903,7 +1942,7 @@ describe("AppShell grounding connections", () => {
     const correlationId = expectSharedMutationCorrelation(
       mocks.updateChatConnectedScopes.mock.calls,
     );
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat grounding mutation failed: ApiError",
         meta: {
@@ -1997,7 +2036,7 @@ describe("AppShell grounding connections", () => {
     const rejectedCorrelation = recordedFilesScopeDecision("timeout-rejected")?.meta?.correlationId;
     expect(rejectedCorrelation).toEqual(expect.any(String));
     expect(rejectedCorrelation).not.toBe(attemptCorrelation);
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "Keiko Files scope ownership decision.",
         meta: {
@@ -2296,7 +2335,7 @@ describe("AppShell grounding connections", () => {
     const correlationId = expectSharedMutationCorrelation(
       mocks.updateChatConnectedScopes.mock.calls,
     );
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat binding compensation failed: Error",
         meta: {
@@ -2569,7 +2608,7 @@ describe("AppShell grounding connections", () => {
     expect(accepted).toBe(false);
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(await screen.findByText("Unable to disconnect scope.")).toBeInTheDocument();
-    expect(reportedDiagnostics).toEqual([
+    expect(mutationOwnerDiagnostics()).toEqual([
       {
         message: "[keiko] Chat lookup failed: ChatLookupFailure",
         meta: {

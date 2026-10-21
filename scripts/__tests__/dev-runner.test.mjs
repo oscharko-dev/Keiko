@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { setTimeout } from "node:timers";
+import { clearTimeout, setTimeout } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -59,6 +59,46 @@ function readinessResponse(status, body, permissionsPolicy) {
     headers: { entries: () => Object.entries(values)[Symbol.iterator]() },
   };
 }
+
+describe("readiness request lifetime", () => {
+  it.each(["headers", "body"])(
+    "bounds a stalled %s observation before another child can be probed",
+    async (phase) => {
+      const sockets = new Set();
+      const server = createHttpServer((_request, response) => {
+        if (phase === "body") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"status":');
+        }
+      });
+      server.on("connection", (socket) => {
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+      });
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("Missing fixture port");
+      let timer;
+      try {
+        const result = await Promise.race([
+          probeApiReadiness(`http://127.0.0.1:${String(address.port)}/api/health`),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("readiness-request-unbounded")), 6000);
+          }),
+        ]);
+        expect(result).toMatchObject({
+          result: expect.stringMatching(/timeout|abort/i),
+          allowSameOriginMicrophone: false,
+        });
+      } finally {
+        clearTimeout(timer);
+        for (const socket of sockets) socket.destroy();
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+    10_000,
+  );
+});
 
 // A loopback port that is bound and released, so connecting to it fails immediately rather than
 // hanging on a firewalled address.

@@ -1,3 +1,10 @@
+import {
+  bindProcessScope,
+  currentProcessId,
+  currentProcessScopeKind,
+  currentProcessScopeObservation,
+} from "@oscharko-dev/keiko-security/process-scope";
+import { createNativeProcessScope } from "@oscharko-dev/keiko-security/native-process-scope";
 // `keiko ui` — launches the local Wave 1 UI BFF (ADR-0011). It resolves the packaged static export
 // (dist/ui/static) and the precomputed CSP hashes (dist/ui/csp-hashes.json) relative to this
 // compiled module, builds the CSP, starts createUiServer bound to 127.0.0.1 only, prints the local
@@ -93,6 +100,12 @@ const PROCESS_HEARTBEAT_OPERATION = defineActivityLogOperation({
     heapTotalBytes: { type: "integer", dataClass: "count", required: true },
     externalBytes: { type: "integer", dataClass: "count", required: true },
     eventLoopDelayP99Ms: { type: "number", dataClass: "duration", required: true },
+    processScopeState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["local", "ready", "unavailable", "unprobed"],
+    },
   },
   causal: "none",
   lifecycle: "state",
@@ -181,6 +194,18 @@ const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
       maxLength: 64,
     },
     gatewayProviderCount: { type: "integer", dataClass: "count", required: false },
+    processScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["local", "outer-native", "outer-unprobed"],
+    },
+    processScopeState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["local", "ready", "unavailable", "unprobed"],
+    },
   },
   causal: "none",
   lifecycle: "start",
@@ -237,6 +262,9 @@ export interface UiCliArgs {
   readonly evidenceDir: string | undefined;
   readonly config: string | undefined;
   readonly uiDbPath: string | undefined;
+  readonly launchId?: string;
+  /** Internal native-launcher handoff; never an environment-supplied process identity. */
+  readonly runtimeOwner?: true;
 }
 
 type UiParseResult = UiCliArgs | "help" | null;
@@ -249,6 +277,7 @@ interface RawUiOptions {
   configRaw?: string | undefined;
   uiDbRaw?: string | undefined;
   launchIdRaw?: string | undefined;
+  runtimeOwner?: true;
 }
 
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
@@ -422,6 +451,10 @@ function collectUiOptions(args: readonly string[]): RawUiOptions | "help" | null
     const arg = args[i];
     if (arg === undefined) return null;
     if (arg === "--help" || arg === "-h") return "help";
+    if (arg === "--runtime-owner") {
+      raw.runtimeOwner = true;
+      continue;
+    }
     if (!isUiFlag(arg)) return null;
     const value = readFlagValue(args, i);
     if (value === null) return null;
@@ -453,12 +486,18 @@ export function parseUiArgs(args: readonly string[]): UiParseResult {
     evidenceDir: evidenceRaw,
     config: configRaw,
     uiDbPath: uiDbRaw,
+    ...launchIdOption(launchIdRaw),
+    ...(raw.runtimeOwner === undefined ? {} : { runtimeOwner: raw.runtimeOwner }),
   };
 }
 
 function browserHost(host: string | undefined): Pick<UiCliArgs, "host"> {
   if (host === undefined) return {};
   return { host: host === "localhost" ? "localhost" : "127.0.0.1" };
+}
+
+function launchIdOption(launchId: string | undefined): Pick<UiCliArgs, "launchId"> {
+  return launchId === undefined ? {} : { launchId };
 }
 
 function defaultStaticRoot(cwd: string): string {
@@ -545,6 +584,7 @@ function withDefaultLocalRuntimeStateEnv(
     KEIKO_STATE_DIR: stateDir,
     KEIKO_UI_HOST: UI_HOST,
     KEIKO_UI_PORT: String(parsed.port),
+    ...(parsed.launchId === undefined ? {} : { [KEIKO_UI_LAUNCH_ID_ENV]: parsed.launchId }),
   };
   if (parsed.uiDbPath === undefined && !hasEnvValue(next.KEIKO_UI_DATA_DIR)) {
     next.KEIKO_UI_DATA_DIR = defaultUiDataDir(stateDir);
@@ -1075,11 +1115,14 @@ async function maybeReExecForSqlite(
   env: EnvSource,
   deps: UiCliDeps,
   cwd: string,
+  runtimeOwner: boolean,
 ): Promise<number | undefined> {
   if (deps.createServer !== undefined) return undefined;
+  const probe = deps.sqliteProbe ?? defaultSqliteProbe;
+  // A replacement would have a different root identity and would lose the private native port.
+  if (runtimeOwner) return probe() ? undefined : 1;
   const execArgv = (deps.currentExecArgv ?? ((): readonly string[] => process.execArgv))();
   if (alreadyFlagged(env, execArgv)) return undefined;
-  const probe = deps.sqliteProbe ?? defaultSqliteProbe;
   if (probe()) return undefined;
   const spawnFn = deps.spawnFn ?? spawn;
   return reExecWithSqliteFlag(env, spawnFn, cwd);
@@ -1108,7 +1151,7 @@ async function buildHandlerDepsOrReport(
       updateStartupRecovery,
       portableHandoffShutdown: createPortableHandoffShutdownTrigger({
         stateDir: resolveRuntimeStateDir(cwd, effectiveEnv),
-        pid: process.pid,
+        pid: currentProcessId(),
         launchId: effectiveEnv[KEIKO_UI_LAUNCH_ID_ENV],
       }),
     });
@@ -1239,6 +1282,7 @@ function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogra
         heapTotalBytes: memory.heapTotal,
         externalBytes: memory.external,
         eventLoopDelayP99Ms,
+        processScopeState: currentProcessScopeObservation(),
       },
     ),
   );
@@ -1365,6 +1409,8 @@ async function reportProcessStarted(
         port: parsed.port,
         stateDirSource,
         logLevel,
+        processScope: currentProcessScopeKind(),
+        processScopeState: currentProcessScopeObservation(),
         ...(installMode === undefined ? {} : { installMode }),
         ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
         ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
@@ -1403,7 +1449,7 @@ function startupRecoveryCurrent(parsed: UiCliArgs, env: EnvSource): UpdateStartu
     throw new Error("Portable update startup recovery requires a valid launch identity.");
   }
   return {
-    pid: process.pid,
+    pid: currentProcessId(),
     launchId: launchId ?? "",
     host: UI_HOST,
     port: parsed.port,
@@ -1577,10 +1623,10 @@ async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promi
     onShutdown: stopHeartbeat,
     closeActivityLog,
     peekShutdownRequest: () =>
-      peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
+      peekShutdownRequest(stateDir, currentProcessId(), options.runtimeEnv[KEIKO_UI_LAUNCH_ID_ENV]),
     pollBrowserRequest: createBrowserHandoffPoll({
       stateDir,
-      pid: process.pid,
+      pid: currentProcessId(),
       env: options.runtimeEnv,
       baseUrl: `http://${parsed.host ?? UI_HOST}:${String(parsed.port)}`,
       io,
@@ -1907,11 +1953,15 @@ export async function runUiCli(
   deps: UiCliDeps = {},
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
-  const effectiveEnv = loadLocalKeikoEnv(cwd, env);
   const parsed = parseUiArgsOrExit(args, io);
   if (typeof parsed === "number") return parsed;
-  const reExec = await maybeReExecForSqlite(effectiveEnv, deps, cwd);
-  if (reExec !== undefined) return reExec;
+  if (!prepareUiProcessScope(parsed, io)) return 1;
+  const effectiveEnv = loadLocalKeikoEnv(cwd, env);
+  const reExec = await maybeReExecForSqlite(effectiveEnv, deps, cwd, parsed.runtimeOwner === true);
+  if (reExec !== undefined) {
+    if (parsed.runtimeOwner === true) io.err("Native runtime requires built-in SQLite support.\n");
+    return reExec;
+  }
   prepareUiInstallLayoutEvidence(cwd, effectiveEnv, deps);
   const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
@@ -1939,6 +1989,17 @@ export async function runUiCli(
     );
   } finally {
     cspRuntime.dispose();
+  }
+}
+
+function prepareUiProcessScope(parsed: UiCliArgs, io: CliIo): boolean {
+  if (parsed.runtimeOwner === undefined) return true;
+  try {
+    bindProcessScope(createNativeProcessScope());
+    return true;
+  } catch {
+    io.err("Native runtime process identity could not be verified.\n");
+    return false;
   }
 }
 

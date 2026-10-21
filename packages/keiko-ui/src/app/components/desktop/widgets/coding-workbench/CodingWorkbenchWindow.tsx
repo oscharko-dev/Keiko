@@ -1704,88 +1704,90 @@ function WorkbenchColumns({
   });
   return (
     <div className={styles.session}>
-      {showWelcome ? (
-        <WorkbenchWelcome />
-      ) : (
-        <div
-          ref={sessionStreamRef}
-          className={styles.sessionStream}
-          role="log"
-          aria-label={t("codingWorkbench.readiness.eventStream.label")}
-          onScroll={onStreamScroll}
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
-          tabIndex={0}
-        >
-          <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
-          <PermissionPrompt state={state} research={research} onDecision={onDecision} />
-          <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
-          <CodingWorkbenchDraftDelivery
-            snapshot={state.run.value ?? undefined}
-            onReviewDescription={(descriptionReview): void => {
-              // The server retains the reviewable proposal under the run's task workspace root
-              // (`descriptionApplicationTarget`: `workspace.binding.activeRoot`), never under the
-              // repository root this settled Workbench labels; the governed pull request card must
-              // open on that exact root or its retained review resolves an empty proposal holder.
-              const root = liveWorkspaceRootOf(activeWorkspace) ?? repositoryRoot;
-              if (root === null) return;
-              onOpenGit({
-                root,
-                binding: "task-workspace",
-                descriptionReview,
-              });
-            }}
-          />
-          <CodingWorkbenchJourneyOutcome
-            snapshot={state.run.value ?? undefined}
-            outcome={journey.outcome}
-            onRefresh={journey.onRefresh}
-            changedFiles={changedFilesSummary(journeyChanges)}
-            markReadyAvailable={onProposeReady !== undefined}
-            {...optionalMarkReadyHandler(onProposeReady)}
-          />
-          <CodingWorkbenchCommitResult
-            result={state.run.value?.verifiedCommitResult}
-            runId={runId}
-          />
-          <ChangesetReviewPanel
-            review={editorBridge.pendingReview}
-            onApprove={editorBridge.approve}
-            onDeny={editorBridge.deny}
-            onRetry={editorBridge.retry}
-          />
-          <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
-          <ResearchGrantChip
-            grant={research.grant ?? undefined}
-            busy={state.mutation.status === "pending"}
-            onRevoke={() => {
-              if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
-            }}
-          />
-          <ApprovedSkillsDisclosure
-            status={skills.status}
-            skills={skills.skills ?? undefined}
-            retry={skills.retry}
-          />
-          <Timeline
-            active={runIsActive}
-            generating={generatingRunState(state.run.value?.state)}
-            events={timeline.events}
-            activity={timeline.activity}
-            questions={questions}
-            focusRef={focusRef}
-          />
-          <CodingWorkbenchChanges
-            root={liveWorkspaceRoot}
-            runId={state.run.value?.runId}
-            changeSignal={latestChangesSignal(state.events)}
-            bindingPending={workspaceBindingPending}
-            submittedRoot={runBoundRoot}
-            pairing={state.pairing}
-          />
-        </div>
-      )}
-      <div className={styles.composerDock}>
+      <div className={styles.cmpSessionContent}>
         {runStatus}
+        {showWelcome ? (
+          <WorkbenchWelcome />
+        ) : (
+          <div
+            ref={sessionStreamRef}
+            className={styles.sessionStream}
+            role="log"
+            aria-label={t("codingWorkbench.readiness.eventStream.label")}
+            onScroll={onStreamScroll}
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
+            tabIndex={0}
+          >
+            <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
+            <PermissionPrompt state={state} research={research} onDecision={onDecision} />
+            <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
+            <CodingWorkbenchDraftDelivery
+              snapshot={state.run.value ?? undefined}
+              onReviewDescription={(descriptionReview): void => {
+                // The server retains the reviewable proposal under the run's task workspace root
+                // (`descriptionApplicationTarget`: `workspace.binding.activeRoot`), never under the
+                // repository root this settled Workbench labels; the governed pull request card must
+                // open on that exact root or its retained review resolves an empty proposal holder.
+                const root = liveWorkspaceRootOf(activeWorkspace) ?? repositoryRoot;
+                if (root === null) return;
+                onOpenGit({
+                  root,
+                  binding: "task-workspace",
+                  descriptionReview,
+                });
+              }}
+            />
+            <CodingWorkbenchJourneyOutcome
+              snapshot={state.run.value ?? undefined}
+              outcome={journey.outcome}
+              onRefresh={journey.onRefresh}
+              changedFiles={changedFilesSummary(journeyChanges)}
+              markReadyAvailable={onProposeReady !== undefined}
+              {...optionalMarkReadyHandler(onProposeReady)}
+            />
+            <CodingWorkbenchCommitResult
+              result={state.run.value?.verifiedCommitResult}
+              runId={runId}
+            />
+            <ChangesetReviewPanel
+              review={editorBridge.pendingReview}
+              onApprove={editorBridge.approve}
+              onDeny={editorBridge.deny}
+              onRetry={editorBridge.retry}
+            />
+            <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
+            <ResearchGrantChip
+              grant={research.grant ?? undefined}
+              busy={state.mutation.status === "pending"}
+              onRevoke={() => {
+                if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
+              }}
+            />
+            <ApprovedSkillsDisclosure
+              status={skills.status}
+              skills={skills.skills ?? undefined}
+              retry={skills.retry}
+            />
+            <Timeline
+              active={runIsActive}
+              generating={generatingRunState(state.run.value?.state)}
+              events={timeline.events}
+              activity={timeline.activity}
+              questions={questions}
+              focusRef={focusRef}
+            />
+            <CodingWorkbenchChanges
+              root={liveWorkspaceRoot}
+              runId={state.run.value?.runId}
+              changeSignal={latestChangesSignal(state.events)}
+              bindingPending={workspaceBindingPending}
+              submittedRoot={runBoundRoot}
+              pairing={state.pairing}
+            />
+          </div>
+        )}
+      </div>
+      <div className={styles.composerDock}>
         {repositorySelector}
         <LocationBindingNotices locationState={locationState} />
         <CodingWorkbenchIssueIntake

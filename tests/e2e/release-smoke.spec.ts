@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -50,7 +50,7 @@ function collectPageErrors(page: Page): () => void {
 }
 
 function createProjectFixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-e2e-project-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-e2e-project-")));
   tempProjects.push(root);
   mkdirSync(join(root, "docs"), { recursive: true });
   mkdirSync(join(root, "packages", "keiko-cli", "src"), { recursive: true });
@@ -397,7 +397,7 @@ test("coding workbench opens its per-window repository selector @smoke", async (
 
   await page.goto("/");
   await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
-  const workbenchWindow = page.getByRole("region", { name: "Coding Workbench" });
+  const workbenchWindow = page.getByRole("region", { name: "Coding Workbench", exact: true });
   await expect(workbenchWindow).toBeVisible();
 
   // The fresh window has no bound task workspace yet, so it shows the setup form and this is the

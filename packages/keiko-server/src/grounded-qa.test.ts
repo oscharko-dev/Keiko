@@ -4,6 +4,7 @@ import {
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
+import * as promptRedaction from "./grounded-prompt-redactor.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
 import * as chatActivity from "./chat-activity.js";
 import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
@@ -1328,6 +1329,48 @@ describe("buildGroundedGatewayMessages", () => {
     expect(sent.messages[1]?.content).toContain("1000 | x");
     expect(sent.messages[1]?.content).not.toContain("3999 | x");
     expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
+  });
+
+  it("redacts identical source text once while fitting multiple excerpt windows", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const content = `export const values = [\n${Array.from({ length: 1000 }, (_, i) => `  ${String(i)},`).join("\n")}\n];`;
+    const pack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, excerptBytesMax: 64_000 },
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              content,
+              atom: { ...excerpt.atom, lineRange: { startLine: 10, endLine: 1011 } },
+            },
+          ],
+        },
+      ],
+    };
+    const redact = buildRedactor({});
+    const observed = vi.fn(redact);
+    const sent = fittedGroundedGatewayPrompt("Read the source", pack, observed, {
+      modelInputTokensMax: 1024,
+    });
+    expect(observed.mock.calls.filter(([value]) => value === content)).toHaveLength(1);
+    expect(sent.sentReferenceCount).toBe(1);
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
+    const reuse = vi
+      .spyOn(promptRedaction, "promptFitRedactor")
+      .mockImplementation((original) => original);
+    try {
+      const uncached = fittedGroundedGatewayPrompt("Read the source", pack, redact, {
+        modelInputTokensMax: 1024,
+      });
+      expect(sent.messages).toEqual(uncached.messages);
+      expect(sent.withoutSources).toEqual(uncached.withoutSources);
+    } finally {
+      reuse.mockRestore();
+    }
   });
 
   it("falls back to the shared default-profile budget when contextWindow=0 (KEIKO-0461)", () => {

@@ -19,6 +19,7 @@ import {
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionMint, SessionRegistry } from "./sessionRegistry.js";
+import type { BrowserApprovalService } from "./browserApproval.js";
 import {
   contentFreeErrorClass,
   type ServerDiagnosticSink,
@@ -47,13 +48,15 @@ export type CodingAppSessionPairResult =
   | { readonly paired: false };
 
 export type CodingAppSessionRotateResult =
-  { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
+  | { readonly rotated: true; readonly cookieToken: string; readonly maxAgeSeconds: number }
+  | { readonly rotated: false };
 
 export type CodingAppSessionEnsureResult =
   | { readonly status: "active"; readonly maxAgeSeconds: number }
   | { readonly status: "unavailable" };
 
 export interface CodingAppSessionChannel {
+  readonly browserApproval?: BrowserApprovalService | undefined;
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
   readonly ensureLocalSession: (cookieToken: string | undefined) => CodingAppSessionEnsureResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
@@ -88,6 +91,7 @@ export interface CodingAppSessionChannel {
 
 export interface CodingAppSessionChannelDeps {
   readonly registry: SessionRegistry;
+  readonly browserApproval?: BrowserApprovalService | undefined;
   /** Absent = fail-closed production posture: no session issuable, every read content-free. */
   readonly pairingPort?: SessionPairingPort | undefined;
   /** Absent = channel serves content-free even to a paired session (this wave's production posture). */
@@ -374,12 +378,34 @@ function ensureLocalSession(
     : { status: "active", maxAgeSeconds: Math.floor(remainingMs / 1000) };
 }
 
+function rotateSession(
+  registry: SessionRegistry,
+  cookieToken: string | undefined,
+): CodingAppSessionRotateResult {
+  if (ensureLocalSession(registry, cookieToken).status === "unavailable") return { rotated: false };
+  const session = registry.verify(cookieToken);
+  if (session === undefined) return { rotated: false };
+  const mint = registry.rotate(session.sessionId);
+  if (mint === undefined) return { rotated: false };
+  const remainingMs = registry.verifyForCookieRepair(mint.cookieToken);
+  if (remainingMs === undefined || remainingMs < 1_000) {
+    registry.revoke(mint.session.sessionId);
+    return { rotated: false };
+  }
+  return {
+    rotated: true,
+    cookieToken: mint.cookieToken,
+    maxAgeSeconds: Math.floor(remainingMs / 1000),
+  };
+}
+
 export function createCodingAppSessionChannel(
   deps: CodingAppSessionChannelDeps,
 ): CodingAppSessionChannel {
   const { registry, pairingPort, contentSource, diagnostics } = deps;
   const admission = makeLiveSubscriptionAdmission();
   return {
+    browserApproval: deps.browserApproval,
     pair: (attestation: unknown): CodingAppSessionPairResult =>
       pairSession(registry, pairingPort, attestation),
     ensureLocalSession: (cookieToken: string | undefined): CodingAppSessionEnsureResult => {
@@ -390,14 +416,8 @@ export function createCodingAppSessionChannel(
       if (session === undefined) return contentFreeCodingAppSessionChannelSnapshot();
       return projectContent(session, contentSource);
     },
-    rotate: (cookieToken: string | undefined): CodingAppSessionRotateResult => {
-      const session = registry.verify(cookieToken);
-      if (session === undefined) return { rotated: false };
-      const mint = registry.rotate(session.sessionId);
-      return mint === undefined
-        ? { rotated: false }
-        : { rotated: true, cookieToken: mint.cookieToken };
-    },
+    rotate: (cookieToken: string | undefined): CodingAppSessionRotateResult =>
+      rotateSession(registry, cookieToken),
     signOut: (cookieToken: string | undefined): boolean => {
       const session = registry.verify(cookieToken);
       if (session === undefined) return false;

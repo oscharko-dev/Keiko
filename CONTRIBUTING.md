@@ -40,9 +40,24 @@ See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area
 
 ### Activity Log runtime changes
 
+Source redaction uses the shared security owner to preserve language syntax while masking credential
+values, including escaped JSON/JSONC and YAML scalars. An unsafe or ambiguous projection, or an
+existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
+unavailable. EOF-only JSON prefixes and public, unquoted Java fragments retain their safe text
+projection under the documented guards (ADR-0022). Gateway
+and BFF streaming retain incomplete source/credential context and discard pending text on cancellation.
+The existing Activity Log records projection revision, region/refusal counts and pending-buffer
+counts; it never records source, credentials or parser diagnostics containing source text.
+
 Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+
+An unchanged privacy-elided Files connection may reuse its conversation-bound canonical
+acknowledgement only when the persisted fingerprint and visible scope both match. Restore the
+existing local edge without starting another source intent or cancelling its response. Missing or
+changed ownership and genuine navigation retain the normal guards; unrelated source holds remain
+intact. The existing `automatic-suppressed` Files scope decision joins the original acknowledgement.
 
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
@@ -111,11 +126,17 @@ scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission bou
 Connected-folder retrieval joins `search.connected-context.source-details`, `selection-details`,
 `completion-details`, and `answer-details` with the completed operation under the same request
 correlation, process, and source/query digests. These typed siblings retain the existing contextual
-field cap. Source details describe actual path/reference admission and eligibility; selection
+field cap. Source details describe actual path/reference admission and eligibility. Extensionless
+document admission uses one shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist
+independently of overview ranking. Ordinary prose cannot become an explicit file merely through its ranking bucket;
+explicit filenames and every existing scope/read grant remain authoritative. Selection
 details describe calibrated floors, high/low confidence, addressed-file demotion, reranker
 disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
 final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.
-Only counts, closed dispositions and digests enter the log, never paths, declarations or answers.
+The correlated `search.connected-context.evidence-details` sibling carries certified descriptor
+counts within the same unchanged contextual-field cap. Existing source-detail rows retain all
+their fields. Only counts, closed dispositions and digests enter the log, never paths, declarations
+or answers.
 The six-reference intake preserves the primary local trace frame and explicitly named question
 paths before secondary frames or conversation referents. Prompt fitting preserves a complete
 matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
@@ -129,6 +150,13 @@ multi-source marker repair; hybrid repair already appends its task. Governed mem
 continuity remain untrusted context inside that unchanged task block. Existing final-prompt
 selection and gateway admission record fitted counts and costs; citation validation and
 original input/output grants remain authoritative.
+Marker repair requests bounded insertion annotations anchored by unique original prose, so
+models need not copy generated code. The existing owner constructs the candidate and reuses
+all unchanged marker-only, code/assessment, fitted-evidence and cumulative-budget validation.
+Literal marker-only responses remain compatible under the same checks.
+Symbol discovery groups the existing bounded excerpt reads by source within each observation
+wave. Current source snapshots, definition/call/parent certificates and original per-window grants
+remain binding; this introduces no persistent source cache or additional synthesis attempt.
 Endpoint definition traversal binds a registration's observed handler reference to its current
 lexical AST target. Further calls retain their exact callable owner and complete observed spans;
 same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -187,6 +215,9 @@ fitted selection confidence without source bodies.
 Evidence manifest hashes and ranges enumerate final sent excerpts; retrieval candidate counts, usage and omissions
 retain the actual earlier work. Existing prompt sent/available counts distinguish fitting removals
 without inventing retrieval omissions.
+Zero-length deduplicated metadata aliases remain in retained packs but add no empty prompt evidence
+fences. Positive bodies, whitespace source lines, document labels and citation authority remain
+unchanged; existing final-prompt counts and costs describe the serialization.
 Lexical relevance establishes neither an answer fact nor precedence between conflicting sources.
 An observed admitted callable may retain an imported constant declaration only when its current
 TypeScript lexical binding, nearest callable owner, declaration identity and physical identifier
@@ -641,6 +672,12 @@ and the SonarCloud analysis are never reused on `dev`: they run on every push to
 SonarCloud's branch history stays current (ADR-0178 D1, amended 2026-09-25). Editing a workflow
 changes the tree, so CI changes always measure themselves.
 
+The candidate matrix admits PR events only while their payload state is `open`. Open metadata
+edits and base retargets retain fresh strict verdicts. Closed/merged metadata edits are rejected
+before candidate checkout, including by the aggregate; they do not judge the signed squash commit
+using the obsolete PR base/head. Merge groups, protected pushes and manual dispatch retain their
+existing paths (ADR-0139 D4).
+
 Only the repository owner account `oscharko` may authorize and execute a merge into `dev`, including
 enabling GitHub native auto-merge. Agents acting under that account operate within the owner's
 explicit authorization. Contributors may prepare PRs and repair findings, but accepting their task
@@ -742,6 +779,27 @@ explicit repository Files windows also allow path changes. Back/Forward history 
 bounded and clears on task-bound root switches. Files titles reflect their resolved
 root; an empty Editor names its project. Navigation and directory reads record
 body-free client stage lifecycle evidence on the existing Activity Log.
+
+Files directory responses identify the actual guarded canonical root. Child responses can
+establish that identity before a root response; old root responses cannot reverse it. Per-path
+read ownership also rejects older same-root listings and replies after unmount, while ordinary
+identical reads remain shared. When an unchanged alias
+resolves elsewhere, outstanding child reads cannot restore its previous tree or selection.
+Explicitly forgetting an ambiguous failed connection while retaining canonical Chat sources
+releases that edge's failed admission hold only. Pending source work cannot be forgotten through
+this recovery action; unrelated source holds remain in force.
+A mounted Chat's runtime conversation identity remains valid before its window cfg id persists;
+refresh admission and failed-edge recovery resolve that same identity.
+Initial binds hold admission before edge creation. Failed equal-root navigation reconciles with
+fresh canonical state. Retired owners release settled failed holds only; timeout-blocked work
+and failed compensation retain their existing settlement/recovery boundary.
+
+The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
+`request-superseded`, joined to directory-read correlations without paths or source bodies.
+Connected Files navigation additionally cancels the bound response before a delayed scope ACK.
+Per-source admission holds in the existing Chat runtime preserve drafts and block sends and
+regeneration until the current intent succeeds. Pending, applied, failed and send-refused intent
+decisions share the serialized mutation's body-free Activity Log correlation.
 
 The ordinary Editor is human-operated. The owner decision of 2026-10-03 retires its agent
 presence/history, incoming actions, selection-to-chat handoff and Chat **Apply to editor** command.

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b9f8b200288b2472539fc3ad23f20cda5a9e34da4811e1b6a1ff2014a942e6b2"
+    "catalogDigest": "b485b6cffd002086f383fac0088da847c9e2009713cdca7bf3d7abd8dad48fc8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 540,
-    "proofCount": 552,
-    "resolvedProofCount": 552,
-    "failureClassCount": 347,
+    "operationCount": 552,
+    "proofCount": 565,
+    "resolvedProofCount": 565,
+    "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -69,6 +69,8 @@
       "ports": ["ServerLogSink"],
       "operations": [
         "cli.lifecycle.browser-handoff",
+        "cli.lifecycle.health",
+        "cli.lifecycle.native-owner",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
         "cli.lifecycle.stop-request-failed",
@@ -93,6 +95,7 @@
         "chat.continuity.capture",
         "chat.continuity.degraded",
         "chat.continuity.rehydration",
+        "chat.creation.intent",
         "chat.creation.rejected",
         "chat.draft.operation",
         "chat.regeneration.rejected",
@@ -161,6 +164,7 @@
         "client.support-report.download-started",
         "client.support-report.preparation-failed",
         "client.support-report.prepared",
+        "client.update-notice.presented",
         "voice.dialogue.stage"
       ],
       "scenarios": [
@@ -282,8 +286,10 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "coding-app-session.browser-approval.state",
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
+        "coding-app-session.expired",
         "coding-app-session.local-session.confirmed",
         "coding-app-session.operation.state",
         "coding-app-session.paired",
@@ -373,6 +379,7 @@
         "git.ci-repair.budget",
         "git.verified-commit.authority",
         "harness.context.compacted",
+        "portable.runtime.native-helper-bound",
         "pr-description.workbench.egress.denied",
         "runtime.confinement.failed",
         "runtime.confinement.spawned",
@@ -481,6 +488,7 @@
         "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
+        "search.connected-context.evidence-details",
         "search.connected-context.failed",
         "search.connected-context.metadata-unavailable",
         "search.connected-context.selection-details",
@@ -699,11 +707,15 @@
         "update.candidate.consumed",
         "update.candidate.issued",
         "update.candidate.rejected",
+        "update.install-mode.detected",
         "update.portable-asset.redirect-refused",
         "update.portable-fetch.failed",
+        "update.portable.native-control",
         "update.release-trust.verify",
+        "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.legacy-snapshot-imported",
+        "update.runtime.state-write",
         "update.session.lifecycle"
       ],
       "scenarios": [
@@ -714,6 +726,7 @@
     }
   ],
   "failureClassScenarios": {
+    "chat-creation-intent": ["bff.dependency-failure"],
     "chat-draft-persistence": ["bff.dependency-failure"],
     "markdown-skill-library": ["bff.dependency-failure"],
     "client-scope-notice": ["client-diagnostics.dependency-failure"],
@@ -742,6 +755,7 @@
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
+    "client-update-notice": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
@@ -969,6 +983,7 @@
     "native-file-dialog-projection": ["ui.dependency-failure"],
     "native-runtime-invalid": ["memory-knowledge.dependency-failure"],
     "native-runtime-unavailable": ["memory-knowledge.dependency-failure"],
+    "portable-native-helper-binding": ["tools-workflows.dependency-failure"],
     "portable-normal-startup-recovery": ["runtime-packages.dependency-failure"],
     "portable-release-trust": ["runtime-packages.dependency-failure"],
     "portable-tree-attestation": ["runtime-packages.dependency-failure"],
@@ -1126,6 +1141,9 @@
     ],
     "chat.continuity.degraded.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.continuity.rehydration.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
+    "chat.creation.intent.decision": [
+      "packages/keiko-server/src/store/chatCreationIntents.test.ts"
+    ],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
@@ -1155,6 +1173,14 @@
     "cli.lifecycle.browser-handoff.outcome": [
       "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
       "packages/keiko-cli/src/ui-browser-handoff.test.ts"
+    ],
+    "cli.lifecycle.health.decision": [
+      "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
+      "packages/keiko-cli/src/lifecycle-health-owner.test.ts"
+    ],
+    "cli.lifecycle.native-owner.outcome": [
+      "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
+      "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
     ],
     "cli.lifecycle.stop-escalated.disposition": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
@@ -1261,11 +1287,20 @@
     "client.support-report.prepared.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
+    "client.update-notice.presented.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "coding-app-session.browser-approval.state.line": [
+      "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts"
+    ],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],
     "coding-app-session.channel.opened.live": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
+    ],
+    "coding-app-session.expired.observation": [
+      "packages/keiko-server/src/coding-app-session/browserApproval.expiry-observation.test.ts"
     ],
     "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
@@ -2178,6 +2213,9 @@
     "portable.normal-startup-recovery.required.reason": [
       "packages/keiko-server/src/update-portable-normal-startup.test.ts"
     ],
+    "portable.runtime.native-helper-bound.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts"
+    ],
     "portable.windows-alert.spawn-failed.emitted-line": [
       "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"
     ],
@@ -2301,6 +2339,12 @@
       "packages/keiko-server/src/grounded-query-facet-ranges.test.ts",
       "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts"
     ],
+    "search.connected-context.evidence-details.line": [
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts",
+      "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts"
+    ],
     "search.connected-context.failed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
@@ -2359,6 +2403,9 @@
     ],
     "search.native-runtime-resolved.state": [
       "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-resolved-logging.test.ts"
+    ],
+    "search.native-runtime-resolved.worker": [
+      "packages/keiko-local-knowledge/src/retrieval/usearch-worker-lifetime.test.ts"
     ],
     "search.prompt.window-fitted.line": [
       "packages/keiko-server/src/grounded-qa-hybrid.test.ts",
@@ -2611,20 +2658,32 @@
     "update.candidate.rejected.reason": [
       "packages/keiko-server/src/update-candidate-authority.test.ts"
     ],
+    "update.install-mode.detected.body-free": [
+      "packages/keiko-server/src/update-preflight-activity.test.ts"
+    ],
     "update.portable-asset.redirect-refused.reason": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"
     ],
     "update.portable-fetch.failed.reason": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"
     ],
+    "update.portable.native-control.lifetime": [
+      "packages/keiko-server/src/update-native-handoff-activity.test.ts"
+    ],
     "update.release-trust.verify.status": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"
+    ],
+    "update.remediation.lease.exclusive": [
+      "packages/keiko-server/src/update-runtime-activity.test.ts"
     ],
     "update.runtime.event.body-free": ["packages/keiko-server/src/update-runtime-activity.test.ts"],
     "update.runtime.legacy-import-deferred.reason": [
       "packages/keiko-cli/src/ui.activity-log-proof.test.ts"
     ],
     "update.runtime.legacy-snapshot-imported.count": [
+      "packages/keiko-server/src/update-runtime-activity.test.ts"
+    ],
+    "update.runtime.state-write.exclusive": [
       "packages/keiko-server/src/update-runtime-activity.test.ts"
     ],
     "update.session.lifecycle.transition": ["packages/keiko-server/src/update-session.test.ts"],

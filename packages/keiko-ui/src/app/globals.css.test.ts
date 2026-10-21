@@ -1459,6 +1459,19 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(fabIdx, "base .ws-fab block not found").toBeGreaterThan(-1);
     const fabBlock = css.slice(fabIdx, css.indexOf("}", fabIdx) + 1);
     expect(fabBlock).toContain("z-index: 1");
+    const workspaceCss = readFileSync(
+      resolve(here, "components/desktop/WorkspaceControls.module.css"),
+      "utf8",
+    );
+    const workspaceComponent = readFileSync(
+      resolve(here, "components/desktop/Workspace.tsx"),
+      "utf8",
+    );
+    expect(cssBlockFrom(css, ".ws-scene")).toContain("z-index: 2");
+    expect(cssBlockFrom(workspaceCss, ".cmpWorkspaceControl.cmpWorkspaceControl")).toContain(
+      "z-index: 3",
+    );
+    expect(workspaceComponent.match(/controlStyles\.cmpWorkspaceControl/gu)).toHaveLength(2);
     expect(css).toContain("z-index: 14000");
     expect(css).toContain("z-index: 99999");
   });

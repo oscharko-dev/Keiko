@@ -32,6 +32,7 @@ import {
 } from "./grounded-faithfulness.js";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { getServerLogger } from "./observability/index.js";
+import { hasCitationRepairProse } from "./grounded-citation-repair.js";
 
 export type CitationReconciliationOutcome =
   "cited" | "cited-with-dangling" | "dangling-only" | "uncited" | "refusal" | "assessment-only";
@@ -82,6 +83,7 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
         "skipped-capability",
       ],
     },
+    repairProseAvailable: { type: "boolean", dataClass: "closed-enum", required: false },
     citationBehaviour: {
       type: "string",
       dataClass: "closed-enum",
@@ -240,6 +242,7 @@ export function logCitationReconciliation(
         ...definedCitationMetadata(metadata),
         outcome: summary.outcome,
         citationKind: "numeric",
+        repairProseAvailable: hasCitationRepairProse(groundedAnswerSourceText(evidence.answer)),
         referenceCount: evidence.referenceCount,
         attachedCount: summary.attachedCount,
         ...(evidence.weakOverlapCount === undefined
@@ -287,6 +290,7 @@ function logInlineCitationSummary(
               summary.danglingMarkerCount,
             ),
         citationKind: "file",
+        repairProseAvailable: hasCitationRepairProse(groundedAnswerSourceText(answer)),
         completeness: "complete",
         loss: "none",
       },

@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "classification": "Deterministic dispatch optimization for citation repair of code-only answers; no skill, model-quality or complete functional acceptance.",
+  "sourceParent": "91e6df41152552c65ff2a0a18969178da789d9cd",
+  "sourceFiles": [
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "e0281a444f349eaf9df7fa3c018d737426847aaed608a2b85fb604083bfab274"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "2b0cb23e6b0040c81de353c8eaced95c6fa8bfa3fb774b1b158910df0de17950"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "5548b38c18d488b30347e197cf539bdeed2aee10e51f3d954d7ced47997d5a29"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "c679e19c5e8f14cc64985a9a381fb1edbea4281339d170c95c2931499c9e80fa"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "df63958e9a2ee72c562325e3d36be02780474e4d8be588f5df3e4883d1741251"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-answer-repair.test.ts",
+      "sha256": "0a527987c79aacd9cda77b342cd0a770a2945fca8da43240f91623bae4c4bf5d"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-answer-repair.ts",
+      "sha256": "fd1d28b078b0fb5274492c4d62c09ca7810ac1ae5602ed7e4df0302d32e81811"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-citation-log.test.ts",
+      "sha256": "0902b83c62b8ce405be9f9af76e4daf4c73303895629d6b18f47ecd6cd2d002e"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-citation-log.ts",
+      "sha256": "175d8824d4bfe9d2a4f716f5addebca58bd380c36f202754a10e3f872d7dae40"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-citation-repair.ts",
+      "sha256": "5680e7fa57d202be740b4299a1d1aaa1b21c505591ec7052be4e8539c11df735"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-synthesis-retry-ceiling.public-handler.test.ts",
+      "sha256": "8601aafa3171e7a21817d58673f7036573625ed7db5b9ce638a7ac0e9e94ca2a"
+    }
+  ],
+  "plan": {
+    "failure": "Actual UI code-only generations invoke a prose-only citation annotation repair, consume remaining output tokens and time, then retain the unchanged uncited answer after rejecting the repair.",
+    "success": "Do not dispatch that incapable repair when canonical Markdown has no prose target outside rendered fenced or inline code. Preserve mixed-prose repair, original usage, content, citations, assessment and uncertainty."
+  },
+  "implementation": {
+    "owner": "Existing grounded answer repair dispatcher and canonical Markdown code ranges.",
+    "newPromptInstructions": 0,
+    "budgetChanges": false,
+    "skillsChanged": false,
+    "activityLog": "Existing search.citations.reconciled optional repairProseAvailable boolean in both citation owners; no source or answer text.",
+    "result": "Original answer object retained for skipped-capability; no fabricated citation or confidence upgrade."
+  },
+  "check": {
+    "failureFirstUnit": {
+      "passed": 18,
+      "failed": 4,
+      "files": 1,
+      "notRunByTargetFilter": 0
+    },
+    "failureFirstPublicHandler": {
+      "passed": 0,
+      "failed": 2,
+      "files": 1,
+      "notRunByTargetFilter": 43
+    },
+    "finalAffected": {
+      "passed": 192,
+      "failed": 0,
+      "existingSkips": 0,
+      "files": 4
+    },
+    "finalGroundedFamilies": {
+      "passed": 2780,
+      "failed": 0,
+      "existingSkips": 1,
+      "files": 159
+    },
+    "localGates": "Strict package/root typing; affected-owner ESLint; complete Activity Log inventory including normal/negative architecture and release impact; retrieval quality, grounded retrieval, faithfulness, error observability, ADR indexing, whole formatting and real local Sonar pass.",
+    "capturedCodeReplay": {
+      "unchangedActualUiAnswers": 5,
+      "beforeRepairDispatches": 5,
+      "afterRepairDispatches": 0,
+      "replayModelCalls": 0,
+      "classification": "Controlled replay of exact before/after production owners, not a live after-change latency measurement. Original live outputs, times, token use and failures remain unchanged."
+    },
+    "sourceFreezeSha256": "5300a9c6bad7c734a3caaa6b9068d74a5fdb11f1fb02bd924f0f972c23b4d2a7",
+    "compiledFreezeSha256": "09e6b2404570faaf41635a8df33bdfff0d5070355bf90e6638ab70e8646bc331"
+  },
+  "retainedDevelopmentFailure": "Replay v1 used CJS require resolution against an import-only package export and failed before loading the retained owner. V2 resolves the declared import export. No v1 behavioral credit.",
+  "limits": [
+    "New live UI latency and held-out skill acceptance remain open.",
+    "The frozen live Java campaign separately exposes a requested README omitted for low relevance; source intake must be repaired and requalified without changing these outcomes.",
+    "Native installed updater/platform/SSD journeys, wider chat/search/context/browser acceptance, final required exact-head CI/reviews and merge remain open.",
+    "No acceptance checkbox or historical campaign outcome changes."
+  ],
+  "artifacts": [
+    {
+      "artifact": "checkpoint71-code-only-repair-red.json",
+      "sha256": "e79a6d90a034b68d2f9ca71881007c2957d0d778b6bab3fbbcbdf24397b8e182"
+    },
+    {
+      "artifact": "checkpoint71-code-only-handler-red.json",
+      "sha256": "29dc807418505eb618e04777dea6007f021d2550d44dc417acf5e2dc7bd31881"
+    },
+    {
+      "artifact": "checkpoint71-repair-scoped-green-v1.json",
+      "sha256": "e4d46dc4d83b368d989efd9ebb3d05b93920bf412c917f88ad4323e0da1e0c39"
+    },
+    {
+      "artifact": "checkpoint71-grounded-families-v1.json",
+      "sha256": "e849a75df6ecbeeeb9cf7e5d967e9288594e93cfc9ed83e196741bdbd468ec64"
+    },
+    {
+      "artifact": "checkpoint71-typecheck-v1.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "artifact": "checkpoint71-changed-lint-v1.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "checkpoint71-activity-log-v1.log",
+      "sha256": "a49fc2cf2fcee5b96e9cd5744284b65087117e49f7cac99e831bf417f8e162d0"
+    },
+    {
+      "artifact": "checkpoint71-retrieval-quality-v1.log",
+      "sha256": "445e6b8f0bbe8000a835aeb9638b2e825cefa7fa72f2e299d50a63e77d457540"
+    },
+    {
+      "artifact": "checkpoint71-grounded-retrieval-v1.log",
+      "sha256": "e67d8c1c0dd1eb7195e6135d7e761636176e7b6f8cdaeda7b24b75670f26db8f"
+    },
+    {
+      "artifact": "checkpoint71-faithfulness-v1.log",
+      "sha256": "fdd38052b4664f551a607833d9165fcf7aeb9f337195541781bf2d7f2c63c5e2"
+    },
+    {
+      "artifact": "checkpoint71-sonar-v1.log",
+      "sha256": "d58aef211889629aa937ba38efa2ae8440a661922e608d08af36666f09bbe32d"
+    },
+    {
+      "artifact": "checkpoint71-final-format-v1.json",
+      "sha256": "1d2826d4f4840b03d06606dd3590419a894a58432c5d745b278aefb5457bd1f5"
+    },
+    {
+      "artifact": "checkpoint71-final-adr-v1.json",
+      "sha256": "7c4f2db1b3f96956174d9d64d6535e4f2aff585c0a148657d98086f92559e5d3"
+    },
+    {
+      "artifact": "checkpoint71-error-observability-v1.json",
+      "sha256": "4ba4320a40fbbc5aabf15a5fd0314d3f9856a147d3aaefcbb75b909c999fca26"
+    },
+    {
+      "artifact": "checkpoint71-captured-code-replay-v2.json",
+      "sha256": "d01c917f5ea41d3f4898d840b18e4a1f0ea5fa2e3192f4336eee78e4de76bb34"
+    },
+    {
+      "artifact": "checkpoint71-source-freeze-v1.json",
+      "sha256": "5300a9c6bad7c734a3caaa6b9068d74a5fdb11f1fb02bd924f0f972c23b4d2a7"
+    },
+    {
+      "artifact": "checkpoint71-compiled-freeze-v1.json",
+      "sha256": "09e6b2404570faaf41635a8df33bdfff0d5070355bf90e6638ab70e8646bc331"
+    }
+  ]
+}

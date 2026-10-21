@@ -30,6 +30,47 @@ export {
   decodeCodingAppSessionPairingFragment,
 } from "./coding-app-session-pairing.js";
 export type { CodingAppSessionPairingAttestation } from "./coding-app-session-pairing.js";
+export {
+  BROWSER_APPROVAL_VERSION,
+  BROWSER_APPROVAL_REQUEST_TTL_MS,
+  BROWSER_APPROVAL_CHALLENGE_TTL_MS,
+  BROWSER_APPROVAL_REMEMBER_TTL_MS,
+  BROWSER_APPROVAL_MAX_RECORDS,
+  BROWSER_APPROVAL_MAX_CHALLENGES,
+  browserApprovalChallengeText,
+  isBrowserApprovalPublicKey,
+  isBrowserApprovalId,
+  isBrowserApprovalOrigin,
+  isBrowserApprovalRequestId,
+  validateBrowserApprovalRequestInput,
+  validateBrowserApprovalDecisionInput,
+  validateBrowserApprovalChallengeInput,
+  validateBrowserApprovalProofInput,
+  validateBrowserApprovalChallenge,
+  isBrowserApprovalRequestDescriptor,
+  isBrowserApprovalDescriptor,
+  validateBrowserApprovalRequestResult,
+  validateBrowserApprovalChallengeResult,
+  validateBrowserApprovalDecisionResult,
+  validateBrowserApprovalManagementResult,
+  validateBrowserApprovalProofResult,
+} from "./browser-approval.js";
+export type {
+  BrowserApprovalPublicKey,
+  BrowserApprovalRequestInput,
+  BrowserApprovalDecisionInput,
+  BrowserApprovalChallengeInput,
+  BrowserApprovalProofInput,
+  BrowserApprovalChallenge,
+  BrowserApprovalRequestDescriptor,
+  BrowserApprovalDescriptor,
+  BrowserApprovalManagementSnapshot,
+  BrowserApprovalManagementResult,
+  BrowserApprovalDecisionResult,
+  BrowserApprovalRequestResult,
+  BrowserApprovalChallengeResult,
+  BrowserApprovalProofResult,
+} from "./browser-approval.js";
 
 /** Contract version for the authenticated app-session channel wire shapes (ADR-0141). */
 export const CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION = "1" as const;

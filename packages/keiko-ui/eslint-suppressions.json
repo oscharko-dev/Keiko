@@ -569,14 +569,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/update/UpdateStartupNotice.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/update/UpdateWindow.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 3
@@ -869,7 +861,7 @@
       "count": 3
     },
     "max-lines-per-function": {
-      "count": 8
+      "count": 7
     }
   },
   "src/app/components/desktop/widgets/cards/GitDeliveryActionSheetCard.tsx": {
@@ -1609,7 +1601,7 @@
   },
   "src/app/components/desktop/workspace-perf.1580.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/components/desktop/workspace-trust/WorkspaceTrustPanel.test.tsx": {

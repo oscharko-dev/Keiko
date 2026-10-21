@@ -1,4 +1,6 @@
 import { raceAbort } from "./abort-race.js";
+import { logChatCreationIntent } from "./store/chatCreationIntents.js";
+import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import {
   gitDescriptionSkillRefusal,
@@ -56,6 +58,7 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
+  isDesktopChatCreationRequestId,
   isConversationMemoryCaptureSurfaceWire,
   type ConversationMemoryCaptureSurfaceWire,
   type ConversationMemoryActionWire,
@@ -402,14 +405,34 @@ function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): st
   return validateProjectPath(process.cwd(), { mustExist: true });
 }
 
-function ensureProject(deps: UiHandlerDeps, path: string): Project {
+function pickRegisteredProjectPath(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): string {
+  try {
+    return resolveRegisteredWorkspaceProjectPath(deps.store, pickProjectPath(body, deps), {
+      preserveLegacyProjectIdentity: true,
+    });
+  } catch (error) {
+    if (error instanceof UiStoreError && error.code === "PROJECT_IDENTITY_CHANGED")
+      logChatCreationIntent("refused", correlationId, "project-identity-changed");
+    throw error;
+  }
+}
+
+function ensureProject(
+  deps: UiHandlerDeps,
+  path: string,
+  correlationId: string | undefined,
+): Project {
   const existing = deps.store.listProjects().find((project) => project.path === path);
   if (existing !== undefined) {
     deps.store.updateProject(path, {});
     return existing;
   }
   const name = basename(path) || "Local workspace";
-  return deps.store.createProject(path, name);
+  return deps.store.createProject(path, name, correlationId);
 }
 
 function findChat(deps: UiHandlerDeps, projectPath: string, chatId: string): Chat | undefined {
@@ -2966,7 +2989,19 @@ export async function handleCreateDesktopChat(
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
   // Reuse configuration initialization; opening a chat never sends a readiness request.
+  if (
+    body.creationRequestId !== undefined &&
+    !isDesktopChatCreationRequestId(body.creationRequestId)
+  ) {
+    logChatCreationIntent("refused", ctx.correlationId);
+    return {
+      status: 400,
+      body: errorBody("INVALID_REQUEST", "The chat creation intent is invalid."),
+    };
+  }
   const explicitModelId = explicitChatModelId(body);
+  const replay = replayDesktopChat(ctx, deps, body, explicitModelId);
+  if (replay !== undefined) return replay;
   await (explicitModelId === undefined
     ? awaitAnyInitializedConversationReadyChatModel(
         deps,
@@ -2974,6 +3009,8 @@ export async function handleCreateDesktopChat(
         ctx.correlationId,
       )
     : awaitInitializedConversationReadiness(deps, explicitModelId, ctx.correlationId));
+  const acceptedWhileWaiting = replayDesktopChat(ctx, deps, body, explicitModelId);
+  if (acceptedWhileWaiting !== undefined) return acceptedWhileWaiting;
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(
@@ -2984,21 +3021,69 @@ export async function handleCreateDesktopChat(
     );
     return modelId;
   }
+  return persistDesktopChat(ctx, deps, body, modelId);
+}
+
+function persistDesktopChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  body: Record<string, unknown>,
+  modelId: string,
+): RouteResult {
   try {
-    const projectPath = pickProjectPath(body, deps);
-    const project = ensureProject(deps, projectPath);
-    const title =
-      typeof body.title === "string" && body.title.trim().length > 0
-        ? body.title.trim()
-        : DEFAULT_CHAT_TITLE;
+    const projectPath = pickRegisteredProjectPath(body, deps, ctx.correlationId);
+    const project = ensureProject(deps, projectPath, ctx.correlationId);
+    const title = desktopChatCreationTitle(body);
     const chat = deps.store.createChat(project.path, title, modelId, {
       correlationId: ctx.correlationId,
+      ...(typeof body.creationRequestId === "string"
+        ? {
+            creationRequestId: body.creationRequestId,
+            automaticModelSelection: explicitChatModelId(body) === undefined,
+          }
+        : {}),
     });
     return { status: 201, body: chatEnvelope(deps, project, chat) };
   } catch (error) {
     if (error instanceof UiStoreError) {
-      // Issue #154 — redact at the boundary so user-controlled path fragments cannot
-      // echo configured gateway secrets back to the client.
+      return {
+        status: error.status,
+        body: errorBody(error.code, redactErrorMessage(error.message, deps)),
+      };
+    }
+    throw error;
+  }
+}
+
+function desktopChatCreationTitle(body: Record<string, unknown>): string {
+  return typeof body.title === "string" && body.title.trim().length > 0
+    ? body.title.trim()
+    : DEFAULT_CHAT_TITLE;
+}
+
+function replayDesktopChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  body: Record<string, unknown>,
+  requestedModelId: string | undefined,
+): RouteResult | undefined {
+  if (typeof body.creationRequestId !== "string") return undefined;
+  try {
+    const projectPath = pickRegisteredProjectPath(body, deps, ctx.correlationId);
+    const chat = deps.store.replayChatCreation({
+      requestId: body.creationRequestId,
+      projectPath,
+      title: desktopChatCreationTitle(body),
+      requestedModelId,
+      branchLabel: undefined,
+      correlationId: ctx.correlationId,
+    });
+    if (chat === undefined) return undefined;
+    const project = deps.store.listProjects().find((item) => item.path === projectPath);
+    if (project === undefined) throw new UiStoreError("NOT_FOUND", "Project not found.", 404);
+    return { status: 201, body: chatEnvelope(deps, project, chat) };
+  } catch (error) {
+    if (error instanceof UiStoreError) {
       return {
         status: error.status,
         body: errorBody(error.code, redactErrorMessage(error.message, deps)),

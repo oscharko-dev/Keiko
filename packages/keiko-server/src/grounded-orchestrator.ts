@@ -1,3 +1,4 @@
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   hasRecursiveTraversalQuery,
   CANONICAL_MANIFEST_BASENAMES,
@@ -289,6 +290,7 @@ import {
 } from "./grounded-document-evidence.js";
 import {
   certifiedContentPaths,
+  certifiedSourceDescriptorPaths,
   type ContentEvidenceIdentity,
   selectGroundedCandidateFiles,
   ordinaryRelativeFloor,
@@ -778,6 +780,35 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     "search.connected-context.selection-quality.line",
     "search.connected-context.continuity.line",
   ],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.evidence-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.logSourceEvidenceDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
+    sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.evidence-details.line"],
   releaseImpact: "patch",
 });
 
@@ -1317,6 +1348,7 @@ interface SourceDecisionObservation {
   semanticProviderCallCount: number;
   semanticRejectedAtomCount: number;
   primaryContentPathCount: number;
+  sourceDescriptorPathCount: number;
 }
 
 function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
@@ -1326,10 +1358,12 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
     semanticProviderCallCount: 0,
     semanticRejectedAtomCount: 0,
     primaryContentPathCount: 0,
+    sourceDescriptorPathCount: 0,
   };
 }
 
 interface SearchInputs {
+  readonly reservedRingSearchCalls?: number | undefined;
   readonly endpointPreferredSourcePaths?: readonly string[] | undefined;
   readonly admittedPaths?: readonly string[] | undefined;
   readonly rejectedPaths?: readonly string[] | undefined;
@@ -2354,7 +2388,7 @@ function certifiedLexicalContent(
   return result.atoms
     .filter(
       (atom) =>
-        ((literal &&
+        (((literal || atom.metrics?.sourceDescriptorMatch === true) &&
           atom.provenance.kind === "lexical-search" &&
           atom.provenance.tool === "repo.searchText") ||
           (atom.provenance.kind === "file-listing" && atom.provenance.tool === "repo.findFiles")) &&
@@ -2723,6 +2757,10 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
     result.atoms,
     primaryContentIdentities,
   ).size;
+  sourceDecision.sourceDescriptorPathCount = certifiedSourceDescriptorPaths(
+    result.atoms,
+    primaryContentIdentities,
+  ).size;
   inputs.observeSourceDecision(sourceDecision);
   inputs.workspaceIndexActivity.recordSearchResult(result);
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
@@ -2836,13 +2874,34 @@ async function settleParallelStage<T>(
   }
 }
 
+interface AdmittedStructuralQueries {
+  readonly queries: readonly RetrievalQuery[];
+  readonly clipped: boolean;
+}
+
+export function admitStructuralQueries(
+  planned: readonly RetrievalQuery[],
+  remaining: number,
+): AdmittedStructuralQueries {
+  const queries = planned.slice(0, Math.max(0, remaining));
+  return { queries, clipped: queries.length < planned.length };
+}
+
+interface NonLexicalAdapterBatch {
+  readonly results: readonly RunRingStructuralResult[];
+  readonly searchesClipped: boolean;
+}
+
 async function runNonLexicalAdapters(
   ring: NonLexicalRing,
   inputs: SearchInputs,
-): Promise<readonly RunRingStructuralResult[]> {
+): Promise<NonLexicalAdapterBatch> {
   const registry = registryForRing(ring);
-  const queries =
+  const plannedQueries =
     ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
+  const reserved = inputs.reservedRingSearchCalls ?? 0;
+  const admitted = admitStructuralQueries(plannedQueries, reserved);
+  const queries = admitted.queries;
   const requestContext =
     ring.kind === "structural" ? inputs.structuralContexts.forLimits(ring.searchLimits) : undefined;
   const results = await runAdapterQueries(registry, ring, queries, inputs, requestContext);
@@ -2855,14 +2914,18 @@ async function runNonLexicalAdapters(
           inputs.query,
         )
       : [];
+  const followUp = admitStructuralQueries(followUpQueries, reserved - queries.length);
   const followUpResults = await runAdapterQueries(
     registry,
     ring,
-    followUpQueries,
+    followUp.queries,
     inputs,
     requestContext,
   );
-  return [...results, ...followUpResults];
+  return {
+    results: [...results, ...followUpResults],
+    searchesClipped: admitted.clipped || followUp.clipped,
+  };
 }
 
 async function gitFileAtomsForRing(
@@ -2932,7 +2995,8 @@ function nonLexicalAtoms(
 
 async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Promise<RingResult> {
   const startedAtMs = inputs.nowMs();
-  const allResults = await runNonLexicalAdapters(ring, inputs);
+  const batch = await runNonLexicalAdapters(ring, inputs);
+  const allResults = batch.results;
   const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
   const merged = mergeAtomsByStableId(allResults, cap);
   const git = await gitFileAtomsForRing(ring, inputs, cap);
@@ -2940,6 +3004,8 @@ async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Pr
   const adapterUncertainty = allResults.flatMap((result) =>
     adapterDiagnostics(result, inputs.nowMs()),
   );
+  if (ring.kind === "structural" && batch.searchesClipped)
+    adapterUncertainty.push(budgetClipped("budget-exhausted on searchCalls", inputs.nowMs()));
   const uncertainty = dedupeUncertainty(
     ring.kind === "git-history"
       ? suppressGitMetadataAdapterDiagnostics(adapterUncertainty, git.atoms.length)
@@ -3073,9 +3139,17 @@ function reserveRingSearchCalls(
   ring: RetrievalRing,
   inputs: SearchInputs,
 ): RingReservation {
+  const remaining = governor.plan.budget.searchCallsMax - governor.usage.searchCalls;
+  if (remaining <= 0) {
+    const reason = "budget-exhausted on searchCalls";
+    return {
+      governor: { ...governor, status: "budget-exhausted", stopReason: reason },
+      marker: budgetClipped(reason, inputs.nowMs()),
+    };
+  }
   const reserved = applyUsage(
     governor,
-    usageDelta({ searchCalls: plannedSearchCallsForRing(ring, inputs) }),
+    usageDelta({ searchCalls: Math.min(remaining, plannedSearchCallsForRing(ring, inputs)) }),
   );
   if (reserved.status !== "budget-exhausted") {
     return { governor: reserved };
@@ -3300,6 +3374,7 @@ async function runReservedRing(
   decisions.executedRingKinds.push(ring.kind);
   const result = await runRing(ring, {
     ...inputs,
+    reservedRingSearchCalls: reservation.governor.usage.searchCalls - current.usage.searchCalls,
     resolveRepoSemanticSearchProvider: semanticProviderResolver(inputs, grant),
     tryReserveAdditionalSearchCall: (): boolean => {
       if (governor.usage.searchCalls >= governor.plan.budget.searchCallsMax) return false;
@@ -3711,7 +3786,10 @@ function wantsProjectMetadata(input: OrchestratorInput, intent: RetrievalIntent)
     return true;
   }
   const question = extractRetrievalChannels(input.query.text, 8).questionText;
-  return classifyRetrievalIntent(question).intent === "project-metadata";
+  return (
+    classifyRetrievalIntent(question).intent === "project-metadata" ||
+    requestsDependencyMetadata(question)
+  );
 }
 
 function wantsRepositoryOverview(intent: RetrievalIntent): boolean {
@@ -5435,7 +5513,7 @@ async function rootGlobManifestPaths(
 // the guarded fs, the traversal control and the shared existence cache stay in lockstep across
 // them instead of being re-threaded positionally into each pass.
 interface MetadataDiscoveryInputs {
-  readonly explicitSourcePaths?: readonly string[];
+  readonly metadataSourcePaths?: readonly string[];
   readonly readableScopeManifest?: boolean;
   readonly input: OrchestratorInput;
   readonly intent: RetrievalIntent;
@@ -5530,12 +5608,20 @@ async function workspacePackageMetadataAtoms(
   return atoms;
 }
 
+function isAdmittedMetadataSource(path: string, inputs: MetadataDiscoveryInputs): boolean {
+  return (
+    (isEcosystemSourceFile(path) || isCanonicalMetadataFile(path)) &&
+    isAdmittedMetadataPath(path, inputs.searchScope, inputs.existsCache) &&
+    fileExistsByContainedStat(inputs.searchScope, inputs.fs, path)
+  );
+}
+
 function projectMetadataRoots(inputs: MetadataDiscoveryInputs): readonly string[] {
   const roots = new Set(metadataRootsForScope(inputs.input.scope));
   const query = extractRetrievalChannels(inputs.input.query.text, 8).questionText;
   if (!requestsDependencyMetadata(query)) return [...roots];
-  for (const path of inputs.explicitSourcePaths ?? []) {
-    if (!isEcosystemSourceFile(path) && !isCanonicalMetadataFile(path)) continue;
+  for (const path of inputs.metadataSourcePaths ?? []) {
+    if (!isAdmittedMetadataSource(path, inputs)) continue;
     let root = dirname(path);
     while (
       root.length > 0 &&
@@ -5680,9 +5766,9 @@ async function deterministicMetadataEvidence(
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
   const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
-    ...(inputs.explicitSourcePaths === undefined
+    ...(inputs.metadataSourcePaths === undefined
       ? {}
-      : { explicitSourcePaths: inputs.explicitSourcePaths }),
+      : { metadataSourcePaths: inputs.metadataSourcePaths }),
     ...(inputs.readableScopeManifest === true ? { readableScopeManifest: true } : {}),
     input,
     intent: plan.retrievalIntent,
@@ -5747,7 +5833,7 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
-  readonly explicitSourcePaths?: readonly string[];
+  readonly metadataSourcePaths?: readonly string[];
   readonly readableScopeManifest?: boolean;
   readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
@@ -5826,16 +5912,31 @@ async function deterministicContextEvidence(
   return mergeDeterministicEvidence([filenameDiscovery, traceEvidence, metadata]);
 }
 
+function metadataSourcePathsFor(rings: RingRunSummary): readonly string[] {
+  const explicit =
+    rings.explicitAdmission?.selections
+      .filter((selection) => selection.origin === "query")
+      .map((selection) => selection.path) ?? [];
+  const observed = rings.atoms
+    .filter(
+      (atom) =>
+        atom.provenance.kind === "lexical-search" &&
+        atom.provenance.tool === "repo.searchText" &&
+        isCanonicalMetadataFile(atom.scopePath),
+    )
+    .map((atom) => atom.scopePath);
+  return [...new Set([...explicit, ...observed])];
+}
+
 async function withDeterministicContextAtoms(
   rings: RingRunSummary,
   inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
   markAugmentationUsed(rings);
-  const explicitSourcePaths =
-    rings.explicitAdmission?.selections
-      .filter((selection) => selection.origin === "query")
-      .map((selection) => selection.path) ?? [];
-  const deterministic = await deterministicContextEvidence({ ...inputs, explicitSourcePaths });
+  const deterministic = await deterministicContextEvidence({
+    ...inputs,
+    metadataSourcePaths: metadataSourcePathsFor(rings),
+  });
   if (
     deterministic.atoms.length === 0 &&
     deterministic.uncertainty.length === 0 &&
@@ -8023,7 +8124,7 @@ function preferCompleteDocumentExcerpt(
   )
     return false;
   const bucket = candidateBucketForPath(scopePath);
-  return bucket === "docs" || bucket === "overview-doc";
+  return bucket === "docs" || bucket === "overview-doc" || bucket === "canonical-metadata";
 }
 
 function readPathExcerptResult(
@@ -10729,6 +10830,13 @@ function sourceReferenceActivityExtra(
   return fields;
 }
 
+function sourceDecisionActivityExtra(
+  observation: SourceDecisionObservation,
+): Omit<SourceDecisionObservation, "sourceDescriptorPathCount"> {
+  const { sourceDescriptorPathCount: _sourceDescriptorPathCount, ...source } = observation;
+  return source;
+}
+
 function sourceDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -10751,7 +10859,9 @@ function sourceDetailsActivityExtra(
       reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
       unrepresentablePathCount:
         execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
-      ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
+      ...sourceDecisionActivityExtra(
+        execution.status.sourceDecision ?? emptySourceDecision("not-evaluated"),
+      ),
       ...metadataRetentionActivityExtra(execution.status),
       ...omissionTotalsActivityExtra(execution.output.pack),
     };
@@ -11020,6 +11130,36 @@ function excerptSchedulingActivityExtra(
   };
 }
 
+function logSourceEvidenceDetails(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  status: ConnectedContextCompletionStatus,
+  correlationId: string,
+): void {
+  const observed = status.sourceDecision;
+  const observation =
+    observed === undefined
+      ? { activityDetailStatus: "unavailable" as const }
+      : {
+          activityDetailStatus: "complete" as const,
+          sourceDescriptorPathCount: observed.sourceDescriptorPathCount,
+        };
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION,
+      { correlationId },
+      {
+        codeRedactionRevision: CODE_REDACTION_REVISION,
+        scopeIdentitySha256: identity.scopeIdentitySha256,
+        queryIdentitySha256: identity.queryIdentitySha256,
+        ...observation,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 function logConnectedContextCompletion(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
@@ -11052,6 +11192,7 @@ function logConnectedContextCompletion(
       selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
+  logSourceEvidenceDetails(logger, identity, execution.status, correlationId);
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,

@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import type { ChatConnectedScope } from "@/lib/types";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportFilesScopeDecision } from "@/lib/client-diagnostics";
 
 export type ChatWindowFlowIntensity = "light" | "heavy";
 
@@ -22,6 +24,150 @@ interface ChatWindowRuntimeState {
   readonly registration: symbol;
   readonly prepareClose: (() => Promise<boolean>) | undefined;
   readonly isCloseReady: (() => boolean) | undefined;
+}
+
+export type ChatScopeTransition = "pending" | "failed" | undefined;
+interface ScopeIntent {
+  readonly token: symbol;
+  readonly status: "pending" | "failed";
+  readonly correlationId: string;
+  readonly isCurrent: () => boolean;
+  readonly ownerKey: (() => string | undefined) | undefined;
+}
+// Admission state only: canonical source lists and identities remain server-owned.
+const scopeIntents = new Map<string, Map<string, ScopeIntent>>();
+
+export function chatScopeTransition(chatId: string | undefined): ChatScopeTransition {
+  const intents = chatId === undefined ? undefined : scopeIntents.get(chatId);
+  if (intents === undefined || intents.size === 0) return undefined;
+  return [...intents.values()].some((intent) => intent.status === "failed") ? "failed" : "pending";
+}
+
+export function chatScopeSourceTransition(chatId: string, sourceId: string): ChatScopeTransition {
+  return scopeIntents.get(chatId)?.get(sourceId)?.status;
+}
+
+export function clearChatScopeTransitions(chatId: string): void {
+  if (!scopeIntents.delete(chatId)) return;
+  for (const listener of listeners) listener();
+}
+
+/** Explicitly forgetting a failed edge retains the server's unchanged canonical sources. */
+export function releaseFailedChatScopeTransition(chatId: string, sourceId: string): boolean {
+  const intents = scopeIntents.get(chatId);
+  const intent = intents?.get(sourceId);
+  if (intent?.status === "pending") return false;
+  if (intent === undefined || intents === undefined) return true;
+  intents.delete(sourceId);
+  if (intents.size === 0) scopeIntents.delete(chatId);
+  reportFilesScopeDecision(intent.correlationId, { decision: "released" });
+  for (const listener of listeners) listener();
+  return true;
+}
+
+/** Fresh explicit reacceptance can retire failed edges belonging to that same mounted source. */
+export function releaseDetachedFailedChatScopeTransitions(
+  chatId: string,
+  ownerKey: string,
+  liveSourceIds: ReadonlySet<string>,
+): void {
+  const intents = scopeIntents.get(chatId);
+  if (intents === undefined) return;
+  for (const [sourceId, intent] of intents) {
+    if (intent.ownerKey?.() === ownerKey && !liveSourceIds.has(sourceId))
+      releaseFailedChatScopeTransition(chatId, sourceId);
+  }
+}
+
+export function releaseObsoleteFailedChatScopeTransitions(): void {
+  for (const [chatId, intents] of scopeIntents) {
+    for (const [sourceId, intent] of intents) {
+      if (intent.status === "failed" && !intent.isCurrent())
+        releaseFailedChatScopeTransition(chatId, sourceId);
+    }
+  }
+}
+
+export function refuseChatScopeSend(chatId: string): ChatScopeTransition {
+  const transition = chatScopeTransition(chatId);
+  const intent = scopeIntents.get(chatId)?.values().next().value;
+  if (intent !== undefined)
+    reportFilesScopeDecision(intent.correlationId, { decision: "intent-send-refused" });
+  return transition;
+}
+
+function settleScopeIntent(
+  chatId: string,
+  sourceId: string,
+  intent: ScopeIntent,
+  accepted: boolean,
+): void {
+  const intents = scopeIntents.get(chatId);
+  if (intents === undefined || intents.get(sourceId)?.token !== intent.token) return;
+  const obsolete = !intent.isCurrent();
+  if (accepted || obsolete) intents.delete(sourceId);
+  else intents.set(sourceId, { ...intent, status: "failed" });
+  if (intents.size === 0) scopeIntents.delete(chatId);
+  const decision = accepted ? "intent-applied" : "intent-failed";
+  reportFilesScopeDecision(intent.correlationId, {
+    decision: obsolete ? "released" : decision,
+  });
+  for (const listener of listeners) listener();
+}
+
+export function beginChatScopeTransition(
+  chatId: string,
+  sourceId: string,
+  isCurrent: () => boolean = (): boolean => true,
+  ownerKey?: () => string | undefined,
+): { readonly correlationId: string; readonly settle: (accepted: boolean) => void } {
+  const shouldCancel = chatScopeTransition(chatId) === undefined;
+  const intent: ScopeIntent = {
+    token: Symbol("chat-scope-intent"),
+    status: "pending",
+    correlationId: newClientCorrelationId(),
+    isCurrent,
+    ownerKey,
+  };
+  const intents = scopeIntents.get(chatId) ?? new Map<string, ScopeIntent>();
+  intents.set(sourceId, intent);
+  scopeIntents.set(chatId, intents);
+  reportFilesScopeDecision(intent.correlationId, { decision: "intent-pending" });
+  for (const listener of listeners)
+    listener(shouldCancel ? chatId : undefined, shouldCancel ? intent.correlationId : undefined);
+  let settled = false;
+  return {
+    correlationId: intent.correlationId,
+    settle(accepted): void {
+      if (settled) return;
+      settled = true;
+      settleScopeIntent(chatId, sourceId, intent, accepted);
+    },
+  };
+}
+
+/** Observe source admission in every owning session, including the root Voice fallback owner. */
+export function useChatScopeCancellation(
+  cancelSend: (conversationId: string, correlationId: string) => void,
+): void {
+  useLayoutEffect(
+    () =>
+      subscribe((conversationId, correlationId): void => {
+        if (conversationId !== undefined && correlationId !== undefined)
+          cancelSend(conversationId, correlationId);
+      }),
+    [cancelSend],
+  );
+}
+
+export function useChatScopeTransition(
+  chat: { readonly id: string } | undefined,
+): ChatScopeTransition {
+  return useSyncExternalStore(
+    subscribe,
+    () => chatScopeTransition(chat?.id),
+    (): undefined => undefined,
+  );
 }
 
 export type ChatWindowGroundingActivity =
@@ -51,10 +197,11 @@ const HEAVY_REFERENCES = 4;
 const FLOW_AFTERGLOW_MS = 2_500;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
-const listeners = new Set<() => void>();
+type ChatActivityListener = (conversationId?: string, correlationId?: string) => void;
+const listeners = new Set<ChatActivityListener>();
 let runtimes: ReadonlyMap<string, ChatWindowRuntimeState> = new Map();
 
-function subscribe(listener: () => void): () => void {
+function subscribe(listener: ChatActivityListener): () => void {
   listeners.add(listener);
   return (): void => {
     listeners.delete(listener);
@@ -147,7 +294,12 @@ export function registerChatWindowRuntime(
   isCloseReady?: () => boolean,
 ): () => void {
   const registration = Symbol("chat-window-runtime");
-  runtimes = new Map(runtimes).set(windowId, { runtime, registration, prepareClose, isCloseReady });
+  runtimes = new Map(runtimes).set(windowId, {
+    runtime,
+    registration,
+    prepareClose,
+    isCloseReady,
+  });
   for (const listener of listeners) listener();
   return (): void => {
     if (runtimes.get(windowId)?.registration !== registration) return;
@@ -181,7 +333,7 @@ export function usePublishChatWindowRuntime(
   prepareClose?: () => Promise<boolean>,
   isCloseReady?: () => boolean,
 ): void {
-  useEffect((): (() => void) | undefined => {
+  useLayoutEffect((): (() => void) | undefined => {
     if (target === undefined) return;
     return registerChatWindowRuntime(windowId, target, prepareClose, isCloseReady);
   }, [target, windowId, prepareClose, isCloseReady]);

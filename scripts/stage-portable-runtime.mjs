@@ -1722,8 +1722,8 @@ function buildSecureReadHelper(target, destination) {
 function runtimeSupervisorSource(target) {
   if (target.nodePlatform === "linux") {
     return {
-      path: "packages/keiko-sandbox/src",
-      root: join(repoRoot, "packages", "keiko-sandbox", "src"),
+      path: "native/runtime-supervisor",
+      root: join(repoRoot, "native", "runtime-supervisor"),
     };
   }
   const platform = target.nodePlatform === "win32" ? "windows" : "macos";
@@ -1734,9 +1734,6 @@ function runtimeSupervisorSource(target) {
 }
 
 function runtimeSupervisorExecutablePath(target) {
-  if (target.nodePlatform === "linux") {
-    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-  }
   return `runtime/native/${RUNTIME_SUPERVISOR_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -1744,9 +1741,7 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
   const executablePath = runtimeSupervisorExecutablePath(target);
   const destination = join(resourceRoot, ...executablePath.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
-  if (target.nodePlatform !== "linux") {
-    (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
-  }
+  (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
   const entry = existsSync(destination) ? lstatSync(destination) : undefined;
   if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("runtime supervisor build did not produce the fixed executable");
@@ -1760,10 +1755,7 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
     kind: "runtime-process-supervisor",
     name: RUNTIME_SUPERVISOR_NAME,
     options,
-    protocol:
-      target.nodePlatform === "linux"
-        ? { schemaVersion: 1, requestMagic: "none", responseMagic: "none" }
-        : { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+    protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
     sourcePath: source.path,
     sourceRoot: source.root,
     target,

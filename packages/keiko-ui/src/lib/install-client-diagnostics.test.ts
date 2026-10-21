@@ -683,6 +683,39 @@ describe("fanOutClientDiagnostic stage evidence", () => {
     expect(body).toEqual({ kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 });
   });
 
+  it.each(["started", "settled"] as const)(
+    "posts browser approval %s evidence without key or message contents",
+    (phase) => {
+      vi.spyOn(console, "debug").mockImplementation(() => undefined);
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const common = { stage: "browser approval", ordinal: 1 } as const;
+      const stageReport =
+        phase === "started"
+          ? { ...common, phase, browserApproval: { operation: "key-store" as const } }
+          : {
+              ...common,
+              phase,
+              durationMs: 2,
+              browserApproval: { operation: "key-store" as const, outcome: "stored" as const },
+            };
+      fanOutClientDiagnostic("PRIVATE_BROWSER_KEY_CANARY", {
+        correlationId: "browser-store-123",
+        parentCorrelationId: "browser-approval-123",
+        stageReport,
+      });
+      const body = lastPostedBody(fetchMock);
+      expect(isClientStageIngestRequest(body)).toBe(true);
+      expect(body).toMatchObject({
+        stage: "browser approval",
+        phase,
+        parentCorrelationId: "browser-approval-123",
+        browserApproval: { operation: "key-store" },
+      });
+      expect(JSON.stringify(body).includes("PRIVATE_BROWSER_KEY_CANARY")).toBe(false);
+    },
+  );
+
   it("posts the closed stage wire shape for a settled report, with durationMs and no other field", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

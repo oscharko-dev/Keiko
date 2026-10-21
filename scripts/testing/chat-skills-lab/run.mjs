@@ -4,7 +4,7 @@ import { fileURLToPath, URL, URLSearchParams } from "node:url";
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { startRuntime, MODEL, digest, workingDiffDigest } from "./runtime.mjs";
+import { startRuntime, finalizeRuntime, MODEL, digest, workingDiffDigest } from "./runtime.mjs";
 import { SOURCE, SKILL, APP, CASES } from "./cases.mjs";
 import { contextObservation, expectedSkillTokens, turnObservation } from "./observations.mjs";
 const runDir = process.env.KEIKO_QUALIFICATION_OUTPUT;
@@ -44,6 +44,7 @@ class QualificationError extends Error {
 const reasonOf = (error) =>
   error instanceof QualificationError ? error.reason : "operation-failed";
 const ledger = [];
+const physical = [];
 const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const sourceDiffDigest = await workingDiffDigest(repositoryRoot);
 const harnessDigests = Object.fromEntries(
@@ -53,11 +54,19 @@ const harnessDigests = Object.fromEntries(
     .map((name) => [name, digest(readFileSync(new URL(name, import.meta.url)))]),
 );
 let runtime;
-const save = () =>
+const save = (finalization) =>
   writeFileSync(
     join(runDir, "ledger.json"),
     JSON.stringify(
-      { sourceHead, sourceDiffDigest, harnessDigests, ledger, physical: runtime?.physical ?? [] },
+      {
+        sourceHead,
+        sourceDiffDigest,
+        harnessDigests,
+        ledger,
+        physical,
+        finalization,
+        exitCode: process.exitCode ?? 0,
+      },
       null,
       2,
     ),
@@ -318,6 +327,7 @@ try {
   const selectedCase = process.argv[2] ?? "setup";
   const task = CASES.find((item) => item.id === selectedCase);
   runtime = await startRuntime(join(runDir, "runtime"), {
+    physicalRecorder: physical,
     contextWindow: new Set(["manual", "automatic"]).has(task?.scenario) ? 8192 : 131072,
     skillBody: SKILL,
     source: SOURCE,
@@ -353,10 +363,8 @@ try {
   process.exitCode = 1;
 } finally {
   if (ledger.some((item) => item.status === "failed")) process.exitCode = 1;
-  try {
-    await runtime?.drain();
-  } finally {
-    await runtime?.close();
-    save();
-  }
+  await finalizeRuntime(runtime, (finalization) => {
+    if (finalization.status === "failed") process.exitCode = 1;
+    save(finalization);
+  });
 }

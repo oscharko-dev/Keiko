@@ -1,6 +1,7 @@
 "use client";
 
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
+import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
   useChatMarkdownSkill,
   chatSkillBlocksSend,
@@ -21,6 +22,13 @@ import {
   MAX_ATTACHMENT_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { useTranslate } from "@/lib/i18n";
+import {
+  clearChatScopeTransitions,
+  useChatScopeCancellation,
+  refuseChatScopeSend,
+  useChatScopeTransition,
+  type ChatScopeTransition,
+} from "../windows/chatWindowActivity";
 import {
   ATTACHMENT_CLEANUP_DEFERRED_ERROR,
   DRAFT_ATTACHMENTS_UNSAVED_ERROR,
@@ -74,7 +82,11 @@ import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { reportClientDiagnostic, reportModelCatalogStage } from "@/lib/client-diagnostics";
+import {
+  reportClientDiagnostic,
+  reportModelCatalogStage,
+  reportFilesScopeDecision,
+} from "@/lib/client-diagnostics";
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { bffRequestErrorKind } from "@/lib/http";
@@ -738,6 +750,7 @@ export function notifyChatUpsert(chat: Chat): void {
 }
 
 export function notifyChatDeleted(chatId: string): void {
+  clearChatScopeTransitions(chatId);
   invalidateSharedBootstrap();
   removeConversationMemorySettings(chatId);
   if (typeof window === "undefined") return;
@@ -793,6 +806,22 @@ function isPreservedSelection(
     selectedModel !== undefined &&
     models.some((model) => model.id === selectedModel && isUsableConversationModel(model))
   );
+}
+
+function currentChatCreationModelChoice(
+  modelId: string | undefined,
+  elected: boolean,
+  selectedModel: string | undefined,
+  models: readonly ModelCapability[],
+): ChatCreationModelChoice {
+  if (modelId === undefined) {
+    return !elected && selectedModel !== undefined
+      ? { kind: "explicit", modelId: selectedModel }
+      : { kind: "automatic" };
+  }
+  return !elected && isPreservedSelection(selectedModel, models)
+    ? { kind: "explicit", modelId }
+    : { kind: "automatic" };
 }
 
 // Resolution WITH provenance (review finding on #3221): the resolved id alone cannot say WHO
@@ -1530,9 +1559,11 @@ export interface UseChatSessionResult {
   // Undefined when no usable model is offered or a deliberate choice is temporarily held.
   // Ready alternatives remain selectable while the held choice cannot submit.
   selectedModel: string | undefined;
+  readonly creationModelChoice?: ChatCreationModelChoice | undefined;
   // true when loading is complete and no eligible model is available.
   noEligibleModels: boolean;
   draft: string;
+  readonly draftRevision?: number | undefined;
   loading: boolean;
   // Issue #152 — derived: `sending = isInFlight(sendStatus)`. Kept for
   // backwards compatibility with call sites that only branch on "is a request
@@ -1547,11 +1578,16 @@ export interface UseChatSessionResult {
   notice?: string | undefined;
   clearError?: (() => void) | undefined;
   clearNotice?: (() => void) | undefined;
-  setDraft: (value: string) => void;
+  setDraft: (value: string) => number | void;
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
   // blank/whitespace falls back to DEFAULT_CHAT_TITLE.
-  openNewChat: (project?: ProjectWithAvailability, title?: string) => Promise<Chat | undefined>;
+  openNewChat: (
+    project?: ProjectWithAvailability,
+    title?: string,
+    creationRequestId?: string,
+    creationModelChoice?: ChatCreationModelChoice,
+  ) => Promise<Chat | undefined>;
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<ProjectWithAvailability | undefined>;
@@ -1592,6 +1628,7 @@ export interface UseChatSessionResult {
   // Issue #185 AC3 — aborts the in-flight grounded request and clears the sending state.
   // No-op when no grounded request is in flight.
   cancelGrounded: () => void;
+  readonly groundingScopeTransition?: ChatScopeTransition;
   // Issue #147 — client-side attachment intake (AC #1–#4).
   // Server-side enforcement is deferred to #149.
   readonly pendingAttachments: readonly PendingAttachment[];
@@ -2433,6 +2470,14 @@ type SessionModelSelection = Pick<
   "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
 >;
 
+function rememberedSessionSelection(state: SessionModelSelection): ResolvedSelection {
+  return {
+    id: state.selectedModel ?? state.restorableModelId,
+    elected:
+      state.selectedModel !== undefined ? state.selectedModelElected : state.restorableModelElected,
+  };
+}
+
 function sessionModelSelection(state: SessionState): SessionModelSelection {
   return {
     selectedModel: state.selectedModel,
@@ -2511,16 +2556,13 @@ function refreshSessionModels(
   result: Extract<GatewayModelRefreshResult, { kind: "success" }>,
 ): SessionState {
   const catalog = sessionCatalogState(result.models, result.source, result.correlationId);
-  const elected =
-    previous.selectedModel !== undefined
-      ? previous.selectedModelElected
-      : previous.restorableModelElected;
+  const remembered = rememberedSessionSelection(previous);
   return {
     ...previous,
     ...catalog,
     ...selectSessionModel(
-      previous.selectedModel ?? previous.restorableModelId,
-      elected,
+      remembered.id,
+      remembered.elected,
       catalog.models,
       catalog.unreadyConversationModelIds,
     ),
@@ -2609,6 +2651,7 @@ function selectionForPersistedChat(state: SessionState, chat: Chat): SessionMode
 // configuredModelsAvailable=false) as "gateway missing" and would mount the modal setup dialog
 // over a fully configured workspace for the duration of every catalog read.
 function clearSessionModelsForPendingRefresh(previous: SessionState): SessionState {
+  const remembered = rememberedSessionSelection(previous);
   return {
     ...previous,
     models: [],
@@ -2620,11 +2663,8 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     // undefined, so chained retries must keep the earliest memo.
     selectedModel: undefined,
     selectedModelElected: false,
-    restorableModelId: previous.selectedModel ?? previous.restorableModelId,
-    restorableModelElected:
-      previous.selectedModel !== undefined
-        ? previous.selectedModelElected
-        : previous.restorableModelElected,
+    restorableModelId: remembered.id,
+    restorableModelElected: remembered.elected,
   };
 }
 
@@ -2757,6 +2797,11 @@ function nonRetryableFailure(userPersisted: boolean): SendMessageOutcome {
   return userPersisted
     ? { status: "failed", retryable: false, userPersisted: true }
     : { status: "failed", retryable: false };
+}
+
+function admitCurrentSource(admission: SendMessageAdmission): SendMessageAdmission {
+  if (admission.kind === "rejected") return admission;
+  return refuseChatScopeSend(admission.chat.id) === undefined ? admission : { kind: "rejected" };
 }
 
 function terminalFailureRefusal(
@@ -3006,6 +3051,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const autoCreate = options.autoCreate ?? true;
   const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
+  const groundingScopeTransition = useChatScopeTransition(state.activeChat);
   const markdownSkill = useChatMarkdownSkill(state.activeChat?.id);
   const sessionStateRef = useRef<SessionState>(state);
   sessionStateRef.current = state;
@@ -3019,9 +3065,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const chatDraft = useChatDraft(state.activeChat?.id, onDraftReplaced);
   const { text: draftState, setText: setDraftState } = chatDraft;
   const setDraft = useCallback(
-    (value: string): void => {
+    (value: string): number => {
       draftRevisionRef.current += 1;
       setDraftState(value);
+      return draftRevisionRef.current;
     },
     [setDraftState],
   );
@@ -3039,7 +3086,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // cancellation paths (grounded uses the controller as signal; ungrounded
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
-  const sendControllerOwnerRef = useRef<"composer" | "canonical-voice" | null>(null);
+  const sendControllerOwnerRef = useRef<{
+    readonly kind: "composer" | "canonical-voice";
+    readonly conversationId: string;
+  } | null>(null);
   // Set only by the deliberate Voice interrupt, and read once by the attempt that owns this exact
   // signal. It is the proof of intent that makes the resulting cancellation terminal for the queue;
   // any other abort (chat switch, unmount, replacement) leaves it untouched and stays retryable.
@@ -3784,19 +3834,33 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     reportSessionSelection(sessionStateRef.current, "refused");
   }, [t]);
 
+  const { id: rememberedModelId, elected: rememberedModelElected } =
+    rememberedSessionSelection(state);
+  const creationModelChoice = useMemo(
+    (): ChatCreationModelChoice =>
+      currentChatCreationModelChoice(
+        selectedSessionModelId,
+        rememberedModelElected,
+        rememberedModelId,
+        state.models,
+      ),
+    [selectedSessionModelId, rememberedModelElected, rememberedModelId, state.models],
+  );
   const openNewChat = useCallback(
     async (
       projectOverride?: ProjectWithAvailability,
       title?: string,
+      creationRequestId?: string,
+      originalModelChoice?: ChatCreationModelChoice,
     ): Promise<Chat | undefined> => {
-      const preservedSelection =
-        !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
-      const modelId = selectedSessionModelId;
-      if (modelId === undefined) {
+      if (originalModelChoice === undefined && selectedSessionModelId === undefined) {
         if (selectionUnavailable) refuseHeldSelection();
         else setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
       }
+      const choice = originalModelChoice ?? creationModelChoice;
+      const preservedSelection = choice.kind === "explicit";
+      const modelId = choice.kind === "explicit" ? choice.modelId : "";
       setError(undefined);
       setNotice(undefined);
       setStreamingAssistantMessage(undefined);
@@ -3806,8 +3870,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         const trimmedTitle = title?.trim();
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
-        const created = await createDesktopChat(
-          createChatInput(
+        const created = await createDesktopChat({
+          ...createChatInput(
             modelId,
             !preservedSelection,
             trimmedTitle !== undefined && trimmedTitle.length > 0
@@ -3815,7 +3879,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               : DEFAULT_CHAT_TITLE,
             targetPath,
           ),
-        );
+          ...(creationRequestId === undefined ? {} : { creationRequestId }),
+        });
         notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;
@@ -3833,11 +3898,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch,
       selectionUnavailable,
       refuseHeldSelection,
-      state.selectedModel,
-      state.selectedModelElected,
+      creationModelChoice,
       selectedSessionModelId,
       state.activeProject,
-      state.models,
     ],
   );
 
@@ -3904,7 +3967,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
       // a late response from the prior chat never lands here.
-      if (sendControllerOwnerRef.current !== "canonical-voice") {
+      if (sendControllerOwnerRef.current?.kind !== "canonical-voice") {
         sendControllerRef.current?.abort();
         sendControllerRef.current = null;
         sendControllerOwnerRef.current = null;
@@ -4512,7 +4575,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // of re-sending an answer whose dialog generation has already been retired (#2842).
   const interruptCanonicalVoiceDelivery = useCallback((): void => {
     if (!isInFlight(sendStatusRef.current)) return;
-    if (sendControllerOwnerRef.current !== "canonical-voice") return;
+    if (sendControllerOwnerRef.current?.kind !== "canonical-voice") return;
     const controller = sendControllerRef.current;
     if (controller !== null) {
       interruptedSendSignalRef.current = controller.signal;
@@ -4520,6 +4583,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     }
     releaseCancelledSendController();
   }, [releaseCancelledSendController]);
+
+  const cancelSendForConversation = useCallback(
+    (conversationId: string, correlationId: string): void => {
+      if (!isInFlight(sendStatusRef.current)) return;
+      if (sendControllerOwnerRef.current?.conversationId !== conversationId) return;
+      reportFilesScopeDecision(correlationId, { decision: "intent-send-cancelled" });
+      cancelSend();
+    },
+    [cancelSend],
+  );
+
+  useChatScopeCancellation(cancelSendForConversation);
 
   // Issue #185 → #152: cancelGrounded is preserved as a thin alias so existing
   // call sites (ChatWindow.tsx grounded TypingBubble) keep working. New code
@@ -4584,16 +4659,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
-      const admission = resolveSendMessageAdmission({
-        options,
-        draft: draftState,
-        activeChat: state.activeChat,
-        selectedModel: state.selectedModel,
-        models: state.models,
-        selectionUnavailable,
-        pendingAttachmentCount: pendingAttachments.length,
-        sendInFlight: isInFlight(sendStatusRef.current),
-      });
+      const admission = admitCurrentSource(
+        resolveSendMessageAdmission({
+          options,
+          draft: draftState,
+          activeChat: state.activeChat,
+          selectedModel: state.selectedModel,
+          models: state.models,
+          selectionUnavailable,
+          pendingAttachmentCount: pendingAttachments.length,
+          sendInFlight: isInFlight(sendStatusRef.current),
+        }),
+      );
       if (admission.kind === "rejected") {
         if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
           refuseHeldSelection();
@@ -4634,8 +4711,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // any) was either already settled or already aborted via cancelSend.
       const controller = new AbortController();
       sendControllerRef.current = controller;
-      sendControllerOwnerRef.current =
-        canonicalTarget === undefined ? "composer" : "canonical-voice";
+      sendControllerOwnerRef.current = {
+        kind: canonicalTarget === undefined ? "composer" : "canonical-voice",
+        conversationId: chat.id,
+      };
       latestSendSignalRef.current = controller.signal;
       setLatestMemory(undefined);
       try {
@@ -5130,6 +5209,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const project = state.activeProject;
       const modelId = selectedSessionModelId;
       if (chat === undefined || project === undefined || modelId === undefined) return;
+      if (refuseChatScopeSend(chat.id) !== undefined) return;
       updateSendStatus("queued");
       setRegeneratingMessageId(assistantMessageId);
       setError(undefined);
@@ -5137,7 +5217,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       const controller = new AbortController();
       sendControllerRef.current = controller;
-      sendControllerOwnerRef.current = "composer";
+      sendControllerOwnerRef.current = { kind: "composer", conversationId: chat.id };
       latestSendSignalRef.current = controller.signal;
       try {
         updateOwnedSendStatus(controller.signal, "contacting");
@@ -5235,6 +5315,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [state.catalogCapabilities, state.catalogSource, state.catalogCorrelationId],
   );
   const noEligibleModels = !loading && state.models.length === 0;
+  const draftRevision = draftRevisionRef.current;
 
   return useMemo<UseChatSessionResult>(
     () => ({
@@ -5249,9 +5330,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
+      creationModelChoice,
       noEligibleModels,
       markdownSkill,
       draft: draftState,
+      draftRevision,
       draftPersistence,
       loading,
       sending,
@@ -5279,6 +5362,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       replaceChat,
       latestGrounded,
       cancelGrounded,
+      groundingScopeTransition,
       pendingAttachments,
       addPendingAttachment,
       removePendingAttachment,
@@ -5307,10 +5391,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeProject,
       state.activeChat,
       state.selectedModel,
+      creationModelChoice,
       noEligibleModels,
       markdownSkill,
       draftPersistence,
       draftState,
+      draftRevision,
       setDraft,
       loading,
       sending,
@@ -5337,6 +5423,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       replaceChat,
       latestGrounded,
       cancelGrounded,
+      groundingScopeTransition,
       pendingAttachments,
       addPendingAttachment,
       removePendingAttachment,

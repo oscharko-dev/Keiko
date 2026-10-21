@@ -5,10 +5,29 @@
 #include "keiko-portable-update-engine.h"
 #include "keiko-portable-update-protocol.h"
 
+static int keiko_coordinator_pid_record_matches(
+    const void *actual_data, size_t actual_length,
+    const char *expected, size_t expected_length) {
+  static const char capability[] = "browser-open-v1\n";
+  static const char owned[] = "browser-open-v1\nnative-app-v1\n";
+  static const char native_only[] = "native-app-v1\n";
+  const unsigned char *actual = (const unsigned char *)actual_data;
+  if (actual_length < expected_length || memcmp(actual, expected, expected_length) != 0)
+    return 0;
+  if (actual_length == expected_length) return 1;
+  if (actual_length - expected_length == sizeof(owned) - 1u)
+    return memcmp(actual + expected_length, owned, sizeof(owned) - 1u) == 0;
+  if (actual_length - expected_length == sizeof(native_only) - 1u &&
+      memcmp(actual + expected_length, native_only, sizeof(native_only) - 1u) == 0) return 1;
+  return actual_length - expected_length == sizeof(capability) - 1u &&
+         memcmp(actual + expected_length, capability, sizeof(capability) - 1u) == 0;
+}
+
 #if !defined(_WIN32)
 
 #if !defined(__APPLE__)
 #include <linux/fs.h>
+#include "../runtime-supervisor/macos/keiko_runtime_protocol.h"
 #endif
 
 #include <arpa/inet.h>
@@ -55,6 +74,18 @@ typedef struct {
   int supervisor_control;
   int supervisor_response;
   int start_gate;
+  int native_handoff;
+  uint64_t native_cleanup_deadline;
+  pid_t native_root;
+  pid_t native_owner;
+  int native_restoring;
+  int native_attempt_restoring;
+  int native_stop_confirmed;
+  int native_release_allowed;
+  int native_release_completed;
+#if defined(__linux__)
+  struct app_environment_packet native_environment;
+#endif
 } keiko_coordinator_context;
 
 static int keiko_coordinator_join(char *output, size_t capacity, const char *base,
@@ -77,18 +108,24 @@ static int keiko_coordinator_read_exact_deadline(int descriptor, void *buffer, s
     uint64_t now = keiko_tree_now_ms();
     int timeout, ready;
     ssize_t count;
-    if (now > deadline_ms) return 0;
+    if (now >= deadline_ms) return 0;
     timeout = deadline_ms - now > (uint64_t)INT_MAX ? INT_MAX : (int)(deadline_ms - now);
     ready = poll(&poll_descriptor, 1, timeout);
     if (ready < 0 && errno == EINTR) continue;
-    if (ready <= 0 || (poll_descriptor.revents & (POLLERR | POLLNVAL)) != 0) return 0;
+    if (ready <= 0 || (poll_descriptor.revents & (POLLERR | POLLNVAL)) != 0 ||
+        keiko_tree_now_ms() >= deadline_ms) return 0;
     count = read(descriptor, bytes + offset, length - offset);
     if (count < 0 && errno == EINTR) continue;
     if (count <= 0) return 0;
     offset += (size_t)count;
   }
-  return 1;
+  return keiko_tree_now_ms() < deadline_ms;
 }
+
+#if defined(__linux__)
+#include "keiko-portable-native-process-linux.h"
+#include "keiko-portable-native-parent-linux.h"
+#endif
 
 static int keiko_coordinator_write_exact(int descriptor, const void *buffer, size_t length) {
   const unsigned char *bytes = (const unsigned char *)buffer;
@@ -100,6 +137,28 @@ static int keiko_coordinator_write_exact(int descriptor, const void *buffer, siz
     offset += (size_t)count;
   }
   return 1;
+}
+
+static int keiko_coordinator_write_deadline(int descriptor, const void *buffer, size_t length,
+                                            uint64_t deadline) {
+  const unsigned char *bytes = buffer;
+  size_t offset = 0;
+  int flags = fcntl(descriptor, F_GETFL);
+  if (flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != 0) return 0;
+  while (offset < length) {
+    struct pollfd item = {descriptor, POLLOUT, 0};
+    uint64_t now = keiko_tree_now_ms();
+    if (now >= deadline || deadline - now > INT_MAX) return 0;
+    int ready = poll(&item, 1, (int)(deadline - now));
+    if (ready < 0 && errno == EINTR) continue;
+    if (ready != 1 || (item.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
+        !keiko_tree_before_deadline(deadline)) return 0;
+    ssize_t count = write(descriptor, bytes + offset, length - offset);
+    if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+    if (count <= 0) return 0;
+    offset += (size_t)count;
+  }
+  return keiko_tree_before_deadline(deadline);
 }
 
 static void keiko_coordinator_u16le(unsigned char *value, uint16_t number) {
@@ -285,6 +344,10 @@ static int keiko_coordinator_launch_packet(const keiko_coordinator_context *cont
   unsigned char *content = (unsigned char *)calloc(KEIKO_COORDINATOR_KRP_MAX_BYTES, 1u);
   const char *argument1 = restoring ? "--resume-restored-update" : "--resume-update";
   const char *environment_name = "KEIKO_STATE_DIR";
+  const char *launch_id = context->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID
+                                                        : KEIKO_KHP_NEW_LAUNCH_ID];
+  const char *handle = context->native_handoff ? launch_id
+                           : context->plan.field[KEIKO_KHP_ACTIVATION_ID];
   size_t offset = KEIKO_COORDINATOR_KRP_HEADER_BYTES + 4u;
   uint32_t payload_length;
   if (content == NULL) return 0;
@@ -292,10 +355,11 @@ static int keiko_coordinator_launch_packet(const keiko_coordinator_context *cont
   keiko_coordinator_u16le(content + 4u, 1u);
   keiko_coordinator_u16le(content + 6u, 1u);
   keiko_coordinator_u16le(content + KEIKO_COORDINATOR_KRP_HEADER_BYTES, 2u);
-  keiko_coordinator_u16le(content + KEIKO_COORDINATOR_KRP_HEADER_BYTES + 2u, 1u);
+  keiko_coordinator_u16le(content + KEIKO_COORDINATOR_KRP_HEADER_BYTES + 2u,
+                           context->native_handoff ? 3u : 1u);
   if (!keiko_coordinator_append_krp_string(
           content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
-          context->plan.field[KEIKO_KHP_ACTIVATION_ID]) ||
+          handle) ||
       !keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
                                           executable) ||
       !keiko_coordinator_append_krp_string(
@@ -310,6 +374,15 @@ static int keiko_coordinator_launch_packet(const keiko_coordinator_context *cont
                                           environment_name) ||
       !keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
                                           context->state_dir) ||
+      (context->native_handoff &&
+       (!keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
+                                             "KEIKO_UI_LAUNCH_ID") ||
+        !keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
+                                             launch_id) ||
+        !keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
+                                             "KEIKO_START_TIMEOUT_SECS") ||
+        !keiko_coordinator_append_krp_string(content, KEIKO_COORDINATOR_KRP_MAX_BYTES, &offset,
+                                             "900"))) ||
       offset - KEIKO_COORDINATOR_KRP_HEADER_BYTES > UINT32_MAX) {
     free(content);
     return 0;
@@ -498,14 +571,22 @@ cleanup:
 }
 
 static int keiko_coordinator_emit_acceptance(keiko_coordinator_context *context) {
-  char response[70];
+  char response[78];
   int result;
   if (!keiko_coordinator_append_receipt(context, "prepared", "completed") ||
       !keiko_coordinator_append_receipt(context, "old-exit", "intent")) return 0;
-  memcpy(response, "KHA1", 4u);
+  memcpy(response, context->native_handoff ? "KHA2" : "KHA1", 4u);
   memcpy(response + 4u, context->plan_sha256, 64u);
-  response[68] = '\n';
-  result = keiko_coordinator_write_exact(3, response, 69u);
+  size_t length = 69;
+#if defined(__linux__)
+  if (context->native_handoff) {
+    if (!keiko_tree_before_deadline(context->native_cleanup_deadline)) return 0;
+    keiko_scope_u64((unsigned char *)response + 68, context->native_cleanup_deadline);
+    length = 77;
+  }
+#endif
+  response[length - 1u] = '\n';
+  result = keiko_coordinator_write_exact(3, response, length);
   close(3);
   return result;
 }
@@ -531,11 +612,16 @@ static int keiko_coordinator_wait_parent_eof(uint64_t deadline_ms) {
 static int keiko_coordinator_port_bindable(const keiko_coordinator_context *context) {
   struct sockaddr_in address;
   uint64_t port;
-  int descriptor, result;
+  int descriptor, result, enabled = 1;
   if (!keiko_khp_decimal_value(context->plan.field[KEIKO_KHP_OLD_PORT], 65535u, &port) ||
       port == 0) return 0;
   descriptor = socket(AF_INET, SOCK_STREAM, 0);
   if (descriptor == -1) return 0;
+  /* Match Node's listener semantics: TIME_WAIT is not a live owner of the retired port. */
+  if (setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) != 0) {
+    close(descriptor);
+    return 0;
+  }
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -551,6 +637,17 @@ static int keiko_coordinator_wait_old_exit(keiko_coordinator_context *context) {
   if (!keiko_khp_decimal_value(context->plan.field[KEIKO_KHP_OLD_PID], INT32_MAX, &pid_value))
     return 0;
   old_pid = (pid_t)pid_value;
+#if defined(__linux__)
+  if (context->native_handoff) {
+    if (!keiko_coordinator_native_envelope(context, 2, context->old_exit_deadline)) return 0;
+    struct pollfd root = {6, POLLIN, 0};
+    return poll(&root, 1, 0) == 1 && (root.revents & POLLIN) != 0 &&
+           (root.revents & (POLLERR | POLLNVAL)) == 0 &&
+           keiko_tree_before_deadline(context->old_exit_deadline) &&
+           keiko_coordinator_port_bindable(context) &&
+           keiko_coordinator_append_receipt(context, "old-exit", "completed");
+  }
+#endif
   if (!keiko_coordinator_wait_parent_eof(context->old_exit_deadline)) return 0;
   while (keiko_tree_before_deadline(context->old_exit_deadline)) {
     if (kill(old_pid, 0) != 0 && errno == ESRCH && keiko_coordinator_port_bindable(context)) {
@@ -966,10 +1063,17 @@ cleanup:
   return result;
 }
 
+#if defined(__linux__)
+#include "keiko-portable-native-successor-linux.h"
+#endif
+
 static int keiko_coordinator_spawn_supervisor(keiko_coordinator_context *context,
                                               uint64_t deadline_ms, int restoring) {
   char supervisor[KEIKO_KHP_MAX_PATH_BYTES + 1];
   char active_launcher[KEIKO_KHP_MAX_PATH_BYTES + 1];
+  char active_supervisor[KEIKO_KHP_MAX_PATH_BYTES + 1];
+  char start_grant[80], commit_grant[80], state_value[KEIKO_KHP_MAX_PATH_BYTES + 20];
+  char launch_value[64];
   unsigned char *packet = NULL;
   size_t packet_length = 0;
   int control[2] = {-1, -1}, response[2] = {-1, -1}, gate[2] = {-1, -1};
@@ -977,6 +1081,11 @@ static int keiko_coordinator_spawn_supervisor(keiko_coordinator_context *context
   posix_spawn_file_actions_t actions;
   char *const arguments[] = {supervisor, NULL};
   char *const environment[] = {NULL};
+  char *native_arguments[] = {active_launcher, (char *)"--own-app-runtime", active_supervisor,
+      (char *)context->plan.field[restoring ? KEIKO_KHP_CURRENT_SUPERVISOR_SHA256
+                                            : KEIKO_KHP_CANDIDATE_SUPERVISOR_SHA256], NULL};
+  char *native_environment[] = {start_grant, commit_grant, state_value, launch_value,
+                                (char *)"KEIKO_START_TIMEOUT_SECS=900", NULL};
   unsigned char header[KEIKO_COORDINATOR_KRP_HEADER_BYTES];
   if (!keiko_tree_before_deadline(deadline_ms) ||
       !keiko_coordinator_join(supervisor, sizeof(supervisor), context->capsule,
@@ -999,6 +1108,18 @@ static int keiko_coordinator_spawn_supervisor(keiko_coordinator_context *context
       posix_spawn_file_actions_init(&actions) != 0)
     goto cleanup;
   action_initialized = 1;
+  if (context->native_handoff &&
+      (!keiko_coordinator_active_path(context,
+          context->plan.field[KEIKO_KHP_CANDIDATE_SUPERVISOR],
+          active_supervisor, sizeof(active_supervisor)) ||
+       snprintf(start_grant, sizeof(start_grant), "KEIKO_UI_START_DEADLINE_MS=%llu",
+                  (unsigned long long)deadline_ms) <= 0 ||
+       snprintf(commit_grant, sizeof(commit_grant), "KEIKO_UI_COMMIT_DEADLINE_MS=%llu",
+                  (unsigned long long)context->native_cleanup_deadline) <= 0 ||
+       snprintf(state_value, sizeof(state_value), "KEIKO_STATE_DIR=%s", context->state_dir) <= 0 ||
+       snprintf(launch_value, sizeof(launch_value), "KEIKO_UI_LAUNCH_ID=%s",
+           context->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID : KEIKO_KHP_NEW_LAUNCH_ID]) <= 0))
+    goto cleanup;
   if ((control[0] != 3 && posix_spawn_file_actions_adddup2(&actions, control[0], 3) != 0) ||
       (response[1] != 4 && posix_spawn_file_actions_adddup2(&actions, response[1], 4) != 0) ||
       (gate[0] != KEIKO_COORDINATOR_START_GATE_FD &&
@@ -1014,11 +1135,20 @@ static int keiko_coordinator_spawn_supervisor(keiko_coordinator_context *context
         goto cleanup;
     }
   }
-  spawn_result = posix_spawn(&context->supervisor_pid, supervisor, &actions, NULL, arguments,
-                             environment);
+  spawn_result = posix_spawn(&context->supervisor_pid,
+      context->native_handoff ? active_launcher : supervisor, &actions, NULL,
+      context->native_handoff ? native_arguments : arguments,
+      context->native_handoff ? native_environment : environment);
   if (spawn_result != 0) {
     context->supervisor_pid = -1;
     goto cleanup;
+  }
+  if (context->native_handoff) {
+    context->native_owner = context->supervisor_pid;
+    context->native_attempt_restoring = restoring;
+    context->native_stop_confirmed = 0;
+    context->native_release_allowed = 0;
+    context->native_release_completed = 0;
   }
   close(control[0]);
   control[0] = -1;
@@ -1032,11 +1162,21 @@ static int keiko_coordinator_spawn_supervisor(keiko_coordinator_context *context
   response[0] = -1;
   context->start_gate = gate[1];
   gate[1] = -1;
-  if (!keiko_coordinator_write_exact(context->supervisor_control, packet, packet_length) ||
+  if (!keiko_coordinator_write_deadline(context->supervisor_control, packet, packet_length,
+                                         deadline_ms) ||
+#if defined(__linux__)
+      (context->native_handoff && !keiko_successor_environment(context, deadline_ms)) ||
+#endif
       !keiko_coordinator_read_exact_deadline(context->supervisor_response, header, sizeof(header),
                                              deadline_ms) ||
-      memcmp(header, "KRS1", 4u) != 0 || keiko_khp_read_u16(header + 4u) != 1u ||
-      keiko_khp_read_u16(header + 6u) != 1u || keiko_khp_read_u32(header + 8u) != 0u)
+      memcmp(header, "KRS1", 4u) != 0 || keiko_khp_read_u16(header + 4u) != 1u)
+    goto cleanup;
+#if defined(__linux__)
+  if (context->native_handoff) {
+    if (!keiko_successor_launched(context, header, restoring, deadline_ms)) goto cleanup;
+  } else
+#endif
+  if (keiko_khp_read_u16(header + 6u) != 1u || keiko_khp_read_u32(header + 8u) != 0u)
     goto cleanup;
   result = 1;
 cleanup:
@@ -1065,22 +1205,45 @@ static int keiko_coordinator_start_runtime(keiko_coordinator_context *context,
                                         "completed")) return 0;
   memcpy(gate, context->plan_sha256, 64u);
   gate[64] = '\n';
-  if (!keiko_coordinator_write_exact(context->start_gate, gate, sizeof(gate))) return 0;
+  if (!keiko_coordinator_write_deadline(context->start_gate, gate, sizeof(gate), deadline_ms)) return 0;
   close(context->start_gate);
   context->start_gate = -1;
   return 1;
 }
 
-static int keiko_coordinator_waitpid_deadline(pid_t child, int *status,
+static int keiko_coordinator_waitpid_deadline(pid_t *child, int *status,
                                               uint64_t deadline_ms) {
-  while (keiko_tree_before_deadline(deadline_ms)) {
-    pid_t waited = waitpid(child, status, WNOHANG);
-    if (waited == child) return 1;
-    if (waited < 0 && errno != EINTR) return 0;
+  pid_t expected = *child;
+  if (expected <= 0) { errno = ECHILD; return 0; }
+  while (keiko_tree_now_ms() < deadline_ms) {
+    pid_t waited = waitpid(expected, status, WNOHANG);
+    int wait_error = errno;
+    /* Ownership ends when wait consumes the child, even if proof validation then fails. */
+    if ((waited == expected && (WIFEXITED(*status) || WIFSIGNALED(*status))) ||
+        (waited < 0 && wait_error != EINTR) ||
+        (waited > 0 && waited != expected)) *child = -1;
+    if (keiko_tree_now_ms() >= deadline_ms) break;
+    if (waited == expected) return WIFEXITED(*status) || WIFSIGNALED(*status);
+    if (waited > 0) { errno = ECHILD; return 0; }
+    if (waited < 0 && wait_error != EINTR) {
+      errno = wait_error;
+      return 0;
+    }
     usleep(10000);
   }
   errno = ETIMEDOUT;
   return 0;
+}
+
+static void keiko_coordinator_dispose_child(pid_t *child) {
+  uint64_t deadline;
+  int status;
+  if (*child <= 0) return;
+  (void)KEIKO_COORDINATOR_KILL(*child, SIGKILL);
+  deadline = keiko_tree_now_ms();
+  if (deadline <= UINT64_MAX - KEIKO_COORDINATOR_PROBE_MS)
+    (void)keiko_coordinator_waitpid_deadline(
+        child, &status, deadline + KEIKO_COORDINATOR_PROBE_MS);
 }
 
 static int keiko_coordinator_stop_runtime(keiko_coordinator_context *context,
@@ -1089,9 +1252,11 @@ static int keiko_coordinator_stop_runtime(keiko_coordinator_context *context,
   unsigned char response[20];
   int status = 0;
   if (context->supervisor_pid <= 0 || context->supervisor_control < 0 ||
-      context->supervisor_response < 0 ||
-      !keiko_coordinator_write_exact(context->supervisor_control, control, sizeof(control)))
+      context->supervisor_response < 0)
     return 0;
+  /* An already reaped child may have closed its request pipe; positive reap is still mandatory. */
+  (void)keiko_coordinator_write_deadline(context->supervisor_control, control, sizeof(control),
+                                         deadline_ms);
   close(context->supervisor_control);
   context->supervisor_control = -1;
   if (!keiko_coordinator_read_exact_deadline(context->supervisor_response, response, 12u,
@@ -1101,17 +1266,22 @@ static int keiko_coordinator_stop_runtime(keiko_coordinator_context *context,
       !keiko_coordinator_read_exact_deadline(context->supervisor_response, response + 12u, 8u,
                                              deadline_ms) ||
       keiko_khp_read_u32(response + 16u) != 0u ||
-      !keiko_coordinator_waitpid_deadline(context->supervisor_pid, &status, deadline_ms) ||
+      !keiko_coordinator_waitpid_deadline(&context->supervisor_pid, &status, deadline_ms) ||
       !WIFEXITED(status) || WEXITSTATUS(status) != 0)
     return 0;
   close(context->supervisor_response);
   context->supervisor_response = -1;
   context->supervisor_pid = -1;
+  if (context->native_handoff) context->native_stop_confirmed = 1;
   return 1;
 }
 
 static int keiko_coordinator_reconcile_stopped_runtime(
     const keiko_coordinator_context *context, uint64_t deadline_ms) {
+#if defined(__linux__)
+  if (context->native_handoff)
+    return context->native_stop_confirmed && keiko_successor_reaped(context, deadline_ms);
+#endif
   char supervisor[KEIKO_KHP_MAX_PATH_BYTES + 1];
   char *const environment[] = {NULL};
   char *arguments[4];
@@ -1120,8 +1290,7 @@ static int keiko_coordinator_reconcile_stopped_runtime(
   int actions_initialized = 0, status = 0, result = 0;
   pid_t child = -1;
   posix_spawn_file_actions_t actions;
-  uint64_t cleanup_deadline;
-  if (!keiko_tree_before_deadline(deadline_ms) ||
+  if (keiko_tree_now_ms() >= deadline_ms ||
       !keiko_coordinator_join(supervisor, sizeof(supervisor), context->capsule,
                               "/runtime-supervisor") ||
       !keiko_coordinator_file_digest_matches(
@@ -1139,7 +1308,8 @@ static int keiko_coordinator_reconcile_stopped_runtime(
   arguments[1] = (char *)"--reconcile";
   arguments[2] = context->plan.field[KEIKO_KHP_ACTIVATION_ID];
   arguments[3] = NULL;
-  if (posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) {
+  if (keiko_tree_now_ms() >= deadline_ms ||
+      posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) {
     child = -1;
     goto cleanup;
   }
@@ -1151,28 +1321,14 @@ static int keiko_coordinator_reconcile_stopped_runtime(
       keiko_khp_read_u16(response + 6u) != 2u || keiko_khp_read_u32(response + 8u) != 8u ||
       keiko_khp_read_u32(response + 12u) != 0u || keiko_khp_read_u32(response + 16u) != 0u)
     goto cleanup;
-  if (!keiko_coordinator_waitpid_deadline(child, &status, deadline_ms)) {
-    if (errno == ECHILD) child = -1;
-    goto cleanup;
-  }
-  /* waitpid transferred the process out of the kernel table. Drop numeric-PID authority before
-   * inspecting its status: a later kill could otherwise target an unrelated process after reuse. */
-  child = -1;
+  if (!keiko_coordinator_waitpid_deadline(&child, &status, deadline_ms)) goto cleanup;
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) goto cleanup;
   result = 1;
 cleanup:
   if (actions_initialized) posix_spawn_file_actions_destroy(&actions);
   if (output[0] != -1) close(output[0]);
   if (output[1] != -1) close(output[1]);
-  if (child > 0) {
-    (void)KEIKO_COORDINATOR_KILL(child, SIGKILL);
-    cleanup_deadline = keiko_tree_now_ms();
-    if (cleanup_deadline != UINT64_MAX &&
-        cleanup_deadline <= UINT64_MAX - KEIKO_COORDINATOR_PROBE_MS) {
-      cleanup_deadline += KEIKO_COORDINATOR_PROBE_MS;
-      (void)keiko_coordinator_waitpid_deadline(child, &status, cleanup_deadline);
-    }
-  }
+  keiko_coordinator_dispose_child(&child);
   memset(response, 0, sizeof(response));
   return result;
 }
@@ -1191,13 +1347,16 @@ static int keiko_coordinator_stop_failed_start(keiko_coordinator_context *contex
     context->supervisor_control = -1;
   }
   if (context->supervisor_pid > 0) {
-    if (!keiko_coordinator_waitpid_deadline(context->supervisor_pid, &status, deadline_ms)) return 0;
+    if (!keiko_coordinator_waitpid_deadline(&context->supervisor_pid, &status, deadline_ms)) return 0;
     context->supervisor_pid = -1;
   }
   if (context->supervisor_response >= 0) {
     close(context->supervisor_response);
     context->supervisor_response = -1;
   }
+#if defined(__linux__)
+  if (context->native_handoff) return keiko_successor_reaped(context, deadline_ms);
+#endif
   return keiko_coordinator_reconcile_stopped_runtime(context, deadline_ms);
 }
 
@@ -1418,8 +1577,20 @@ static int keiko_coordinator_next_receipt_exists(const keiko_coordinator_context
 static void keiko_coordinator_hold_runtime(keiko_coordinator_context *context) {
   int status;
   if (context->supervisor_pid <= 0) return;
+#if defined(__linux__)
+  if (context->native_handoff) {
+    if (context->native_release_allowed) {
+      if (!keiko_successor_commit(context)) return;
+      context->supervisor_pid = -1;
+    } else {
+      (void)keiko_coordinator_stop_failed_start(context, context->native_cleanup_deadline);
+    }
+  } else
+#endif
+  {
   while (waitpid(context->supervisor_pid, &status, 0) < 0 && errno == EINTR) {}
   context->supervisor_pid = -1;
+  }
   if (context->supervisor_control >= 0) {
     close(context->supervisor_control);
     context->supervisor_control = -1;
@@ -1435,11 +1606,10 @@ static int keiko_coordinator_engine_deadline(
     int field,
     uint64_t *deadline_ms
 ) {
-  return keiko_coordinator_deadline(
-      (keiko_coordinator_context *)opaque,
-      field,
-      deadline_ms
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  int result = keiko_coordinator_deadline(context, field, deadline_ms);
+  if (result && field == KEIKO_KHP_CLEANUP_AT) context->native_cleanup_deadline = *deadline_ms;
+  return result;
 }
 
 static int keiko_coordinator_engine_emit_acceptance(void *opaque) {
@@ -1482,12 +1652,16 @@ static int keiko_coordinator_engine_wait_receipt(
     const char *outcome,
     uint64_t deadline_ms
 ) {
-  return keiko_coordinator_wait_expected_receipt(
-      (keiko_coordinator_context *)opaque,
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  int result = keiko_coordinator_wait_expected_receipt(
+      context,
       kind,
       outcome,
       deadline_ms
   );
+  if (result && strcmp(kind, "restored-verify") == 0 && strcmp(outcome, "completed") == 0)
+    context->native_release_allowed = 1;
+  return result;
 }
 
 static int keiko_coordinator_engine_next_receipt_exists(void *opaque) {
@@ -1532,10 +1706,10 @@ static int keiko_coordinator_engine_cleanup_verified(
     void *opaque,
     uint64_t deadline_ms
 ) {
-  return keiko_coordinator_cleanup_verified(
-      (keiko_coordinator_context *)opaque,
-      deadline_ms
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  int result = keiko_coordinator_cleanup_verified(context, deadline_ms);
+  if (result) context->native_release_allowed = 1;
+  return result;
 }
 
 static int keiko_coordinator_engine_restore_previous(
@@ -1572,22 +1746,23 @@ static int keiko_coordinator_execute_posix(keiko_coordinator_context *context) {
       keiko_coordinator_engine_cleanup_verified,
       keiko_coordinator_engine_restore_previous,
       keiko_coordinator_engine_hold_runtime};
-  return keiko_coordinator_execute_engine(
+  int result = keiko_coordinator_execute_engine(
       &engine,
       KEIKO_KHP_START_AT,
       KEIKO_KHP_VERIFY_AT,
       KEIKO_KHP_CLEANUP_AT
   );
+  return result && (!context->native_handoff || context->native_release_completed);
 }
 
-static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
-                                       char output[65]) {
+static int keiko_coordinator_open_hashed_file(const char *path, uint64_t deadline_ms,
+                                              char output[65]) {
   int descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
   struct stat before, after, named;
   unsigned char buffer[64u * 1024u], digest[32];
   uint64_t total = 0;
   keiko_sha256 hash;
-  int result = 0;
+  int result = -1;
   if (descriptor == -1 || fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) ||
       before.st_nlink != 1 || before.st_size < 0 ||
       (uint64_t)before.st_size > KEIKO_COORDINATOR_MAX_FILE_BYTES ||
@@ -1606,16 +1781,25 @@ static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
   if (fstat(descriptor, &after) != 0 || lstat(path, &named) != 0 ||
       !keiko_coordinator_same_file(&before, &after) ||
       !keiko_coordinator_same_file(&before, &named) || total != (uint64_t)before.st_size ||
-      !keiko_sha256_final(&hash, digest)) goto cleanup;
+      !keiko_sha256_final(&hash, digest)) goto cleanup_hash;
   keiko_sha256_hex(digest, output);
   memset(digest, 0, sizeof(digest));
-  result = 1;
+  result = descriptor;
+  descriptor = -1;
   goto cleanup;
 cleanup_hash:
   keiko_sha256_clear(&hash);
 cleanup:
   if (descriptor != -1) close(descriptor);
   return result;
+}
+
+
+static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
+                                       char output[65]) {
+  int descriptor = keiko_coordinator_open_hashed_file(path, deadline_ms, output);
+  if (descriptor < 0) return 0;
+  return close(descriptor) == 0;
 }
 
 static int keiko_coordinator_join(char *output, size_t capacity, const char *base,
@@ -1686,13 +1870,16 @@ static int keiko_coordinator_ui_identity(const keiko_coordinator_context *contex
       !keiko_tree_before_deadline(deadline_ms)) return 0;
   descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
   if (descriptor == -1 || fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
-      status.st_nlink != 1 || status.st_size != written) {
+      status.st_nlink != 1 || status.st_size < written ||
+      status.st_size > (off_t)sizeof(actual)) {
     if (descriptor != -1) close(descriptor);
     return 0;
   }
   count = read(descriptor, actual, sizeof(actual));
   close(descriptor);
-  return count == written && memcmp(actual, expected, (size_t)written) == 0;
+  return count == status.st_size &&
+         keiko_coordinator_pid_record_matches(actual, (size_t)count, expected, (size_t)written) &&
+         keiko_tree_before_deadline(deadline_ms);
 }
 
 static int keiko_coordinator_registration_matches(const keiko_coordinator_context *context,
@@ -1732,31 +1919,25 @@ static int keiko_coordinator_probe_monitor(const char *supervisor, uint64_t dead
   posix_spawn_file_actions_t actions;
   char *const arguments[] = {(char *)supervisor, (char *)"--probe-monitor", NULL};
   char *const environment[] = {NULL};
-  int status = 0, initialized = 0;
-  uint64_t probe_deadline = keiko_tree_now_ms() + KEIKO_COORDINATOR_PROBE_MS;
+  int status = 0, result = 0;
+  uint64_t now = keiko_tree_now_ms(), probe_deadline;
+  if (now >= deadline_ms || now > UINT64_MAX - KEIKO_COORDINATOR_PROBE_MS) return 0;
+  probe_deadline = now + KEIKO_COORDINATOR_PROBE_MS;
   if (probe_deadline > deadline_ms) probe_deadline = deadline_ms;
   if (posix_spawn_file_actions_init(&actions) != 0) return 0;
-  initialized = 1;
-  (void)posix_spawn_file_actions_addclose(&actions, STDIN_FILENO);
-  (void)posix_spawn_file_actions_addclose(&actions, 3);
-  if (posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) goto cleanup;
-  while (keiko_tree_before_deadline(probe_deadline)) {
-    pid_t waited = waitpid(child, &status, WNOHANG);
-    if (waited == child) {
-      child = -1;
-      if (initialized) posix_spawn_file_actions_destroy(&actions);
-      return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    }
-    if (waited < 0 && errno != EINTR) break;
-    usleep(10000);
+  if (posix_spawn_file_actions_addclose(&actions, STDIN_FILENO) != 0 ||
+      posix_spawn_file_actions_addclose(&actions, 3) != 0 ||
+      keiko_tree_now_ms() >= probe_deadline) goto cleanup;
+  if (posix_spawn(&child, supervisor, &actions, NULL, arguments, environment) != 0) {
+    child = -1;
+    goto cleanup;
   }
+  result = keiko_coordinator_waitpid_deadline(&child, &status, probe_deadline) &&
+           WIFEXITED(status) && WEXITSTATUS(status) == 0;
 cleanup:
-  if (child > 0) {
-    (void)kill(child, SIGKILL);
-    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-  }
-  if (initialized) posix_spawn_file_actions_destroy(&actions);
-  return 0;
+  keiko_coordinator_dispose_child(&child);
+  posix_spawn_file_actions_destroy(&actions);
+  return result;
 }
 
 static int keiko_coordinator_artifacts_match(const keiko_coordinator_context *context,
@@ -1786,10 +1967,22 @@ static int keiko_coordinator_artifacts_match(const keiko_coordinator_context *co
          keiko_tree_hash_posix(context->plan.field[KEIKO_KHP_CANDIDATE_ROOT], tree_deadline,
                                tree_digest) &&
          strcmp(tree_digest, context->plan.field[KEIKO_KHP_CANDIDATE_TREE_SHA256]) == 0 &&
-         keiko_coordinator_probe_monitor(copied_supervisor, deadline_ms);
+         (
+#if defined(__linux__)
+          /* Linux W is the admitted generation monitor; it has no separate ES service to ping. */
+          context->native_handoff ?
+            (keiko_parent_death_is_armed() &&
+             poll(&(struct pollfd){6, POLLIN, 0}, 1, 0) == 0 &&
+             keiko_tree_before_deadline(deadline_ms)) :
+#endif
+          keiko_coordinator_probe_monitor(copied_supervisor, deadline_ms));
 }
 
 static void keiko_coordinator_clear(keiko_coordinator_context *context) {
+#if defined(__linux__)
+  clear_app_environment(&context->native_environment);
+#endif
+  if (context->native_handoff) { close(6); close(7); }
   if (context->supervisor_control >= 0) close(context->supervisor_control);
   if (context->supervisor_response >= 0) close(context->supervisor_response);
   if (context->start_gate >= 0) close(context->start_gate);
@@ -1815,12 +2008,17 @@ static int keiko_coordinator_prepare_posix(keiko_coordinator_context *context,
   uint64_t deadline = keiko_tree_now_ms() + KEIKO_COORDINATOR_MAX_CONTROL_MS;
   uint64_t old_exit_wall, wall_now;
   int result = 0;
+  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 0;
   memset(context, 0, sizeof(*context));
   context->supervisor_pid = -1;
   context->supervisor_control = -1;
   context->supervisor_response = -1;
   context->start_gate = -1;
-  if (state == NULL || !keiko_khp_is_absolute_canonical_path(state) ||
+  if (
+#if defined(__linux__)
+      !keiko_coordinator_native_deadline(&deadline) ||
+#endif
+      state == NULL || !keiko_khp_is_absolute_canonical_path(state) ||
       realpath(state, canonical_state) == NULL || strcmp(state, canonical_state) != 0 ||
       realpath(executable, canonical_executable) == NULL ||
       !keiko_coordinator_join(context->capsule, sizeof(context->capsule), state,
@@ -1844,7 +2042,11 @@ static int keiko_coordinator_prepare_posix(keiko_coordinator_context *context,
   context->old_exit_deadline = keiko_tree_now_ms() + (old_exit_wall - wall_now);
   if (context->old_exit_deadline > deadline) context->old_exit_deadline = deadline;
   if (
+#if defined(__linux__)
+      !keiko_coordinator_parent_matches(context, deadline) ||
+#else
       (uint64_t)getppid() != strtoull(context->plan.field[KEIKO_KHP_OLD_PID], NULL, 10) ||
+#endif
       !keiko_coordinator_parent_control(context, deadline) ||
       !keiko_coordinator_ui_identity(context, deadline) ||
       !keiko_coordinator_registration_matches(context, capsule_fd, deadline) ||
@@ -1892,7 +2094,8 @@ static int keiko_coordinator_prepare_resume_posix(keiko_coordinator_context *con
       !S_ISDIR(capsule_status.st_mode) || capsule_status.st_uid != geteuid() ||
       (capsule_status.st_mode & (S_IWGRP | S_IWOTH)) != 0 ||
       !keiko_coordinator_load_plan(context, capsule_fd, activation_id, deadline) ||
-      !keiko_coordinator_deadline(context, KEIKO_KHP_START_AT, &deadline) ||
+      !keiko_coordinator_deadline(
+          context, restoring ? KEIKO_KHP_CLEANUP_AT : KEIKO_KHP_START_AT, &deadline) ||
       !keiko_coordinator_active_path(context,
                                      context->plan.field[KEIKO_KHP_CANDIDATE_LAUNCHER],
                                      expected_executable, sizeof(expected_executable)) ||

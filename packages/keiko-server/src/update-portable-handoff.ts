@@ -14,11 +14,24 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
+import { performance } from "node:perf_hooks";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  currentNativeAppControl,
+  NativeAppControlError,
+  type NativeAppHandoffControl,
+} from "./update-native-app-control.js";
+import { emitNativeHandoffState } from "./update-native-handoff-activity.js";
 import type { UpdateActivationWalState } from "@oscharko-dev/keiko-contracts";
+import {
+  attestPortableManagedRegistration,
+  posixPortableActivationLayout,
+} from "./update-portable-activation-files.js";
 import {
   portableHandoffPlanSha256,
   portableHandoffRoot,
   readPortableHandoffPlan,
+  syncPortableHandoffDirectory,
   type PortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
 
@@ -62,6 +75,9 @@ export interface PortableHandoffCoordinatorOptions {
   readonly now?: (() => number) | undefined;
   readonly acceptanceTimeoutMs?: number | undefined;
   readonly teardownTimeoutMs?: number | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly nativeControl?:
+    ((launchId: string) => Promise<NativeAppHandoffControl | undefined>) | undefined;
 }
 
 export class PortableHandoffCoordinatorError extends Error {
@@ -179,7 +195,10 @@ function digestOpenedFile(descriptor: number, expectedSize: number, maxBytes: nu
 }
 
 function digestCopiedFile(destination: string, expectedSize: number, maxBytes: number): string {
-  const copiedFd = openSync(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const copiedFd = openSync(
+    destination,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
     const copiedStat = fstatSync(copiedFd);
     if (!copiedStat.isFile() || copiedStat.nlink !== 1 || copiedStat.size !== expectedSize) {
@@ -192,7 +211,10 @@ function digestCopiedFile(destination: string, expectedSize: number, maxBytes: n
 }
 
 function digestExistingFile(path: string, maxBytes: number): string {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
     const before = assertSourceIdentity(path, descriptor, maxBytes);
     const digest = digestOpenedFile(descriptor, before.size, maxBytes);
@@ -212,7 +234,7 @@ function copyVerifiedFile(
 ): string {
   assertNoLinkPath(sourceRoot, source);
   const noFollow = constants.O_NOFOLLOW;
-  const sourceFd = openSync(source, constants.O_RDONLY | noFollow);
+  const sourceFd = openSync(source, constants.O_RDONLY | noFollow | constants.O_NONBLOCK);
   const temporary = `${destination}.${String(process.pid)}.tmp`;
   let destinationFd: number | undefined;
   try {
@@ -229,12 +251,7 @@ function copyVerifiedFile(
     assertUnchangedIdentity(sourceIdentity, assertSourceIdentity(source, sourceFd, maxBytes));
     renameSync(temporary, destination);
     if (process.platform !== "win32") {
-      const parentFd = openSync(dirname(destination), constants.O_RDONLY);
-      try {
-        fsyncSync(parentFd);
-      } finally {
-        closeSync(parentFd);
-      }
+      syncPortableHandoffDirectory(dirname(destination));
     }
     const actual = digestCopiedFile(destination, copied.size, maxBytes);
     if (actual !== copied.sha256) fail("portable handoff copy digest mismatch");
@@ -375,6 +392,20 @@ function writeCoordinatorControl(child: ChildProcess, planSha256: string): Promi
   });
 }
 
+function assertCurrentManagedRegistration(stateDir: string, plan: PortableHandoffPlan): void {
+  if (
+    !attestPortableManagedRegistration({
+      stateDir,
+      managedRoot: plan.paths.managedRoot,
+      target: plan.target,
+      version: plan.oldProcess.version,
+      expectedSha256: plan.digests.previousRegistrationSha256,
+    })
+  ) {
+    fail("portable handoff current managed registration is invalid");
+  }
+}
+
 async function prepareCoordinator(
   options: PortableHandoffCoordinatorOptions,
   sessionId: string,
@@ -385,6 +416,7 @@ async function prepareCoordinator(
   readonly coordinatorSha256: string;
   readonly planSha256: string;
   readonly intentRevision: number;
+  readonly oldLaunchId: string;
 }> {
   const plan = readPortableHandoffPlan(options.stateDir, activationId);
   assertNotAborted(signal);
@@ -394,6 +426,8 @@ async function prepareCoordinator(
   const coordinator = join(root, `coordinator${extension}`);
   const supervisor = join(root, `runtime-supervisor${extension}`);
   try {
+    snapshotWindowsCapsule(plan, root);
+    assertCurrentManagedRegistration(options.stateDir, plan);
     const coordinatorSha256 = await copyAndVerifyNativeArtifacts({
       options,
       plan,
@@ -401,7 +435,6 @@ async function prepareCoordinator(
       supervisor,
       signal,
     });
-    snapshotWindowsCapsule(plan, root);
     const planSha256 = await persistPreparedCoordinator(
       options,
       plan,
@@ -413,6 +446,7 @@ async function prepareCoordinator(
       coordinatorSha256,
       planSha256,
       intentRevision: plan.aggregateRevision,
+      oldLaunchId: plan.oldProcess.launchId,
     };
   } catch (error) {
     cleanupAfterPreparationFailure(plan, root, coordinator, supervisor, error);
@@ -610,17 +644,8 @@ function currentNativeArtifacts(plan: PortableHandoffPlan): {
       supervisor: join(generation, "runtime", "native", "keiko-runtime-supervisor.exe"),
     };
   }
-  return {
-    coordinator: join(plan.paths.managedRoot, "Contents", "MacOS", "Keiko"),
-    supervisor: join(
-      plan.paths.managedRoot,
-      "Contents",
-      "Resources",
-      "runtime",
-      "native",
-      "keiko-runtime-supervisor",
-    ),
-  };
+  const layout = posixPortableActivationLayout(plan.target, plan.paths.managedRoot);
+  return { coordinator: layout.launcherPath, supervisor: layout.runtimeSupervisorPath };
 }
 
 async function beginPortableHandoff(
@@ -629,6 +654,94 @@ async function beginPortableHandoff(
 ): ReturnType<PortableHandoffCoordinatorPort["begin"]> {
   const { sessionId, activationId, signal } = input;
   const prepared = await prepareCoordinator(options, sessionId, activationId, signal);
+  const native = await resolveNativeCoordinatorControl(options, prepared.oldLaunchId, activationId);
+  if (native === undefined) await beginChildCoordinator(options, prepared, input);
+  else await beginNativeCoordinator(options, prepared, input, native);
+  return {
+    coordinatorId: prepared.coordinatorSha256,
+    acceptedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
+  };
+}
+
+async function resolveNativeCoordinatorControl(
+  options: PortableHandoffCoordinatorOptions,
+  launchId: string,
+  activationId: string,
+): Promise<NativeAppHandoffControl | undefined> {
+  try {
+    return await (options.nativeControl ?? currentNativeAppControl)(launchId);
+  } catch (error) {
+    emitNativeHandoffState(options.securityLogSink, activationId, "admission", "failed", false);
+    throw new PortableHandoffCoordinatorError("native app control unavailable", false, error);
+  }
+}
+
+async function beginNativeCoordinator(
+  options: PortableHandoffCoordinatorOptions,
+  prepared: Awaited<ReturnType<typeof prepareCoordinator>>,
+  input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
+  control: NativeAppHandoffControl,
+): Promise<void> {
+  const { activationId, sessionId, signal } = input;
+  const deadline = performance.now() + (options.acceptanceTimeoutMs ?? ACCEPT_TIMEOUT_MS);
+  try {
+    const pid = await control.start(
+      {
+        activationId,
+        launchId: prepared.oldLaunchId,
+        planSha256: prepared.planSha256,
+        coordinatorSha256: prepared.coordinatorSha256,
+      },
+      deadline,
+      signal,
+    );
+    if (!options.publishCoordinatorPid(sessionId, pid))
+      fail("native coordinator ownership publication failed");
+    emitNativeHandoffState(options.securityLogSink, activationId, "admission", "completed", true);
+    await control.accept(deadline, signal);
+    emitNativeHandoffState(options.securityLogSink, activationId, "acceptance", "completed", true);
+    assertNotAborted(signal);
+    await persistCoordinatorAccepted(options, prepared, input);
+    await control.commit(deadline, signal);
+    emitNativeHandoffState(options.securityLogSink, activationId, "commit", "completed", true);
+  } catch (error) {
+    throw await nativeCoordinatorFailure(options, control, activationId, error);
+  }
+}
+
+async function nativeCoordinatorFailure(
+  options: PortableHandoffCoordinatorOptions,
+  control: NativeAppHandoffControl,
+  activationId: string,
+  error: unknown,
+): Promise<PortableHandoffCoordinatorError> {
+  if (error instanceof NativeAppControlError && !error.nativeAuthorityMayBeLive) {
+    emitNativeHandoffState(options.securityLogSink, activationId, "admission", "failed", false);
+    return new PortableHandoffCoordinatorError("native coordinator was not started", false, error);
+  }
+  try {
+    await control.cancel(
+      activationId,
+      performance.now() + (options.teardownTimeoutMs ?? COORDINATOR_TEARDOWN_TIMEOUT_MS),
+    );
+  } catch (cleanupError) {
+    emitNativeHandoffState(options.securityLogSink, activationId, "cleanup", "uncertain", true);
+    return new PortableHandoffCoordinatorError(
+      "native coordinator cleanup remains uncertain",
+      true,
+      new AggregateError([error, cleanupError], "native coordinator admission and cleanup failed"),
+    );
+  }
+  emitNativeHandoffState(options.securityLogSink, activationId, "cleanup", "completed", false);
+  return new PortableHandoffCoordinatorError("native coordinator admission failed", false, error);
+}
+
+async function beginChildCoordinator(
+  options: PortableHandoffCoordinatorOptions,
+  prepared: Awaited<ReturnType<typeof prepareCoordinator>>,
+  input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
+): Promise<void> {
+  const { activationId } = input;
   const child = spawnPreparedCoordinator(options, prepared.coordinator, activationId);
   try {
     await acceptPreparedCoordinator(options, prepared, child, input);
@@ -655,10 +768,6 @@ async function beginPortableHandoff(
   }
   (child.stdin as NodeJS.WritableStream & { unref?: () => void }).unref?.();
   child.unref();
-  return {
-    coordinatorId: prepared.coordinatorSha256,
-    acceptedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
-  };
 }
 
 function spawnPreparedCoordinator(
@@ -693,7 +802,15 @@ async function acceptPreparedCoordinator(
     ),
   ]);
   assertNotAborted(input.signal);
-  await options.persistAccepted({
+  await persistCoordinatorAccepted(options, prepared, input);
+}
+
+function persistCoordinatorAccepted(
+  options: PortableHandoffCoordinatorOptions,
+  prepared: Awaited<ReturnType<typeof prepareCoordinator>>,
+  input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
+): Promise<void> {
+  return options.persistAccepted({
     sessionId: input.sessionId,
     activationWal: {
       activationId: input.activationId,

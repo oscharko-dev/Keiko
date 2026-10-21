@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "classification": "Existing browser-approval/session management repair. Actual mounted HTTP and deterministic owner controls; not browser UI, native browser, OS restart, SSD, updater or full epic acceptance.",
+  "parentHead": "357849d10012fc853304bc37ab170b97460340ad",
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0141-authenticated-local-app-session-channel.md",
+      "sha256": "ac78f03b26492329a29c4011c19798ba55a85eefd3e872c2c4c1e6e73d7a7144"
+    },
+    {
+      "path": "packages/keiko-contracts/src/browser-approval.ts",
+      "sha256": "ffc673c3543a040c6b6d646dea76dd9f63ab66bc6896ed2268622e2779726181"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApproval.ts",
+      "sha256": "03cca3ded5f1e913e2046bb4639a4e6a6d3c10a7540ed9bd12302f7d7d4ea89d"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApproval.test.ts",
+      "sha256": "6eec90a361571b3ba064229c6e13154b5c730fb5503226b3ffbac3402b286d15"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts",
+      "sha256": "cf9bd728770e0bf980ff202227b9f2c7a4841a4a2e8a6bc7a0dc78084b86f542"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts",
+      "sha256": "c4884e2887a65c4cbb697d59e7023e1debefdd1cf95c79a6f9f58c493012c14e"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts",
+      "sha256": "49efb1af579720145799d184ac1057bd2700e3167669a3077f9850dd80bf1de0"
+    }
+  ],
+  "failure": "Session-only approvals had live cookies but no visible management descriptor, and revocation could remove authority while reporting refusal. Pending request retirement at five minutes could also discard the only management metadata.",
+  "repair": [
+    "Reuse bounded in-memory request metadata for session-only management; never persist once-only authority. Completed live records remain only for their actual session/grant lifetime. Dead, revoked or evicted sessions release metadata and request capacity immediately.",
+    "Registry inspection exposes an owner-only non-touching snapshot using existing expiry semantics. Management polling does not refresh another session or extend inactivity, absolute lifetime or approval grants.",
+    "Completion challenge issuance and proof both enforce the original request deadline, including equality. Retaining management metadata does not extend eligibility to mint or rotate.",
+    "Descriptors distinguish remembered from session-only decisions. Rotation retains management identity. Revocation acknowledges any removed stored grant, live associated session or pending approved decision and retires only matching challenges.",
+    "The existing Activity Log state operation adds bounded counts for pending requests, session-only approvals and remembered approvals. No body, bearer, key, signature or identifier is logged."
+  ],
+  "causal": {
+    "classification": "Identical final unit and actual mounted BFF controls against the actual published parent service/registry owners, then the repair. Identical current logging adapter/generated registry held fixed; schema drift is not an authority failure. No model/native browser or OS restart.",
+    "parentHead": "357849d10012fc853304bc37ab170b97460340ad",
+    "sources": [
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApproval.ts",
+        "beforeSha256": "f088838ba13e1270cb06db46825b31fc56826bc6db8e26fe5e1600906a774673",
+        "afterSha256": "03cca3ded5f1e913e2046bb4639a4e6a6d3c10a7540ed9bd12302f7d7d4ea89d"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts",
+        "beforeSha256": "bbe02949f72e6d04cdde72b519f3b25bd56a7711127a63d2f1dbb2dfb4425590",
+        "afterSha256": "49efb1af579720145799d184ac1057bd2700e3167669a3077f9850dd80bf1de0"
+      }
+    ],
+    "tests": [
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApproval.test.ts",
+        "sha256": "6eec90a361571b3ba064229c6e13154b5c730fb5503226b3ffbac3402b286d15"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts",
+        "sha256": "c4884e2887a65c4cbb697d59e7023e1debefdd1cf95c79a6f9f58c493012c14e"
+      }
+    ],
+    "restored": true,
+    "runs": [
+      {
+        "phase": "before",
+        "scope": "unit",
+        "exitCode": 1,
+        "log": "browser34-causal-final-unit-before.log",
+        "sha256": "4c5e05e9d2e382361277a0e18e1c625a0c5ff50f78da664d027e07de20df1f77",
+        "summary": [
+          "⎯⎯⎯⎯⎯⎯ Failed Tests 15 ⎯⎯⎯⎯⎯⎯⎯",
+          " Test Files  1 failed (1)",
+          "      Tests  15 failed | 15 passed (30)"
+        ]
+      },
+      {
+        "phase": "before",
+        "scope": "http",
+        "exitCode": 1,
+        "log": "browser34-causal-final-http-before.log",
+        "sha256": "84f7916b6b235e787cb79e133771cbcf415f38648a6e588e67e2f62a3d155972",
+        "summary": [
+          "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+          " Test Files  1 failed (1)",
+          "      Tests  1 failed | 1 passed | 9 skipped (11)"
+        ]
+      },
+      {
+        "phase": "after",
+        "scope": "unit",
+        "exitCode": 0,
+        "log": "browser34-causal-final-unit-after.log",
+        "sha256": "8fe374559ac29516cff8e1c89626664bd8f49914bb66c906172aabbcb85023ab",
+        "summary": [" Test Files  1 passed (1)", "      Tests  30 passed (30)"]
+      },
+      {
+        "phase": "after",
+        "scope": "http",
+        "exitCode": 0,
+        "log": "browser34-causal-final-http-after.log",
+        "sha256": "47de302977af5f5871efb529f46fca3e6c6dbed79c0e9a2da7f462ccdd348fa4",
+        "summary": [" Test Files  1 passed (1)", "      Tests  2 passed | 9 skipped (11)"]
+      }
+    ]
+  },
+  "causalCounts": {
+    "unitBeforeFailed": 15,
+    "unitBeforeHealthy": 15,
+    "unitAfterPassed": 30,
+    "targetedHttpBeforeFailed": 1,
+    "targetedHttpBeforeHealthy": 1,
+    "targetedHttpAfterPassed": 2,
+    "otherHttpTestsFiltered": 9
+  },
+  "owningControls": {
+    "suites": 45,
+    "passed": 924,
+    "failed": 0,
+    "scope": "All app-session/store suites, chat draft routes, browser contracts and Chat skill lab observations. Full affected run includes all 11 HTTP controls.",
+    "boundaries": [
+      "immediate and beyond five-minute visibility",
+      "exact original completion deadline",
+      "idle and twelve-hour absolute expiry",
+      "active operation and release",
+      "rotation and revocation",
+      "remember requested but not approved",
+      "bounded 32 live approvals and early eviction capacity release",
+      "service recomposition loses transient authority"
+    ]
+  },
+  "independentControls": {
+    "classification": "Independent same actual service/registry/store P256 proof flows against published 32 and current uncommitted candidate, actual migration 45 SQLite in memory. Candidate copied/transpiled only in auditor scratch. No BFF/browser/process/model/native/shared build or repository changes. Recomposition is narrower than actual process/SSD acceptance. Provisional until exact final/published source join. No emitted cookies/keys/signatures/IDs.",
+    "sourceStable": true,
+    "receiptSha256": "756580a3dd7020ee93eab2a0c841a73e1a5d70f50534a3541461f4b1cce951b1",
+    "sources": [
+      {
+        "path": "packages/keiko-contracts/src/browser-approval.ts",
+        "sha256": "ffc673c3543a040c6b6d646dea76dd9f63ab66bc6896ed2268622e2779726181"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/browserApproval.ts",
+        "sha256": "03cca3ded5f1e913e2046bb4639a4e6a6d3c10a7540ed9bd12302f7d7d4ea89d"
+      },
+      {
+        "path": "packages/keiko-server/src/store/browserApprovals.ts",
+        "sha256": "c5ac531894c5381f0f6dbb782fc2568911b7f91439fc0d49ff220fa4bd87850a"
+      },
+      {
+        "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts",
+        "sha256": "49efb1af579720145799d184ac1057bd2700e3167669a3077f9850dd80bf1de0"
+      }
+    ],
+    "beforeFailed": 10,
+    "beforeHealthy": 8,
+    "afterPassed": 18
+  },
+  "logs": [
+    {
+      "name": "browser34-full-owners-final.log",
+      "sha256": "36ecb077770943f203ab7bbe08f19362240ae02f7dcef818dc4f756e46eea3fd",
+      "summary": [" Test Files  45 passed (45)", "      Tests  924 passed (924)"]
+    },
+    {
+      "name": "browser34-types-final.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29",
+      "summary": []
+    },
+    {
+      "name": "browser34-lint-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "name": "browser34-activity-final.log",
+      "sha256": "e72a908e63047292602cdf6c7cd7d1c285cb7896ad1c962e7f06fde4f96172e4",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  97 passed (97)",
+        " Test Files  11 passed (11)",
+        "      Tests  148 passed (148)",
+        "check:activity-log PASS — 7 checks over the full registered inventory in 75.7 s."
+      ]
+    },
+    {
+      "name": "browser34-adr-final.log",
+      "sha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529",
+      "summary": []
+    },
+    {
+      "name": "browser34-knip-final.log",
+      "sha256": "d777b059912352886420c73d426fd652dce01156e8402cd056c4d00b393f2799",
+      "summary": ["check:knip PASS — no unused files, exports, dependencies, or binaries."]
+    }
+  ],
+  "retainedFailures": [
+    "Original management controls failed before the repair. Earlier expanded controls and their failures remain retained.",
+    "A build-order failure after registry generation was reproduced: compiled contracts still described the prior registry. Rebuilding packages after generation repaired the test environment; no registration or obligation was removed.",
+    "The original lost-response control expected a new completion challenge after revocation. The final control instead signs an outstanding challenge before revocation and proves it afterward, preserving the original no-revival assertion and additionally asserting earlier challenge refusal.",
+    "The final identical causal comparison retains15 unit failures/15 healthy controls and one HTTP failure/one healthy control against the actual published parent service and registry. The current logging adapter and generated registry are held identical to exclude schema-drift artifacts."
+  ],
+  "limitations": [
+    "Requester/approver UI, IndexedDB, boot/recovery and real Chrome/Safari/Firefox journeys remain unfinished.",
+    "Recomposition is not actual process restart, profile, state-volume or SSD continuity proof.",
+    "The existing shared bounded capacity admits at most 32 live request records; an unauthenticated request cannot evict a live approval to bypass that bound.",
+    "Schema 45 compatibility with older-binary updater rollback remains unqualified.",
+    "Both skill benefit matrices, native generation ownership, full Chat/search/source 96 and final required checks/reviews/integration remain open."
+  ]
+}

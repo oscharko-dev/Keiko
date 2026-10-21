@@ -1629,7 +1629,9 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
         });
 
       const view = await bootStreamingHook();
-      act((): void => view.result.current.setDraft("trigger network error"));
+      act((): void => {
+        view.result.current.setDraft("trigger network error");
+      });
       await act(async (): Promise<void> => {
         await view.result.current.sendMessage();
       });

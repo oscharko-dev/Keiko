@@ -32,12 +32,60 @@ describe("runtime supervisor build", () => {
     ).resolves.toBe(2);
     await expect(
       runRuntimeSupervisorBuild({
-        argv: ["node", "script", "linux-x64", "/tmp/helper"],
+        argv: ["node", "script", "linux-arm64", "/tmp/helper"],
         spawnSyncImpl,
       }),
     ).resolves.toBe(2);
     expect(spawnSyncImpl).not.toHaveBeenCalled();
   });
+
+  it("builds the Linux x64 native owner with its bounded environment and hardened ELF flags", async () => {
+    const root = await temporaryRoot();
+    const output = join(root, "keiko-runtime-supervisor");
+    const spawnSyncImpl = vi.fn(() => ({ status: 0 }));
+    await expect(
+      runRuntimeSupervisorBuild({
+        argv: ["node", "script", "linux-x64", output],
+        environment: { PATH: "/usr/bin", CC: "/untrusted/compiler", CFLAGS: "-include /untrusted" },
+        spawnSyncImpl,
+      }),
+    ).resolves.toBe(0);
+    expect(spawnSyncImpl).toHaveBeenCalledExactlyOnceWith(
+      "cc",
+      expect.arrayContaining([
+        "-std=c11",
+        "-m64",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fPIE",
+        "-pie",
+        "-fstack-protector-strong",
+        "-D_FORTIFY_SOURCE=3",
+        "-Wl,-z,relro,-z,now,-z,noexecstack",
+        "-o",
+        output,
+        resolve("native/runtime-supervisor/linux/keiko_runtime_supervisor.c"),
+      ]),
+      { env: { PATH: "/usr/bin" }, stdio: "inherit" },
+    );
+  });
+
+  it.each([7, null])(
+    "retains Linux compiler failure %s without building macOS components",
+    async (status) => {
+      const root = await temporaryRoot();
+      const spawnSyncImpl = vi.fn(() => ({ status }));
+      await expect(
+        runRuntimeSupervisorBuild({
+          argv: ["node", "script", "linux-x64", join(root, "supervisor")],
+          environment: { PATH: "/usr/bin" },
+          spawnSyncImpl,
+        }),
+      ).resolves.toBe(status ?? 1);
+      expect(spawnSyncImpl).toHaveBeenCalledOnce();
+    },
+  );
 
   it("builds Windows with the bounded compiler environment and hardened loader flags", async () => {
     const root = await temporaryRoot();

@@ -99,6 +99,12 @@ This shapes the product _and_ how you work on it:
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
+  syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
+  use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
+  leaf and separate native old/new images; unsupported fragments fail closed. Streaming retains unresolved credential/source context until it can
+  publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
+  not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
   body-free logging on the existing activity log, and when you debug, that log is the source you
   read first (§8).
@@ -236,7 +242,7 @@ evidence.
 
 | You changed…                                                    | Also run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9), and `npm run check:update-ui-evidence` when the change touches one of the eight sources the updater UI evidence binds (`src/lib/i18n-messages.de.ts` and `.en.ts`, `src/lib/api.ts`, `globals.css`, the `desktop/update/` components): a stale digest fails the `ui` and `Core quality` jobs, and the regeneration procedure is in `docs/design-system/evidence/3405/README.md`                                                                                                                                                                      |
+| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9), and `npm run check:update-ui-evidence` when the change touches one of the sources declared in `scripts/check-update-ui-evidence.mjs` (including the core/optional message catalogs, optional translation owner, API, styles, and updater components): a stale digest fails the `ui` and `Core quality` jobs, and the regeneration procedure is in `docs/design-system/evidence/3405/README.md`                                                                                                                                                       |
 | A package's **public exports** / a new package                  | `npm run check:package-surface:assembled`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -442,8 +448,13 @@ system that exists, never beside it:
   Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
   basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
   `search.connected-context.source-details` operation; the shared correlation joins its completed
-  read-window and budget evidence without exceeding the operation field cap. Diagnostic-reference
-  selection uses the final six available source-detail fields. Additional selection observations
+  read-window and budget evidence without exceeding the operation field cap. Extensionless document
+  admission uses a shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist, separate
+  from overview ranking. Ordinary prose cannot gain explicit-file authority from its ranking bucket;
+  explicit filenames, selected scope and the existing discovery/read grants remain authoritative.
+  Existing source-details counts distinguish actual explicit admission from ordinary ranking.
+  Diagnostic-reference selection uses the final six available source-detail fields. Additional
+  selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
   Contextual below-floor fallback logs its closed ranking source and remains low confidence. Its
@@ -468,6 +479,13 @@ system that exists, never beside it:
   continuity remain untrusted context inside that unchanged task block. Existing final-prompt
   selection and gateway admission record fitted counts and costs; citation validation and
   original input/output grants remain authoritative.
+  Marker repair requests at most 32 unique-prose insertion annotations instead of regenerating
+  the answer. The existing repair owner constructs the candidate locally, then applies the
+  unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
+  Literal marker-only responses remain subject to those same guards.
+  Symbol discovery batches the existing bounded excerpt ranges per source and observation wave.
+  Each definition retains current-source, call/parent and range certificates; no persistent source
+  cache, read grant, synthesis attempt or source authority is added by batching.
   Endpoint definition traversal binds a registration's observed handler reference to its current
   lexical AST target. Further calls retain their exact callable owner and complete observed spans;
   same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -821,6 +839,28 @@ system that exists, never beside it:
   `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
   folder or asks for confirmation. The existing timeline carries these dispositions and counts
   without scope paths or notice text.
+  Files directory responses identify the guarded canonical root, including for symbolic aliases.
+  Every directory response retains its canonical identity and latest per-path read ownership;
+  child-discovered replacements and unmounted windows cannot publish older roots or listings.
+  Root normalization/replacement and superseded child reads use the existing Files scope-decision
+  Activity Log under their directory-read correlation, without paths or contents.
+  Explicitly forgetting a failed Files edge releases only its own failed admission hold;
+  pending work and independent source holds remain protected.
+  An unchanged privacy-elided Files edge may restore its local representation from the same
+  conversation/connection's canonical acknowledgement only when its persisted fingerprint and
+  visible scope both match. This does not start a new source intent or cancel a response. Missing
+  or changed proof and failed transitions retain normal recovery; other source holds remain intact.
+  The existing `automatic-suppressed` scope decision joins the original acknowledgement.
+  A mounted Chat may establish its conversation through the existing runtime before its id is
+  persisted in window cfg; refresh admission and failed-edge recovery use that same live identity.
+  Initial Files bindings hold admission before an edge exists, using stable window ownership.
+  Returning to an acknowledged root after failure requires fresh canonical reconciliation.
+  Retired owners release settled failed holds only; timeout-blocked work and failed compensation
+  retain their holds until the existing recovery path proves settlement.
+  Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
+  retains per-source pending/failed admission holds and releases only the current accepted token;
+  drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision
+  operation and the serialized mutation correlation.
   `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
   `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
   `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch

@@ -1,0 +1,16 @@
+/* The scene owns stacking level 2; canvas controls stay above its ordinary windows. */
+.cmpWorkspaceControl.cmpWorkspaceControl {
+  z-index: 3;
+}
+
+@media (max-width: 700px), (max-height: 430px) {
+  .cmpWorkspaceViewport {
+    container-type: size;
+  }
+
+  /* Browser approval can reduce the actual canvas height. Keep its controls below
+     ordinary windows rather than placing them over the window's actions. */
+  .cmpViewportWindow.cmpViewportWindow {
+    max-height: max(180px, calc(100cqh - 76px));
+  }
+}

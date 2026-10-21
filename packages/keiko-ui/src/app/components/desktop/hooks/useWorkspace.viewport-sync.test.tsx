@@ -5,6 +5,7 @@ import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/cl
 import { useWorkspace } from "./useWorkspace";
 import type { UseWorkspaceResult } from "./useWorkspace.types";
 import type { AppWindow } from "../windows/types";
+import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 const WS_LS = "keiko.workspace.v4";
 let latest: UseWorkspaceResult | undefined;
@@ -137,5 +138,156 @@ describe("workspace maximized viewport adaptation", () => {
     expect(
       fetcher.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === "PUT"),
     ).toEqual([]);
+  });
+});
+
+describe("fresh local window viewport adaptation", () => {
+  function prepareResize(): () => void {
+    let resize = (): void => undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resize = callback;
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+      },
+    );
+    return (): void => {
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(
+        new DOMRect(0, 0, 1280, 540),
+      );
+      act(resize);
+    };
+  }
+
+  function codingWindow(): AppWindow {
+    const window = latest?.wins?.find((entry) => entry.type === "coding");
+    if (window === undefined) throw new Error("Expected coding window");
+    return window;
+  }
+
+  function openCodingWindow(): void {
+    render(<Harness />);
+    act(() => latest?.api.toggleTool("coding"));
+    expect(codingWindow().h).toBe(WIN_TYPES.coding.h);
+  }
+
+  it("keeps a fresh tool frame visible after a late work-area reduction", () => {
+    const resize = prepareResize();
+    openCodingWindow();
+    resize();
+    const fitted = codingWindow();
+    expect(fitted.y + fitted.h).toBeLessThanOrEqual(540);
+    expect(fitted.max).toBe(false);
+    expect(diagnostic).toHaveBeenCalledWith("Workspace window fitted to available space.", {
+      composerActivity: "workspace-viewport-fitted",
+    });
+  });
+
+  it("retains automatic fitting through focus and configuration changes", () => {
+    const resize = prepareResize();
+    openCodingWindow();
+    act(() => {
+      latest?.api.focus("coding");
+      latest?.api.update("coding", { cfg: { projectPath: "Private project canary" } });
+    });
+    resize();
+    const fitted = codingWindow();
+    expect(fitted.y + fitted.h).toBeLessThanOrEqual(540);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private project canary");
+  });
+
+  it("preserves a deliberate human resize", () => {
+    const resize = prepareResize();
+    openCodingWindow();
+    act(() => latest?.api.update("coding", { w: 1000, h: 680 }));
+    resize();
+    expect(codingWindow()).toMatchObject({ w: 1000, h: 680, max: false });
+  });
+
+  it("preserves a deliberate human move", () => {
+    const resize = prepareResize();
+    openCodingWindow();
+    act(() => latest?.api.update("coding", { x: 100, y: 50 }));
+    resize();
+    expect(codingWindow()).toMatchObject({ x: 100, y: 50, h: WIN_TYPES.coding.h });
+  });
+
+  it("keeps repeated viewport observations as identity-preserving no-ops", () => {
+    const resize = prepareResize();
+    openCodingWindow();
+    resize();
+    const fitted = latest?.wins;
+    diagnostic.mockClear();
+    resize();
+    expect(latest?.wins).toBe(fitted);
+    expect(diagnostic).not.toHaveBeenCalled();
+  });
+
+  it("preserves a saved floating layout", () => {
+    const resize = prepareResize();
+    window.localStorage.setItem(
+      WS_LS,
+      JSON.stringify([{ ...remoteWindows()[1], id: "coding", type: "coding", h: 680 }]),
+    );
+    render(<Harness />);
+    resize();
+    expect(codingWindow()).toMatchObject({ h: 680, max: false });
+  });
+
+  it("relinquishes automatic sizing when a sibling snapshot replaces equal geometry", () => {
+    const resize = prepareResize();
+    openCodingWindow();
+    const previous = codingWindow();
+    window.localStorage.setItem(WS_LS, JSON.stringify([{ ...previous, z: 200 }]));
+    act(emitStorage);
+    expect(codingWindow().z).toBe(200);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Workspace automatic sizing retired for restored layout.",
+      { composerActivity: "workspace-window-sizing-retired" },
+    );
+    resize();
+    expect(codingWindow()).toMatchObject({ w: previous.w, h: previous.h });
+  });
+
+  it.each([
+    { external: false, label: "retains local fitting after an own server PUT acknowledgement" },
+    { external: true, label: "relinquishes local fitting after an equal-geometry server snapshot" },
+  ])("$label", async ({ external }) => {
+    const resize = prepareResize();
+    Object.defineProperty(navigator, "webdriver", { configurable: true, value: false });
+    let revision = 0;
+    let incoming: AppWindow[] = [];
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (init?.method === "PUT") {
+          revision += 1;
+          return new Response(JSON.stringify({ workspace: { revision } }));
+        }
+        return new Response(
+          JSON.stringify({ workspace: { revision, windows: incoming, connections: [] } }),
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetcher);
+    openCodingWindow();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method === "PUT")).toHaveLength(1);
+    const previous = codingWindow();
+    if (external) {
+      incoming = [{ ...previous, z: 200 }];
+      revision += 1;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1600);
+      });
+      expect(codingWindow().z).toBe(200);
+    }
+    resize();
+    if (external) expect(codingWindow()).toMatchObject({ w: previous.w, h: previous.h });
+    else expect(codingWindow().y + codingWindow().h).toBeLessThanOrEqual(540);
   });
 });

@@ -121,6 +121,34 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-cli/src/ui.ts:prepareUiProcessScope",
+    "Native identity refusal precedes all durable writers. Fixed content-free CLI stderr reports the refusal and startup returns before constructing state; actual absent-port and SQLite controls verify this boundary.",
+  ],
+  [
+    "packages/keiko-security/src/native-process-scope.ts:retirePort",
+    "Best-effort close during initial admission refusal or after permanent port retirement. Failure grants no authority, does not assert successful closure and cannot reactivate a failed port.",
+  ],
+  [
+    "packages/keiko-security/src/native-process-scope.ts:exchange",
+    "A failed bounded lookup permanently retires the port. Existing process start/heartbeat exposes unavailable observation; guarded storage refusal uses existing writer-loss evidence. Metadata grants no ownership and liveness remains unknown. Logging through guarded I/O here would recurse.",
+  ],
+  [
+    "packages/keiko-security/src/process-scope.ts:localLiveness",
+    "This read-only kernel predicate distinguishes confirmed ESRCH from unknown. Unknown retains persistent ownership and cannot authorize reclamation; it is never converted to death.",
+  ],
+  [
+    "packages/keiko-security/src/process-scope.ts:observation",
+    "A failed observation callback returns the closed unavailable state emitted by the existing process start/heartbeat owner; it cannot restore a failed channel or grant authority.",
+  ],
+  [
+    "packages/keiko-security/src/process-scope.ts:liveness",
+    "A failed process probe returns unknown to the persistent-state owner. Existing locks and publication guards retain ownership rather than treating callback failure as process death.",
+  ],
+  [
+    "packages/keiko-security/src/process-scope.ts:createProcessScope",
+    "A failed file-owner callback returns no UID. The existing guarded-I/O owner refuses access and owns its failure evidence; logging from this lower-level ownership probe would recursively require the same authorization.",
+  ],
+  [
     "packages/keiko-server/src/grounded-preselection-reranker.ts:rerankGroundedCandidates",
     "The catch preserves the original error in PreselectionRerankerResult.failure. The connected-context owner persists failureKind, frames and causeChain on selection-details; cancellation is rethrown.",
   ],

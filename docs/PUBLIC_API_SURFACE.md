@@ -1,4 +1,4 @@
-# Public API surface — 1.2.4
+# Public API surface — 1.2.5
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.2.5: the root exports and CLI entrypoints remain unchanged. Existing authenticated local
+  session routes add bounded browser approval, expiration and revocation. Forward-only SQLite
+  migrations V45 and V46 persist browser approvals and shared Chat creation intents. Source
+  ownership, updater recovery and syntax-preserving privacy are hardened through existing
+  contracts. Compact test-generation skills add instructions without execution authority or
+  a demonstrated universal model-quality guarantee; unfulfilled acceptance remains in #4051.
 - 1.2.4: the root exports and CLI entrypoints remain unchanged. Chat gateway waiting,
   connected-source selection, restored source presentation and repository retrieval are hardened
   through existing contracts. Java/Spring Boot and React/MUI/Vitest Markdown skill candidates

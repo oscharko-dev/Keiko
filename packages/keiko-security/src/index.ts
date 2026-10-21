@@ -7,6 +7,28 @@
 export { KEIKO_SECURITY_VERSION } from "./version.js";
 
 export {
+  bindProcessScope,
+  createProcessScope,
+  currentProcessId,
+  currentProcessScopeKind,
+  currentProcessScopeObservation,
+  fileDescriptorOwnerUid,
+  isProcessId,
+  isProcessAlive,
+  processFileOwnerUid,
+  processLiveness,
+  readProcessNamespaceIds,
+} from "./process-scope.js";
+export type {
+  ProcessLiveness,
+  ProcessScope,
+  ProcessScopeKind,
+  ProcessScopePort,
+  ProcessScopeObservation,
+} from "./process-scope.js";
+export { createNativeProcessScope } from "./native-process-scope.js";
+
+export {
   redact,
   containsCredentialShape,
   createAuditRedactor,

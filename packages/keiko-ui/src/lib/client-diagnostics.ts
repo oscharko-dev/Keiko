@@ -50,6 +50,7 @@ import {
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
+  type ClientUpdateNotice,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -74,6 +75,7 @@ import {
   type ClientComposerCodeStage,
   type ClientGatewayProfileRefreshEvidence,
   type ClientChatHistoryDeletionCounts,
+  type ClientBrowserApprovalEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
 import {
@@ -100,7 +102,10 @@ export type ClientDiagnosticStageReport = (
       readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
       readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
     }
-) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
+) & {
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
+};
 
 // A restored window's binding outcome (#3557), in closed values only: never the reference itself.
 // `meta.correlationId` names the request whose answer decided it.
@@ -189,6 +194,7 @@ export interface ClientDiagnosticMeta {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  readonly updateNotice?: ClientUpdateNotice | undefined;
   // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.

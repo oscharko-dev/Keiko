@@ -299,6 +299,7 @@ describe("POST /api/diagnostics/client", () => {
 
   it.each([
     "workspace-viewport-fitted",
+    "workspace-window-sizing-retired",
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",
     "scope-refusal-skipped-draft",
@@ -1606,6 +1607,42 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("persists a setup-only update notice as routine closed presentation evidence", async () => {
+    const sink = captureServerLog();
+    const updateNotice = {
+      blockerCount: 0,
+      noticeKind: "portable-setup-required",
+      presentation: "shown",
+      updateAvailable: false,
+    };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_notice-0001",
+      updateNotice,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.update-notice.presented",
+    );
+    if (event === undefined) throw new TypeError("Missing update notice presentation evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.update-notice.presented.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_notice-0001",
+      ...updateNotice,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
   it.each([
     "restored",
     "owned-elsewhere",
@@ -1621,6 +1658,13 @@ describe("POST /api/diagnostics/client", () => {
     "timeout-recovered",
     "timeout-rejected",
     "request-superseded",
+    "root-normalized",
+    "root-replaced",
+    "intent-pending",
+    "intent-applied",
+    "intent-failed",
+    "intent-send-refused",
+    "intent-send-cancelled",
   ])(
     "persists the closed Files ownership decision %s as routine causal evidence",
     async (decision) => {
@@ -3491,3 +3535,47 @@ it("persists a real profile read outcome and skipped catalog reread without inve
   expect(JSON.parse(line)).not.toHaveProperty("configuredModelCount");
   expect(clientDiagnosticEvents(sink)).toEqual([]);
 });
+
+it.each([
+  ["started", "key-store"],
+  ["settled", "key-store"],
+  ["started", "key-prepare"],
+  ["settled", "key-prepare"],
+] as const)(
+  "persists closed browser approval %s/%s evidence through the actual registered formatter",
+  async (phase, operation) => {
+    const sink = captureServerLog();
+    const outcome = operation === "key-prepare" ? "created" : "stored";
+    const body = {
+      kind: "stage",
+      stage: "browser approval",
+      phase,
+      ordinal: 1,
+      correlationId: "browser-store-123",
+      parentCorrelationId: "browser-approval-123",
+      ...(phase === "started"
+        ? { browserApproval: { operation } }
+        : { durationMs: 2, browserApproval: { operation, outcome } }),
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    const event = clientStageEvents(sink, `client.stage.${phase}`)[0];
+    const line = formatActivityLogProofLine(event ?? {});
+    if (phase === "started") expectActivityLogProof("client.stage.started.line", line);
+    else expectActivityLogProof("client.stage.settled.line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      level: "info",
+      stage: "browser-approval",
+      browserOperation: operation,
+      correlationId: body.correlationId,
+      parentCorrelationId: body.parentCorrelationId,
+      ...(phase === "started" ? {} : { durationMs: 2, browserOutcome: outcome }),
+    });
+    const invalid = {
+      ...body,
+      browserApproval: { ...body.browserApproval, privateKey: "PRIVATE_BROWSER_KEY_CANARY" },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(invalid)))).status).toBe(400);
+    expect(line.includes("PRIVATE_BROWSER_KEY_CANARY")).toBe(false);
+    expect(clientDiagnosticEvents(sink)).toEqual([]);
+  },
+);

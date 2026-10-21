@@ -25,13 +25,8 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
-import {
-  STREAMING,
-  type HandlerOutcome,
-  type RouteContext,
-  type RouteDefinition,
-  type RouteResult,
-} from "../routes.js";
+import { STREAMING } from "../route-outcome.js";
+import type { HandlerOutcome, RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import { createSessionStreamWriter, createSessionStreamTransport } from "./sessionStreamWriter.js";
 import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
@@ -129,7 +124,7 @@ const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionRotate",
-  fields: {},
+  fields: { cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true } },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -455,14 +450,15 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
     });
     return ackResult();
   }
+  const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_ROTATED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      { cookieMaxAgeSeconds: maxAgeSeconds },
     ),
   );
-  return ackResult(issuedCookie(ctx.req, result.cookieToken));
+  return ackResult(issuedCookie(ctx.req, result.cookieToken, maxAgeSeconds));
 }
 
 /** POST /sign-out — revoke the presented session and clear the cookie. */

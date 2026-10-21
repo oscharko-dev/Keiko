@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "6b39a992ef619b3074fbc4c23ed79d50db183552",
+  "sourceFreeze": {
+    "artifact": "checkpoint73-source-freeze-v1.json",
+    "sha256": "72f8d02a6fe47dde1add3c2f7013e4da1e07be58879ce8144b760bdc51684017"
+  },
+  "compiledFreeze": {
+    "artifact": "checkpoint73-compiled-freeze-v1.json",
+    "sha256": "58cf44acd6625608f1262c795b130ff497fc3e1fb4cc6c8123f4085dc6e8c24c"
+  },
+  "sourceFileCount": 7557,
+  "compiledFileCount": 6621,
+  "verification": {
+    "affectedTests": {
+      "passed": 3521,
+      "failed": 0,
+      "existingSkipped": 1,
+      "files": 187
+    },
+    "uiCoverage": {
+      "passed": 10857,
+      "failed": 0,
+      "existingSkipped": 1,
+      "files": 563
+    },
+    "workspaceBrowser": {
+      "passed": 8,
+      "failed": 0,
+      "engine": "chromium",
+      "initialProject": "explicit-owned-readable-fixture"
+    },
+    "checks": [
+      {
+        "artifact": "checkpoint73-typecheck-v2.json",
+        "sha256": "8e709e502ff725009b4b27fb3d23ff5a473c23cd8bf3c15e977c26d8d0d5c3f2",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-activity-log-v1.json",
+        "sha256": "0abc244154726687ef3a317ec4ef482474b12dc16e8c75c3cfc8bb023eb9219d",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-root-lint-v2.json",
+        "sha256": "fcdacb7101ebcd7268c22857a462e4f821ac4d23cc05cb13ba9a9a5176bf2166",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-ui-lint-v2.json",
+        "sha256": "d2eb7515ab38eafbb0f899c37f2dc957df2a73890406f93e4875639bb96fef0a",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-ui-coverage-v2.json",
+        "sha256": "931dd93bdf0121daa3ce44fa783d8dcfb5fadae9eaa8899a6ac53892477c5c0b",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-affected-tests-green-v3.json",
+        "sha256": "d301e91ecac5f5bf3c844b60f0f287947b9e6f3ba64c39da414286c7bc18cf91",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-workspace-surfaces-green-v3.json",
+        "sha256": "8398a7f710156bc75c4f9a4a20a7d3cb36ad0edcd6d427661a2ce49dc198e304",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-e2e-wiring-v1.json",
+        "sha256": "1217965200696c9e7adcc49dcfac62fdfa103494614c1dcaae0a4c150548e6d9",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-editor-evidence-v1.json",
+        "sha256": "10564d8aea5a3492ac6d3597633a4ea4701a43d889ad27c7aa5baddd57edfc84",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-adr-index-v1.json",
+        "sha256": "3b7ed9101785d418725c08cb2bccb1899c6dce8f5dce87d3960c9e971ee48a77",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-context-quality-v1.json",
+        "sha256": "3f8f68da1de25c8f7271621cfa9f5c8a127ae688fa3a70491f2b6d160fb96418",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-retrieval-quality-v1.json",
+        "sha256": "fe796e96ea712068903bc3a3d11307583d8cd21b37b368988b6b5b1eb3e4750d",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-grounded-retrieval-quality-v1.json",
+        "sha256": "bb101874158d9ffe582485167b7ac19c84f8eba75a792ec04a878cd9315c004e",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-grounded-faithfulness-v1.json",
+        "sha256": "88425f77e4d4931ed6c459c6dad151d173add95a0912b5bc8c7f6800b6d27897",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-sonar-v1.json",
+        "sha256": "f20e119bac954b2f7115cda91d85f5b0ec7e31ee9248218d301dd720e8ca64eb",
+        "exitCode": 0
+      }
+    ]
+  },
+  "overallAcceptance": false,
+  "mergeAcceptance": false,
+  "skillsAndModelPromptsChanged": false,
+  "classification": "Causal JSON persistence repair; live Java comparison remains incomplete",
+  "sources": [
+    {
+      "path": "packages/keiko-server/src/store/messages.ts",
+      "sha256": "2cfa22fd0574f901d869395161b5065f8d59c45fd579d33634cfa7918b1ad12d"
+    },
+    {
+      "path": "packages/keiko-server/src/store/messages.test.ts",
+      "sha256": "b4691d79c1c0dd47974bc37fa2852e67bf26be5a8c397f433673695a7ebcb9b2"
+    }
+  ],
+  "failure": {
+    "liveUiRequestFailed": true,
+    "providerCompleted": true,
+    "draftPreserved": true,
+    "retryCount": 0,
+    "originalProviderAnswerRetained": false,
+    "failedRunReceivesExecutableTestCredit": false,
+    "supportQuery": {
+      "artifact": "ui72-java-control1-support-query-v1.private.json",
+      "sha256": "b6637a4694f42dc759c6adf8c56cddcbff9e133d472617d8b5583c4aac5b7caa"
+    },
+    "uiFailureMetadataSha256": "e4d3b4e2f946555850a4aa275431ec7570e116fb37adc1f05d17a7c311b9f7be"
+  },
+  "repair": "Apply the existing deepRedactStrings owner to string leaves before JSON serialization; retain both retrieval-activity validations. No redaction rule is weakened.",
+  "causalRegression": {
+    "artifact": "checkpoint73-grounded-persistence-red-v4-receipt.json",
+    "sha256": "96aa41ce3ab0e84b3933dc9be6d7bc12f3e01708ddbd3a9c721fef0a6bfc4e95",
+    "parentPassed": 0,
+    "parentFailed": 3,
+    "notRunByTargetFilter": 50,
+    "finalStoreTestsPassed": 53,
+    "finalStoreTestsFailed": 0,
+    "covers": [
+      "create",
+      "attach",
+      "reload",
+      "database-reopen",
+      "source-object-preservation",
+      "citation-and-context-preservation",
+      "unambiguous-assignment-plaintext-absence"
+    ]
+  },
+  "retainedEarlierAttempts": [
+    {
+      "artifact": "checkpoint73-grounded-persistence-red-v1.json",
+      "disposition": "Fixture API setup failure; no behavioral credit"
+    },
+    {
+      "artifact": "checkpoint73-store-chat-grounded-tests-v2.json",
+      "disposition": "One prose fixture used two nested credential-key contexts; its blanket plaintext assertion exceeded serialization scope. Final controls use an unambiguous quoted assignment. Original failure retained; no redaction-policy change or model regrading."
+    }
+  ],
+  "liveComparison": {
+    "plannedRuns": 12,
+    "attemptedRuns": 2,
+    "successfulUiGenerations": 1,
+    "uiRequestFailures": 1,
+    "finalizedRuntime": true,
+    "fullComparisonComplete": false,
+    "firstPost72SkillGeneration": {
+      "correctApplicationPassed": true,
+      "testsPassed": 11,
+      "independentMutantsDetected": 6,
+      "independentMutantsTotal": 6,
+      "matchedControlHasExecutableOutput": false
+    },
+    "skillAccepted": false
+  }
+}

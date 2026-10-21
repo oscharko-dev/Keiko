@@ -1,7 +1,7 @@
 import { posix as path } from "node:path";
 import { readWorkspaceFile, readWorkspaceFileBytesForTextInspection } from "./discovery.js";
 import { decodeTextFileBytes } from "./binaryDetect.js";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -768,9 +768,7 @@ async function readImportSource(
     );
     if (read.binary || !read.complete) return undefined;
     const decoded = decodeTextFileBytes(read.bytes, { scopePath, requireSupportedEncoding: true });
-    return decoded === undefined
-      ? undefined
-      : redact(decoded.text, [], { preserveSourceLineBreaks: true });
+    return decoded === undefined ? undefined : redactWorkspaceSource(decoded.text, scopePath);
   } catch {
     return undefined;
   }

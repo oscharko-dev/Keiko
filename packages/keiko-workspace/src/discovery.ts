@@ -39,7 +39,7 @@ import {
 } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import {
   DEFAULT_READ_OPTIONS,
   type DiscoveredFile,
@@ -1315,7 +1315,7 @@ export function readWorkspaceFilePrefixForEvidence(
   }
   assertStablePrefixRead(workspace, fs, target);
   assertBeforeRead?.();
-  return redact(rawText, [], { preserveSourceLineBreaks: true });
+  return redactWorkspaceSource(rawText, relPath);
 }
 
 /** Internal text seam that keeps stable read metadata attached until index persistence. */
@@ -1348,7 +1348,9 @@ export function readWorkspaceFileTextForInternalUse(
         }
       : {}),
     content:
-      lane === "editor" ? raw.rawText : redact(raw.rawText, [], { preserveSourceLineBreaks }),
+      lane === "editor"
+        ? raw.rawText
+        : redactWorkspaceSource(raw.rawText, relPath, preserveSourceLineBreaks),
     sizeBytes: raw.sizeBytes,
     stat: raw.stat,
   };
@@ -1455,7 +1457,7 @@ export function readWorkspaceFile(
   return {
     relativePath: raw.relativePath,
     sizeBytes: raw.sizeBytes,
-    text: redact(raw.rawText, [], { preserveSourceLineBreaks: true }),
+    text: redactWorkspaceSource(raw.rawText, relPath),
     truncated: raw.truncated,
   };
 }

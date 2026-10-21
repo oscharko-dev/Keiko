@@ -16,6 +16,7 @@ const UnlockIcon = Icons.unlock;
 export type HeaderStatusTone = "ok" | "warn" | "danger";
 
 interface HeaderProps {
+  readonly notice?: ReactNode;
   readonly layoutLocked: boolean;
   readonly onToggleLayoutLock: () => void;
   readonly onTileAll: () => void;
@@ -51,12 +52,12 @@ function HeaderTools({
   onTileAll,
   onSplitFront,
   onCascade,
-}: HeaderProps): ReactNode {
+}: Omit<HeaderProps, "notice">): ReactNode {
   const t = useTranslate();
   const label = t(layoutLocked ? "header.unlockLayout" : "header.lockLayout");
   const LayoutLockIcon = layoutLocked ? LockIcon : UnlockIcon;
   return (
-    <div className="hd-tools">
+    <div className={`hd-tools ${styles.cmpWindowTools}`}>
       <button
         type="button"
         className={`hd-tool ui-tip ${styles.cmpLayoutLock}`}
@@ -101,7 +102,7 @@ function HeaderImpl(props: HeaderProps): ReactNode {
         <span className="hd-wordmark">Keiko</span>
       </div>
 
-      <span className="spacer" />
+      <div className={styles.cmpNoticeSlot}>{props.notice}</div>
 
       <HeaderTools {...props} />
     </header>

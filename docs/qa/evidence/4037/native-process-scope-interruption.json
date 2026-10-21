@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "6b39a992ef619b3074fbc4c23ed79d50db183552",
+  "sourceFreeze": {
+    "artifact": "checkpoint73-source-freeze-v1.json",
+    "sha256": "72f8d02a6fe47dde1add3c2f7013e4da1e07be58879ce8144b760bdc51684017"
+  },
+  "compiledFreeze": {
+    "artifact": "checkpoint73-compiled-freeze-v1.json",
+    "sha256": "58cf44acd6625608f1262c795b130ff497fc3e1fb4cc6c8123f4085dc6e8c24c"
+  },
+  "sourceFileCount": 7557,
+  "compiledFileCount": 6621,
+  "verification": {
+    "affectedTests": {
+      "passed": 3521,
+      "failed": 0,
+      "existingSkipped": 1,
+      "files": 187
+    },
+    "uiCoverage": {
+      "passed": 10857,
+      "failed": 0,
+      "existingSkipped": 1,
+      "files": 563
+    },
+    "workspaceBrowser": {
+      "passed": 8,
+      "failed": 0,
+      "engine": "chromium",
+      "initialProject": "explicit-owned-readable-fixture"
+    },
+    "checks": [
+      {
+        "artifact": "checkpoint73-typecheck-v2.json",
+        "sha256": "8e709e502ff725009b4b27fb3d23ff5a473c23cd8bf3c15e977c26d8d0d5c3f2",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-activity-log-v1.json",
+        "sha256": "0abc244154726687ef3a317ec4ef482474b12dc16e8c75c3cfc8bb023eb9219d",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-root-lint-v2.json",
+        "sha256": "fcdacb7101ebcd7268c22857a462e4f821ac4d23cc05cb13ba9a9a5176bf2166",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-ui-lint-v2.json",
+        "sha256": "d2eb7515ab38eafbb0f899c37f2dc957df2a73890406f93e4875639bb96fef0a",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-ui-coverage-v2.json",
+        "sha256": "931dd93bdf0121daa3ce44fa783d8dcfb5fadae9eaa8899a6ac53892477c5c0b",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-affected-tests-green-v3.json",
+        "sha256": "d301e91ecac5f5bf3c844b60f0f287947b9e6f3ba64c39da414286c7bc18cf91",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-workspace-surfaces-green-v3.json",
+        "sha256": "8398a7f710156bc75c4f9a4a20a7d3cb36ad0edcd6d427661a2ce49dc198e304",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-e2e-wiring-v1.json",
+        "sha256": "1217965200696c9e7adcc49dcfac62fdfa103494614c1dcaae0a4c150548e6d9",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-editor-evidence-v1.json",
+        "sha256": "10564d8aea5a3492ac6d3597633a4ea4701a43d889ad27c7aa5baddd57edfc84",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-adr-index-v1.json",
+        "sha256": "3b7ed9101785d418725c08cb2bccb1899c6dce8f5dce87d3960c9e971ee48a77",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-context-quality-v1.json",
+        "sha256": "3f8f68da1de25c8f7271621cfa9f5c8a127ae688fa3a70491f2b6d160fb96418",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-retrieval-quality-v1.json",
+        "sha256": "fe796e96ea712068903bc3a3d11307583d8cd21b37b368988b6b5b1eb3e4750d",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-grounded-retrieval-quality-v1.json",
+        "sha256": "bb101874158d9ffe582485167b7ac19c84f8eba75a792ec04a878cd9315c004e",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-grounded-faithfulness-v1.json",
+        "sha256": "88425f77e4d4931ed6c459c6dad151d173add95a0912b5bc8c7f6800b6d27897",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-sonar-v1.json",
+        "sha256": "f20e119bac954b2f7115cda91d85f5b0ec7e31ee9248218d301dd720e8ca64eb",
+        "exitCode": 0
+      }
+    ]
+  },
+  "overallAcceptance": false,
+  "mergeAcceptance": false,
+  "skillsAndModelPromptsChanged": false,
+  "classification": "EINTR packet I/O repair; renewed full native platform qualification pending",
+  "sources": [
+    {
+      "path": "packages/keiko-security/src/native-process-scope.ts",
+      "sha256": "9913cf7a47c05844d9faabd0cc2554e74b15c569bf7d6e7eee9896dc456ff224"
+    },
+    {
+      "path": "packages/keiko-security/src/native-process-scope.test.ts",
+      "sha256": "f5b465f2542a932dff7c2989b40b828853ce257dca14e202da8e6255cff3991a"
+    },
+    {
+      "path": "packages/keiko-server/src/support-report-job.ts",
+      "sha256": "52184ff31e46ba37292cdd875af310b637dab32e77a8f930a86afcd39e91fb61"
+    }
+  ],
+  "observedFailure": {
+    "platform": "linux/x64",
+    "node": "24.18.0",
+    "uid": 65534,
+    "operationResultKind": 7,
+    "payloadBytes": 32,
+    "systemError": "EINTR",
+    "diagnosticOnly": true,
+    "diagnosticRun": 39365798975,
+    "diagnosticAcceptanceCredit": false,
+    "negativeReceiverStderrFailures": "Five per UID were caused by intentional diagnostic output; retained without product-regression or acceptance credit."
+  },
+  "repair": "Resume only interrupted read/write syscalls while the same original monotonic grant remains live. Never renew a deadline, resend a successfully written request, retry decoder initialization, retry close, accept malformed/late data, or retry other I/O errors.",
+  "causalRegression": {
+    "artifact": "checkpoint73-native-interruption-red-v1.json",
+    "sha256": "a097629133c0d7eb5d755c3ac294ccf668e8986a40e59a6ad9dd10ef7d12d50c",
+    "parentPassedPositiveRefusalControls": 3,
+    "parentFailedInterruptionControls": 6,
+    "notRunByTargetFilter": 50,
+    "finalNativeConsumerTestsPassed": 60,
+    "finalNativeConsumerTestsFailed": 0,
+    "supportReportJobTestsPassed": 24
+  },
+  "secondaryRepair": "Name the existing node:worker_threads constructor NodeWorker so Vite does not transform the Node Worker as a browser Worker. Constructor, options and authority are unchanged. Both previously blocked UI import suites execute in the full green UI run.",
+  "supportedPlatformRuntimeAccepted": false,
+  "installedCrossVersionUpdatesAccepted": false,
+  "historicalNativeRunsRetained": [
+    "native-amd64-result-v6: UID1000 full native quality passed, UID65534 support report failed",
+    "native-amd64-result-v7: diagnostic only",
+    "native-amd64-result-v8: diagnostic only; EINTR identified"
+  ]
+}

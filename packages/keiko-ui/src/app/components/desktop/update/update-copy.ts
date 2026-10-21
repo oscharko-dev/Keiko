@@ -1,4 +1,5 @@
-import type { I18nTranslate } from "@/lib/i18n";
+import type { ClientUpdateNoticeKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { OptionalWidgetTranslate as I18nTranslate } from "@/lib/optional-widget-i18n";
 import type {
   ReleaseImpactRemediation,
   UpdatePreflightReport,
@@ -41,6 +42,17 @@ export function hasStartupUpdateSignal(report: UpdatePreflightReport): boolean {
     report.manualUpdateRequired ||
     report.userActionRequired
   );
+}
+
+/** Availability is asserted only by the server's version comparison, never setup severity. */
+export function startupUpdateNoticeKind(report: UpdatePreflightReport): ClientUpdateNoticeKind {
+  if (report.updateAvailable)
+    return report.severity === "critical" ? "critical-update-available" : "update-available";
+  if (isPortableExternallyManaged(report)) return "externally-managed";
+  if (isPortableBootstrapSetupRequired(report)) return "portable-setup-required";
+  if (isPortableReleaseMetadataUnavailable(report) || isUpdateCheckUnavailable(report))
+    return "check-unavailable";
+  return hasStartupUpdateSignal(report) ? "action-required" : "no-update-signal";
 }
 
 export function isManualUpdatePath(
@@ -187,7 +199,7 @@ export function statusTitle(
   if (session?.phase === "preparing" || session?.phase === "running") {
     return t("updates.status.installing");
   }
-  if (report.severity === "critical") return t("updates.status.critical");
+  if (report.updateAvailable && report.severity === "critical") return t("updates.status.critical");
   if (isPortableReleaseMetadataUnavailable(report)) return t("updates.status.releaseUnavailable");
   if (isUpdateCheckUnavailable(report)) return t("updates.status.unavailable");
   if (report.updateAvailable) return t("updates.status.available");

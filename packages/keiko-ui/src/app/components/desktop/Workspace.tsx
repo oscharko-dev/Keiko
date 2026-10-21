@@ -25,7 +25,7 @@ import {
   isTextInputTarget,
   workspaceInteractionLocked,
 } from "./interactionGuards";
-import { WindowFrame } from "./windows/WindowFrame";
+import { createWindowChunkFallback } from "./widgets/WindowChunkFallback";
 import { KNOWLEDGE_CONNECTOR_NODE_SIZE, localizedWindowTitle } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
@@ -60,8 +60,9 @@ import {
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
 import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
-import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
+import { syncDeferredPdfPreviewWorkspace } from "./widgets/cards/pdf-citation-preview-workspace";
 import selectionStyles from "./WorkspaceSelection.module.css";
+import controlStyles from "./WorkspaceControls.module.css";
 import clipboardStatusStyles from "./WorkspaceClipboardStatus.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -69,6 +70,12 @@ const ZoomOutIcon = Icons.zoomOut;
 const ExpandIcon = Icons.expand;
 const ZoomInIcon = Icons.zoomIn;
 const AddIcon = Icons.add;
+
+// Window chrome is only needed when a window exists; keep the empty canvas interactive first.
+const WindowFrame = dynamic(
+  () => import("./windows/WindowFrame").then((module) => module.WindowFrame),
+  { ssr: false, loading: createWindowChunkFallback("window chunk") },
+);
 
 // Load connection geometry independently of the initial desktop shell.
 const ConnectionsLayer = dynamic(
@@ -892,18 +899,23 @@ function WorkspaceScene({
       ) : null}
       {wins !== null
         ? wins.map((w) => (
-            <WindowFrame
+            <div
               key={w.id}
-              win={w}
-              top={top !== null && w.id === top.id}
-              connState={connStateById.get(w.id) ?? null}
-              api={api}
-              wsRef={wsRef}
-              linkRevision={linkRevision}
-              layoutLocked={layoutLocked}
-              selected={selectedWindowIds.has(w.id)}
-              selectedWindowCount={selectedWindowIds.size}
-            />
+              hidden={w.minimized === true}
+              style={{ display: w.minimized === true ? "none" : "contents" }}
+            >
+              <WindowFrame
+                win={w}
+                top={top !== null && w.id === top.id}
+                connState={connStateById.get(w.id) ?? null}
+                api={api}
+                wsRef={wsRef}
+                linkRevision={linkRevision}
+                layoutLocked={layoutLocked}
+                selected={selectedWindowIds.has(w.id)}
+                selectedWindowCount={selectedWindowIds.size}
+              />
+            </div>
           ))
         : null}
       {/* Selection rings render as sibling overlays on their own window's z-layer
@@ -1437,7 +1449,7 @@ export function Workspace({
     [wins],
   );
   useEffect(() => {
-    syncPdfCitationPreviewWindowRegistry(wins);
+    return syncDeferredPdfPreviewWorkspace(wins);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- winMembershipSignature is the stable membership key; wins is read fresh
   }, [winMembershipSignature]);
 
@@ -1498,11 +1510,15 @@ export function Workspace({
     handTool,
     marquee,
   });
+  const openWindowPalette = (): void => {
+    reportClientDiagnostic("Workspace window palette opened.");
+    openPalette();
+  };
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
     <main
-      className={`workspace ${selectionStyles.cmpWorkspaceSurface}`}
+      className={`workspace ${selectionStyles.cmpWorkspaceSurface} ${controlStyles.cmpWorkspaceViewport}`}
       data-layout-locked={layoutLocked ? "true" : undefined}
       ref={wsRef}
       aria-label={t("workspace.surface")}
@@ -1539,7 +1555,7 @@ export function Workspace({
       </p>
       <WorkspaceClipboardStatusView status={clipboardStatus} />
       <WorkspaceConnectHint connecting={connecting} t={t} />
-      <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
+      <WorkspaceEmptyState empty={empty} onNewWindow={openWindowPalette} />
 
       <WorkspaceScene
         layoutLocked={layoutLocked}
@@ -1557,7 +1573,7 @@ export function Workspace({
         selectedWindowIds={selectedWindowIds}
       />
 
-      <div className="ws-zoom">
+      <div className={`ws-zoom ${controlStyles.cmpWorkspaceControl}`}>
         <button
           type="button"
           className="ws-zoom-btn ui-tip cmp-tip-start"
@@ -1602,9 +1618,9 @@ export function Workspace({
 
       <button
         type="button"
-        className="ws-fab ui-tip cmp-tip-end"
+        className={`ws-fab ui-tip cmp-tip-end ${controlStyles.cmpWorkspaceControl}`}
         onPointerDown={(event) => event.stopPropagation()}
-        onClick={openPalette}
+        onClick={openWindowPalette}
         aria-label={t("workspace.newWindow")}
         data-tip={t("workspace.newWindow")}
       >

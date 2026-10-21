@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { parseUnifiedDiff } from "./patch-parse.js";
+import { parseUnifiedDiff, PatchParseError } from "./patch-parse.js";
+import { PatchParseError as CanonicalPatchParseError } from "@oscharko-dev/keiko-contracts/runtime/unified-diff";
 
 describe("parseUnifiedDiff", () => {
+  it("preserves the canonical error constructor through the existing tools entry", () => {
+    expect(PatchParseError).toBe(CanonicalPatchParseError);
+    expect(() => parseUnifiedDiff("--- a/x\n+++ b/x\n@@ malformed")).toThrow(
+      CanonicalPatchParseError,
+    );
+  });
   it("parses a modify with explicit hunk counts", () => {
     const diff = "--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n";
     const { files } = parseUnifiedDiff(diff);

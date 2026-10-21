@@ -4,7 +4,11 @@ import { createStructuralExecutionControl } from "./structuralExecution.js";
 import type { WorkspaceInfo } from "./types.js";
 import { WORKSPACE_PATH_DISCOVERY_LIMITS } from "./types.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
-import { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
+import {
+  discoverWorkspacePaths,
+  isDocumentBasenameShorthand,
+  matchesDocumentBasenameStem,
+} from "./workspacePathDiscovery.js";
 
 const WORKSPACE: WorkspaceInfo = {
   root: "/repo",
@@ -233,5 +237,59 @@ describe("workspace path discovery scoped results", () => {
       ),
     ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
     expect(getter).not.toHaveBeenCalled();
+  });
+});
+
+describe("conventional document basename shorthand", () => {
+  it.each(["README", "readme", "ReadMe", "CONTRIBUTING", "contributing"])(
+    "admits the conventional bare name %s independently of overview ranking",
+    (stem) => {
+      expect(isDocumentBasenameShorthand(stem)).toBe(true);
+    },
+  );
+  it.each([
+    "architecture",
+    "Architecture",
+    "agents",
+    "overview",
+    "readmeHelper",
+    "myREADME",
+    "README.md",
+    "docs/README",
+    "",
+  ])("does not promote other words or paths as shorthand: %s", (stem) => {
+    expect(isDocumentBasenameShorthand(stem)).toBe(false);
+  });
+
+  it.each(["README", "readme.md", "docs/ReadMe.MD", "README.txt", "README.rst", "README.html"])(
+    "matches the exact document stem in %s",
+    (path) => {
+      expect(matchesDocumentBasenameStem(path, "README")).toBe(true);
+    },
+  );
+  it.each(["README.ts", "README.backup.md", "myREADME.md", "README-helper.md", "docs/README.ts"])(
+    "rejects other stems and source files in %s",
+    (path) => {
+      expect(matchesDocumentBasenameStem(path, "README")).toBe(false);
+    },
+  );
+  it("filters exact document stems before bounded retention without reading bodies", async () => {
+    const fs = memFs(WORKSPACE.root, {
+      ...Object.fromEntries(
+        Array.from({ length: 100 }, (_, i) => [`selected/a/README-${String(i)}.md`, "noise"]),
+      ),
+      "selected/z/ReadMe.MD": "accepted",
+      "selected/README.ts": "source",
+      "other/README.md": "unselected",
+    });
+    const read = vi.spyOn(fs, "readFileUtf8");
+    const result = await discoverWorkspacePaths(
+      WORKSPACE,
+      { mode: "glob", directory: "selected", query: "**/*", maxResults: 1 },
+      { ...createStructuralExecutionControl(null), documentStem: "readme" },
+      fs,
+    );
+    expect(result.entries.map((entry) => entry.relativePath)).toEqual(["selected/z/ReadMe.MD"]);
+    expect(read).not.toHaveBeenCalled();
   });
 });

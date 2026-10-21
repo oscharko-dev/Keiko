@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as workspace from "@oscharko-dev/keiko-workspace";
 import type { LineRange } from "@oscharko-dev/keiko-contracts/connected-context";
+import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
   ChatConnectedScope,
   HybridGroundedAnswer,
@@ -29,6 +31,8 @@ import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.
 import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { assistantRetrievalReferents } from "./grounded-assistant-referents.js";
+import { buildEvalContextPack, evalEvidenceAtom } from "./grounded-eval-support.js";
+import { _readKeptExcerptsForTests, type ExcerptReadSummary } from "./grounded-orchestrator.js";
 
 const MODEL = "structured-folder-referent-native-proof";
 const TARGET = "src/deep/Novel.ts";
@@ -397,12 +401,16 @@ interface NativeExcerptObservation {
   readonly reason?: string;
 }
 
-function observeTargetExcerptReads(root: string): readonly NativeExcerptObservation[] {
+function observeTargetExcerptReads(
+  root: string,
+  onRequest?: (request: Parameters<typeof workspace.readExcerpt>[1]) => void,
+): readonly NativeExcerptObservation[] {
   const observations: NativeExcerptObservation[] = [];
   const originalRead = workspace.readExcerpt;
   vi.spyOn(workspace, "readExcerpt").mockImplementation((...args) => {
     const [scope, request] = args;
     if (scope.workspace.root !== root || request.scopePath !== TARGET) return originalRead(...args);
+    onRequest?.(request);
     const selection = { startLine: request.startLine, endLine: request.endLine };
     return originalRead(...args).then(
       (result) => {
@@ -425,22 +433,90 @@ function observeTargetExcerptReads(root: string): readonly NativeExcerptObservat
   return observations;
 }
 
+function readLoneStaleHint(root: string, line: number): Promise<ExcerptReadSummary> {
+  const atom = evalEvidenceAtom(TARGET, { startLine: line, endLine: line });
+  return _readKeptExcerptsForTests([TARGET], {
+    searchScope: {
+      workspace: {
+        root,
+        selectedRoot: root,
+        name: "stale-window",
+        version: undefined,
+        testFramework: "unknown",
+        sourceDirs: ["src"],
+        testDirs: [],
+        languages: ["typescript"],
+        ignoreLines: [],
+      },
+      scopeId: "stale-window",
+      relativePaths: ["src/deep"],
+    },
+    fs: nodeWorkspaceFs,
+    budget: DEFAULT_EXPLORATION_BUDGET,
+    initialUsage: buildEvalContextPack([]).usage,
+    atomsByPath: new Map([
+      [
+        TARGET,
+        [
+          {
+            ...atom,
+            provenance: {
+              kind: "file-listing",
+              tool: "repo.selectedFile",
+              queryFingerprint: atom.provenance.queryFingerprint,
+            },
+          },
+        ],
+      ],
+    ]),
+    nowMs: () => 1,
+    deadlineAtMs: Number.POSITIVE_INFINITY,
+  });
+}
+
 describe("structured folder citations through native follow-up admission", () => {
   it("uses a current same-path window when mutation makes the previous line hint stale", async () => {
     const setup = await fixture(true);
-    await numericHistory(setup);
+    const previous = await numericHistory(setup);
+    expect(
+      previous.citations.find((citation) => citation.scopePath === TARGET)?.lineRange?.startLine,
+    ).toBeGreaterThan(2);
     writeFileSync(join(setup.root, TARGET), `export const shortenedValue = ${AFTER}\n`);
-    const observations = observeTargetExcerptReads(setup.root);
+    const queues: LineRange[][] = [];
+    const observations = observeTargetExcerptReads(setup.root, (request) => {
+      queues.push(...(request.rangeQueues ?? []).map((queue) => [...queue]));
+    });
     const answer = await ask(setup, "Explain that.");
-    expect(observations).toEqual([
-      { startLine: 61, endLine: 85, reason: "outside-range" },
-      { startLine: 1, endLine: 200, returned: [{ startLine: 1, endLine: 2 }] },
-    ]);
+    expect(queues[0]?.[0]).toEqual({ startLine: 61, endLine: 85 });
     expect(setup.provider.evidence.at(-1)).toContain(AFTER);
     const citation = answer.citations.find((item) => item.scopePath === TARGET);
     expect(citation?.lineRange?.startLine).toBe(1);
     expect(citation?.lineRange?.endLine).toBeLessThan(61);
     expect(continuityCounts(setup, "continuityAdmittedCount")).toEqual([1, 0]);
+    // A queued current sibling range can recover within one read; the isolated retry pin follows.
+    expect(observations).toHaveLength(1);
+    expect(observations.flatMap((observation) => observation.returned ?? [])).toEqual([
+      { startLine: 1, endLine: 2 },
+    ]);
+  });
+
+  it("retains the owning outside-range retry when no current sibling window is admitted", async () => {
+    const setup = await fixture(true);
+    const previous = await numericHistory(setup);
+    const line = previous.citations.find((citation) => citation.scopePath === TARGET)?.lineRange
+      ?.startLine;
+    expect(line).toBeGreaterThan(2);
+    if (line === undefined) throw new TypeError("Missing previous line hint");
+    writeFileSync(join(setup.root, TARGET), `export const shortenedValue = ${AFTER}\n`);
+    const observations = observeTargetExcerptReads(setup.root);
+    const result = await readLoneStaleHint(setup.root, line);
+    expect(observations).toEqual([
+      { startLine: 61, endLine: 85, reason: "outside-range" },
+      { startLine: 1, endLine: 200, returned: [{ startLine: 1, endLine: 2 }] },
+    ]);
+    expect(result.excerpts.get(TARGET)?.some((excerpt) => excerpt.content.includes(AFTER))).toBe(
+      true,
+    );
   });
 
   it("uses the persisted numeric folder citation to reread the changed line61 target", async () => {

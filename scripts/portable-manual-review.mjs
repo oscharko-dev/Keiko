@@ -734,9 +734,6 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
-  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
-    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-  }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 
@@ -754,7 +751,7 @@ function nativeHelper(target, version, signingVerified, name) {
   const runtimeTarget = targetByName(target);
   const secureRead = name === "keiko-secure-workspace-read";
   const sourcePath = nativeHelperSourcePath(target, secureRead);
-  const protocol = nativeHelperProtocol(target, secureRead);
+  const protocol = nativeHelperProtocol(secureRead);
   const bytes = nativeHelperBytes(target, name);
   const digest = sha256(bytes);
   const signing = componentSigningEvidence(target, signingVerified);
@@ -784,16 +781,13 @@ function nativeHelper(target, version, signingVerified, name) {
 
 function nativeHelperSourcePath(target, secureRead) {
   if (secureRead) return "native/secure-workspace-read";
-  if (target === "linux-x64") return "packages/keiko-sandbox/src";
+  if (target === "linux-x64") return "native/runtime-supervisor";
   const platform = target === "windows-x64" ? "windows" : "macos";
   return `native/runtime-supervisor/${platform}`;
 }
 
-function nativeHelperProtocol(target, secureRead) {
+function nativeHelperProtocol(secureRead) {
   if (secureRead) return { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" };
-  if (target === "linux-x64") {
-    return { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
-  }
   return { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
 }
 

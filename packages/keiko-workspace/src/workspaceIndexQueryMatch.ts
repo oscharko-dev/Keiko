@@ -36,10 +36,17 @@ function validLineFields(value: {
   );
 }
 
-function normalizeLineGroup(value: object): Pick<ScoredLine, "queryGroupKey"> | undefined {
+function normalizeLineGroup(
+  value: object,
+): Pick<ScoredLine, "queryGroupKey" | "sourceDescriptorMatch"> | undefined {
   const digest = "queryGroupKey" in value ? value.queryGroupKey : undefined;
+  const descriptor = "sourceDescriptorMatch" in value ? value.sourceDescriptorMatch : undefined;
   if (digest !== undefined && !isLexicalQueryGroupKey(digest)) return undefined;
-  return digest === undefined ? {} : { queryGroupKey: digest };
+  if (descriptor !== undefined && descriptor !== true) return undefined;
+  return {
+    ...(digest === undefined ? {} : { queryGroupKey: digest }),
+    ...(descriptor === true ? { sourceDescriptorMatch: true } : {}),
+  };
 }
 
 function normalizeLine(value: unknown): ScoredLine | undefined {

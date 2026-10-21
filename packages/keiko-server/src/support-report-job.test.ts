@@ -17,6 +17,16 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as filesystem from "node:fs";
 import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
+import * as workerScopes from "@oscharko-dev/keiko-security/process-scope-worker";
+import { MessageChannel } from "node:worker_threads";
+
+vi.mock("@oscharko-dev/keiko-security/process-scope-worker", async (original) => {
+  const actual = await original<typeof workerScopes>();
+  return {
+    ...actual,
+    createProcessScopeWorkerBridge: vi.fn(actual.createProcessScopeWorkerBridge),
+  };
+});
 
 vi.mock("@oscharko-dev/keiko-activity-log", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-activity-log")>();
@@ -80,6 +90,9 @@ const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
 );
 
 const actualFilesystem = await vi.importActual<typeof filesystem>("node:fs");
+const actualWorkerScopes = await vi.importActual<typeof workerScopes>(
+  "@oscharko-dev/keiko-security/process-scope-worker",
+);
 
 function failNextIncidentReadClose(): void {
   let incidentDescriptor: number | undefined;
@@ -123,6 +136,9 @@ function expectAbandonedPreparation(stateDir: string): void {
 }
 
 afterEach(() => {
+  vi.mocked(workerScopes.createProcessScopeWorkerBridge)
+    .mockReset()
+    .mockImplementation(actualWorkerScopes.createProcessScopeWorkerBridge);
   vi.useRealTimers();
   vi.mocked(dismissSupportIncident).mockClear();
   vi.mocked(reportServerLogFailure).mockClear();
@@ -544,6 +560,33 @@ describe("bounded desktop support-report worker", () => {
       report: { fileName: "report.json", reportJson: "{}" },
     });
     await expect(second).resolves.toHaveProperty("fileName", "report.json");
+  });
+  it("closes observation authority before a failed Worker termination", async () => {
+    const channel = new MessageChannel(),
+      order: string[] = [];
+    const dispose = vi.fn((): void => {
+      order.push("scope-closed");
+      channel.port1.close();
+      channel.port2.close();
+    });
+    vi.mocked(workerScopes.createProcessScopeWorkerBridge).mockReturnValueOnce({
+      data: { version: 1, pid: process.pid, port: channel.port2 },
+      dispose,
+    });
+    workers.terminate.mockImplementationOnce((): Promise<never> => {
+      order.push("terminate");
+      return Promise.reject(new TypeError("Synthetic termination failure"));
+    });
+    try {
+      const result = runSupportReportJob("/private-report-state");
+      activeWorker().emit("error", new TypeError("Synthetic Worker failure"));
+      await expect(result).rejects.toMatchObject({ reason: "unavailable" });
+      expect(order).toEqual(["scope-closed", "terminate"]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      channel.port1.close();
+      channel.port2.close();
+    }
   });
   it("cancels a disconnected download and releases capacity", async () => {
     const controller = new AbortController();

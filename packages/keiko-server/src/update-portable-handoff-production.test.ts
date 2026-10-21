@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -15,6 +15,7 @@ import {
   type UpdateLocalStateManager,
 } from "./update-local-state.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-builder.js";
+import { writePosixRegistrationFixture } from "./__tests__/portable-registration.js";
 import {
   createPortableHandoffPlan,
   writePortableHandoffPlan,
@@ -137,16 +138,14 @@ async function productionFixture(outcome: FixtureOutcome = "restored"): Promise<
   mkdirSync(stateDir, { recursive: true });
   const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
   const initialized = localState.writeRuntimeState(localState.readRuntimeState());
-  const registration = JSON.stringify({
-    schemaVersion: 1,
-    status: "managed",
-    updateEligible: true,
-    stable: true,
-    platformTarget: "macos-arm64",
-    packageVersion: outcome === "restored" ? "1.2.2" : "1.2.3",
-    installRootIdentitySha256: createHash("sha256").update(realpathSync(managedRoot)).digest("hex"),
+  const { registration } = writePosixRegistrationFixture({
+    managedRoot,
+    stateDir,
+    target: "macos-arm64",
+    version: outcome === "restored" ? "1.2.2" : "1.2.3",
+    home: root,
+    now: NOW,
   });
-  writeFileSync(join(stateDir, "portable-install-state.json"), registration);
   const currentTreeSha256 = await hashPortableHandoffTree(managedRoot, {
     deadline: Date.now() + 30_000,
   });

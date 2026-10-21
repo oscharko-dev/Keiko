@@ -360,6 +360,7 @@ test("@smoke file scope exposes a full unbroken path without horizontal overflow
   await seedConnectedWindows(page, fixture.root, fixture.chat, { width: 480, height: 480 });
   await page.goto("/");
   const { files, chatWindow, pill } = scopeViews(page);
+  await expect(pill).toHaveText(/Folder:|Ordner:/u);
   await expectScope(request, fixture.root, fixture.chat.id, "workspace-root", []);
   await files.locator('.tr-dir-enter[data-path="docs"]').click();
   await expectScope(request, fixture.root, fixture.chat.id, "directory", ["docs"]);

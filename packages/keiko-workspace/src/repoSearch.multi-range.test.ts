@@ -89,6 +89,7 @@ describe("fresh multi-range excerpt projection", () => {
       { startLine: 3, endLine: 3 },
     ]);
     expect(result.omittedRangeCount).toBe(1);
+    expect(result.windows?.map((window) => window.requestedRangeIndex)).toEqual([0, 2]);
   });
 
   it("classifies and decodes once rather than reopening once per requested range", async (): Promise<void> => {
@@ -319,4 +320,26 @@ describe("fresh multi-range excerpt projection", () => {
     ).rejects.toMatchObject({ reason: "aborted" });
     expect(reads.caps.filter((cap) => cap > DEFAULT_BINARY_PROBE.maxProbeBytes)).toHaveLength(1);
   });
+});
+
+it("retains direct-range positions after an unavailable range and across duplicates", async () => {
+  writeFileSync(join(root, "readings.txt"), "alpha\nbeta\ngamma");
+  const result = await readExcerpt(scope(), {
+    ...request(),
+    startLine: 1,
+    endLine: 999,
+    ranges: [
+      { startLine: 1, endLine: 2 },
+      { startLine: 999, endLine: 999 },
+      { startLine: 1, endLine: 2 },
+      { startLine: 2, endLine: 3 },
+    ],
+  });
+  expect(result.windows?.map((window) => window.requestedRangeIndex)).toEqual([0, 2, 3]);
+  expect(result.windows?.map((window) => window.content)).toEqual([
+    "alpha\nbeta",
+    "alpha\nbeta",
+    "beta\ngamma",
+  ]);
+  expect(result.omittedRangeCount).toBe(1);
 });

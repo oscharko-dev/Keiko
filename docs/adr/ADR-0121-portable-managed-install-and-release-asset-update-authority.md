@@ -151,6 +151,31 @@ same root before every portable update. Organization-managed installations remai
 Keiko's self-updater unless the same managed-root authority is attested. V1 does not install an
 always-on privileged helper, schedule a task, or register a background updater.
 
+The launcher and server share the pure system-root classifier; filesystem, symlink, volume,
+repository/state separation, signature and activation checks remain with their existing owners.
+The server resolves the Linux flat `app/` layout and both macOS bundle layouts through the same
+portable layout resolver used by staging and automatic Coding runtime discovery. Portable target
+recognition uses the contracts inventory. For POSIX managed eligibility, the installed package
+identity and the registration's setup, real root and launcher digests must match the current files;
+a matching target/version alone is insufficient. The canonical macOS exception never overrides an
+explicit organization/machine-managed policy. Preflight and session status record their actual
+classification and elapsed time on the existing Activity Log without paths or package bodies.
+
+Startup and post-handoff recovery revalidate those same registration/setup/launcher bindings on
+every portable target. The existing bounded, no-follow, single-link readers and stable-file
+identity checks apply to POSIX files as well as Windows files, using the canonical activation
+layout and the unchanged attestation deadline. A matching registration snapshot and root digest
+alone cannot settle an update whose setup or launcher binding is invalid. Normal-startup refusal
+retains the WAL and emits the existing correlated recovery-required Activity Log event; this
+binding check does not replace native supervisor, release-signature or process-lifetime proof.
+Registration, setup and launcher readers open nonblocking before checking the descriptor type,
+so a FIFO cannot stall startup before the existing regular-file and deadline checks run.
+Handoff preparation reuses that same current-install attestation before copying or verifying the
+current coordinator and supervisor, and before publishing prepared intent. Its expected registration
+digest comes from the accepted plan. Windows capsule prerequisites retain their existing earlier
+validation and cleanup. A digest measured from an executable during preparation establishes byte
+continuity only; it cannot replace the installation binding or release authenticity.
+
 ### D4 — Source-of-truth split
 
 GitHub Release Assets are the authoritative source of portable installability.
@@ -226,6 +251,18 @@ capsule is private local control data: authenticated fixed paths and mechanical 
 are permitted there, but are never copied into API projections, activity logs, support evidence, or
 release artifacts. It is not a package backup or another update state store.
 
+POSIX activation and native-copy preparation share the existing target-layout owner: Linux uses
+the flat root launcher, setup manifest and runtime supervisor; macOS uses its app-bundle paths.
+Current and candidate setup lookup follow that same grammar before layout validation. This path
+resolution grants no release trust, platform verification waiver or native handoff acceptance.
+
+Handoff digest, native-copy, plan, receipt and verification-acknowledgement reads open descriptors
+nonblocking before validating regular-file type, link count, identity and byte bounds. A FIFO
+replacement cannot prevent those checks or make an elapsed deadline unreachable. Directory
+durability uses the existing shared handoff sync owner, which opens without following links,
+requires a directory descriptor and refuses a FIFO replacement. Copy durability retains its
+existing platform admission; Windows unsupported-directory-sync handling remains in that owner.
+
 The server persists semantic intent before spawning the coordinator. Native code accepts only the
 closed activation-id mode, validates the fixed plan and its authority, and acknowledges the exact
 plan digest over the inherited channel. A spawn event alone is not acceptance. Preparation remains
@@ -241,9 +278,324 @@ routes become ready; exact process, launch identity, loopback port, target versi
 must agree before success. A failed replacement may restore the previous verified tree only after
 proving the owned new process tree has stopped. Once N is verified, restart and cleanup must retain N.
 
+Both native coordinators accept the canonical CLI PID record: exact PID and launch-id lines with
+an optional exact `browser-open-v1` line. The shared byte matcher consumes the complete record;
+unknown suffixes, extra bytes, missing final newlines or a different identity refuse. The marker
+expresses launcher browser-reopening support; update authority still comes from the validated plan,
+parent and generation. Existing single-link regular-file, symlink/reparse, bounded-read and identity
+guards remain. The original monotonic deadline includes read completion and cleanup, so a process
+that resumes after expiry cannot accept a late valid record. Linux qualification executes the
+existing portable coordinator component suite as well as its compiler and requested kernel scope.
+
+Persisted remediation leases use the same positive, bounded kernel-PID domain as process probes.
+Zero, negative and out-of-domain integers are malformed records, rather than unknown live owners.
+Fresh malformed publication remains protected by its file-age grace; aged malformed records are
+quarantined before a replacement lease is published. Valid live or unobserved owners remain held.
+This record classification does not establish exclusive reclaim or foreign-process incarnation.
+
+Canonical lease reads distinguish observed malformed bytes from unobservable ownership. They
+reuse the existing bounded state-file descriptor reader with a 4 KiB record cap, nonblocking
+no-follow admission, regular single-link identity and exact BigInt identity/change checks before
+and after the read. Invalid UTF-8/JSON or record fields use the existing malformed publication
+grace; permission/I/O failures, oversized or unsafe objects and changed snapshots refuse without
+quarantine. An unreadable valid legacy owner therefore never becomes reclaimable merely by age.
+
+Remediation acquisition, reclamation and release also hold one per-action SQLite transaction as an
+OS-backed exclusion guard. The already bundled SQLite runtime owns a stable zero-data file; no
+schema, application data, WAL, helper process or new dependency is introduced. SQLite may retain
+its rollback journal while the transaction is held and removes it when closing normally.
+Both main file and sidecar stay inside the same denied private directory. Nonblocking busy
+admission retains the existing already-running result. Each successful lease retains its connection
+in the existing manager until its idempotent release callback settles, including uncertain-outcome
+holds. Different actions retain independent guards. Failed admission closes its own connection;
+release already holds its guard and therefore requires no competing release acquisition or retry.
+Canonical read/rename/unlink failures are observable release failures and retain the held guard.
+The same manager retains the exact callback and requested-release state. After the filesystem is
+repaired, a later explicit acquisition retries only that previously requested own release before
+attempting new admission. An action whose release was never authorized is not retried or cleared.
+No background scheduler or unbounded retry loop is introduced; an old callback cannot close or
+remove a newer guard entry. A release is logged only after its canonical result and connection close.
+
+Guard files live below `updates/remediation-leases/.keiko/guards/`, including for custom state roots.
+The existing full raw/resolved `.keiko` workspace denial protects them from ordinary Files and
+recursive readers: raw same-process opens/closes must never touch a held SQLite guard, because
+POSIX descriptor closure can cancel SQLite locks. Existing update scans, snapshots and permission
+repair only inspect metadata/counts/modes, and never read guard bodies. Guards are never unlinked,
+recreated, quarantined or hashed while in use. Existing SQLite path preflight rejects symlinks,
+hardlinks and unsafe ancestors; it retains its documented pathname-only, non-atomic same-UID limit.
+
+The JSON lease remains authoritative for valid live/unknown owners, publication grace and process
+identity. An available guard does not authorize reclaiming such a record or clearing an uncertain
+remediation result. The existing Activity Log records closed acquisition/busy/owner-held/release/
+failure outcomes, an opaque attempt identity and action digest with the originating correlation.
+Run and defer decisions recheck outcome uncertainty after acquiring that exact action owner.
+Deferral cannot mark an unsettled live or unknown action complete or release its owner.
+Automatic pending-status persistence rechecks absence under the same per-action owner. It retains
+an action that another owner has since started, completed or marked uncertain. Restart completion
+uses one aggregate snapshot, requires the requested target to match that snapshot, preserves
+unrelated and uncertain rows, and publishes one revision-checked transition. It never adopts a
+newer snapshot to retarget or complete a different update.
+
+Aggregate runtime-state writes use the same stable zero-data SQLite guard mechanism at
+`updates/.keiko/guards/runtime-state.json`. The short synchronous critical section covers the
+complete persisted revision read, transition validation, durable replacement and flush. Busy
+admission and stale revisions refuse explicitly; the writer never silently merges or retries a
+stale snapshot. Different remediation actions retain their independent lifetime owners while
+sharing this aggregate publication boundary. Failed writes close only their own short guard.
+Closed written/busy/failed observations use the existing Activity Log with an opaque write identity
+and caller correlation, without state bodies, paths or credentials. The same private-reader denial
+and stable-inode rules apply to both guard locations.
+
+Exclusion applies to cooperating guarded peers; old active writers that ignore the guard must be
+drained by the existing installation-generation ownership boundary. These controls do not establish
+foreign PID incarnation, installed generation transfer or an actual cross-version update.
+
+On macOS, a monitor's zero-live reply is necessary but does not replace successful reaping of the
+supervisor's exact owned root. The supervisor checks the returned child identity and terminal
+status under one monotonic five-second wait deadline, including interruptions and the final
+system-call completion. Missing ownership, a stopped child, unavailable clock or an elapsed wait
+refuses the reaped proof through the existing observation error path. The wait clears the stored
+child identity as soon as a terminal wait consumes it or ownership becomes unknown, before any
+later proof or response failure. Error cleanup may signal only a still-owned child and uses the
+same bounded wait. The POSIX coordinator retains this ownership state across stop, failed-start,
+reconciliation and monitor-probe calls. The probe shares the same wait/cleanup owner, refuses an
+expired or unavailable monotonic clock before spawning and checks expiry after wait completion.
+These checks do not establish immutable generation membership or replace Endpoint Security
+qualification.
+
+The Linux native generation implementation uses an atomically held `clone3` PID handle for a
+new user/PID namespace init; the outer owner remains outside that generation. The init verifies
+unchanged non-root ids, drops capabilities, sets no-new-privileges, and verifies non-dumpability
+before creating the runtime root. Its private lease and nonblocking reap loop remain responsive
+while descendants detach or create nested namespaces. Linux also binds each init to a parent pidfd
+captured before clone: SIGKILL parent-death arming is checked against that held reference before
+and after init credential/capability setup. The outer launcher applies the same pre-fork binding
+to its supervisor, whose report role verifies that binding survived exec. This protects stopped
+owners without depending on their userspace lease polling. The private parent references close
+before untrusted root execution. The normal lease and owned waits remain authoritative; neither
+a parent-death setting nor a signal request is a terminal proof. The zero-live derivation requires the exact
+owned init's terminal wait under the original monotonic bound; pidfd readiness alone is insufficient.
+Readiness, credential intake, start acknowledgement and terminal waits recheck their bounds after
+system-call completion. Consumed children remain consumed even when a late result is refused.
+
+The shared POSIX codec stays inside the existing attested macOS source tree, preserving installed
+candidate-validator compatibility while both implementations use one bounded codec. Source presence,
+protocol controls and isolated kernel mechanics do not enable a portable update capability. Newly
+produced Linux x64 packages compile a hardened ELF supervisor at the same native helper path as
+other POSIX targets. Their KRP1/KRS1 identity hashes the complete native supervisor source tree,
+including the shared codec. Existing exact JavaScript/none-protocol identities remain readable as
+legacy metadata; newly produced artifacts cannot use them. Runtime discovery binds the selected
+helper bytes and records the native binding on the existing Activity Log. Linux Coding continues
+to use its existing namespace/egress gateway; its qualification receipt binds the native helper's
+identity but does not qualify updater generation ownership. Linux updater
+admission still requires the initial outer owner, authenticated per-attempt coordinator and successor
+ownership, consistent host process identities, complete shipped source/receipt bindings and actual
+installed-version qualification. Existing sandbox namespace/egress requirements remain binding;
+there is no host-policy or unconfined production fallback.
+
+The existing launcher also has a Linux outer-owner role. It opens and hashes the selected
+supervisor through the existing bounded file owner, retains that exact descriptor for execution,
+and owns the supervisor as its direct child outside the runtime generation. A private, parent-bound
+sequenced-packet channel transfers the supervisor's already-held root pidfd with kernel sender
+credentials. Admission validates that exact received reference through its kernel pidfd type,
+positive authenticated procfs descriptor/PID binding and live state in a coherent single-coordinate
+outer-owner view. An empty pipe, a different live pidfd, a nested/ambiguous procfs coordinate view
+or a missing positive binding supplies no authority; procfs absence never proves process death.
+Its original report deadline begins before the first OS probe; a delayed probe or send
+cannot renew that grant. The one-shot descriptor closes after the report attempt and is never
+inherited by the runtime root. Root identity is not a zero-live proof: forwarding the existing
+reaped response additionally requires the supervisor's zero-live result, the exact root's terminal
+handle and the owned supervisor's successful terminal wait. Missing, malformed, truncated, late or
+foreign reports fail closed and all received descriptors are released. Native unavailability keeps
+its original protocol error. The original optional start gate remains a separate descriptor. Idle lifetime waits for its owned
+process/control events. STOP, TERM or control EOF starts one original five-second stop deadline,
+carried through later polls, reads, responses and owned waits. A stopped supervisor cannot renew
+that grant or leave the outer owner waiting indefinitely. Expiry produces refusal followed by
+the existing bounded failure cleanup; forced cleanup supplies no successful zero-live protocol
+proof.
+
+An explicit app-owner role additionally supplies a root-only sequenced-packet port. The BFF binds
+its outer process coordinate before constructing any durable writer or lock. Liveness requests
+use the outer owner's kernel process references; only a positively missing or terminal reference
+establishes death. Unknown observations retain ownership. File-owner requests duplicate an
+already-open root descriptor through the held root pidfd and return metadata only. The consumer
+joins device, inode and mode before applying the existing root/self ownership policy. The main
+thread claims the one-shot decoder before observing the shared port; Workers and repeated factory
+calls cannot consume its identity or close its descriptor. A failed first initialization cannot
+be retried. Conditional file-owner requests carry the expected unsigned 64-bit device and inode
+and unsigned 32-bit mode. The owner compares them against one stat of the duplicated, held object
+before returning its UID. This is a held-object precondition, not an atomic comparison against a
+caller's mutable descriptor slot. A stale identity or unavailable target returns no metadata and
+preserves the healthy channel. The conditional result has its own closed message kind; clients
+never retry through the older unconditional request. Malformed, mismatched successful, or delayed
+results still retire the port, including a refusal containing nonzero reserved metadata. All
+nonlocal ownership requires this observation, including when an unmapped UID looks identical to
+the caller's UID. No UID mapping, ptrace capability or filesystem permission is widened. Failed
+or expired requests permanently retire that lookup port; they never revive from a delayed reply
+and do not terminate the healthy app. Existing containment and stop proofs remain independent.
+An interrupted packet read or write (`EINTR`, before a byte transfer) may resume only while its
+original monotonic grant remains live; interruption never renews that deadline or resends a
+successfully written request. Other I/O errors, partial or invalid packets and late results retain
+the existing permanent refusal. This does not retry decoder initialization or descriptor closure.
+The existing process start and heartbeat events record the selected coordinate and closed
+observation state without paths, file contents or numeric process references in their extra fields.
+Native SQLite unavailability refuses before durable state instead of replacing the root by re-exec.
+
+The supported report Worker binds a private observation proxy before selecting or reading state.
+Its existing report/preparation protocol remains separate. The proxy delegates only bounded
+process and opened-file observations to the already selected main scope, never initializes the
+native decoder and never creates a Worker writer. Each synchronous request has its own fixed-size
+shared reply buffer and one original process-monotonic five-second deadline, including queue time.
+The main thread validates the closed request and empty buffer, claims it atomically, and publishes
+payload before terminal completion only within that grant. The Worker checks the closed completion
+and deadline after waking. Late replies cannot complete a fresh buffer or revive a terminal one.
+Job settlement closes this private authority before terminating the Worker, including cancellation
+or termination failure; the main root port remains independently owned. Existing caller failure
+events and root lifecycle availability evidence remain authoritative.
+
+The ANN Worker uses that same private observation bridge before opening its approved native runtime.
+It holds both the binary and its immediate parent across module loading and compares lossless
+BigInt descriptor metadata before asking the selected scope for ownership. Unknown ownership
+refuses; root/caller ownership still requires the existing non-writable POSIX mode, object type,
+symlink, digest, runtime-version and pre/post-load identity checks. Windows retains its existing
+ACL-independent checks. The existing index owner closes the private authority on construction or
+build failure, deadline expiry, Worker error/exit, eviction/reset and query discard, before requesting
+termination. No second index cache, native decoder, report writer or special UID exception is added.
+The existing native-runtime Activity Log operation records one closed Worker build result separately
+from cold digest resolution. The existing BFF composition supplies its process log sink; accepted
+and refused builds include no file path, descriptor, inode, UID, query or content.
+
+The Linux initial CLI now uses that app-owner role for an attested managed install. Its app-specific
+root receipt carries the actual BFF PID captured from the held root reference and the selected
+launch identity. Generic runtime admission retains its original empty `LAUNCHED` response and
+controller-EOF lifetime. App admission requires the selected state directory, launch identity and
+start grant; missing fields cannot downgrade to generic admission. The original grant bounds
+provisional ownership, health and the explicit commit acknowledgement. Packet assembly, decoded
+responses and their awaited consumers check the same final monotonic deadline. Linux libuv's
+`uv_hrtime` and the native processes use `CLOCK_MONOTONIC`; the CLI samples that clock before
+the remaining grant and sends a conservatively rounded absolute deadline. The supervisor consumes
+that same deadline before packet intake, generation creation and root execution. A delayed
+consumer cannot obtain a new startup grant.
+
+The full application environment crosses the existing private control pipe as a separate `KAE1`
+data packet, bounded to 4,096 entries and 128 KiB including its header; each value retains the
+16 KiB limit. Only the admitted app root applies those values, overlaying the selected launch,
+state and grant from KRP. The outer owner starts with the closed four selected control values;
+its supervisor receives only the effective absolute deadline. Application loader variables cannot
+select code in either native authority process. Generic KRP environment limits remain unchanged.
+Provider, browser and certificate configuration is neither silently dropped nor inserted into
+diagnostics.
+
+CLI lifecycle commands serialize existing PID tracking with the same stable, zero-data SQLite
+guard primitive used by updater state publication. Its stable zero-data `ui.pid` guard lives at
+`.keiko-lifecycle-<SHA-256 of canonical selected state path>/.keiko/guards/ui.pid` under the existing
+host CLI control-state directory, outside project and removable runtime trees. The control root
+uses the host platform and home directory, independently from environment overrides or a selected
+installation's target platform. Complete state removal cannot unlink a held guard or admit a concurrent start
+through a replacement inode.
+It is never raw-read or unlinked; read-only repair previews do not acquire or create it.
+The nested `.keiko` segment retains the existing workspace denial for internal authority files.
+The repository's `.keiko/` ignore rule matches that nested segment, not its outer lifecycle directory.
+The existing bounded nearest-ancestor resolver canonicalizes its parent before the lock identity
+is selected, including allowed macOS system aliases and an absent state leaf. Raw ancestor policy
+checks precede that resolution. Dot components, redundant/trailing separators and platform case
+aliases cannot create another guard; conservative case folding may serialize distinct names on
+a case-sensitive macOS or Windows volume. Unrelated symlink ancestors remain refused.
+Command and guard exceptions retain their sanitized failure class on the existing
+`cli.lifecycle.native-owner` event. Only a tracking-state uncertainty uses the ownership-uncertain
+message; unrelated filesystem, configuration and transport failures do not claim that diagnosis.
+A native start first reserves `ui.pid`
+as `native-app-starting-v1` plus its launch identity, without claiming a BFF or owner PID. Missing
+first receipts and uncertain cleanup retain that reservation. Only a matching native terminal
+record may retire an uncertain attempt; known pre-spawn validation and failed OS spawning do not
+create a fictitious generation. A previously used launch identity cannot start another generation.
+Repair and uninstall retain pending, unknown and incompletely reaped native ownership.
+If the native owner positively knows it never forked a supervisor, it can publish a separate
+launch-bound `not-started` record with root zero. That record may retire only a pending attempt;
+it never establishes that a previously admitted root generation was reaped.
+
+After the root receipt, the actual PID record is published completely and atomically over the
+owned pending attempt, using the existing marked atomic-state staging namespace. Partial writes,
+flush, close or rename failure cannot expose a valid legacy prefix in place of a native record.
+Native records add the exact `native-app-v1` capability after the existing optional browser
+capability. Both CLI and coordinator readers retain canonical legacy compatibility and refuse
+unknown or truncated capabilities. Native commit requires the canonical native PID binding, an
+authenticated root metadata exchange, the held live root reference and durable ownership state.
+The selected private receipt hierarchy is rebound before and after publication, created directory
+links are flushed, and inaccessible receipt modes refuse. These pathname preflights do not claim
+atomic protection against an external same-UID ancestor replacement.
+
+Before commit, controller loss retires the provisional generation through the existing native
+stop/reap path. After durable commit, launching-CLI EOF leaves the native owner, its direct
+supervisor and the readonly metadata port alive. A lost commit ACK remains uncertain at the CLI;
+it cannot erase tracking or authorize a duplicate. The owner writes a protected, launch-bound
+terminal record only after the held root terminates, its supervisor reports zero remaining members,
+and that direct supervisor is positively reaped. A later CLI stop requires that native observation
+in addition to root termination. A file is never converted into a branded server reap receipt.
+Missing, partial or mismatched records and owner crashes remain held.
+
+For a managed Linux app, the same outer owner dispatches its selected update coordinator outside
+the retiring namespace. The main root uses a separate private stream (FD8); the readonly metadata
+port remains independent. Its closed, length-bounded messages select only the activation, plan
+digest, current coordinator digest, launch identity and original monotonic acceptance deadline.
+The owner authenticates each stream fragment against its held root reference. It attests the copied
+coordinator against its loaded executable, holds the direct coordinator child, and passes the held
+old-root reference and a private launch/plan-bound proof pipe. EOF cannot establish old-generation
+completion. Only the owner may publish that proof after its whole supervisor generation is reaped.
+The BFF publishes the actual coordinator PID before authorization and persists accepted intent
+before committing the transfer. Cancellation requires positive reaping of that direct child;
+delayed acceptance, commit or failure messages cannot substitute for the cancellation receipt.
+
+Application environment data follows the existing bounded KAE representation through a sealed,
+anonymous descriptor to the coordinator. It is inherited from the already admitted app generation,
+not selected by a command or pathname in the control stream. The native loader environments remain
+closed. Only the new app root receives the application values, overlaid with its new selected
+launch and state identity. The existing packet limits, original transaction deadlines and evidence
+redaction continue to apply; no provider configuration or value enters a native diagnostic.
+
+The coordinator starts a successor or restored generation through the same persistent app-owner
+role used by initial CLI launch. Startup retains its original exec deadline; provisional ownership
+is separately bounded by the transaction's original cleanup deadline. Until verified cleanup or
+verified restoration, the canonical PID record continues to name the retiring generation, whose
+whole-generation receipt remains held. This prevents a provisional successor exit from admitting
+a competing CLI start during filesystem replacement. Only after those mutations finish does the
+coordinator atomically publish the actual successor PID and request durable ownership. A positive
+commit acknowledgement releases the successor owner independently of the coordinator. Missing
+acknowledgement remains uncertainty. Socket availability uses Node's reuse semantics so TCP
+TIME_WAIT alone does not block a valid replacement; a live listener remains a refusal.
+
+These mechanisms do not substitute for installed-version, platform, interruption, restart or SSD
+qualification. In particular, a small native integration fixture is not a complete packaged Keiko
+update or an endorsement of an unexecuted platform.
+Retaining an already running native generation also requires the matching committed `owned`
+record after health, process identity and canonical PID capability checks. A healthy provisional
+root or a lost commit acknowledgement alone cannot supply that confirmation. Once a lost-ACK
+commit is durably confirmed by its owner, a later launcher may retain the same generation.
+
+These mechanisms do not by themselves admit an installed updater transition. Each update still needs
+authenticated coordinator selection, separate installed-current and running-owner identities,
+successor ownership and installed-version evidence described above.
+The macOS outer-owner path also remains unqualified. No third helper artifact or Linux sandbox
+egress exception is introduced.
+
 A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
 identity. It must attest the original tree and registration, then prove its own PID, version and
-loopback binding before readiness opens. Successful restoration settles a **failed update with
+loopback binding before readiness opens. POSIX and Windows resume admission use the plan's `startAt` deadline
+for N and its already-authorized `cleanupAt` deadline for restored N−1, matching the coordinator
+engine's phase grant. Verification can expire after `startAt`; that expiry must not prevent a
+still-authorized restoration. At or after the applicable deadline, resume refuses. Selecting the
+existing restoration phase does not extend either deadline or bypass the image, capsule or start
+gate checks. Existing `restored-start` and `restored-verify` receipts retain their meaning; admission
+alone proves neither runtime readiness nor settled recovery.
+Windows selects that plan deadline immediately after loading the capsule, before image, parent,
+volume, phase and gate work. It cannot replace an expired phase with a fresh control interval;
+unavailable wall time and monotonic overflow refuse through the existing conversion owner.
+Both native exact-read owners preserve that same absolute monotonic deadline through the operation:
+they check before waiting, after readiness and before accepting a completed read. A buffered or
+partial frame becoming available at or after expiry cannot renew authority. Interrupted or repeated
+reads retain the original deadline. Failure to observe a valid clock or complete timely response
+retains recovery ownership; no PID/port absence or transport EOF can substitute for native proof.
+Successful restoration settles a **failed update with
 recovery settled**, not a successful update, cancellation, or automatic retry. The server commits
 that result through revision-checked state; uncertain termination, incomplete restore evidence, or
 a persistence failure keeps recovery ownership. A crash between semantic verification and its
