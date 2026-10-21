@@ -1,6 +1,17 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  truncateSync,
+  writeSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -116,6 +127,36 @@ describe("portable ZIP archive writer", () => {
     expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
     writeFileSync(archive, "not a ZIP");
     expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
+  });
+
+  it("refuses truncated comments, every ZIP64 entry sentinel and excessive metadata allocation", () => {
+    const archive = join(temporaryRoot(), "payload.zip");
+    writeZipArchiveEntries(archive, [{ name: "Keiko/one", data: Buffer.from("one") }]);
+    const valid = readFileSync(archive);
+    const missingComment = Buffer.from(valid);
+    missingComment.writeUInt16LE(1, missingComment.length - 2);
+    writeFileSync(archive, missingComment);
+    expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
+    for (const fieldOffset of [20, 24, 42]) {
+      const invalid = Buffer.from(valid);
+      invalid.writeUInt32LE(0xffffffff, centralDirectoryOffset(invalid) + fieldOffset);
+      writeFileSync(archive, invalid);
+      expect(() => readZipArchiveUncompressedSize(archive)).toThrow();
+    }
+    const directorySize = 32 * 1024 * 1024 + 1;
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50);
+    end.writeUInt16LE(1, 8);
+    end.writeUInt16LE(1, 10);
+    end.writeUInt32LE(directorySize, 12);
+    truncateSync(archive, directorySize + end.length);
+    const fd = openSync(archive, "r+");
+    try {
+      writeSync(fd, end, 0, end.length, directorySize);
+    } finally {
+      closeSync(fd);
+    }
+    expect(() => readZipArchiveUncompressedSize(archive)).toThrow(/central directory/u);
   });
 
   it("writes deterministic, directory-entry-free archives with POSIX entry names", async () => {

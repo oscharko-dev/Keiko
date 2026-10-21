@@ -153,10 +153,8 @@ export function createPortableHandoffNativeCopyVerifier(
     if (hostPlatform === "darwin") {
       const expectedTeamIdentifier =
         options.macosExpectedTeamIdentifier ?? macosReleaseTeamIdentifier();
-      if (expectedTeamIdentifier === undefined) {
-        await verifyPlanBoundCopy(input);
-        return;
-      }
+      await verifyPlanBoundCopy(input);
+      if (expectedTeamIdentifier === undefined) return;
       await verifyMacosCopy(input, options.macosRun ?? runCommand, expectedTeamIdentifier);
       return;
     }

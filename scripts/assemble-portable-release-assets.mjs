@@ -140,6 +140,7 @@ function commonIdentity(manifest) {
     packageVersion: field(manifest, "product", "packageVersion"),
     releaseImpact: {
       catalogPath: field(manifest, "releaseImpact", "catalogPath"),
+      catalog: field(manifest, "releaseImpact", "catalog"),
       entryId: field(manifest, "releaseImpact", "entryId"),
       entryPackageVersion: field(manifest, "releaseImpact", "entryPackageVersion"),
       entryReleaseTag: field(manifest, "releaseImpact", "entryReleaseTag"),

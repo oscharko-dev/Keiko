@@ -187,6 +187,17 @@ The release-impact catalog remains the authoritative source of compatibility and
 It records whether a release requires restart, repair, local reindexing, migration, manual review,
 or other user action. It is the only compatibility/remediation authority for this release line.
 
+A future portable release carries the stable entries of that same catalog in
+`releaseImpact.catalog`, inside the Keiko-signed manifest. The installed reader validates the
+complete catalog, its unique entry identities, and its exact target entry before resolving all
+intermediate impacts. Remote prose and unauthenticated catalog fields cannot supply this authority.
+The manifest remains bounded to 1 MiB; archive expansion remains bounded to 2 GiB. The existing
+`update.release-trust.verify` event records the verified catalog entry count without catalog bodies.
+An already shipped reader that only understands its bundled catalog cannot acquire this behavior
+through release metadata alone; such installations require an explicit verified bootstrap before
+subsequent in-app updates. Historical release assets remain immutable.
+
+
 External release and asset metadata lookups must route through the governed server-side egress
 surface. Browser-tier code must not fetch GitHub update metadata or portable assets directly. Proxy,
 custom-CA, timeout, and byte-limit behavior follows ADR-0038. Proxy URLs with embedded credentials

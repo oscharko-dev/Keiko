@@ -7,6 +7,7 @@ import {
 } from "@oscharko-dev/keiko-security/portable-release-trust";
 import { gatewayFetch, readBytesCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import {
+  type ReleaseImpactCatalog,
   type UpdatePreflightBlocker,
   type UpdatePreflightPortableInstallability,
   type UpdatePortableSidecarSummary,
@@ -38,7 +39,12 @@ import {
 } from "./update-portable-sidecar-verification.js";
 import { portableManifestGenerationSchemaVerified } from "./update-portable-windows-generation.js";
 
-const MAX_PORTABLE_MANIFEST_BYTES = 256_000;
+import {
+  portableImpactMetadataValid,
+  portableReleaseImpactCatalog,
+} from "./update-preflight-portable-impact.js";
+
+const MAX_PORTABLE_MANIFEST_BYTES = 1_048_576;
 const MAX_CHECKSUM_BYTES = 32_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
 const PORTABLE_EVIDENCE_DEADLINE_MS = 30_000;
@@ -50,16 +56,19 @@ interface TextAsset {
 }
 
 interface PortableAssetResolution {
+  readonly releaseImpactCatalog?: ReleaseImpactCatalog | undefined;
   readonly installability: UpdatePreflightPortableInstallability;
   readonly blockers: readonly UpdatePreflightBlocker[];
   readonly warnings: readonly string[];
 }
 
 interface ValidatedPortableManifest {
+  readonly releaseImpactCatalog?: ReleaseImpactCatalog | undefined;
   readonly archiveSha256: string;
   readonly releaseTrust?: {
     readonly keyId: string;
     readonly metadataVersion: number;
+    readonly catalogEntryCount?: number | undefined;
   };
   readonly uncompressedSizeBytes: number;
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
@@ -314,18 +323,32 @@ function validateManifest(
   }
   if (!validManifestBooleans(manifest, nativeVerified, releaseTrust.ok)) return undefined;
   if (!reviewedBindingValid(manifest, release, archive, target, nativeVerified)) return undefined;
+  const releaseImpactCatalog = portableReleaseImpactCatalog(
+    manifest.releaseImpact,
+    release.targetVersion,
+    releaseTrust.ok,
+  );
+  if (!portableImpactMetadataValid(manifest.releaseImpact, releaseImpactCatalog)) return undefined;
   return {
+    releaseImpactCatalog,
     archiveSha256: sha256,
-    ...(releaseTrust.ok
-      ? {
-          releaseTrust: {
-            keyId: releaseTrust.keyId,
-            metadataVersion: releaseTrust.metadataVersion,
-          },
-        }
-      : {}),
+    ...releaseTrustEvidence(releaseTrust, releaseImpactCatalog),
     uncompressedSizeBytes,
     sidecarRuntimes: verifyPortableManifestSidecars(manifest, target).summaries,
+  };
+}
+
+function releaseTrustEvidence(
+  trust: PortableReleaseTrustVerification,
+  catalog: ReleaseImpactCatalog | undefined,
+): Pick<ValidatedPortableManifest, "releaseTrust"> {
+  if (!trust.ok) return {};
+  return {
+    releaseTrust: {
+      keyId: trust.keyId,
+      metadataVersion: trust.metadataVersion,
+      ...(catalog === undefined ? {} : { catalogEntryCount: catalog.entries.length }),
+    },
   };
 }
 
@@ -524,9 +547,7 @@ async function resolvePortableEvidence(
     checksumAsset,
     manifestSha256: manifestText.sha256,
     checksumSha256: checksum.sha256,
-    archiveSha256: validated.archiveSha256,
-    uncompressedSizeBytes: validated.uncompressedSizeBytes,
-    sidecarRuntimes: validated.sidecarRuntimes,
+    ...validated,
   });
 }
 
@@ -646,6 +667,7 @@ function sidecarResolution(target: UpdatePortableTarget): PortableAssetResolutio
 }
 
 function eligibleResolution(input: {
+  readonly releaseImpactCatalog?: ReleaseImpactCatalog | undefined;
   readonly release: PortableRelease;
   readonly target: UpdatePortableTarget;
   readonly archive: GitHubAsset;
@@ -658,6 +680,7 @@ function eligibleResolution(input: {
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }): PortableAssetResolution {
   return {
+    releaseImpactCatalog: input.releaseImpactCatalog,
     installability: {
       source: "github-release-asset",
       target: input.target,

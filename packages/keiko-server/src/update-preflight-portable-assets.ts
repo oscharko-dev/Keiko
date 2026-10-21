@@ -1,5 +1,6 @@
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import {
+  type ReleaseImpactCatalog,
   type UpdatePreflightBlocker,
   type UpdatePreflightPortableInstallability,
   type UpdatePreflightReleaseSummary,
@@ -54,6 +55,7 @@ export type PortableGitHubReleaseOutcome =
     }
   | {
       readonly status: "live";
+      readonly releaseImpactCatalog?: ReleaseImpactCatalog | undefined;
       readonly targetVersion: string;
       readonly release: UpdatePreflightReleaseSummary;
       readonly portableAsset: UpdatePreflightPortableInstallability;
@@ -240,6 +242,7 @@ export async function fetchPortableGitHubReleaseAssets(
       targetVersion: result.release.targetVersion,
       release: result.release.release,
       portableAsset: resolution.installability,
+      releaseImpactCatalog: resolution.releaseImpactCatalog,
       blockers: resolution.blockers,
       warnings: resolution.warnings,
     };

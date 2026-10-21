@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b485b6cffd002086f383fac0088da847c9e2009713cdca7bf3d7abd8dad48fc8",
+    "catalogDigest": "4725a19ab54ebf8fde05d47214bdc9bedc0b292ebe0c1a1fd71f0f2b3f363032",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36734,8 +36734,8 @@
         "failureClasses": ["update-runtime"],
         "proofIds": ["update.install-mode.detected.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:268",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:347"]
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:276",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:355"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36788,7 +36788,7 @@
         "proofIds": ["update.portable-asset.redirect-refused.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:31",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:195"]
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:196"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36839,7 +36839,7 @@
         "proofIds": ["update.portable-fetch.failed.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:75",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:215"]
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:216"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36939,6 +36939,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": false
+          },
+          "catalogEntryCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -36949,8 +36954,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:112",
         "emitterSites": [
-          "packages/keiko-server/src/update-preflight-activity.ts:234",
-          "packages/keiko-server/src/update-preflight-activity.ts:253"
+          "packages/keiko-server/src/update-preflight-activity.ts:235",
+          "packages/keiko-server/src/update-preflight-activity.ts:258"
         ]
       },
       {
@@ -80241,6 +80246,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "catalogEntryCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "keyId",
                   "type": "string",
                   "dataClass": "opaque-id",
@@ -96102,7 +96113,7 @@
     {
       "op": "update.install-mode.detected",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:271",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:279",
       "package": "keiko-server"
     },
     {

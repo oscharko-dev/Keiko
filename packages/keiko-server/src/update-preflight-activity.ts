@@ -144,6 +144,7 @@ const RELEASE_TRUST_VERIFY_OPERATION = defineActivityLogOperation({
     },
     keyId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     metadataVersion: { type: "integer", dataClass: "count", required: false },
+    catalogEntryCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -246,7 +247,11 @@ export function recordReleaseTrustFailure(
 export function recordReleaseTrustSuccess(
   sink: ServerLogSink | undefined,
   target: UpdatePortableTarget,
-  trust: { readonly keyId: string; readonly metadataVersion: number },
+  trust: {
+    readonly keyId: string;
+    readonly metadataVersion: number;
+    readonly catalogEntryCount?: number | undefined;
+  },
   correlationId?: string,
 ): void {
   sink?.write(
@@ -258,6 +263,9 @@ export function recordReleaseTrustSuccess(
         target,
         keyId: trust.keyId,
         metadataVersion: trust.metadataVersion,
+        ...(trust.catalogEntryCount === undefined
+          ? {}
+          : { catalogEntryCount: trust.catalogEntryCount }),
         completeness: "complete",
         loss: "none",
       },

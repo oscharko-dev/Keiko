@@ -446,11 +446,18 @@ function portableManifest(
   };
 }
 
-function releaseTrustedManifest(target: UpdatePortableTarget): {
+function releaseTrustedManifest(
+  target: UpdatePortableTarget,
+  catalog?: unknown,
+): {
   readonly manifest: Record<string, unknown>;
   readonly trustedKey: PortableReleaseTrustedKey;
 } {
   const unsigned = portableManifest(target);
+  if (catalog !== undefined) {
+    (unsigned.releaseImpact as Record<string, unknown>).catalog = catalog;
+    (unsigned.releaseImpact as Record<string, unknown>).entryId = "0.2.11-a";
+  }
   const security = unsigned.security as Record<string, unknown>;
   security.verificationPolicy = "release";
   security.verificationStatus = "platform-signature-optional";
@@ -778,6 +785,63 @@ describe("update preflight service", () => {
     );
     deps.store.close();
   });
+
+  it.each([false, true])(
+    "resolves future impact only from authenticated metadata (tampered: %s)",
+    async (tampered) => {
+      const target: UpdatePortableTarget = "macos-arm64";
+      const trusted = releaseTrustedManifest(target, {
+        schemaVersion: 1,
+        entries: baseCatalog().entries.filter(({ packageVersion }) =>
+          isStableVersionString(packageVersion),
+        ),
+      });
+      if (tampered) {
+        (trusted.manifest.releaseImpact as Record<string, unknown>).catalog = {
+          schemaVersion: 1,
+          entries: [],
+        };
+      }
+      const fetchImpl = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/releases/latest"))
+          return Promise.resolve(jsonResponse(portableRelease(target)));
+        if (url.endsWith("-portable-manifest.json"))
+          return Promise.resolve(jsonResponse(trusted.manifest));
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      });
+      const events: ServerLogEvent[] = [];
+      const deps = depsWith(fetchImpl, {
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        updatePortableReleaseNow: () => Date.parse("2026-09-11T08:00:00.000Z"),
+        updatePortableReleaseTrustedKeys: [trusted.trustedKey],
+      });
+      try {
+        const report = await runUpdatePreflight(deps, {
+          currentVersion: "0.2.10",
+          bundledCatalog: { schemaVersion: 1, entries: [] },
+          installMode: () => portableMode(target),
+        });
+        expect(report.oneClickEligible).toBe(!tampered);
+        if (!tampered) {
+          expect(report.impact?.entries).toHaveLength(1);
+          const verified = events.find(({ op }) => op === "update.release-trust.verify");
+          expect(verified?.extra?.catalogEntryCount).toBe(2);
+          expect(verified?.extra?.status).toBe("succeeded");
+          expect(JSON.stringify(events)).not.toContain("Catalog summary");
+        } else
+          expect(report.blockers.map(({ code }) => code)).toContain("portable-signing-unverified");
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
 
   it("logs a body-free security event when a portable asset redirect is refused", async () => {
     const target: UpdatePortableTarget = "macos-arm64";

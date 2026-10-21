@@ -402,7 +402,7 @@ export function readZipArchiveUncompressedSize(archivePath) {
   }
 }
 
-function uncompressedDirectorySize(fd) {
+function expandedZipDirectory(fd) {
   const size = fstatSync(fd).size;
   const tailLength = Math.min(size, END_OF_CENTRAL_DIRECTORY_MIN_BYTES + 0xffff);
   const tail = readAt(fd, size - tailLength, tailLength);
@@ -411,15 +411,37 @@ function uncompressedDirectorySize(fd) {
   const directoryOffset = tail.readUInt32LE(end + 16);
   const directorySize = tail.readUInt32LE(end + 12);
   assertZip32Directory(count, directoryOffset);
-  if (count > 60_000 || directoryOffset + directorySize !== size - tailLength + end) {
+  if (
+    end + END_OF_CENTRAL_DIRECTORY_MIN_BYTES + tail.readUInt16LE(end + 20) !== tail.length ||
+    tail.readUInt16LE(end + 4) !== 0 ||
+    tail.readUInt16LE(end + 6) !== 0 ||
+    tail.readUInt16LE(end + 8) !== count
+  )
+    throw new Error("ZIP end record is incomplete or uses multiple disks");
+  if (
+    count > 60_000 ||
+    directorySize > 32 * 1024 * 1024 ||
+    directoryOffset + directorySize !== size - tailLength + end
+  ) {
     throw new Error("ZIP central directory is malformed or exceeds the entry ceiling");
   }
   const directory = readAt(fd, directoryOffset, directorySize);
+  return { directory, count };
+}
+
+function uncompressedDirectorySize(fd) {
+  const { directory, count } = expandedZipDirectory(fd);
+  const directorySize = directory.length;
   let offset = 0;
   let expanded = 0;
   for (let index = 0; index < count; index += 1) {
     const entry = readCentralEntry(directory, offset);
-    if (entry.next > directorySize || entry.size === 0xffffffff) {
+    if (
+      entry.next > directorySize ||
+      entry.size === 0xffffffff ||
+      entry.compressedSize === 0xffffffff ||
+      entry.localOffset === 0xffffffff
+    ) {
       throw new Error("ZIP central directory entry is malformed or uses ZIP64");
     }
     expanded += entry.size;
