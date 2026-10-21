@@ -35,7 +35,7 @@ if (workerData.mode === "bind-refuse") {
       first: processFileOwnerUid(workerData.descriptor ?? 9, ...identity),
       pid: currentProcessId(),
       kind: currentProcessScopeKind(),
-      liveness: [2001, 2002, 2003].map(processLiveness),
+      liveness: [2001, 2002, 2003].map((pid) => processLiveness(pid)),
       observation: currentProcessScopeObservation(),
     });
   }

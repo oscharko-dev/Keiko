@@ -283,6 +283,7 @@ describe("dev quality workflows", () => {
       "coverage-sonar",
       "build-scan-sbom-smoke",
       "cross-platform-smoke",
+      "firefox-smoke",
       "ui",
     ];
 

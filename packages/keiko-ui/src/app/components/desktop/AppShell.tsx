@@ -337,6 +337,7 @@ export const BrowserApprovalNotice = dynamic(
       .catch((error: unknown) => unavailableStartupNotice(error, "browser-approval")),
   { ssr: false, loading: () => null },
 );
+const BROWSER_APPROVAL_NOTICE = <BrowserApprovalNotice compact />;
 
 // Issue #1207 (ADR-0042 D3.6) — the startup update notice renders nothing until its own preflight
 // resolves, and it is gated on a workspace that has already loaded, so neither it nor the release
@@ -3144,13 +3145,13 @@ function AppShellInner(): ReactNode {
                     {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
                     <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
                     <Header
+                      notice={BROWSER_APPROVAL_NOTICE}
                       layoutLocked={ws.layoutLocked}
                       onToggleLayoutLock={ws.api.toggleLayoutLock}
                       onTileAll={ws.api.tileAll}
                       onSplitFront={ws.api.splitFront}
                       onCascade={ws.api.cascade}
                     />
-                    <BrowserApprovalNotice />
                     <div className="mid">
                       {needsGatewaySetup ? null : (
                         <LeftRail

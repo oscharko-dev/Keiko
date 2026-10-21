@@ -76,6 +76,31 @@ afterEach(() => {
 });
 
 describe("browser notice authentication lifecycle", () => {
+  it("returns to the compact invoker after a pointer-opened dialog without granting authority", async () => {
+    active = false;
+    render(<BrowserApprovalNotice compact />);
+    const connect = await screen.findByRole("button", { name: "Connect browser" });
+    expect(document.body).toHaveFocus();
+    fireEvent.click(connect);
+    const dialog = screen.getByRole("dialog", { name: "Connect this browser" });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    expect(screen.getByRole("button", { name: "Request approval" })).toBeEnabled();
+    expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+    expect(api.approveBrowserRequest).not.toHaveBeenCalled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(connect).toHaveFocus());
+  });
+
+  it("keeps compact inventory retry read-only", async () => {
+    active = false;
+    vi.mocked(api.inspectBrowserApprovals).mockRejectedValueOnce(new TypeError("offline"));
+    render(<BrowserApprovalNotice compact />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await screen.findByRole("button", { name: "Connect browser" });
+    expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+    expect(api.approveBrowserRequest).not.toHaveBeenCalled();
+  });
+
   it("rechecks a local self-revocation without waiting for focus", async () => {
     render(
       <>

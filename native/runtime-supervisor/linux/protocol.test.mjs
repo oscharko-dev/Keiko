@@ -24,24 +24,6 @@ const execute = promisify(execFile);
 const source = fileURLToPath(new URL("./keiko_runtime_supervisor.c", import.meta.url));
 const raw = await readFile(source, "utf8");
 const code = stripStringLiteralBodies(prepareCSource(raw));
-for (const token of [
-  "SYS_clone3",
-  "CLONE_NEWUSER",
-  "CLONE_NEWPID",
-  "CLONE_PIDFD",
-  "SYS_pidfd_open",
-  "SYS_pidfd_send_signal",
-  "SO_PASSCRED",
-  "SCM_CREDENTIALS",
-  "PR_SET_NO_NEW_PRIVS",
-  "PR_SET_DUMPABLE",
-  "PR_GET_DUMPABLE",
-  "SYS_capset",
-  "SYS_close_range",
-  "WNOHANG",
-])
-  assert.match(code, new RegExp(`\\b${token}\\b`, "u"));
-assert.doesNotMatch(code, /\b(?:system|popen|execlp|execvp)\s*\(/u);
 
 async function compile(name, directory) {
   const input = fileURLToPath(new URL(`./${name}.c`, import.meta.url));
@@ -453,6 +435,25 @@ async function qualifyRequested(options) {
 }
 
 await test("Linux generation source, protocol and requested kernel boundaries", async () => {
+  // Refuse an invalid source contract before compiling or entering native qualification.
+  for (const token of [
+    "SYS_clone3",
+    "CLONE_NEWUSER",
+    "CLONE_NEWPID",
+    "CLONE_PIDFD",
+    "SYS_pidfd_open",
+    "SYS_pidfd_send_signal",
+    "SO_PASSCRED",
+    "SCM_CREDENTIALS",
+    "PR_SET_NO_NEW_PRIVS",
+    "PR_SET_DUMPABLE",
+    "PR_GET_DUMPABLE",
+    "SYS_capset",
+    "SYS_close_range",
+    "WNOHANG",
+  ])
+    assert.match(code, new RegExp(`\\b${token}\\b`, "u"));
+  assert.doesNotMatch(code, /\b(?:system|popen|execlp|execvp)\s*\(/u);
   const [result] = await Promise.allSettled([
     qualifyRequested(qualificationOptions(process.argv.slice(2))),
   ]);

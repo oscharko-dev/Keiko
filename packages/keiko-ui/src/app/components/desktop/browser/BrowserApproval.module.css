@@ -19,6 +19,24 @@
 .cmpNotice {
   margin: 12px;
 }
+.cmpCompactNotice {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: nowrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.cmpNotice.cmpCompactNotice button {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  font-size: var(--text-body-sm);
+}
 .cmpPanel p,
 .cmpDialog p {
   line-height: 1.5;

@@ -2487,3 +2487,13 @@ cap, two workers, 3072 MiB heap, distinct blob names, every-suite-success guard 
 Focused tests execute the actual completeness guard for empty, missing, complete and extra sets.
 Complete final-source local release coverage and exact-head hosted checks remain integration
 conditions. Original unfinished functional acceptance remains in #4051.
+
+## Checkpoint 93 — stable browser approval and bounded CI closeout
+
+Late browser inventory no longer moves navigation or overlays Composer controls. The existing header spacer holds the compact action at fixed geometry; the original inventory, approval dialog and authority remain. Four native EN/DE pointer cases retain header/workspace/tool bounds. Thirteen targeted controls cover the actual rejected-overlay failures, forced colors, private Skills, context compaction, native Start/Stop/recovery and narrow modal focus/Retry. The stopped overlay run remains rejected.
+
+An actual WebKit focus failure was reproduced with the original pointer and Escape assertions: pointer activation left focus on the body. The Connect handler now focuses its own button before opening the unchanged shared dialog. The actual unit case and WebKit case fail before the fix and pass afterward; body-free focus observations are retained. Final whole Chromium and WebKit runs pass 125 and 123 cases respectively.
+
+The native fixture retains all original source assertions at the start of its existing qualification test. An actual-source regression pin preserves one healthy and two failing controls before the correction, then three passes, without compiling or launching native code. Firefox preserves its complete original 123-case selection across two independent one-worker shards with the original 20-minute step cap. Required ui and exact-tree evidence reject every missing, skipped, cancelled or failed shard. Hosted execution remains required.
+
+The [source-bound packet](browser-notice-navigation-repair.json) records actual current local gates, source epochs and browser results. Historical 7df complete coverage is joined only by unchanged source identity, never renamed a current run or reused as new-head LCOV. Exact-head hosted checks, authenticated Sonar association/applicability decisions, protected integration, publication and the real SSD updater test remain explicit. Unfinished original acceptance stays in #4051.

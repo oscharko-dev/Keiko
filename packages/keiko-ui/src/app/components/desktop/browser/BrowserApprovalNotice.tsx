@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEventHandler, type ReactNode } from "react";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { BrowserApprovalDialog } from "./BrowserApprovalDialog";
 import { useBrowserApprovalInventory } from "./useBrowserApprovalInventory";
 import styles from "./BrowserApproval.module.css";
 
-export function BrowserApprovalNotice(): ReactNode {
-  const t = useTranslate();
+export function BrowserApprovalNotice({
+  compact = false,
+}: {
+  readonly compact?: boolean;
+}): ReactNode {
   const [open, setOpen] = useState(false);
   const inventory = useBrowserApprovalInventory();
   const previous = useRef(inventory.result?.state);
@@ -22,15 +25,15 @@ export function BrowserApprovalNotice(): ReactNode {
   return (
     <>
       {unavailable || inventory.failed ? (
-        <aside className={styles.cmpNotice} aria-label={t("browserApproval.title")}>
-          <span>{t(inventory.failed ? "browserApproval.failed" : "browserApproval.notice")}</span>
-          <button
-            type="button"
-            onClick={inventory.failed ? inventory.refresh : (): void => setOpen(true)}
-          >
-            {t(inventory.failed ? "browserApproval.retry" : "browserApproval.open")}
-          </button>
-        </aside>
+        <BrowserApprovalBanner
+          compact={compact}
+          failed={inventory.failed}
+          onRetry={inventory.refresh}
+          onOpen={(event): void => {
+            event.currentTarget.focus();
+            setOpen(true);
+          }}
+        />
       ) : null}
       {open ? (
         <BrowserApprovalDialog
@@ -41,5 +44,28 @@ export function BrowserApprovalNotice(): ReactNode {
         />
       ) : null}
     </>
+  );
+}
+
+interface BannerProps {
+  readonly compact: boolean;
+  readonly failed: boolean;
+  readonly onRetry: () => void;
+  readonly onOpen: MouseEventHandler<HTMLButtonElement>;
+}
+
+function BrowserApprovalBanner({ compact, failed, onRetry, onOpen }: BannerProps): ReactNode {
+  const t = useTranslate();
+  const message = t(failed ? "browserApproval.failed" : "browserApproval.notice");
+  return (
+    <aside
+      className={`${styles.cmpNotice} ${compact ? styles.cmpCompactNotice : ""}`}
+      aria-label={t("browserApproval.title")}
+    >
+      <span className={compact ? "visually-hidden" : undefined}>{message}</span>
+      <button type="button" title={message} onClick={failed ? onRetry : onOpen}>
+        {t(failed ? "browserApproval.retry" : "browserApproval.open")}
+      </button>
+    </aside>
   );
 }
