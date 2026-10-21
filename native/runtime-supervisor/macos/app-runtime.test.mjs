@@ -5,10 +5,6 @@ import { encodeAppEnvironmentPacket } from "../../../packages/keiko-contracts/sr
 import { header, launchPacket, readBytes, response, streamReader } from "../protocol-harness.mjs";
 
 const [helper, fixture] = process.argv.slice(2);
-assert.equal(process.platform, "darwin");
-assert.equal(typeof helper, "string");
-assert.equal(typeof fixture, "string");
-assert.equal(spawnSync(helper, ["--probe-app-runtime"], { env: {} }).status, 0);
 
 async function qualify(controlBytes, expectedKind) {
   const child = spawn(helper, ["--app-runtime"], {
@@ -58,6 +54,10 @@ async function qualify(controlBytes, expectedKind) {
 }
 
 test("macOS private app lifecycle, split control, EOF and malformed control", async () => {
+  assert.equal(process.platform, "darwin");
+  assert.equal(typeof helper, "string");
+  assert.equal(typeof fixture, "string");
+  assert.equal(spawnSync(helper, ["--probe-app-runtime"], { env: {} }).status, 0);
   assert.equal((await qualify(header("KRC1", 2, 0), 2)).code, 0);
   assert.equal((await qualify(header("KRC1", 3, 0), 2)).code, 0);
   assert.equal((await qualify(undefined, 2)).code, 0);
