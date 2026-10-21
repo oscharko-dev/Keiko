@@ -97,7 +97,7 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - **Future release metadata.** Signed manifests carry future release impacts, and archives declare measured expanded sizes. Invalid, altered or oversized inputs remain refused.
 
 Already published 1.2.5 installations need the verified updater bootstrap before automatic updates.
-Back up local state and preserve private keys during that repair. The [repair evidence](docs/qa/portable-updater-repair-4055.md)
+Back up local state and preserve private keys during that repair. The [repair evidence](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/portable-updater-repair-4055.md)
 distinguishes local bootstrap and fixture qualification from the live public-release SSD test,
 which remains pending deployment. Installed Windows and Linux cross-version qualification is not
 claimed by the macOS repair.
