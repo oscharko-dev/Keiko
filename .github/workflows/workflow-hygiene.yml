@@ -96,7 +96,7 @@ jobs:
     steps:
       - name: Check out repository
         id: checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download and verify actionlint
@@ -161,7 +161,7 @@ jobs:
           annotations: true
       - name: Scan dependency manifests with OSV Scanner
         if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
-        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
           # `--config` is passed explicitly rather than relying on directory auto-discovery, so the
           # committed triage record in osv-scanner.toml is the single, reviewable source of every
