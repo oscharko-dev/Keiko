@@ -1016,8 +1016,13 @@
   },
   "limits": [
     "The direct Linux --compile attempt returned native-unavailable kind3/code6 and remains unqualified. Decoder-only controls do not clear kernel or installed-update acceptance.",
-    "Six individually evidenced S9382 applicability decisions and actual stronger Banking Grade association require authenticated owner action; no suppression, accepted technical debt or gate weakening.",
+    "Six individually evidenced S9382 applicability decisions require authenticated owner review and exact-head Cloud/ci evidence. ADR-0134 D1 deliberately keeps the free-plan Sonar way active; the required repository verifier independently enforces all stricter Keiko metrics and drift-checks the dormant Banking Grade definition. No custom association, paid plan, suppression, accepted debt or threshold change is required or authorized.",
     "Final clean-commit assembled-package proof, dependency restoration, exact-head required checks/reviews, protected merge, release 1.2.5 and actual SSD updater UI test remain integration conditions at packet creation.",
     "All unfinished original acceptance remains in #4051; no repeatable skill advantage, historic private fixture recovery, installed two-update canary or SSD continuity is inferred."
-  ]
+  ],
+  "sonarArchitectureCorrection": {
+    "authority": "docs/adr/ADR-0134-sonarcloud-free-plan-scope-and-native-compensation.md D1 and D6",
+    "correction": "The initial packet incorrectly treated custom-gate reassignment as an integration condition. That was an unverified assumption, contradicted by the governing ADR and actual provider plan. The existing free-plan native gate plus required strict repository verifier remain unchanged.",
+    "runtimeOrGatePolicyChanged": false
+  }
 }
