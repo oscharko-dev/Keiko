@@ -39,9 +39,9 @@ Existing linked decisions and executable gates remain the source to check before
 - **Editor perf evidence does not need an in-flight regeneration — except for toolchain edits.**
   The pull-request gate validates evidence integrity + budgets only (ADR-0139 D10), and since
   ADR-0156 D2 it asks the toolchain-freshness question only of a diff that actually touches
-  `D12_MEASUREMENT_TOOLCHAIN_PATHS`. Regenerate in-flight (`npm run perf:evidence:regen`) only when
-  your change edits that list — changing the ruler requires re-measuring with it. Real per-PR perf
-  protection lives in the deterministic bundle gates (`check:editor-release-evidence`,
+  `D12_MEASUREMENT_TOOLCHAIN_PATHS`. Regenerate in-flight (`npm run perf:evidence:regen`) when
+  your diff touches a path listed in that set — changing the ruler requires re-measuring with it.
+  Real per-PR perf protection lives in the deterministic bundle gates (`check:editor-release-evidence`,
   `check:editor-bundle-size`).
 - **The D12 reference environment is a developer machine, not CI (ADR-0156 D6).** The budgets are
   absolute numbers calibrated on the pinned container at linux/arm64 with >=14 logical cores, which
