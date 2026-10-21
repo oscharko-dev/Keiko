@@ -680,3 +680,113 @@ describe("owned refusal marker pair responsibility (#3918)", () => {
     },
   );
 });
+
+describe("owned raw-registration transport responsibility (#3918)", () => {
+  it("closes the transport option independently and retains its history", () => {
+    const previous = responsibilityPolicy([metadataSourceRecord(true)]);
+    const current = responsibilityPolicy([metadataSourceRecord(true, true)]);
+    expect(validatePolicy(current, [previous])).toEqual([]);
+    expect(validatePolicy(previous, [current])).toEqual(["responsibility-shrank"]);
+    expect(validatePolicy(responsibilityPolicy([metadataSourceRecord(false, true)]))).toEqual([]);
+    for (const mutate of [
+      (record) => {
+        record.ownedRegistrationTransport = false;
+      },
+      (record) => {
+        delete record.metadataSourceInput;
+      },
+      (record) => {
+        record.ownedMarkerPair = false;
+      },
+      (record) => {
+        record.kind = "validator";
+      },
+      (record) => {
+        record.ownedPredicateStage = true;
+      },
+    ]) {
+      const invalid = structuredClone(current);
+      mutate(invalid.responsibilities[0]);
+      expect(validatePolicy(invalid)).not.toEqual([]);
+    }
+  });
+
+  it("requires exact completed parent proofs for all transport slots on both dispatches", async () => {
+    const own = createMetadataSourceFixture("valid", true, true);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const parent = report.assessments[0];
+    expect(parent.structural).toBe("ready");
+    expect(parent.slots).toHaveLength(6);
+    for (const kind of ["raw-property-observation", "public-parser"]) {
+      // Non-object findings isolate proof gating; these are not native widening grants.
+      const slots = parent.slots.slice(3).map((slot) => ({
+        ...slot,
+        rule: "anti-slop/no-known-value-widening",
+      }));
+      const assessment = { ...parent, kind, slots };
+      assessment.proofs = parent.proofs.map((proof) => ({ ...proof, executed: true }));
+      assessment.proofAssertions = own.record.proofAssertions.map((proof) => ({
+        ...proof,
+        status: "passed",
+      }));
+      if (kind === "public-parser")
+        for (const slot of slots) slot.contributingResponsibilityIds = [assessment.id];
+      const findings = slots.map(({ path, rule, line, column }) => ({ path, rule, line, column }));
+      const adapted = () =>
+        adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [assessment] })
+          .violations;
+      expect(adapted()).toEqual(findings);
+      assessment.semantic = "qualified";
+      expect(adapted()).toEqual([]);
+      const completed = assessment.proofAssertions;
+      assessment.proofAssertions = completed.slice(0, 1);
+      expect(adapted()).toEqual(findings);
+      assessment.proofAssertions = completed;
+      slots[1].registrationTransportRoot = {
+        ...slots[1].registrationTransportRoot,
+        recordId: "other-parent",
+      };
+      expect(adapted()).toEqual([findings[1]]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each(["valid", "unchecked-runtime"])(
+    "retains actual %s parent public transport proofs",
+    async (variant) => {
+      const own = createMetadataSourceFixture("valid", true, true);
+      await installSemanticFixtureTools(own);
+      const path = "packages/alpha/tsconfig.json";
+      const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+      config.compilerOptions.lib.push("DOM");
+      own.put(path, config);
+      const runtime = "packages/alpha/dist/owner.js";
+      const original = readFileSync(join(own.root, runtime), "utf8");
+      if (variant === "unchecked-runtime") {
+        const changed = original.replace(
+          "if (registration !== undefined) {",
+          "if (registration !== undefined && Object.keys(registration).length > 0) {",
+        );
+        expect(changed).not.toBe(original);
+        own.put(runtime, changed);
+      }
+      try {
+        const subject = await collectPolicySubject(own.root);
+        const pending = assessPolicyResponsibilities(subject, own.policy);
+        expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
+        expect(pending.assessments[0].slots).toHaveLength(6);
+        if (variant === "unchecked-runtime") {
+          await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+            "semantic-proof-execution-failed",
+          );
+          return;
+        }
+        const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
+        expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+        expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+      } finally {
+        own.put(runtime, original);
+      }
+    },
+  );
+});

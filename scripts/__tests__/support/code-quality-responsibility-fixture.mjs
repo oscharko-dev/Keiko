@@ -1704,7 +1704,7 @@ it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toB
   return own;
 }
 
-export function metadataSourceRecord(ownedMarkerPair = false) {
+export function metadataSourceRecord(ownedMarkerPair = false, ownedRegistrationTransport = false) {
   const record = responsibilityRecord("raw-property-observation");
   const consumer = (exportName) => ({
     owner: "alpha",
@@ -1714,6 +1714,7 @@ export function metadataSourceRecord(ownedMarkerPair = false) {
   });
   record.id = "fixture-metadata-source";
   if (ownedMarkerPair) record.ownedMarkerPair = true;
+  if (ownedRegistrationTransport) record.ownedRegistrationTransport = true;
   record.rules = ["anti-slop/no-object-parameters"];
   for (const role of ["input", "transform", "output"]) record[role].exportName = "copyMetadata";
   record.consumer = consumer("first");
@@ -1775,22 +1776,29 @@ it("metadata source retains malformed attachment", () => {
 `;
 }
 
-export function createMetadataSourceFixture(variant = "valid", ownedMarkerPair = false) {
+export function createMetadataSourceFixture(
+  variant = "valid",
+  ownedMarkerPair = false,
+  ownedRegistrationTransport = false,
+) {
   return assembleResponsibilityFixture((own) => {
     const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
     config.exclude = ["**/*.test.ts"];
     own.put("packages/alpha/tsconfig.json", config);
     own.put(
       "packages/alpha/src/owner.ts",
-      ownedMarkerPair ? markerMetadataSourceOwner(variant) : metadataSourceOwner(variant),
+      metadataFixtureOwner(variant, ownedMarkerPair, ownedRegistrationTransport),
     );
     own.put("packages/alpha/src/index.ts", 'export { copyMetadata as parse } from "./owner.js";\n');
-    own.put("packages/alpha/src/proof.test.ts", metadataSourceProof(ownedMarkerPair));
+    own.put(
+      "packages/alpha/src/proof.test.ts",
+      metadataSourceProof(ownedMarkerPair || ownedRegistrationTransport),
+    );
     own.put(
       "src/consumer.ts",
       'import { copyMetadata, first, second } from "alpha/runtime"; export const copy = copyMetadata({}, {}); export const one = first({}); export const two = second({});',
     );
-    const record = metadataSourceRecord(ownedMarkerPair);
+    const record = metadataSourceRecord(ownedMarkerPair, ownedRegistrationTransport);
     const policy = responsibilityPolicy([record]);
     activateResponsibilityFixtureRules(policy, record);
     own.put("scripts/code-quality-policy.json", policy);
@@ -1886,4 +1894,57 @@ function markerMetadataSourceProof() {
       "    expect(Reflect.get(target, marker)).toBe(raw);\n});",
       `    expect(Reflect.get(target, marker)).toBe(raw);${malformed}\n});`,
     );
+}
+
+function registrationTransportOwner(variant) {
+  let source = markerMetadataSourceOwner("valid")
+    .replace('Symbol("fixture-registration")', 'Symbol.for("fixture-registration")')
+    .replace(
+      "Object.defineProperty(target, marker, { value: Reflect.get(source, marker) });",
+      "attachRegistration(target, readRegistration(source));",
+    );
+  source += `
+function readRegistration(event: object): object | undefined {
+  const registration = observeRefusal(event, marker);
+  return typeof registration === "object" && registration !== null ? registration : undefined;
+}
+function attachRegistration(event: object, registration: object | undefined): void {
+  if (registration !== undefined) {
+    Object.defineProperty(event, marker, { value: registration,
+      enumerable: false, configurable: false, writable: false });
+  }
+}
+`;
+  return registrationTransportVariant(source, variant);
+}
+
+function registrationTransportVariant(source, variant) {
+  if (variant === "registration-key") {
+    source += 'const foreignRegistrationKey = Symbol.for("fixture-registration-other");\n';
+    source = source.replace(
+      "Object.defineProperty(event, marker,",
+      "Object.defineProperty(event, foreignRegistrationKey,",
+    );
+  }
+  if (variant === "registration-copy")
+    source = source.replace("value: registration,", "value: { ...registration },");
+  if (variant === "registration-default")
+    source = source.replace(
+      "registration: object | undefined)",
+      "registration: object | undefined = {})",
+    );
+  if (variant === "registration-side-call")
+    source = source.replace(
+      "  const registration = observeRefusal(event, marker);",
+      "  void event; const registration = observeRefusal(event, marker);",
+    );
+  if (variant === "registration-escape")
+    source += "const escapedRegistration = [readRegistration]; void escapedRegistration;\n";
+  return source;
+}
+
+function metadataFixtureOwner(variant, ownedMarkerPair, ownedRegistrationTransport) {
+  if (ownedRegistrationTransport) return registrationTransportOwner(variant);
+  if (ownedMarkerPair) return markerMetadataSourceOwner(variant);
+  return metadataSourceOwner(variant);
 }

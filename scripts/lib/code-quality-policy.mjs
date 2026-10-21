@@ -223,6 +223,15 @@ function validOwnedMarkerOption(record) {
   );
 }
 
+function validOwnedRegistrationTransportOption(record) {
+  return (
+    record.ownedRegistrationTransport === true &&
+    (!Object.hasOwn(record, "ownedMarkerPair") || record.ownedMarkerPair === true) &&
+    !Object.hasOwn(record, "ownedPredicateStage") &&
+    validMetadataSourceOption(record)
+  );
+}
+
 function validOwnedPredicateOption(record) {
   return (
     record.kind === "validator" &&
@@ -232,6 +241,8 @@ function validOwnedPredicateOption(record) {
 }
 
 function validObservationOptions(record) {
+  if (Object.hasOwn(record, "ownedRegistrationTransport"))
+    return validOwnedRegistrationTransportOption(record);
   if (Object.hasOwn(record, "ownedMarkerPair")) return validOwnedMarkerOption(record);
   if (Object.hasOwn(record, "ownedPredicateStage")) return validOwnedPredicateOption(record);
   if (Object.hasOwn(record, "metadataSourceInput")) return validMetadataSourceOption(record);
@@ -309,6 +320,7 @@ function responsibilityKeys(record) {
     "rawObjectInput",
     "ownedPredicateStage",
     "ownedMarkerPair",
+    "ownedRegistrationTransport",
     "additionalObservationForms",
     "directRawCheckerInputs",
     "metadataSourceInput",
@@ -422,9 +434,13 @@ function observationOptionShrank(current, record) {
     (Object.hasOwn(record, "metadataSourceInput") &&
       canonicalIdentity(current.metadataSourceInput) !==
         canonicalIdentity(record.metadataSourceInput)) ||
-    ["rawObjectInput", "ownedPredicateStage", "ownedMarkerPair", "directRawCheckerInputs"].some(
-      (key) => record[key] === true && current[key] !== true,
-    ) ||
+    [
+      "rawObjectInput",
+      "ownedPredicateStage",
+      "ownedMarkerPair",
+      "ownedRegistrationTransport",
+      "directRawCheckerInputs",
+    ].some((key) => record[key] === true && current[key] !== true) ||
     (record.additionalObservationForms ?? []).some(
       (form) => !(current.additionalObservationForms ?? []).includes(form),
     )

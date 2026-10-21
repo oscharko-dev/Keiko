@@ -3649,3 +3649,69 @@ describe("owned refusal marker pair facts (#3918)", () => {
     expect(() => own.resolver.metadataSourceFacts(current, true)).toThrow("symbol-subject-changed");
   });
 });
+
+describe("owned raw-registration transport facts (#3918)", () => {
+  it("retains defaults and adds exactly the raw-registration transport parameters", async () => {
+    const own = createMetadataSourceFixture("valid", true, true);
+    fixtures.push(own);
+    // Keep the original-engine FIRST independent of new policy-schema admission.
+    delete own.record.ownedRegistrationTransport;
+    own.put("scripts/code-quality-policy.json", own.policy);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const original = own.resolver.metadataSourceFacts(identity);
+    expect(original.slots).toHaveLength(1);
+    const marker = own.resolver.metadataSourceFacts(identity, true);
+    expect(marker.slots).toHaveLength(3);
+    const combined = own.resolver.metadataSourceFacts(identity, true, true);
+    expect(combined.slots.slice(0, 3)).toEqual(marker.slots);
+    expect(combined.slots).toHaveLength(6);
+    expect(combined.slots.slice(3).map((slot) => slot.index)).toEqual([0, 1, 0]);
+    expect(combined.slots.slice(3).every((slot) => slot.ownedRegistrationTransportInput)).toBe(
+      true,
+    );
+    const transport = own.resolver.metadataSourceFacts(identity, false, true);
+    expect(transport.slots).toEqual([...original.slots, ...combined.slots.slice(3)]);
+  });
+
+  it.each([
+    "registration-key",
+    "registration-copy",
+    "registration-default",
+    "registration-side-call",
+    "registration-escape",
+  ])("withholds the closed transport for %s", async (variant) => {
+    const own = createMetadataSourceFixture(variant, true, true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(identity).slots).toHaveLength(1);
+    expect(own.resolver.metadataSourceFacts(identity, true).slots).toHaveLength(3);
+    expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
+      "unsupported-owned-registration-transport",
+    );
+  });
+
+  it("retains shared identity capacity and currentness for the new form", async () => {
+    const own = createMetadataSourceFixture("valid", true, true);
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, { aliases: 4 });
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(identity, true).slots).toHaveLength(3);
+    expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
+      "symbol-alias-budget",
+    );
+    own.resolver.close();
+    own.resolver = createSymbolResolver(subject);
+    expect(own.resolver.metadataSourceFacts(identity, true, true).slots).toHaveLength(6);
+    expect(() => own.resolver.metadataSourceFacts(identity, true, "true")).toThrow(
+      "unsupported-owned-registration-transport-option",
+    );
+    const path = identity.producer.path;
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+    expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+});

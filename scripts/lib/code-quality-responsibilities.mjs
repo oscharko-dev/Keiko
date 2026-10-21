@@ -171,20 +171,24 @@ function proofFacts(subject, resolver, record) {
 function propertyObservationSlots(resolver, record, roles) {
   if (record.metadataSourceInput)
     return resolver
-      .metadataSourceFacts(roles.input.identities[0], record.ownedMarkerPair === true)
-      .slots.map((slot) =>
-        slot.ownedMarkerPairInput
-          ? {
-              ...slot,
-              markerPairRoot: {
-                identity: roles.input.identities[0],
-                index: 0,
-                recordId: record.id,
-                proofAssertions: structuredClone(record.proofAssertions),
-              },
-            }
-          : slot,
-      );
+      .metadataSourceFacts(
+        roles.input.identities[0],
+        record.ownedMarkerPair === true,
+        record.ownedRegistrationTransport === true,
+      )
+      .slots.map((slot) => {
+        if (!slot.ownedMarkerPairInput && !slot.ownedRegistrationTransportInput) return slot;
+        const key = slot.ownedMarkerPairInput ? "markerPairRoot" : "registrationTransportRoot";
+        return {
+          ...slot,
+          [key]: {
+            identity: roles.input.identities[0],
+            index: 0,
+            recordId: record.id,
+            proofAssertions: structuredClone(record.proofAssertions),
+          },
+        };
+      });
   return resolver
     .propertyObservationFacts(roles.input.identities[0], {
       rawObjectInput: record.rawObjectInput,
@@ -488,9 +492,16 @@ function objectProofsCompleted(required, record) {
 }
 
 function qualifiedOwnedStageRoot(assessment, slot, assessments) {
-  if (!slot.ownedPredicateStageInput && !slot.ownedMarkerPairInput) return true;
-  if (slot.ownedPredicateStageInput && slot.ownedMarkerPairInput) return false;
-  const root = slot.ownedMarkerPairInput ? slot.markerPairRoot : slot.predicateStageRoot;
+  const tags = [
+    slot.ownedPredicateStageInput,
+    slot.ownedMarkerPairInput,
+    slot.ownedRegistrationTransportInput,
+  ].filter(Boolean);
+  if (!tags.length) return true;
+  if (tags.length !== 1) return false;
+  let root = slot.predicateStageRoot;
+  if (slot.ownedMarkerPairInput) root = slot.markerPairRoot;
+  if (slot.ownedRegistrationTransportInput) root = slot.registrationTransportRoot;
   if (!root || root.recordId !== assessment.id) return false;
   return qualifiedOwnedStageParent(assessment, root, assessments, slot);
 }
