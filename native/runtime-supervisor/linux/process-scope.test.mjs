@@ -12,7 +12,7 @@ import {
   encodeControlPacket,
   encodeLaunchPacket,
 } from "../../../packages/keiko-server/dist/coding-runtime/nativeRuntimeProcessProtocol.js";
-import { appResponse, commitPacket, appLaunchPacket } from "./app-owner-harness.mjs";
+import { appResponse, commitPacket, appLaunchPacket } from "./test-support.app-owner.mjs";
 import { writeExclusivePidFile } from "../../../packages/keiko-cli/dist/state-paths.js";
 import { readBytes, response, streamReader } from "../protocol-harness.mjs";
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { test } from "node:test";
 import { encodeAppEnvironmentPacket } from "../../../packages/keiko-contracts/src/native-runtime-wire.ts";
 import { header, launchPacket, readBytes, response, streamReader } from "../protocol-harness.mjs";
 
@@ -56,10 +57,9 @@ async function qualify(controlBytes, expectedKind) {
   }
 }
 
-await qualify(header("KRC1", 2, 0), 2);
-await qualify(header("KRC1", 3, 0), 2);
-await qualify(undefined, 2);
-await qualify(header("KRC1", 99, 0), 3);
-console.log(
-  "macOS app runtime: PASS - private lifecycle, split control, EOF and malformed control",
-);
+test("macOS private app lifecycle, split control, EOF and malformed control", async () => {
+  await assert.doesNotReject(qualify(header("KRC1", 2, 0), 2));
+  await assert.doesNotReject(qualify(header("KRC1", 3, 0), 2));
+  await assert.doesNotReject(qualify(undefined, 2));
+  await assert.doesNotReject(qualify(header("KRC1", 99, 0), 3));
+});

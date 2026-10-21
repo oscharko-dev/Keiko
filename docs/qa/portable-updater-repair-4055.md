@@ -68,3 +68,32 @@ release trust; an Apple Developer account is not required. The owner subsequentl
 current published Latest version as the SSD baseline, followed by release 1.2.6 and a live SSD
 update after successful deployment. That release and installed-product acceptance remain pending.
 Auto-merge remains disabled.
+
+## Release qualification follow-up (2026-10-22)
+
+The full macOS coverage run at `77d6660e3` passed 57,282 package tests, 10,868 UI tests and
+7,645 script tests. All 27 package coverage floors passed. Local new-code coverage still reported
+84.2 percent against the unchanged 85 percent requirement; that result was not accepted as green.
+
+The follow-up adds real filesystem controls for managed runtime admission, including modified
+launchers, foreign platforms, corrupt registrations and failed setup. Separate transport admission
+controls reject workers and foreign launch identities before touching the private control descriptor.
+The complete affected CLI suite and owning server/tooling controls pass 1,566 tests across 86 files
+with one skipped test. An earlier mixed-source build/test attempt failed three support controls;
+a stable rebuild, all 109 affected support controls, and the complete affected suite pass afterward.
+Builds and catalog regeneration must finish before tests consume the emitted CLI.
+
+Three existing native qualification programs now use the repository's existing test filename
+conventions. Their consumers remain wired to the actual native lanes; no product source, rule or
+coverage threshold was excluded or weakened. The macOS qualification runner uses `node:test` with
+explicit asynchronous assertions. Startup cleanup uses lazy asynchronous timer iteration, retaining
+sequential reconciliation, exponential backoff and the original completion deadline.
+
+The native handoff fixture's readiness observation now uses its existing admitted 15-second startup
+grant. Previously it rejected readiness after 10 seconds despite admitting 15 seconds. The product
+startup grant and all handoff, cleanup and containment assertions remain unchanged.
+
+Coverage aggregation retains the successful full-run measurements for unchanged product sources and
+uses fresh affected-suite measurements for the changed startup source. Istanbul's standard merge
+and report writers produce the combined reports; stale source offsets and failed-run reports are
+not reused. This qualification does not replace the pending public-release update on the SSD.

@@ -78,7 +78,7 @@ clang --analyze "${runtime_flags[@]}" "$fixture" -o /dev/null
 clang "${runtime_flags[@]}" "$root/native/portable-launcher/keiko-portable-process-scope-macos.test.c" \
   -o "$scratch/process-scope-test"
 "$scratch/process-scope-test"
-node "$runtime_root/test-app-runtime.mjs" "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture"
+node "$runtime_root/app-runtime.test.mjs" "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture"
 node "$root/native/portable-launcher/test-app-owner-macos.mjs" "$scratch/keiko-launcher" \
   "$scratch/keiko-runtime-supervisor" "$scratch/runtime-qualification-fixture"
 node "$root/native/portable-launcher/test-app-owner-macos.mjs" "$scratch/launcher-test" \

@@ -24,7 +24,7 @@ import {
   appResponse,
   commitPacket,
   compileOwnerFixture,
-} from "./app-owner-harness.mjs";
+} from "./test-support.app-owner.mjs";
 import { streamReader } from "../protocol-harness.mjs";
 import { writeExclusivePidFile } from "../../../packages/keiko-cli/dist/state-paths.js";
 import {
@@ -58,7 +58,8 @@ const launcherFor = (root) =>
 const helperFor = (root) => join(resources(root), "runtime/native/keiko-runtime-supervisor");
 const stateDir = join(directory, "state");
 const managedRoot = join(directory, bundleName);
-const rootFixture = fileURLToPath(new URL("./app-handoff-root-fixture.mjs", import.meta.url));
+const rootFixture = fileURLToPath(new URL("./test-support.app-handoff-root.mjs", import.meta.url));
+const INITIAL_START_TIMEOUT_MS = 15_000;
 let initialOwner;
 let ownerExited;
 let port;
@@ -237,7 +238,7 @@ async function initialStart(launcher, helper, hash) {
         env: {
           KEIKO_STATE_DIR: stateDir,
           KEIKO_UI_LAUNCH_ID: launchId,
-          KEIKO_START_TIMEOUT_SECS: "15",
+          KEIKO_START_TIMEOUT_SECS: String(INITIAL_START_TIMEOUT_MS / 1000),
         },
       },
       { executable: process.execPath, cwd: directory },
@@ -266,7 +267,8 @@ async function initialStart(launcher, helper, hash) {
     true,
     true,
   );
-  const readyDeadline = performance.now() + 10_000;
+  // Observe the complete startup grant already admitted by the native owner.
+  const readyDeadline = performance.now() + INITIAL_START_TIMEOUT_MS;
   let ready = false;
   while (!ready && performance.now() < readyDeadline) {
     try {

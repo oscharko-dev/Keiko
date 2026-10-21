@@ -1574,15 +1574,29 @@ async function awaitStartupRecoveryCompletion(
   current: UpdateStartupRecoveryCurrent,
 ): Promise<StartupRecoveryResult> {
   let result = await recovery.reconcile({ phase: "post-listen", current });
-  let pollDelayMs = 250;
-  while (result.status === "ready" && result.completionDeadline !== undefined) {
-    const remaining = result.completionDeadline - Date.now();
-    if (remaining <= 0) return { status: "recovery-required", reason: "interrupted" };
-    await delay(Math.min(pollDelayMs, remaining));
-    pollDelayMs = Math.min(pollDelayMs * 2, 5_000);
+  // Each cleanup observation depends on its predecessor and must remain sequential.
+  for await (const poll of startupRecoveryPolls(() =>
+    result.status === "ready" ? result.completionDeadline : undefined,
+  )) {
+    if (poll === "expired") return { status: "recovery-required", reason: "interrupted" };
     result = await recovery.reconcile({ phase: "post-listen", current });
   }
   return result;
+}
+
+async function* startupRecoveryPolls(
+  completionDeadline: () => number | undefined,
+): AsyncGenerator<"retry" | "expired", void, unknown> {
+  for (let pollDelayMs = 250; ; pollDelayMs = Math.min(pollDelayMs * 2, 5_000)) {
+    const deadline = completionDeadline();
+    if (deadline === undefined) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      yield "expired";
+      return;
+    }
+    yield delay<"retry">(Math.min(pollDelayMs, remaining), "retry");
+  }
 }
 
 // The #3532 evidence hooks a real launch threads into the lifecycle: the heartbeat re-evaluates
