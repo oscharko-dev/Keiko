@@ -2,12 +2,16 @@ import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
+  constants,
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   linkSync,
   readdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -16,10 +20,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { URL } from "node:url";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
+import { collectWorkspacePackages } from "../workspace-graph.mjs";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { qualificationReceiptFor as linuxQualificationReceiptFor } from "../qualify-linux-runtime-release.mjs";
 import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
@@ -130,7 +135,8 @@ const PORTABLE_RELEASE_IMPACT_ENTRY_ID = JSON.parse(
     entry.review?.humanApproved === true &&
     entry.portableRuntimeArtifactContract !== undefined,
 )?.id;
-let packageSurfacePreparedForTest = false;
+let packageSurfacePreparedForTest;
+let packageSurfaceFixtureRoot;
 
 describe("findPortableMetadataRedactionFailures", () => {
   it.each([
@@ -474,6 +480,12 @@ const BASE_MANIFEST = {
 
 const tempDirs = [];
 
+afterAll(() => {
+  if (packageSurfaceFixtureRoot !== undefined) {
+    rmSync(packageSurfaceFixtureRoot, { recursive: true, force: true });
+  }
+}, 60_000);
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -513,6 +525,29 @@ function tempDir() {
   tempDirs.push(dir);
   return dir;
 }
+
+describe("portable package fixture ownership", () => {
+  it.each(["relative", "absolute"])("isolates %s workspace links and writes", (kind) => {
+    const dir = tempDir();
+    const sourceRoot = join(dir, "source");
+    const fixtureRoot = join(dir, "copy");
+    const workspace = join(sourceRoot, "packages", "example");
+    const link = join(sourceRoot, "node_modules", "example");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(dirname(link), { recursive: true });
+    writeFileSync(join(workspace, "output.js"), "original");
+    symlinkSync(
+      kind === "absolute" ? workspace : relative(dirname(link), workspace),
+      link,
+      "junction",
+    );
+    copyPackageFixtureEntry(sourceRoot, fixtureRoot, realpathSync(sourceRoot), fixtureRoot);
+    const copiedLink = join(fixtureRoot, "node_modules", "example");
+    expect(realpathSync(copiedLink)).toBe(realpathSync(join(fixtureRoot, "packages", "example")));
+    writeFileSync(join(copiedLink, "output.js"), "fixture-only");
+    expect(readFileSync(join(workspace, "output.js"), "utf8")).toBe("original");
+  });
+});
 
 function portableTarget(platformTarget) {
   const target = PORTABLE_TARGETS.find((candidate) => candidate.platformTarget === platformTarget);
@@ -557,6 +592,9 @@ function packNodeFixtureArchive(target, archivePath, sourceParent, rootName, opt
 }
 
 function runFixtureCommand(command, args, cwd) {
+  if (command === "npm" && realpathSync(cwd) === realpathSync(process.cwd())) {
+    throw new Error("fixture npm commands must not mutate the shared checkout");
+  }
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr);
 }
@@ -1154,11 +1192,108 @@ function completeWindowsVerificationInput(input) {
   };
 }
 
-function preparePackageSurfaceForTest() {
-  if (packageSurfacePreparedForTest) return;
-  runFixtureCommand("npm", ["run", "build"], process.cwd());
-  runFixtureCommand("npm", ["run", "prepare:bin"], process.cwd());
-  packageSurfacePreparedForTest = true;
+function copyPackageFixtureLink(source, destination, sourceRoot, fixtureRoot) {
+  const resolvedTarget = realpathSync(source);
+  const targetPath = relative(sourceRoot, resolvedTarget);
+  const isOwned =
+    targetPath !== ".." && !targetPath.startsWith(`..${sep}`) && !isAbsolute(targetPath);
+  const target = isOwned ? join(fixtureRoot, targetPath) : resolvedTarget;
+  const directory = statSync(source).isDirectory();
+  symlinkSync(
+    process.platform === "win32" && directory ? target : relative(dirname(destination), target),
+    destination,
+    directory ? "junction" : "file",
+  );
+}
+
+function copyPackageFixtureEntry(source, destination, sourceRoot, fixtureRoot) {
+  mkdirSync(dirname(destination), { recursive: true });
+  const entry = lstatSync(source);
+  if (entry.isSymbolicLink()) {
+    copyPackageFixtureLink(source, destination, sourceRoot, fixtureRoot);
+  } else if (entry.isDirectory()) {
+    mkdirSync(destination, { recursive: true });
+    for (const child of readdirSync(source)) {
+      copyPackageFixtureEntry(
+        join(source, child),
+        join(destination, child),
+        sourceRoot,
+        fixtureRoot,
+      );
+    }
+  } else if (entry.isFile()) {
+    copyFileSync(source, destination, constants.COPYFILE_FICLONE);
+  } else {
+    throw new Error("unsupported package fixture entry");
+  }
+}
+
+async function copyPackageFixtureSources(sourceRoot, fixtureRoot) {
+  const tracked = spawnSync("git", ["ls-files", "-z"], { cwd: sourceRoot, encoding: "utf8" });
+  if (tracked.status !== 0) throw new Error("package fixture source inventory failed");
+  const workspaces = await collectWorkspacePackages(sourceRoot);
+  const generated = ["node_modules", "dist"];
+  for (const workspace of workspaces) {
+    const path = relative(sourceRoot, workspace.dir);
+    generated.push(join(path, "node_modules"), join(path, "dist"));
+  }
+  for (const path of [...tracked.stdout.split("\0").filter(Boolean), ...generated]) {
+    const source = join(sourceRoot, path);
+    if (existsSync(source)) {
+      copyPackageFixtureEntry(source, join(fixtureRoot, path), sourceRoot, fixtureRoot);
+    }
+  }
+  for (const workspace of workspaces) {
+    const link = join(fixtureRoot, "node_modules", workspace.name);
+    if (
+      realpathSync(link) !== realpathSync(join(fixtureRoot, relative(sourceRoot, workspace.dir)))
+    ) {
+      throw new Error("package fixture workspace escaped its private root");
+    }
+  }
+}
+
+function refusingPackagePreparationFixture(dir) {
+  const bin = join(dir, "bin");
+  const attempts = join(dir, "npm-attempts.jsonl");
+  mkdirSync(bin);
+  const source = `const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(attempts)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + "\\n");
+process.stderr.write("fixture package preparation refused\\n");
+process.exitCode = 1;
+`;
+  if (process.platform === "win32") {
+    const script = join(bin, "npm.cjs");
+    writeFileSync(script, source);
+    writeFileSync(join(bin, "npm.cmd"), `@"${process.execPath}" "${script}" %*\r\n`);
+  } else {
+    writeFileSync(join(bin, "npm"), `#!${process.execPath}\n${source}`, { mode: 0o700 });
+  }
+  return { bin, attempts };
+}
+
+async function preparePrivatePackageSurface() {
+  const sourceRoot = realpathSync(process.cwd());
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-portable-package-fixture-"));
+  packageSurfaceFixtureRoot = fixtureRoot;
+  try {
+    await copyPackageFixtureSources(sourceRoot, fixtureRoot);
+    const path = join(fixtureRoot, "package.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    manifest.description = "Isolated portable runtime test fixture";
+    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+    runFixtureCommand("npm", ["run", "build"], fixtureRoot);
+    runFixtureCommand("npm", ["run", "prepare:bin"], fixtureRoot);
+    return fixtureRoot;
+  } catch (error) {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function preparePackageSurfaceForTest() {
+  packageSurfacePreparedForTest ??= preparePrivatePackageSurface();
+  return await packageSurfacePreparedForTest;
 }
 
 async function assembleStageForTest(
@@ -2861,9 +2996,15 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain('"--ignore-scripts"');
     expect(source).toContain('"--pack-destination"');
     expect(source).toContain('["run", "check:package-surface"]');
-    expect(
-      source.indexOf("(hooks.preparePackageSurface ?? preparePackageSurface)();"),
-    ).toBeLessThan(source.indexOf("const tarball = packRoot(dirname(paths.extractRoot));"));
+    const preparation = source.indexOf(
+      "const packageRoot = await (hooks.preparePackageSurface ?? preparePackageSurface)();",
+    );
+    const packing = source.indexOf(
+      "const tarball = packRoot(dirname(paths.extractRoot), packageRoot);",
+    );
+    expect(preparation).toBeGreaterThanOrEqual(0);
+    expect(packing).toBeGreaterThanOrEqual(0);
+    expect(preparation).toBeLessThan(packing);
     expect(source).toContain("await assemblePortableStage(options);");
     expect(source).not.toContain('["install"');
   });
@@ -3397,6 +3538,46 @@ describe("stage-portable-runtime prerelease guard", () => {
 });
 
 describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
+  it("stops before packing when default package preparation fails", async () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");
+    const fixture = refusingPackagePreparationFixture(dir);
+    const outDir = join(dir, "out");
+    const originalPath = process.env.PATH;
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const terminate = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`fixture stage exit ${code}`);
+    });
+    process.env.PATH = [fixture.bin, originalPath].filter(Boolean).join(delimiter);
+    try {
+      await expect(
+        assemblePortableStage({
+          target: "macos-arm64",
+          nodeArchive: nodeArchive.path,
+          nodeSha256: nodeArchive.sha256,
+          nodeVersion: NODE_VERSION,
+          nodeCacheDir: join(dir, "cache"),
+          outDir,
+        }),
+      ).rejects.toThrow("fixture stage exit 1");
+      expect(terminate).toHaveBeenCalledExactlyOnceWith(1);
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("npm run build exited 1: fixture package preparation refused"),
+      );
+      const attempts = readFileSync(fixture.attempts, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(attempts).toEqual([{ args: ["run", "build"], cwd: process.cwd() }]);
+      expect(existsSync(join(outDir, "macos-arm64"))).toBe(false);
+    } finally {
+      diagnostic.mockRestore();
+      terminate.mockRestore();
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");
@@ -3405,6 +3586,13 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
 
     await assembleStageForTest("macos-arm64", nodeArchive, outDir, dir, [sidecarSpec]);
     const root = join(outDir, "macos-arm64");
+    const packaged = JSON.parse(
+      readFileSync(
+        join(stagedMacResourcesRoot(outDir, "macos-arm64"), "app", "package.json"),
+        "utf8",
+      ),
+    );
+    expect(packaged.description).toBe("Isolated portable runtime test fixture");
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

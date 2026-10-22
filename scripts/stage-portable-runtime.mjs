@@ -878,8 +878,10 @@ function runNpm(args, options = {}) {
   return run("npm", args, { ...options, shell: process.platform === "win32" });
 }
 
-function packRoot(packDir) {
-  const result = runNpm(["pack", "--silent", "--ignore-scripts", "--pack-destination", packDir]);
+function packRoot(packDir, packageRoot = repoRoot) {
+  const result = runNpm(["pack", "--silent", "--ignore-scripts", "--pack-destination", packDir], {
+    cwd: packageRoot,
+  });
   const tarballName = result.stdout.trim().split(/\r?\n/u).findLast(Boolean);
   if (tarballName === undefined) fail("npm pack did not report a tarball name");
   const tarball = join(packDir, tarballName);
@@ -2398,8 +2400,8 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   mkdirSync(paths.extractRoot, { recursive: true });
   mkdirSync(paths.resourceRoot, { recursive: true });
   const nodeArchiveSha256 = await stageNodeRuntime(options, target, paths.resourceRoot);
-  (hooks.preparePackageSurface ?? preparePackageSurface)();
-  const tarball = packRoot(dirname(paths.extractRoot));
+  const packageRoot = await (hooks.preparePackageSurface ?? preparePackageSurface)();
+  const tarball = packRoot(dirname(paths.extractRoot), packageRoot);
   stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
   bindMacosReleaseTeamIdentifier(join(paths.resourceRoot, "app"), target, options.appleTeamId);
   stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
