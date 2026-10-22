@@ -9,7 +9,7 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
@@ -108,6 +108,7 @@ function fixtureSignal(): { readonly promise: Promise<void>; readonly resolve: (
 function softScanFixtureFs(advanceClock: () => void): {
   readonly fs: WorkspaceFs;
   readonly release: () => void;
+  readonly settle: () => Promise<void>;
 } {
   const read = nodeWorkspaceFs.readFileBytes;
   if (read === undefined) throw new Error("fixture byte reader missing");
@@ -115,24 +116,34 @@ function softScanFixtureFs(advanceClock: () => void): {
   const laterMayRead = fixtureSignal();
   const heldPaths = new Set<string>();
   let laterNativeReads = 0;
+  const reads: Promise<void>[] = [];
   const release = (): void => {
     firstMayRead.resolve();
     laterMayRead.resolve();
   };
   return {
     release,
+    settle: async (): Promise<void> => {
+      await Promise.all(reads);
+    },
     fs: {
       ...nodeWorkspaceFs,
       readFileBytes: async (path, ...args): Promise<Uint8Array> => {
-        if (basename(path) === "example.ts") {
-          await firstMayRead.promise;
-        } else {
-          heldPaths.add(path);
-          if (heldPaths.size === 7) firstMayRead.resolve();
-          await laterMayRead.promise;
-          laterNativeReads += 1;
+        const finished = fixtureSignal();
+        reads.push(finished.promise);
+        try {
+          if (basename(path) === "example.ts") {
+            await firstMayRead.promise;
+          } else {
+            heldPaths.add(path);
+            if (heldPaths.size === 7) firstMayRead.resolve();
+            await laterMayRead.promise;
+            laterNativeReads += 1;
+          }
+          return await read(path, ...args);
+        } finally {
+          finished.resolve();
         }
-        return read(path, ...args);
       },
       iterateDirectory: async function* (path): AsyncGenerator<WorkspaceDirEntry> {
         const entries = [...nodeWorkspaceFs.readDir(path)].sort((a, b) =>
@@ -365,6 +376,7 @@ describe("production coding repository handler composition", () => {
     let now = 0;
     const controlled = softScanFixtureFs(() => {
       now = 60;
+      vi.advanceTimersByTime(60);
     });
     const { root, handler, events } = fixture(() => true, {
       nowMs: () => now,
@@ -374,12 +386,22 @@ describe("production coding repository handler composition", () => {
     for (let index = 0; index < 7; index += 1) {
       writeFileSync(join(root, `src/z-late-${index.toString()}.ts`), "parseConfig late");
     }
+    let pending: ReturnType<typeof handler.invoke> | undefined = undefined;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     onTestFinished(async () => {
-      now = 60;
-      controlled.release();
-      await pending;
+      try {
+        now = 60;
+        controlled.release();
+        try {
+          await pending;
+        } finally {
+          await controlled.settle();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
     });
-    const pending = handler.invoke(request, context());
+    pending = handler.invoke(request, context());
     try {
       expect(await pending).toMatchObject({
         ok: true,
@@ -389,7 +411,11 @@ describe("production coding repository handler composition", () => {
     } finally {
       now = 60;
       controlled.release();
-      await pending;
+      try {
+        await pending;
+      } finally {
+        await controlled.settle();
+      }
     }
     expect(settledProof(events)).toMatchObject({
       state: "completed",
