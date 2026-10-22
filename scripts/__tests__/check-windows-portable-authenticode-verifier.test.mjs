@@ -163,6 +163,36 @@ describe("committed Windows portable Authenticode verifier asset", () => {
     ).toThrow(/reviewed generated-asset pin/u);
   });
 
+  it("admits only the observed October compiler candidate for byte-equality checking", () => {
+    const observed = {
+      compilerSha256: "a13d1edf3ef5dd0d0e09886251f03fa18877d46ba2dacee075b4c8a5add21457",
+      compilerDistribution: {
+        fileCount: 111,
+        sha256: "6d96789fadf839936d7e980a511d8d1b19a13d4691a338531fc4dc13650dce6a",
+        totalBytes: 36401120,
+      },
+      referenceSha256: {
+        "mscorlib.dll": "1eb7ab99447ceed5ec717c97b94c4aec5da1edeef9fe4989c287355e03a8f58f",
+        "System.dll": "3fba2c9ab7f1538d09d3a025730da545f3dc24af0b6b74ea5f92cc7768edd5d5",
+        "System.Core.dll": "0c5a6f6527a4ebda1d105809c48c0577b316d75d5fd04177a5a0e54f1e4cff59",
+        "System.Security.dll": "fbd98d2027a174137b3dc8c7ba4fda4606c7c8506e35781ede74703676321844",
+      },
+    };
+    expect(selectReviewedVerifierToolchain(observed)).toEqual(observed);
+    expect(() =>
+      selectReviewedVerifierToolchain({
+        ...observed,
+        compilerDistribution: { ...observed.compilerDistribution, fileCount: 112 },
+      }),
+    ).toThrow(/reviewed generated-asset pin/u);
+    expect(() =>
+      selectReviewedVerifierToolchain({
+        ...observed,
+        referenceSha256: { ...observed.referenceSha256, "System.dll": "0".repeat(64) },
+      }),
+    ).toThrow(/reviewed generated-asset pin/u);
+  });
+
   it("binds the canonical source and exact assembly bytes to SHA-256", () => {
     expect(assertCommittedVerifierAsset(COMMITTED_VERIFIER_ASSET)).toHaveLength(
       COMMITTED_VERIFIER_ASSET.assemblyByteLength,
