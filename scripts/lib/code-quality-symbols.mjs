@@ -3622,6 +3622,292 @@ function directObservationChecker(state, root, qualified, observer) {
   );
 }
 
+function physicalObservationCallable(state, call, count, index, result) {
+  if (!markerDirectCall(call, count)) return null;
+  const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
+  if (
+    !target ||
+    !markerPrivateCallable(target, count) ||
+    !physicalProtocolCallable(target) ||
+    target.callable.type?.kind !== result ||
+    !observationParameter(target.callable.parameters[index], ts.SyntaxKind.ObjectKeyword)
+  )
+    return null;
+  const signature = typedNamedCallable(state.context, target.callable);
+  return signature && state.context.checker.getResolvedSignature(call) === signature
+    ? rawState(state.compiler, state.context, state.source, state.nodes, target, index)
+    : null;
+}
+
+function physicalObservationReferences(state, call) {
+  return !state.nodes.some((node) => helperReference(state, node) && referenceCall(node) !== call);
+}
+
+function physicalProtocolCallable(state) {
+  return (
+    !state.callable.typeParameters?.length &&
+    !state.callable.asteriskToken &&
+    !state.callable.modifiers?.some((entry) => entry.kind === ts.SyntaxKind.AsyncKeyword) &&
+    !state.callable.parameters.some((entry) => entry.initializer)
+  );
+}
+
+function physicalRegistrationProtocol(root, call) {
+  const reader = markerCallable(root, call, 1);
+  const read = reader && registrationTransportRead(reader);
+  if (!read || !physicalProtocolCallable(reader)) return null;
+  const candidates = root.source.statements
+    .filter(ts.isFunctionDeclaration)
+    .map((callable) => ({
+      ...root,
+      callable,
+      declaration: callable,
+      identity: canonicalDeclaration(root.compiler, callable, null),
+    }))
+    .filter(metadataSourceSignature)
+    .map((state) => ({ state, flow: registrationTransportFlow(state) }))
+    .filter(
+      ({ state, flow }) =>
+        flow && canonicalCall(root.compiler, state.context, flow.read.expression, reader.identity),
+    );
+  if (candidates.length !== 1) return null;
+  const { state, flow } = candidates[0];
+  const writer = markerCallable(state, flow.write, 2);
+  const write = writer && registrationTransportWrite(writer);
+  return write && physicalProtocolCallable(writer) && registrationTransportKey(state, read, write)
+    ? { reader, writer, copier: state }
+    : null;
+}
+
+function physicalRegistrationRefusalCondition(state, condition, local) {
+  return (
+    ts.isBinaryExpression(condition) &&
+    condition.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+    observationIdentifier(state, condition.left, local) &&
+    rawReaderAbsent(state, condition.right)
+  );
+}
+
+function physicalRegistrationRefusal(state, statement, local) {
+  if (
+    !ts.isIfStatement(statement) ||
+    statement.elseStatement ||
+    !physicalRegistrationRefusalCondition(state, statement.expression, local)
+  )
+    return false;
+  const body = statement.thenStatement;
+  return (
+    ts.isBlock(body) && body.statements.length === 1 && ts.isThrowStatement(body.statements[0])
+  );
+}
+
+function physicalRegistrationCapture(root, statement, index) {
+  const local = observationConst(statement);
+  if (
+    !local ||
+    !markerDirectCall(local.initializer, 1) ||
+    !wholeObservationOrigin(root, local.initializer.arguments[0])
+  )
+    return null;
+  const refusal = root.callable.body.statements[index + 1];
+  const protocol = physicalRegistrationProtocol(root, local.initializer);
+  return protocol && refusal && physicalRegistrationRefusal(root, refusal, local)
+    ? { local, refusal, protocol }
+    : null;
+}
+
+function physicalNamedParameter(state, index, domain) {
+  const parameter = state.callable.parameters[index];
+  return (
+    parameter?.type &&
+    ts.isTypeReferenceNode(parameter.type) &&
+    state.context.checker.getTypeAtLocation(parameter.type) === domain
+  );
+}
+
+function physicalCanonicalResult(root, target, node, domain) {
+  return (
+    target?.callable.type &&
+    ts.isTypeReferenceNode(target.callable.type) &&
+    root.context.checker.getTypeAtLocation(target.callable.type) === domain &&
+    root.context.checker.getTypeAtLocation(node) === domain
+  );
+}
+
+function physicalCanonicalArgument(root, node, domain) {
+  if (!ts.isIdentifier(node)) return false;
+  const declaration = root.context.checker.getSymbolAtLocation(node)?.valueDeclaration;
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.type ||
+    !aliasInitializer(declaration) ||
+    !markerDirectCall(declaration.initializer, 1) ||
+    !wholeObservationOrigin(root, declaration.initializer.arguments[0])
+  )
+    return false;
+  const target = markerCallable(root, declaration.initializer, 1);
+  return physicalCanonicalResult(root, target, node, domain);
+}
+
+function physicalLocalReferences(root, capture, call) {
+  const symbol = root.context.checker.getSymbolAtLocation(capture.local.name);
+  return !root.nodes.some(
+    (node) =>
+      ts.isIdentifier(node) &&
+      referenceValueSymbol(root.context, node) === symbol &&
+      !declarationReference(node) &&
+      node !== capture.refusal.expression.left &&
+      node !== call.arguments[1],
+  );
+}
+
+function physicalWrapperCall(root, capture, domain) {
+  const calls = stateCalls(root).filter(
+    (call) =>
+      markerDirectCall(call, 3) &&
+      call.getStart() > capture.refusal.end &&
+      observationIdentifier(root, call.arguments[1], capture.local),
+  );
+  if (calls.length !== 1 || !physicalLocalReferences(root, capture, calls[0])) return null;
+  const call = calls[0];
+  const wrapper = physicalObservationCallable(root, call, 3, 1, ts.SyntaxKind.VoidKeyword);
+  return wrapper &&
+    wholeObservationOrigin(root, call.arguments[0]) &&
+    physicalCanonicalArgument(root, call.arguments[2], domain) &&
+    observationParameter(wrapper.callable.parameters[0], ts.SyntaxKind.ObjectKeyword) &&
+    physicalNamedParameter(wrapper, 2, domain) &&
+    physicalObservationReferences(wrapper, call)
+    ? { wrapper, call }
+    : null;
+}
+
+function physicalComparisonCall(wrapper, domain) {
+  const parameter = wrapper.callable.parameters[wrapper.index];
+  const calls = stateCalls(wrapper).filter(
+    (call) =>
+      markerDirectCall(call, 2) &&
+      observationIdentifier(wrapper, call.arguments[0], parameter) &&
+      observationIdentifier(wrapper, call.arguments[1], wrapper.callable.parameters[2]),
+  );
+  if (calls.length !== 1) return null;
+  const call = calls[0];
+  const comparison = physicalObservationCallable(wrapper, call, 2, 0, ts.SyntaxKind.BooleanKeyword);
+  return comparison &&
+    physicalNamedParameter(comparison, 1, domain) &&
+    physicalObservationReferences(comparison, call)
+    ? { comparison, call }
+    : null;
+}
+
+function physicalReceiverReferences(state) {
+  return state.nodes.filter(
+    (node) =>
+      ts.isIdentifier(node) &&
+      referenceValueSymbol(state.context, node) === state.parameterSymbol &&
+      !declarationReference(node),
+  );
+}
+
+function physicalWrapperReferences(wrapper, call) {
+  const references = physicalReceiverReferences(wrapper);
+  return (
+    references.length === 1 &&
+    references[0] === call.arguments[0] &&
+    directRawBody(references[0], wrapper.callable)
+  );
+}
+
+function physicalOwnKeyCall(state, call, observer) {
+  if (
+    !markerDirectCall(call, 2) ||
+    !observationIdentifier(state, call.arguments[1], state.callable.parameters[1])
+  )
+    return false;
+  const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
+  const owned = target && { ...state, ...target };
+  return (
+    owned &&
+    !sameProducer(owned.identity, observer.identity) &&
+    ownKeyObservationSignature(owned) &&
+    privateObservationReferences(owned) &&
+    ownKeyObservationBody(owned)
+  );
+}
+
+function physicalComparisonReferences(state, observer) {
+  const references = physicalReceiverReferences(state);
+  return (
+    references.length > 0 &&
+    references.every((node) => {
+      const call = node.parent;
+      if (!directRawBody(node, state.callable) || !observationReceiverCall(call, node))
+        return false;
+      return (
+        canonicalCall(state.compiler, state.context, call.expression, observer.identity) ||
+        physicalOwnKeyCall(state, call, observer)
+      );
+    })
+  );
+}
+
+function physicalRegistrationSlots(root, legacy, states, capture, observer, domain) {
+  const selected = physicalWrapperCall(root, capture, domain);
+  if (
+    !selected ||
+    !legacy.some(
+      (state) =>
+        state.identity.producer.start === selected.wrapper.identity.producer.start &&
+        state.index === 0,
+    )
+  )
+    return [];
+  const compared = physicalComparisonCall(selected.wrapper, domain);
+  if (
+    !compared ||
+    !physicalWrapperReferences(selected.wrapper, compared.call) ||
+    !physicalComparisonReferences(compared.comparison, observer)
+  )
+    return [];
+  const supported = [selected.wrapper, compared.comparison];
+  const keys = new Set(states.keys());
+  for (const state of [
+    ...supported,
+    capture.protocol.reader,
+    capture.protocol.writer,
+    capture.protocol.copier,
+  ])
+    for (let index = 0; index < state.callable.parameters.length; index += 1)
+      keys.add(`${state.identity.producer.start}:${index}`);
+  if (keys.size > root.compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  return supported.map((state) => ({
+    ...annotationSlot(
+      state.context,
+      state.source,
+      state.callable.parameters[state.index].type,
+      state.identity,
+      "parameter",
+      state.index,
+    ),
+    rule: "anti-slop/no-object-parameters",
+    physicalRegistrationInput: true,
+    observationRoots: [{ identity: root.identity, index: 0 }],
+  }));
+}
+
+function physicalRegistrationObservationFacts(root, legacy, states, observer) {
+  if (!root.callable.type) return [];
+  const domain = root.context.checker.getTypeAtLocation(root.callable.type);
+  if (!namedObjectResult(domain) || !observationOwnedResult(root.compiler, domain, root.identity))
+    return [];
+  const captures = root.callable.body.statements
+    .map((statement, index) => physicalRegistrationCapture(root, statement, index))
+    .filter(Boolean);
+  return captures.length === 1
+    ? physicalRegistrationSlots(root, legacy, states, captures[0], observer, domain)
+    : [];
+}
+
 function directObservationCheckerFacts(compiler, reached, observer) {
   const owned = reached[0];
   // Validate the actual boundary signature without implicitly adapting its coordinate.
@@ -3640,7 +3926,7 @@ function directObservationCheckerFacts(compiler, reached, observer) {
     directObservationChecker(state, root, qualified, observer),
   );
   if (supported.length === 0) throw new TypeError("unsupported-direct-observation-checkers");
-  return supported.map((state) => ({
+  const slots = supported.map((state) => ({
     ...annotationSlot(
       state.context,
       state.source,
@@ -3652,6 +3938,8 @@ function directObservationCheckerFacts(compiler, reached, observer) {
     rule: "anti-slop/no-object-parameters",
     observationRoots: [{ identity: root.identity, index: 0 }],
   }));
+  slots.push(...physicalRegistrationObservationFacts(root, supported, states, observer));
+  return slots;
 }
 
 function assertObservationOptions(options) {

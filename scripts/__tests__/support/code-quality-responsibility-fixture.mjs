@@ -1948,3 +1948,95 @@ function metadataFixtureOwner(variant, ownedMarkerPair, ownedRegistrationTranspo
   if (ownedMarkerPair) return markerMetadataSourceOwner(variant);
   return metadataSourceOwner(variant);
 }
+
+function physicalRegistrationOwner(variant) {
+  let source = registrationTransportOwner(variant === "foreign-key" ? "registration-key" : "valid");
+  source += `
+export interface Observation { readonly code: string; }
+const canonical: Observation = { code: "checked" };
+function exactKeys(left: object, right: object): boolean {
+  const keys = Reflect.ownKeys(left);
+  const expected = new Set(Reflect.ownKeys(right));
+  return keys.length === expected.size && keys.every((key) => expected.has(key));
+}
+function canonicalForEvent(event: object): Observation {
+  if (observeRefusal(event, "code") !== canonical.code) throw new TypeError("unregistered");
+  return canonical;
+}
+function matchesRegistration(registration: object, expected: Observation): boolean {
+  return exactKeys(registration, expected) && observeRefusal(registration, "code") === expected.code;
+}
+function checkRegistration(event: object, registration: object, expected: Observation): void {
+  if (!matchesRegistration(registration, expected) || observeRefusal(event, "code") !== expected.code)
+    throw new TypeError("mismatch");
+}
+export function validate(event: object): Observation {
+  const registration = readRegistration(event);
+  if (registration === undefined) { throw new TypeError("unregistered"); }
+  const expected = canonicalForEvent(event);
+  checkRegistration(event, registration, expected);
+  return expected;
+}
+`;
+  if (variant === "missing-refusal")
+    source = source.replace(
+      '  if (registration === undefined) { throw new TypeError("unregistered"); }',
+      "  if (registration === undefined) return canonical;",
+    );
+  if (variant === "copied-registration")
+    source = source.replace(
+      "checkRegistration(event, registration, expected);",
+      "checkRegistration(event, { ...registration }, expected);",
+    );
+  if (variant === "receiver-escape")
+    source =
+      source.replace(
+        "  checkRegistration(event, registration, expected);",
+        "  persist(registration); checkRegistration(event, registration, expected);",
+      ) + "\nfunction persist(value: object): void { void value; }\n";
+  if (variant === "outside-caller")
+    source +=
+      "\nexport function other(event: object, raw: object): void { checkRegistration(event, raw, canonical); }\n";
+  return source;
+}
+
+function physicalRegistrationProof() {
+  return `import { expect, it } from "vitest";
+import { validate, marker, type Observation } from "alpha/runtime";
+export function observe(event: object): Observation { const result = validate(event); return result; }
+it("physical registration preservation", () => {
+  const healthy = { code: "checked" };
+  Object.defineProperty(healthy, marker, { value: { code: "checked" } });
+  expect(observe(healthy).code).toBe("checked");
+  const malformed = { code: "checked" };
+  Object.defineProperty(malformed, marker, { value: { code: 42 } });
+  expect(() => observe(malformed)).toThrow("mismatch");
+});
+`;
+}
+
+export function createPhysicalRegistrationObservationFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", physicalRegistrationOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { validate as parse } from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { validate, marker } from "alpha/runtime"; const event = { code: "checked" }; Object.defineProperty(event, marker, { value: { code: "checked" } }); export const result = validate(event);',
+    );
+    const path = "packages/alpha/src/proof.test.ts";
+    own.put(path, physicalRegistrationProof());
+    const record = observationFixtureRecord(path, {
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+      directRawCheckerInputs: true,
+    });
+    record.proofAssertions = [{ path, testName: "physical registration preservation" }];
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}
