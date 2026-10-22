@@ -126,13 +126,10 @@ function resumeProcess(pid: number): void {
 function killProcessTree(child: ChildProcess | undefined): void {
   if (child?.pid === undefined) return;
   try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Process already exited.
-    }
+    if (process.platform === "win32") terminateProcessTree(child.pid);
+    else process.kill(-child.pid, "SIGKILL");
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) throw error;
   }
 }
 
@@ -184,6 +181,57 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
     }
     child = undefined;
     childClosed = undefined;
+  });
+
+  it("closes the owned runner tree even when it ignores SIGTERM", async ({ onTestFinished }) => {
+    const leaf =
+      'process.on("SIGTERM", () => {}); setInterval(() => {}, 1_000); process.stdin.resume(); process.send("ready");';
+    const program = `
+      const { spawn } = require("node:child_process");
+      process.on("SIGTERM", () => process.send("ignored"));
+      process.stdin.resume();
+      const leaf = spawn(process.execPath, ["-e", ${JSON.stringify(leaf)}], {
+        stdio: ["pipe", "inherit", "inherit", "ipc"],
+      });
+      leaf.once("message", () => process.send("ready"));
+    `;
+    const spawned = spawn(process.execPath, ["-e", program], {
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
+    });
+    const closed = new Promise<void>((resolveClose) => spawned.once("close", resolveClose));
+    const ready = new Promise<unknown>((resolveReady, reject) => {
+      spawned.once("message", resolveReady);
+      spawned.once("error", reject);
+    });
+    const outcome = new Promise<string>((resolveOutcome) => {
+      spawned.on("message", (message: unknown) => {
+        if (message === "ignored") resolveOutcome("ignored");
+      });
+      spawned.once("close", () => {
+        resolveOutcome("closed");
+      });
+    });
+    const cleanup = async (): Promise<void> => {
+      if (spawned.pid !== undefined) {
+        try {
+          if (process.platform === "win32") terminateProcessTree(spawned.pid);
+          else process.kill(-spawned.pid, "SIGKILL");
+        } catch (error) {
+          if (spawned.exitCode === null && spawned.signalCode === null) throw error;
+        }
+      }
+      await closed;
+    };
+    onTestFinished(cleanup);
+    retainRunner(spawned);
+    try {
+      expect(await ready).toBe("ready");
+      killProcessTree(spawned);
+      expect(await outcome).toBe("closed");
+    } finally {
+      await cleanup();
+    }
   });
 
   it(
