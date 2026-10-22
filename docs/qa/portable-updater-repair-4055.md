@@ -5,6 +5,20 @@ Collected on macOS arm64 on 2026-10-21 for
 This ledger distinguishes full-package fixture updates, the existing SSD installation, and release
 acceptance. It does not attest a new public release.
 
+## Stop failure follow-up (2026-10-22)
+
+After the long-running SSD session, the root process exited but its native receipt remained
+`owned`. The stop command therefore refused completion. Normal work-image and physical SSD ejects
+succeeded after no open work-volume files remained; no reap receipt was fabricated.
+
+A failure-first native regression separately reproduces loss of previously established unrelated
+ancestry during scope reclamation. The corrected scope retains exact positive ancestry in bounded
+compact ranges, while never-observed ancestry, incomplete observation and exhausted storage still
+refuse zero-live proof. Existing unknown-ancestry controls remain negative; the positive regression
+requires retained evidence for an ancestor that was actually observed. The historical SSD failure
+has no retained helper error detail, so this regression alone is not its complete diagnosis or the
+final SSD acceptance. A new live stop/update/eject qualification remains required.
+
 ## Full-package update qualification
 
 A separate copy of the complete portable application completed **99.0.0 → 99.0.1 → 99.0.2**.

@@ -109,21 +109,32 @@ describe("Next development version metadata deadline", () => {
       const address = server.address();
       if (address === null || typeof address === "string") throw new TypeError("Missing test port");
       const local = `http://127.0.0.1:${String(address.port)}/`;
+      const report = vi.fn();
       const guarded = createNextVersionFetch(
         (_input, init) => globalThis.fetch(local, init),
-        vi.fn(),
+        report,
       );
       const response = await guarded(NEXT_VERSION_METADATA_URL);
       const body = response.json();
       const reason = new globalThis.DOMException("Fixture body deadline", "TimeoutError");
       deadline.abort(reason);
       await expect(body).rejects.toBe(reason);
+      expect(report).toHaveBeenCalledExactlyOnceWith();
     } finally {
       server.closeAllConnections();
       await new Promise((resolve) => {
         server.close(resolve);
       });
     }
+  });
+
+  it("does not report a later timeout after JSON was consumed successfully", async () => {
+    const report = vi.fn();
+    const response = globalThis.Response.json({ latest: "16.3.8" });
+    const guarded = createNextVersionFetch(vi.fn().mockResolvedValue(response), report);
+    expect(await (await guarded(NEXT_VERSION_METADATA_URL)).json()).toEqual({ latest: "16.3.8" });
+    deadline.abort(new globalThis.DOMException("Fixture later deadline", "TimeoutError"));
+    expect(report).not.toHaveBeenCalled();
   });
 
   it("propagates registry errors without inventing version metadata", async () => {

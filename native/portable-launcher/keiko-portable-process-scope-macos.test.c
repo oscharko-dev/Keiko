@@ -109,7 +109,7 @@ static void churn_controls(void) {
   keiko_macos_classify(&scope);
   assert(child->membership == KEIKO_MACOS_OWNED);
   keiko_macos_scope_member *unclassified = keiko_macos_member(&scope, next++, 1);
-  unclassified->identity.parent_unique_id = 10; /* Collected unrelated ancestor. */
+  unclassified->identity.parent_unique_id = 9; /* Never-observed ancestor. */
   unclassified->seen = scope.epoch;
   assert(keiko_macos_scope_reclaim(&scope));
   keiko_macos_classify(&scope);
@@ -118,10 +118,61 @@ static void churn_controls(void) {
   keiko_macos_scope_destroy(&scope);
 }
 
+static void retained_ancestry_controls(void) {
+  keiko_macos_process_scope scope = {0};
+  unsigned int live, unknown;
+  scope.members = calloc(KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*scope.members));
+  assert(scope.members != NULL);
+  scope.root_unique_id = 1;
+  scope.epoch = 3;
+  keiko_macos_scope_member *root = keiko_macos_member(&scope, 1, 1);
+  root->membership = KEIKO_MACOS_OWNED;
+  keiko_macos_scope_member *unrelated = keiko_macos_member(&scope, 10, 1);
+  unrelated->membership = KEIKO_MACOS_UNRELATED;
+  unrelated->seen = 1;
+  keiko_macos_scope_member *child = keiko_macos_member(&scope, 11, 1);
+  child->identity.parent_unique_id = 10;
+  child->seen = scope.epoch;
+  keiko_macos_scope_member *unobserved = keiko_macos_member(&scope, 12, 1);
+  unobserved->identity.parent_unique_id = 9;
+  unobserved->seen = scope.epoch;
+  assert(keiko_macos_scope_reclaim(&scope));
+  keiko_macos_classify(&scope);
+  assert(keiko_macos_member(&scope, 11, 0)->membership == KEIKO_MACOS_UNRELATED);
+  assert(keiko_macos_member(&scope, 12, 0)->membership == KEIKO_MACOS_UNKNOWN);
+  assert(keiko_macos_scope_live(&scope, &live, &unknown) && live == 0 && unknown == 1);
+  keiko_macos_scope_destroy(&scope);
+}
+
+static void unrelated_history_controls(void) {
+  keiko_macos_process_scope scope = {0};
+  assert(!keiko_macos_remember_unrelated(&scope, 0));
+  const uint64_t identities[] = {10, 12, 11, 10, 20, 19, UINT64_MAX};
+  for (size_t i = 0; i < sizeof(identities) / sizeof(identities[0]); ++i)
+    assert(keiko_macos_remember_unrelated(&scope, identities[i]));
+  assert(scope.unrelated_count == 3);
+  assert(scope.unrelated_history[0].first == 10 && scope.unrelated_history[0].last == 12);
+  assert(scope.unrelated_history[1].first == 19 && scope.unrelated_history[1].last == 20);
+  assert(keiko_macos_known_unrelated(&scope, UINT64_MAX));
+  assert(!keiko_macos_known_unrelated(&scope, 0));
+  assert(!keiko_macos_known_unrelated(&scope, 13));
+  assert(!keiko_macos_known_unrelated(&scope, 18));
+  keiko_macos_scope_destroy(&scope);
+  for (uint64_t i = 0; i < KEIKO_MACOS_SCOPE_CAPACITY; ++i)
+    assert(keiko_macos_remember_unrelated(&scope, i * 2u + 1u));
+  assert(scope.unrelated_count == KEIKO_MACOS_SCOPE_CAPACITY);
+  assert(!keiko_macos_remember_unrelated(&scope, UINT64_MAX));
+  assert(!keiko_macos_known_unrelated(&scope, UINT64_MAX));
+  assert(!keiko_macos_known_unrelated(&scope, 2));
+  keiko_macos_scope_destroy(&scope);
+}
+
 int main(void) {
   identity_controls();
   scope_controls();
   churn_controls();
+  retained_ancestry_controls();
+  unrelated_history_controls();
   puts("macOS process identity, generation-bound signals and scope controls passed");
   return 0;
 }

@@ -399,7 +399,11 @@ Node/libuv (`CLOCK_MONOTONIC_RAW`); Linux uses `CLOCK_MONOTONIC`. Admission reta
 deadline plus its existing ten-minute restoration tail; a delayed response cannot extend it.
 The Darwin stop loop retains the original stop deadline across its 50-ms observation ticks.
 The process scope reclaims only stale unrelated identities, rehashing its bounded table while
-retaining every owned or unclassified ancestor. Unknown surviving processes still block proof.
+retaining every owned or unclassified ancestor. Exact, positively established unrelated ancestry
+survives reclamation in bounded compact identity ranges. Only adjacent observed identities merge;
+an unobserved gap never becomes unrelated evidence. Exhausted history storage fails closed.
+Unknown surviving processes still block proof. Existing native-owner Activity Log outcomes record
+whether cleanup was reaped or remains held.
 
 The private application environment also retains the running app's canonical working directory.
 The coordinator requires that directory to remain real, canonical and available before launching

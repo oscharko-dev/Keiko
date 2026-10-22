@@ -13,6 +13,12 @@ function requestSignal(input, init) {
   return init?.signal ?? (input instanceof globalThis.Request ? input.signal : undefined);
 }
 
+function observeJsonRead(response, onRejected) {
+  const readJson = response.json.bind(response);
+  response.json = () => readJson().catch(onRejected);
+  return response;
+}
+
 export function createNextVersionFetch(fetchImpl, reportTimeout) {
   return (input, init) => {
     if (requestUrl(input) !== NEXT_VERSION_METADATA_URL) return fetchImpl(input, init);
@@ -20,9 +26,13 @@ export function createNextVersionFetch(fetchImpl, reportTimeout) {
     const inherited = requestSignal(input, init);
     const signal =
       inherited === undefined ? timeout : globalThis.AbortSignal.any([inherited, timeout]);
-    return fetchImpl(input, { ...init, signal }).catch((error) => {
+    const onRejected = (error) => {
       if (timeout.aborted && inherited?.aborted !== true) reportTimeout();
       throw error;
-    });
+    };
+    return fetchImpl(input, { ...init, signal }).then(
+      (response) => observeJsonRead(response, onRejected),
+      onRejected,
+    );
   };
 }
