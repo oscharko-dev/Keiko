@@ -1,23 +1,15 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+
+import { copyPackageFixtureSources } from "../../scripts/__tests__/support/private-repository-fixture.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const RUNNER = join(REPO_ROOT, "scripts", "dev-runner.mjs");
-const DEFAULT_DEV_PID_FILE = join(REPO_ROOT, ".keiko", "dev", "dev-ui.pid.json");
-const UI_TSCONFIG = join(REPO_ROOT, "packages", "keiko-ui", "tsconfig.json");
 const PUBLIC_READY_TIMEOUT_MS = 180_000;
 const PUBLIC_READY_POLL_MS = 250;
 const DEV_RUNNER_TEST_TIMEOUT_MS = 240_000;
@@ -144,36 +136,39 @@ function killProcessTree(child: ChildProcess | undefined): void {
   }
 }
 
-function processIsRunning(pid: unknown): boolean {
-  if (!Number.isInteger(pid)) return false;
-  try {
-    process.kill(pid as number, 0);
-    return true;
-  } catch {
-    return false;
-  }
+let fixtureRoot: string | undefined;
+let fixturePrepared: Promise<string> | undefined;
+
+async function prepareRunnerFixture(): Promise<string> {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dev-runner-source-"));
+  fixtureRoot = root;
+  await copyPackageFixtureSources(REPO_ROOT, root);
+  return root;
 }
 
-function defaultDevUiIsRunning(): boolean {
-  if (!existsSync(DEFAULT_DEV_PID_FILE)) return false;
-  try {
-    const parsed = JSON.parse(readFileSync(DEFAULT_DEV_PID_FILE, "utf8")) as {
-      readonly runnerPid?: unknown;
-    };
-    return processIsRunning(parsed.runnerPid);
-  } catch {
-    return false;
-  }
+function runnerFixture(): Promise<string> {
+  fixturePrepared ??= prepareRunnerFixture();
+  return fixturePrepared;
 }
+
+afterAll(() => {
+  if (fixtureRoot !== undefined) rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 describe("scripts/dev-runner.mjs readiness gate", () => {
   let stateDir: string | undefined;
   let child: ChildProcess | undefined;
   let childPortCollision: Server | undefined;
-  let uiTsconfigBefore: string | undefined;
+  let childClosed: Promise<void> | undefined;
+
+  function retainRunner(spawned: ChildProcess): void {
+    child = spawned;
+    childClosed = new Promise<void>((resolveClose) => spawned.once("close", resolveClose));
+  }
 
   afterEach(async () => {
     killProcessTree(child);
+    await childClosed;
     if (childPortCollision !== undefined) {
       const collision = childPortCollision;
       await new Promise<void>((resolvePromise) => {
@@ -183,34 +178,27 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
       });
       childPortCollision = undefined;
     }
-    await sleep(500);
     if (stateDir !== undefined) {
       rmSync(stateDir, { recursive: true, force: true });
       stateDir = undefined;
     }
-    if (uiTsconfigBefore !== undefined) {
-      writeFileSync(UI_TSCONFIG, uiTsconfigBefore, "utf8");
-      uiTsconfigBefore = undefined;
-    }
     child = undefined;
+    childClosed = undefined;
   });
 
   it(
     "does not proxy transient Next warmup 500s through the public port",
     async () => {
-      if (defaultDevUiIsRunning()) {
-        return;
-      }
-
-      uiTsconfigBefore = readFileSync(UI_TSCONFIG, "utf8");
+      const repositoryRoot = await runnerFixture();
+      const runner = join(repositoryRoot, "scripts", "dev-runner.mjs");
       stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dev-runner-"));
       const publicPort = await freePort();
       const bffPort = await freePort();
       const nextPort = await freePort();
       const output: string[] = [];
 
-      const spawned = spawn(process.execPath, [RUNNER], {
-        cwd: REPO_ROOT,
+      const spawned = spawn(process.execPath, [runner], {
+        cwd: repositoryRoot,
         detached: true,
         env: {
           ...process.env,
@@ -224,7 +212,7 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
-      child = spawned;
+      retainRunner(spawned);
       spawned.stdout.on("data", (chunk) => output.push(String(chunk)));
       spawned.stderr.on("data", (chunk) => output.push(String(chunk)));
 
@@ -255,19 +243,16 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
   it(
     "recovers the public proxy after a Next.js respawn selects a new child port",
     async () => {
-      if (defaultDevUiIsRunning()) {
-        return;
-      }
-
-      uiTsconfigBefore = readFileSync(UI_TSCONFIG, "utf8");
+      const repositoryRoot = await runnerFixture();
+      const runner = join(repositoryRoot, "scripts", "dev-runner.mjs");
       stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dev-runner-"));
       const stateFile = join(stateDir, "dev-ui.pid.json");
       const publicPort = await freePort();
       const bffPort = await freePort();
       const nextPort = await freePort();
 
-      child = spawn(process.execPath, [RUNNER], {
-        cwd: REPO_ROOT,
+      const spawned = spawn(process.execPath, [runner], {
+        cwd: repositoryRoot,
         detached: true,
         env: {
           ...process.env,
@@ -284,6 +269,7 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
         },
         stdio: "ignore",
       });
+      retainRunner(spawned);
 
       await waitFor(
         async () => statusOf(publicPort),
@@ -299,7 +285,7 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
       );
       const nextPid = initialState.children?.at(-1);
       expect(Number.isInteger(nextPid)).toBe(true);
-      const runnerPid = child.pid;
+      const runnerPid = spawned.pid;
       if (runnerPid === undefined) throw new Error("dev runner PID is unavailable");
       suspendProcess(runnerPid);
       try {
