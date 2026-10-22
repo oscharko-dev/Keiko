@@ -981,6 +981,7 @@ export const CLIENT_STAGE_IDS = [
   "gateway profile refresh",
   "model selection availability",
   "markdown copy feedback",
+  "transcript navigation",
   "browser approval",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];

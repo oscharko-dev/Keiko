@@ -1549,7 +1549,11 @@ function WorkbenchColumns({
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
   // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
   const sessionStreamRef = useRef<HTMLDivElement>(null);
-  const { onScroll: onStreamScroll, resume: followNewest } = useFollowNewest(
+  const {
+    onScroll: onStreamScroll,
+    regionRef: streamRegionRef,
+    resume: followNewest,
+  } = useFollowNewest(
     sessionStreamRef,
     sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length),
   );
@@ -1710,7 +1714,7 @@ function WorkbenchColumns({
           <WorkbenchWelcome />
         ) : (
           <div
-            ref={sessionStreamRef}
+            ref={streamRegionRef}
             className={styles.sessionStream}
             role="log"
             aria-label={t("codingWorkbench.readiness.eventStream.label")}
