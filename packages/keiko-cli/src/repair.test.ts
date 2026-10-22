@@ -109,7 +109,11 @@ function pathInsideRepository(path: string): boolean {
 function makePolicyAllowedRoot(prefix: string): string {
   const cwdParent = dirname(process.cwd());
   const parent =
-    cwdParent.startsWith(REAL_TMPDIR) || pathInsideRepository(cwdParent) ? homedir() : cwdParent;
+    cwdParent === dirname(cwdParent) ||
+    cwdParent.startsWith(REAL_TMPDIR) ||
+    pathInsideRepository(cwdParent)
+      ? homedir()
+      : cwdParent;
   const root = mkdtempSync(join(parent, `.keiko-${prefix}-`));
   tempRoots.push(root);
   return root;
