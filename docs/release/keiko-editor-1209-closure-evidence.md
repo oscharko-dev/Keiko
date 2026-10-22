@@ -22,6 +22,11 @@ controls remain active until Monaco vendors a DOMPurify release above the affect
 Maintenance update (2026-09-30): PR #3678 advances the root DOMPurify override to 3.4.16, the release
 that fixes GHSA-p98j-92pf-mc4p. This changes no editor trust boundary or Monaco pin.
 
+Maintenance update (2026-10-22): PR #4056 advances the same override to 3.4.17 for the three
+newly matched DOMPurify advisories recorded in the
+[dependency security closeout](2296-dependency-security-closeout.md). The inert Markdown sinks and
+Monaco pin remain unchanged.
+
 ## 0. Update (2026-06-20) — wave-2 delivered; the deferral statements below are superseded
 
 > This dated update supersedes the wave-2 deferral statements in §1, §3, §4 (Target Outcomes 5/7/8),

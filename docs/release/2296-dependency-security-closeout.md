@@ -57,6 +57,16 @@ repository-wide DOMPurify override to 3.4.16, fixing
 exact OSV Scanner 2.6.0 repository scan both report zero vulnerabilities with these patches; no
 waiver or gate threshold changed.
 
+On 2026-10-22 the required OSV scan newly matched DOMPurify 3.4.16 against
+[GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7),
+[GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) and
+[GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), and `ip-address`
+10.7.2 / 10.7.3 against [GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5).
+PR #4056 updates the existing DOMPurify override to the identified patched 3.4.17 release and both
+the root and native OpenCode host lockfiles to `ip-address` 10.7.4 within their existing ranges.
+The exact local OSV Scanner 2.6.0 invocation reproduces all five findings before the updates and
+reports no open findings afterward. The two existing waivers are unchanged.
+
 On 2026-10-02 GitHub reviewed
 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (braces through 3.0.3)
 and [GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) (http-cache-semantics

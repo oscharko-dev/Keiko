@@ -182,3 +182,8 @@ The 2026-10-22 OSV scan newly matched `next@16.3.8` against GHSA-2464-fhr4-w9xw 
 GHSA-p3m5-59mp-jv5r. The same local scanner reproduces both findings on the earlier lockfile and
 reports no open findings after the aligned `next` / `eslint-config-next` update to the advisory's
 patched 16.4.1 release. No exception was added to the vulnerability policy.
+
+The subsequent required scan newly matches three DOMPurify advisories and `ip-address` in both
+dependency lockfiles. The exact local OSV invocation reproduces all five findings. Updating the
+existing DOMPurify override to 3.4.17 and the two `ip-address` resolutions to 10.7.4 clears them;
+the same scanner reports no open findings. Existing vulnerability exceptions remain unchanged.
