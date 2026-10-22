@@ -165,9 +165,18 @@ settled. Both fail against the earlier rendering. Refreshes retain stable rows a
 state with `aria-busy`; initial empty loads retain their visible loading notice. Git results retain
 their reserved line without displaying a message for an ordinary non-repository folder. Existing
 read lifecycle evidence remains on the Activity Log. Complete affected browser qualification and
-current-head CI are still required before integration or release. Both corrected pointer cases pass
-three consecutive runs each with the patched Next.js runtime; the complete affected shard is
-running separately.
+current-head CI are still required before integration or release. Both corrected pointer cases and
+the exact failing inline-editor journey pass three consecutive runs each with the patched Next.js
+runtime. The complete affected Firefox shard then passes all 61 cases. Its navigation helper also
+requires the lazy navigation controls' actual flex layout before the original pointer actions;
+functional assertions, timeouts and retry policy remain unchanged.
+
+Fresh broad package qualification records 57,307 passing tests. One suite cannot initialize because
+its Darwin-only C adapter still names the retired app-runtime dispatch function. Updating those
+inert fail-closed stubs to the two current job entrypoints preserves the actual consumed-root cleanup
+code and its assertions; all nine controls pass afterward. The complete fresh scripts coverage run
+also passes all 7,657 tests, including that suite. This test-adapter correction changes no production
+Node source or coverage offsets. Fresh UI coverage passes all 10,872 tests.
 
 The 2026-10-22 OSV scan newly matched `next@16.3.8` against GHSA-2464-fhr4-w9xw and
 GHSA-p3m5-59mp-jv5r. The same local scanner reproduces both findings on the earlier lockfile and

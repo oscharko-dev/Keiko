@@ -218,10 +218,22 @@ async function seedModalProofWindow(
   }, windowEntry);
 }
 
+async function expectFilesNavigationLayout(
+  filesWindow: ReturnType<Page["getByRole"]>,
+): Promise<void> {
+  // The lazy widget can expose its buttons before its navigation stylesheet is applied.
+  // Require its real layout before a pointer action, as well as retaining row actionability.
+  const controls = filesWindow
+    .getByRole("button", { name: "Open parent folder", exact: true })
+    .locator("..");
+  await expect(controls).toHaveCSS("display", "flex");
+}
+
 async function openTreePath(
   filesWindow: ReturnType<Page["getByRole"]>,
   path: string,
 ): Promise<void> {
+  await expectFilesNavigationLayout(filesWindow);
   const row = filesWindow.locator(`[role="treeitem"].tr-row[data-path="${path}"]`);
   await expect(row).toBeVisible();
   await row.click();
@@ -548,6 +560,7 @@ for (const surface of ["directory", "git"] as const) {
     await expect.poll(() => release !== undefined).toBe(true);
     const completeRead = release;
     if (completeRead === undefined) throw new Error("The background read must be held");
+    await expectFilesNavigationLayout(filesWindow);
     await row.hover();
     const bounds = await row.boundingBox();
     if (bounds === null) throw new Error("The retained folder row must remain visible");
