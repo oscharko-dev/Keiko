@@ -13,7 +13,7 @@ import {
   commitPacket,
   compileOwnerFixture,
   appLaunchPacket,
-} from "./app-owner-harness.mjs";
+} from "./test-support.app-owner.mjs";
 import { readBytes, streamReader } from "../protocol-harness.mjs";
 
 const { fetch, AbortSignal } = globalThis;

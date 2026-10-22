@@ -89,6 +89,13 @@ static int reconcile_fixture(const char *directory) {
       !keiko_coordinator_hash_file(path, UINT64_MAX - 1u, digest)) return -1;
   context.plan.field[KEIKO_KHP_CURRENT_SUPERVISOR_SHA256] = digest;
   context.plan.field[KEIKO_KHP_ACTIVATION_ID] = (char *)"inert-activation";
+#if defined(__APPLE__)
+  if (scenario >= 11) {
+    context.app_tree_reaped = 1;
+    context.supervisor_pid = scenario == 12 ? 17 : -1;
+    if (scenario == 13) now_ms = deadline_ms + 1u;
+  }
+#endif
   if (scenario == 6) now_ms = deadline_ms;
   if (scenario == 8) unavailable = 1;
   return keiko_coordinator_reconcile_stopped_runtime(&context, deadline_ms);

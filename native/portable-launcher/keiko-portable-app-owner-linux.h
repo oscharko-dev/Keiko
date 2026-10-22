@@ -81,7 +81,8 @@ static int keiko_app_owner_select(keiko_runtime_owner *owner,
   if (selected != NULL) {
     if (!keiko_positive_u64(selected, UINT64_MAX, &absolute) ||
         absolute < owner->commit_deadline ||
-        absolute - owner->started_at > KEIKO_COORDINATOR_MAX_CONTROL_MS) return 0;
+        absolute - owner->started_at >
+          KEIKO_COORDINATOR_MAX_CONTROL_MS + keiko_khp_phase_tail(KEIKO_KHP_CLEANUP_AT)) return 0;
     owner->commit_deadline = absolute;
   }
   owner->state = keiko_app_owner_move(keiko_coordinator_open_directory_path(owner->state_path));
@@ -116,9 +117,9 @@ static int keiko_app_owner_state_named(const keiko_runtime_owner *owner) {
     fstat(descriptor, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named.st_ino;
   if (result) {
     hidden = openat(descriptor, ".keiko", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (keiko_app_owner_directory(hidden))
+    if (hidden >= 0 && keiko_app_owner_directory(hidden))
       receipts = openat(hidden, "ui-runtime", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    result = keiko_app_owner_directory(receipts) && fstat(owner->receipts, &held) == 0 &&
+    result = receipts >= 0 && keiko_app_owner_directory(receipts) && fstat(owner->receipts, &held) == 0 &&
       fstat(receipts, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named.st_ino;
   }
   if (receipts >= 0 && close(receipts) != 0) result = 0;
@@ -150,7 +151,11 @@ static int keiko_app_owner_record(keiko_runtime_owner *owner, const char *phase,
       !S_ISREG(named.st_mode) || named.st_nlink != 1 || named.st_uid != geteuid() ||
       (named.st_mode & 0777) != 0600) goto cleanup;
   if (initial) {
+#if defined(__APPLE__)
+    if (renameatx_np(owner->receipts, temporary, owner->receipts, name, RENAME_EXCL) != 0)
+#else
     if (renameat2(owner->receipts, temporary, owner->receipts, name, RENAME_NOREPLACE) != 0)
+#endif
       goto cleanup;
   } else if (renameat(owner->receipts, temporary, owner->receipts, name) != 0) goto cleanup;
   owner->receipt_identity = named;
@@ -224,9 +229,8 @@ static void keiko_app_owner_cancel(keiko_runtime_owner *owner) {
   if (!keiko_owner_response(owner, header, payload, deadline) ||
       read_u16(header + 6) != RESPONSE_REAPED || read_u32(header + 8) != 8 ||
       read_u32(payload + 4) != 0) return;
-  struct pollfd held = {owner->root_handle, POLLIN, 0};
   int status;
-  if (poll(&held, 1, 0) == 1 && (held.revents & POLLIN) != 0 &&
+  if (keiko_owner_root_exited(owner) &&
       keiko_coordinator_waitpid_deadline(&owner->supervisor, &status, deadline) &&
       WIFEXITED(status) && WEXITSTATUS(status) == 0)
     (void)keiko_app_owner_record(owner, "reaped", 0, deadline);

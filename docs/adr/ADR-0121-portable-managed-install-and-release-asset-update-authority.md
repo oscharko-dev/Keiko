@@ -126,9 +126,10 @@ self-update manual-only.
 ### D3 — First-run install state is separate from `.keiko`
 
 First run expands the portable archive into a dedicated managed install folder. Windows remains
-user-local under `%LOCALAPPDATA%\Programs\Keiko`. The two release-qualified macOS targets install
-at exactly `/Applications/Keiko.app`, because Apple's Endpoint Security activation contract
-requires the containing app to run from `/Applications`.
+user-local under `%LOCALAPPDATA%\Programs\Keiko`. The macOS default is
+`/Applications/Keiko.app`; explicit setup may attest a dedicated user-owned local folder,
+including an external SSD. The ordinary app and updater lifecycle does not depend on Endpoint
+Security activation. Its optional Coding sandbox remains subject to its separate platform rules.
 
 That folder is distinct from `.keiko`, which remains the runtime-state root for governed local state
 such as update recovery, redacted evidence, and other Keiko-owned runtime data. Portable install
@@ -186,6 +187,17 @@ determine whether the product is installable. GitHub release prose is informatio
 The release-impact catalog remains the authoritative source of compatibility and remediation.
 It records whether a release requires restart, repair, local reindexing, migration, manual review,
 or other user action. It is the only compatibility/remediation authority for this release line.
+
+A future portable release carries the stable entries of that same catalog in
+`releaseImpact.catalog`, inside the Keiko-signed manifest. The installed reader validates the
+complete catalog, its unique entry identities, and its exact target entry before resolving all
+intermediate impacts. Remote prose and unauthenticated catalog fields cannot supply this authority.
+The manifest remains bounded to 1 MiB; archive expansion remains bounded to 2 GiB. The existing
+`update.release-trust.verify` event records the verified catalog entry count without catalog bodies.
+An already shipped reader that only understands its bundled catalog cannot acquire this behavior
+through release metadata alone; such installations require an explicit verified bootstrap before
+subsequent in-app updates. Historical release assets remain immutable.
+
 
 External release and asset metadata lookups must route through the governed server-side egress
 surface. Browser-tier code must not fetch GitHub update metadata or portable assets directly. Proxy,
@@ -255,6 +267,15 @@ POSIX activation and native-copy preparation share the existing target-layout ow
 the flat root launcher, setup manifest and runtime supervisor; macOS uses its app-bundle paths.
 Current and candidate setup lookup follow that same grammar before layout validation. This path
 resolution grants no release trust, platform verification waiver or native handoff acceptance.
+
+On macOS, a missing Apple Developer ID does not prevent native-copy preparation. After the
+existing managed-registration and plan validation, both the current executable and its private
+copy must match the plan's exact current launcher or supervisor SHA-256. The existing bounded,
+nonblocking descriptor reader rejects changed identities, symlinks, additional hard links and
+digest mismatches. This is copy identity within an already admitted installation; a caller-supplied
+digest alone does not admit an installation or a candidate. When the release carries an Apple
+identity, its existing strict identity checks remain additional verification. No positive Apple
+signing or notarization evidence is fabricated for an unsigned release.
 
 Handoff digest, native-copy, plan, receipt and verification-acknowledgement reads open descriptors
 nonblocking before validating regular-file type, link count, identity and byte bounds. A FIFO
@@ -360,8 +381,58 @@ later proof or response failure. Error cleanup may signal only a still-owned chi
 same bounded wait. The POSIX coordinator retains this ownership state across stop, failed-start,
 reconciliation and monitor-probe calls. The probe shares the same wait/cleanup owner, refuses an
 expired or unavailable monotonic clock before spawning and checks expiry after wait completion.
-These checks do not establish immutable generation membership or replace Endpoint Security
-qualification.
+These legacy monitor checks do not establish immutable generation membership or replace Endpoint
+Security qualification for the Coding sandbox. The ordinary macOS application lifecycle instead
+uses the existing persistent native app-owner protocol with a separate account-free helper role.
+The helper runs in a temporary launchd job in the current user's GUI login domain. Each job receives
+its own kernel resource coalition. Its descendants inherit that membership through fork, exec,
+reparenting and `setsid`; an unprivileged descendant cannot select another resource coalition.
+The job is loaded from a private temporary definition with `KeepAlive` disabled, then removed after
+the helper exits. Admission first checks that the target GUI domain is available under a bounded
+read-only launchctl query. It is not installed as a persistent LaunchAgent. A same-user socket checks the
+peer's executable and transfers only the existing lifecycle descriptors. The receiver acknowledges
+their installation before the sender releases its copies; descriptor presence is preserved exactly.
+Setup errors before descriptor transfer return the existing KRS1 observation error. Once descriptors
+transfer, the job alone owns that response stream, including when its acknowledgement is uncertain.
+The platform-owned `/usr/bin/env -i` clears launchd's inherited loader environment before the native
+helper starts; the job role refuses a nonempty native environment. No application credentials or
+task arguments enter the launchd definition or launchctl arguments.
+The helper admits a suspended direct child in that coalition, with a separate job-control process
+group so orphan-group hangup signals cannot terminate its supervisor. Darwin unique IDs and kernel
+audit-token signals retain protection against PID reuse. Complete current coalition membership
+replaces inference from snapshots of the whole host's ancestry. An unobserved intermediate parent
+therefore cannot hide an owned detached child or make a foreign orphan block cleanup. Incomplete
+membership or identity observations still refuse zero-live proof. The persistent
+owner creates update coordinators outside the previous app generation and releases its private
+old-generation proof only after the helper reports zero live processes and is successfully reaped.
+The updater never substitutes EOF, a missing PID or a free port for that proof. Application
+credentials travel over the existing private environment packet, never the native owner environment.
+This app lifecycle is not an Endpoint Security sandbox qualification.
+
+The Darwin owner and coordinator use the same continuous, unadjusted monotonic clock as
+Node/libuv (`CLOCK_MONOTONIC_RAW`); Linux uses `CLOCK_MONOTONIC`. Admission retains its original
+15-minute maximum. The validated plan's cleanup grant is bounded by that original admission
+deadline plus its existing ten-minute restoration tail; a delayed response cannot extend it.
+The Darwin stop loop retains the original stop deadline across its 50-ms observation ticks.
+The process scope reads current kernel membership at admission and cleanup instead of continuously
+accumulating global process history. Foreign churn is not an application lifetime limit. Bounded
+enumeration, identity changes during a read, inaccessible membership and incomplete scans still
+refuse proof. Existing native-owner Activity Log outcomes record whether cleanup was reaped or
+remains held. The bridge, persistent owner and update coordinators remain outside the app's resource
+coalition; the supervisor itself is excluded by its exact Darwin unique ID.
+
+The private application environment also retains the running app's canonical working directory.
+The coordinator requires that directory to remain real, canonical and available before launching
+the successor; it does not silently select the install folder as the user's workspace. Streaming
+progress stores its phase at the lifecycle level and only bounded byte counts inside `progress`.
+The closed runtime-state codec remains strict and rejects unknown byte-counter fields.
+After the successor publishes verification, startup keeps readiness closed while the native
+coordinator completes cleanup under the plan's original cleanup deadline. Recovery then settles
+the completed receipt chain and refreshes the session projection before reporting the app ready.
+Verification alone must not leave the update indefinitely awaiting a second restart to settle.
+Durable terminal settlement also releases the matching session's existing file lock, including
+an ordinary native successor without a separate crash-recovery ownership descriptor. A descriptor,
+when present, still requires its exact ownership identity before the session lock is released.
 
 The Linux native generation implementation uses an atomically held `clone3` PID handle for a
 new user/PID namespace init; the outer owner remains outside that generation. The init verifies
@@ -748,6 +819,12 @@ predicates. Any mutation, target substitution, partial release, unknown key, mal
 expired metadata, signature failure, or metadata version below an enforced high-water mark fails
 closed before download or staging. A target version must also be strictly newer than the installed
 version, so a valid older release cannot downgrade an installation.
+
+This contract covers the bundled macOS sidecar as well as the launcher. Update preflight and
+staging independently authenticate the complete manifest before accepting its exact sidecar
+digests with declared negative Apple evidence. Unsigned, expired, untrusted or modified manifests
+remain refused. Sidecar platform-signature and Coding qualification evidence stays false; accepting
+authenticated update bytes does not activate or qualify the optional Endpoint Security backend.
 
 Key ids are SHA-256 digests of the public SPKI bytes. Rotation is additive: ship a release that
 trusts old and new public keys before signing exclusively with the new private key. Removing a key

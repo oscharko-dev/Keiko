@@ -29,7 +29,20 @@ import {
   publishPortableHandoffVerifiedAck,
 } from "../../../packages/keiko-server/dist/update-portable-handoff-receipts.js";
 
-bindProcessScope(createNativeProcessScope());
+let startupStage = "ownership";
+process.on("uncaughtExceptionMonitor", (error) => {
+  writeFileSync(
+    join(process.env.KEIKO_STATE_DIR, `fixture-failure-${process.env.KEIKO_UI_LAUNCH_ID}.json`),
+    JSON.stringify({
+      stage: startupStage,
+      messageSha256: createHash("sha256").update(error.message).digest("hex"),
+    }),
+    { mode: 0o600 },
+  );
+});
+
+if (process.platform === "darwin") process.env.KEIKO_APP_RUNTIME_OWNER = "1";
+else bindProcessScope(createNativeProcessScope());
 if (!isProcessAlive(currentProcessId()))
   throw new Error("native fixture root ownership unavailable");
 if (process.env.KEIKO_HANDOFF_FIXTURE_FAIL_BOOT === "1") process.exit(73);
@@ -95,7 +108,7 @@ const coordinator = createPortableHandoffCoordinator({
     return true;
   },
   securityLogSink: { write: (event) => events.push(event) },
-  acceptanceTimeoutMs: 15_000,
+  // Exercise the real maximum/default grant; a clock-domain offset must not reject it.
   nativeControl: process.env.KEIKO_HANDOFF_FIXTURE_COALESCED === "1" ? nativeControl : undefined,
 });
 
@@ -116,6 +129,7 @@ function fixtureState() {
     environmentDigest: createHash("sha256")
       .update(process.env.KEIKO_HANDOFF_FIXTURE_DATA ?? "")
       .digest("hex"),
+    workingDirectoryDigest: createHash("sha256").update(process.cwd()).digest("hex"),
   };
 }
 
@@ -178,6 +192,7 @@ if (process.env.KEIKO_HANDOFF_FIXTURE_RESUME === "1") {
   const restored = process.env.KEIKO_UI_LAUNCH_ID === plan.restoreLaunchId;
   const kind = restored ? "restored-verify" : "verify";
   for (const outcome of ["intent", "completed"]) {
+    startupStage = `verification-${outcome}`;
     const previous = readPortableHandoffReceipts(stateDir, wal.activationId).at(-1);
     appendPortableHandoffReceipt({
       stateDir,
@@ -191,4 +206,5 @@ if (process.env.KEIKO_HANDOFF_FIXTURE_RESUME === "1") {
   }
   if (!restored)
     publishPortableHandoffVerifiedAck({ stateDir, activationId: wal.activationId, planSha256 });
+  startupStage = "verified";
 }

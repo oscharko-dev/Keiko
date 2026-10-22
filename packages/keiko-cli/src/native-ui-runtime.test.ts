@@ -121,6 +121,7 @@ describe("native UI client admission", () => {
     );
     expect(packets[0]?.includes(Buffer.from("FIXTURE_139=value"))).toBe(true);
     expect(packets[0]?.includes(Buffer.from("OPENAI_API_KEY=fixture-placeholder"))).toBe(true);
+    expect(packets[0]?.includes(Buffer.from("KEIKO_UI_WORKING_DIRECTORY=/fixture"))).toBe(true);
     expect(packets[0]?.readUInt16LE(14)).toBe(3);
     await launch.commit();
     launch.release();

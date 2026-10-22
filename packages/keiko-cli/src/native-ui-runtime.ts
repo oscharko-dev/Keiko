@@ -11,7 +11,7 @@ import { isProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { readNativeUiResponse } from "./native-ui-channel.js";
 import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
-import type { PortableLayout } from "./portable-shared.js";
+import type { PortableLayout, PortableTarget } from "./portable-shared.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 export interface NativeUiRuntime {
@@ -36,14 +36,23 @@ export async function resolveManagedNativeUiRuntime(
   home: string,
   platform: NodeJS.Platform,
 ): Promise<NativeUiRuntime | undefined> {
-  if (platform !== "linux" || !existsSync(join(stateDir, "portable-install-state.json")))
+  if (
+    !new Set(["linux", "darwin"]).has(platform) ||
+    !existsSync(join(stateDir, "portable-install-state.json"))
+  )
     return undefined;
   const { attestedPortableInstallRecord } = await import("./portable-install.js");
   const installed = attestedPortableInstallRecord(stateDir, env, home);
-  if (installed?.target !== "linux-x64" || installed.registration.status !== "managed")
-    return undefined;
+  if (installed?.registration.status !== "managed") return undefined;
+  const nativePlatform = nativeUiPlatform(installed.target);
+  if (nativePlatform !== platform) return undefined;
   if (installed.layout === undefined) throw new Error("native-ui-install-attestation-unavailable");
   return nativeUiRuntimeForLayout(installed.layout);
+}
+
+function nativeUiPlatform(target: PortableTarget): NodeJS.Platform {
+  if (target === "linux-x64") return "linux";
+  return target.startsWith("macos-") ? "darwin" : "win32";
 }
 
 export function nativeUiRuntimeForLayout(
@@ -132,7 +141,7 @@ export class NativeUiAdmissionError extends Error {
   }
 }
 
-/** Linux libuv and the native owner share CLOCK_MONOTONIC; sample before the remaining grant. */
+/** Match libuv's clock: MONOTONIC on Linux, MONOTONIC_RAW (continuous) on Darwin. */
 export function nativeUiStartDeadline(deadline: number): string {
   const observed = process.hrtime.bigint() / 1_000_000n;
   const remaining = Math.floor(deadline - performance.now());
@@ -202,7 +211,10 @@ function spawnNativeUiOwner(input: NativeUiStartInput): NativeUiOwner {
   let packet: Buffer, child: ChildProcess;
   let deadline: string;
   try {
-    packet = Buffer.concat([launchPacket(input), encodeAppEnvironmentPacket(input.env)]);
+    packet = Buffer.concat([
+      launchPacket(input),
+      encodeAppEnvironmentPacket({ ...input.env, KEIKO_UI_WORKING_DIRECTORY: input.cwd }),
+    ]);
     deadline = nativeUiStartDeadline(input.deadline);
     input.reserve();
     if (performance.now() >= input.deadline) throw new Error("native-ui-start-grant-expired");

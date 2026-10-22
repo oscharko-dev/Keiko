@@ -64,7 +64,10 @@ import {
   assemblePortableReleaseAssets,
   validatePortableReleaseSet,
 } from "../assemble-portable-release-assets.mjs";
-import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
+import {
+  readZipArchiveUncompressedSize,
+  writeZipArchiveFromDirectory,
+} from "../lib/zip-archive.mjs";
 import {
   USEARCH_RUNTIME_MANIFEST,
   usearchRuntimeApproval,
@@ -284,6 +287,7 @@ const BASE_MANIFEST = {
     assetName: "keiko-windows-x64.zip",
     archiveFormat: "zip",
     sizeBytes: 12345678,
+    uncompressedSizeBytes: 23456789,
     sha256: DIGEST_A,
   },
   provenance: {
@@ -1057,6 +1061,7 @@ function writeAssemblerFixture(
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
+    candidate.artifact.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
     candidate.artifact.sha256 = digestFor(readFileSync(archivePath));
     const resourceRoot =
       target.nodePlatform === "darwin"
@@ -1945,6 +1950,17 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
   });
 
+  it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 2 ** 31 + 1])(
+    "rejects an expanded archive size that the installed reader refuses: %s",
+    (uncompressedSizeBytes) => {
+      const candidate = manifest();
+      candidate.artifact.uncompressedSizeBytes = uncompressedSizeBytes;
+      expect(validatePortableManifest(candidate).join("\n")).toContain(
+        "artifact.uncompressedSizeBytes",
+      );
+    },
+  );
+
   it("accepts manifests with absent or empty sidecar runtimes", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
     const candidate = manifest();
@@ -2154,6 +2170,41 @@ describe("validatePortableManifest", () => {
     const failures = validatePortableManifest(candidate).join("\n");
     expect(failures).toContain("evidence.rawLogsPath: uses a forbidden manifest key");
     expect(failures).toContain("releaseImpact.packageManagerOutput: uses a forbidden manifest key");
+  });
+
+  it("accepts public catalog store descriptions while rejecting private data in that catalog", () => {
+    const candidate = manifest();
+    candidate.releaseImpact.catalog = {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: "public-local-knowledge-update",
+          affectedStateStores: ["local-knowledge", "task-workspaces"],
+          releaseNoteBullets: ["Updates the documented keiko.config.json settings."],
+        },
+      ],
+    };
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    const entry = candidate.releaseImpact.catalog.entries[0];
+    for (const value of [
+      "sk-testCredential123456789",
+      "/Users/customer/private.json",
+      ".keiko/provider-credentials.vault",
+      "config/provider-credentials.vault",
+      "config\\provider-credentials.vault",
+      "config/provider-credentials.vault,",
+      "(config\\provider-credentials.vault).",
+      "config/provider-credentials.vault-backup",
+      "https://user:pass@example.com/config",
+    ]) {
+      entry.releaseNoteBullets = [value];
+      expect(validatePortableManifest(candidate).join("\n")).toMatch(
+        /contains (?:secret-like|forbidden)/u,
+      );
+    }
+    entry.releaseNoteBullets = [];
+    entry.rawPayload = "local-knowledge";
+    expect(validatePortableManifest(candidate).join("\n")).toContain("forbidden payload reference");
   });
 
   it("rejects rollback eligibility and unverified platform signatures", () => {

@@ -3,9 +3,13 @@
 
 /* A role of the existing launcher, outside the generation held by its direct supervisor. */
 #include "../runtime-supervisor/macos/keiko_runtime_protocol.h"
+#if defined(__linux__)
 #include <sys/syscall.h>
 #include <sys/vfs.h>
 #include <linux/magic.h>
+#else
+#include "../runtime-supervisor/macos/keiko_runtime_process_scope.h"
+#endif
 
 #define KEIKO_OWNER_BOUND_MS 5000u
 
@@ -34,6 +38,11 @@ typedef struct {
   const char *state_path;
   const char *launch_id;
   struct stat receipt_identity;
+#if defined(__APPLE__)
+  keiko_macos_process_identity root_identity;
+  keiko_macos_process_identity scope_helper_identity;
+  pid_t scope_helper;
+#endif
 } keiko_runtime_owner;
 
 static void keiko_owner_close(int *descriptor) {
@@ -56,13 +65,16 @@ static int keiko_owner_write(int descriptor, const void *content, size_t size,
   return keiko_coordinator_write_deadline(descriptor, content, size, deadline);
 }
 
+#if defined(__linux__)
 #include "keiko-portable-process-scope-linux.h"
+#endif
 
 static int keiko_owner_packet_reader(int descriptor, void *bytes, size_t length, void *context) {
   const uint64_t *deadline = (const uint64_t *)context;
   return keiko_coordinator_read_exact_deadline(descriptor, bytes, length, *deadline);
 }
 
+#if defined(__linux__)
 static int keiko_owner_child(const char *helper, int executable, const int control[2],
                               const int response[2], int identity, int start_gate, int owner_handle,
                               int scope, int app_control, uint64_t deadline) {
@@ -207,6 +219,10 @@ static int keiko_owner_capture(keiko_runtime_owner *owner, uint64_t deadline) {
   return keiko_owner_root_reference(owner, deadline);
 }
 
+#else
+#include "keiko-portable-runtime-owner-macos.h"
+#endif
+
 static int keiko_owner_response(keiko_runtime_owner *owner, unsigned char header[12],
                                  unsigned char payload[64], uint64_t deadline) {
   if (!keiko_coordinator_read_exact_deadline(owner->response, header, 12, deadline) ||
@@ -215,6 +231,14 @@ static int keiko_owner_response(keiko_runtime_owner *owner, unsigned char header
   return size <= 64 && (size == 0 ||
     keiko_coordinator_read_exact_deadline(owner->response, payload, size, deadline));
 }
+
+#if defined(__linux__)
+static int keiko_owner_root_exited(const keiko_runtime_owner *owner) {
+  struct pollfd held = {owner->root_handle, POLLIN, 0};
+  return poll(&held, 1, 0) == 1 && (held.revents & POLLIN) != 0 &&
+         (held.revents & (POLLERR | POLLNVAL)) == 0;
+}
+#endif
 
 #include "keiko-portable-app-owner-linux.h"
 
@@ -254,6 +278,9 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
     int bounded = stopping || (owner->persistent && !owner->committed);
     keiko_handoff_bound(owner, &bound, &bounded);
     int timeout = !bounded ? -1 : bound - now > INT_MAX ? INT_MAX : (int)(bound - now);
+#if defined(__APPLE__)
+    if (timeout < 0 || timeout > 50) timeout = 50;
+#endif
     struct pollfd items[6] = {{stopping || (handoff != NULL && handoff->old_reaped) ? -1 : owner->controller, POLLIN | POLLHUP, 0},
                               {owner->response, POLLIN | POLLHUP, 0},
                               {owner->scope, POLLIN | POLLHUP, 0},
@@ -262,6 +289,9 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
                               {handoff == NULL ? -1 : handoff->child_handle, POLLIN, 0}};
     int ready = poll(items, 6, timeout);
     if (ready < 0 && errno == EINTR) continue;
+#if defined(__APPLE__)
+    if (ready == 0) ready = 1; /* A capped observation tick is not the stop deadline. */
+#endif
     if (ready == 0 && !stopping) continue;
     if (ready <= 0 || (stopping && !keiko_tree_before_deadline(stop_deadline))) return 0;
     uint64_t deadline = stopping ? stop_deadline : keiko_tree_now_ms() + KEIKO_OWNER_BOUND_MS;
@@ -289,8 +319,10 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
       }
       if (stopping) keiko_owner_close(&owner->scope);
     }
+#if defined(__linux__)
     if (owner->scope >= 0 && items[2].revents != 0 && !keiko_scope_serve(owner, deadline))
       keiko_owner_close(&owner->scope);
+#endif
     if (owner->app_control >= 0 && items[3].revents != 0 && !keiko_handoff_receive(owner) &&
         !keiko_handoff_close_app(owner)) return 0;
     if (owner->handoff != NULL && owner->handoff->response >= 0 && items[4].revents != 0 &&
@@ -298,7 +330,13 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
       if (!keiko_handoff_stop(owner, deadline) ||
           (owner->app_control >= 0 && !keiko_handoff_reply(owner, 10, 2, deadline))) return 0;
     }
-    if (owner->handoff != NULL && owner->handoff->child_handle >= 0 && items[5].revents != 0) {
+    if (owner->handoff != NULL &&
+#if defined(__APPLE__)
+        keiko_macos_handoff_exited(owner->handoff->child)
+#else
+        owner->handoff->child_handle >= 0 && items[5].revents != 0
+#endif
+        ) {
       int completed = keiko_handoff_child_exited(owner, deadline);
       if (completed == 0) return 0;
       if (completed == 2)
@@ -308,9 +346,8 @@ static int keiko_owner_wait(keiko_runtime_owner *owner) {
     if (!keiko_owner_response(owner, header, payload, deadline) ||
         read_u16(header + 6) != RESPONSE_REAPED || read_u32(header + 8) != 8 ||
         read_u32(payload + 4) != 0) return 0;
-    struct pollfd held = {owner->root_handle, POLLIN, 0};
     int status;
-    if (poll(&held, 1, 0) != 1 || (held.revents & POLLIN) == 0 ||
+    if (!keiko_owner_root_exited(owner) ||
         !keiko_coordinator_waitpid_deadline(&owner->supervisor, &status, deadline) ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 0;
     int transferred = keiko_handoff_old_reaped(owner, deadline);
@@ -362,7 +399,9 @@ static int keiko_runtime_owner_linux(const char *helper, const char *expected, i
   }
   if (!keiko_owner_response(&owner, header, payload, deadline) ||
       read_u16(header + 6) != RESPONSE_LAUNCHED || read_u32(header + 8) != 0 ||
+#if defined(__linux__)
       (app && !keiko_scope_send(owner.scope, 1, (uint32_t)owner.root, (uint32_t)getpid(), deadline)) ||
+#endif
       !keiko_app_control_hello(&owner, deadline) ||
       !keiko_app_owner_started(&owner, deadline)) goto cleanup;
   keiko_owner_close(&owner.identity);
@@ -372,7 +411,7 @@ cleanup:
   if (app && owner.supervisor < 0 && owner.root_handle < 0)
     keiko_app_owner_record_unstarted();
   int handoff_clean = keiko_handoff_cleanup(&owner);
-  if (result != 0 && handoff_clean && owner.persistent && owner.root_handle >= 0 && owner.supervisor > 0)
+  if (result != 0 && handoff_clean && owner.persistent && owner.root > 0 && owner.supervisor > 0)
     keiko_app_owner_cancel(&owner);
   keiko_owner_close(&owner.control); keiko_owner_close(&owner.response);
   keiko_owner_close(&owner.identity); keiko_owner_close(&owner.root_handle);

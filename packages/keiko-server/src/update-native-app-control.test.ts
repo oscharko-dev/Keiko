@@ -1,11 +1,11 @@
 import { duplexPair, type Duplex } from "node:stream";
 import { performance } from "node:perf_hooks";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   encodeNativeAppControlFrame,
   type NativeAppControlKind,
 } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
-import { NativeAppControl } from "./update-native-app-control.js";
+import { currentNativeAppControl, NativeAppControl } from "./update-native-app-control.js";
 import { NativeAppControlStream } from "./update-native-app-control-stream.js";
 
 const launchId = "b".repeat(32);
@@ -54,9 +54,16 @@ async function started(
 
 afterEach(() => {
   for (const stream of streams.splice(0)) stream.destroy();
+  vi.unstubAllEnvs();
 });
 
 describe("native app handoff control", () => {
+  it.runIf(process.platform === "darwin")("refuses an unowned Mac application", async () => {
+    vi.stubEnv("KEIKO_APP_RUNTIME_OWNER", undefined);
+    await expect(currentNativeAppControl(launchId)).rejects.toMatchObject({
+      nativeAuthorityMayBeLive: false,
+    });
+  });
   it.each([
     [122, 124, launchId],
     [123, 123, launchId],

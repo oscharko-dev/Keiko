@@ -1114,8 +1114,12 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   ): void {
     const current = this.active?.sessionId === sessionId ? this.active : undefined;
     if (current === undefined || controller.signal.aborted) return;
+    const bytes = {
+      completedBytes: progress.completedBytes,
+      ...(progress.totalBytes === undefined ? {} : { totalBytes: progress.totalBytes }),
+    };
     this.replace(current, {
-      ...transitionUpdateSession(current, { phase: progress.phase, progress }),
+      ...transitionUpdateSession(current, { phase: progress.phase, progress: bytes }),
     });
   }
 

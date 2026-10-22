@@ -27,12 +27,17 @@ none of them in either its JavaScript or TypeScript rule repository. All four af
 were correctly classified as main sources, rather than tests. Review these shapes explicitly until
 the pinned local analyzer contains the rules; a clean local scan cannot check an absent rule.
 
-| Cloud rule | Required shape                                         | Preserved behavior                                                                                              |
-| ---------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `S9382`    | Check whether loop iterations are independent.         | Keep dependent retries, readiness probes and backpressure yields sequential; parallelize only independent work. |
-| `S9381`    | Flatten nested Promise handlers.                       | Retain handshake ordering and the existing rejection boundary.                                                  |
-| `S7503`    | Remove async callbacks without asynchronous work.      | Return the existing Promise contract without an unnecessary async wrapper.                                      |
-| `S9027`    | Use `getBy*` queries for positive presence assertions. | Preserve Testing Library's missing-element diagnostics; retain `queryBy*` for absence assertions.               |
+| Cloud rule | Required shape                                         | Preserved behavior                                                                                                            |
+| ---------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `S9382`    | Check whether loop iterations are independent.         | Keep dependent retries, readiness probes and backpressure yields sequential; parallelize only independent work.               |
+| `S9381`    | Flatten nested Promise handlers.                       | Retain handshake ordering and the existing rejection boundary.                                                                |
+| `S7503`    | Remove async callbacks without asynchronous work.      | Return the existing Promise contract without an unnecessary async wrapper.                                                    |
+| `S9027`    | Use `getBy*` queries for positive presence assertions. | Preserve Testing Library's missing-element diagnostics; retain `queryBy*` for absence assertions.                             |
+| `S8784`    | Keep assertions inside a test or lifecycle hook.       | A standalone native qualification converted to `node:test` keeps its platform, input and probe assertions in the owning test. |
+
+PR #4056 encountered `javascript:S8784` for four module-level precondition assertions in the native
+macOS test. The pinned local scan passed that source; Cloud rejected those assertions. All four
+checks now execute inside the owning test, with their predicates and native probe unchanged.
 
 PR #4046 additionally encountered S9027 in a test source. The pinned local 13.1 analyzer's rule
 metadata returns `Rule not found` for `typescript:S9027`; an actual owning test and this explicit

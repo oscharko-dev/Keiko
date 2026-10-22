@@ -25,6 +25,11 @@ import {
   platformCheckKeys,
   type PortableRuntimeLane,
 } from "./coding-runtime/portableRuntimeLane.js";
+import {
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  verifyPortableReleaseTrust,
+  type VerifyPortableReleaseTrustOptions,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
 
 export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
@@ -627,21 +632,30 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * `lane` defaults CLOSED to the release-qualified clause, so the update/promotion entry point below
- * keeps its original call shape and can never reach the evaluation lane.
+ * Runtime activation defaults CLOSED. Only the update entry point can admit negative platform
+ * evidence after independently authenticating the complete macOS release manifest.
  */
 function verifiedSidecars(
   rawSidecars: readonly unknown[],
   target: UpdatePortableTarget,
   lane: PortableRuntimeLane = "release-qualified",
+  releaseTrusted = false,
 ): readonly PortableSidecarRuntimeVerification[] {
   const names = new Set<string>();
-  return rawSidecars.map((entry) => parseRuntime(entry, target, names, lane));
+  return rawSidecars.map((entry) => {
+    const signing = isPlainRecord(entry) ? recordAt(entry, "signing") : undefined;
+    const selectedLane =
+      releaseTrusted && signing?.verificationPolicy === "evaluation"
+        ? "evaluation-unqualified"
+        : lane;
+    return parseRuntime(entry, target, names, selectedLane);
+  });
 }
 
 export function verifyPortableManifestSidecars(
   manifest: Record<string, unknown>,
   target: UpdatePortableTarget,
+  trustOptions?: VerifyPortableReleaseTrustOptions,
 ): PortableSidecarManifestVerification {
   const rawSidecars = manifest.sidecarRuntimes;
   const binding = recordAt(recordAt(manifest, "releaseImpact"), "reviewedBinding");
@@ -658,7 +672,18 @@ export function verifyPortableManifestSidecars(
   if (!Array.isArray(boundSidecars) || !bindingValuesMatch(boundSidecars, rawSidecars)) {
     fail("sidecar-release-impact-binding-mismatch", "sidecar release binding is invalid");
   }
-  const sidecars = verifiedSidecars(rawSidecars, target);
+  // Keiko authenticates every declared digest and the honest negative Apple evidence together.
+  // This admits update bytes; it never supplies Endpoint Security/Coding execution authority.
+  const releaseTrusted =
+    target.startsWith("macos-") &&
+    verifyPortableReleaseTrust(
+      manifest,
+      trustOptions ?? {
+        now: new Date(),
+        trustedKeys: KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+      },
+    ).ok;
+  const sidecars = verifiedSidecars(rawSidecars, target, "release-qualified", releaseTrusted);
   return { sidecars, summaries: sidecars.map((sidecar) => sidecar.summary) };
 }
 

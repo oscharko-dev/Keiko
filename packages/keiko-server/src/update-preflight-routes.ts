@@ -137,7 +137,11 @@ async function portablePreflightReport(
   }
   const catalog =
     validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk(deps.diagnostics);
-  const impactResolution = impactFromCatalog(catalog, currentVersion, outcome.targetVersion);
+  const impactResolution = impactFromCatalog(
+    outcome.releaseImpactCatalog ?? catalog,
+    currentVersion,
+    outcome.targetVersion,
+  );
   return portableUpdateAvailableReport(
     base,
     outcome.targetVersion,

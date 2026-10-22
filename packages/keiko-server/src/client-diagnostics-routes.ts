@@ -597,6 +597,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "gateway-profile-refresh",
   "model-selection-availability",
   "markdown-copy-feedback",
+  "transcript-navigation",
   "browser-approval",
 ] as const;
 
@@ -618,6 +619,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
   "markdown copy feedback": "markdown-copy-feedback",
+  "transcript navigation": "transcript-navigation",
   "browser approval": "browser-approval",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 

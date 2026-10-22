@@ -30,7 +30,7 @@ import {
   appendPortableHandoffReceipt,
   type PortableHandoffReceiptKind,
 } from "./update-portable-handoff-receipts.js";
-import type { UpdateSessionLock } from "./update-session-lock.js";
+import { createStateDirUpdateSessionLock, type UpdateSessionLock } from "./update-session-lock.js";
 
 const roots: string[] = [];
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
@@ -464,8 +464,17 @@ describe("production portable handoff recovery", () => {
 
   it("atomically settles a complete activation as succeeded and remains ready", async () => {
     const fixture = await productionFixture("complete");
+    const realLock = createStateDirUpdateSessionLock(fixture.stateDir);
+    expect(
+      realLock.acquire({
+        sessionId: fixture.sessionId,
+        targetVersion: fixture.plan.targetVersion,
+        startedAt: new Date(NOW).toISOString(),
+        pid: process.pid,
+      }),
+    ).toBe(true);
     const runtime = createProductionPortableHandoffRuntime({
-      sessionLock,
+      sessionLock: realLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.targetVersion,
@@ -494,6 +503,7 @@ describe("production portable handoff recovery", () => {
       sessionId: fixture.sessionId,
       lifecycle: { phase: "succeeded" },
     });
+    expect(realLock.isLocked()).toBe(false);
 
     const restarted = createProductionPortableHandoffRuntime({
       sessionLock,

@@ -4453,6 +4453,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "gateway-profile-refresh",
           "model-selection-availability",
           "markdown-copy-feedback",
+          "transcript-navigation",
           "browser-approval",
         ],
       },
@@ -4635,6 +4636,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "gateway-profile-refresh",
           "model-selection-availability",
           "markdown-copy-feedback",
+          "transcript-navigation",
           "browser-approval",
         ],
       },
@@ -35417,6 +35419,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 128,
       },
       metadataVersion: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      catalogEntryCount: {
         type: "integer",
         dataClass: "count",
         required: false,

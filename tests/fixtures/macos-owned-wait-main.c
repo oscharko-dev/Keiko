@@ -87,6 +87,12 @@ static int send_error(enum error_code kind) { (void)kind; return 1; }
 static void consume_control(void) {}
 static int probe_monitor(void) { return 0; }
 static int reconcile(const char *handle) { (void)handle; return 0; }
+#if defined(__APPLE__)
+/* These controls exercise the ES owned-wait branch. App lifecycle has its real native gate. */
+static int keiko_app_probe(void) { return ERROR_TREE_OBSERVE; }
+static int keiko_job_bridge(int report_owner) { (void)report_owner; return ERROR_TREE_OBSERVE; }
+static int keiko_job_run(const char *path) { (void)path; return ERROR_TREE_OBSERVE; }
+#endif
 static int read_launch_request(struct launch_request *request) {
   static char handle[KEIKO_RECOVERY_HANDLE_BYTES + 1];
   request->recovery_handle = handle;

@@ -5387,7 +5387,7 @@ function EmptyOrNoChatState({
 // (per whether a chat is open) vs. the question map + conversation thread + grounded panel +
 // sent-documents note.
 function ChatWindowLog({
-  scrollRef,
+  regionRef,
   stickRef,
   onLogScroll,
   pendingQuestionScrollRef,
@@ -5416,7 +5416,7 @@ function ChatWindowLog({
   lastSentDocuments,
   lastSentImages,
 }: {
-  readonly scrollRef: RefObject<HTMLDivElement | null>;
+  readonly regionRef: Ref<HTMLDivElement>;
   readonly stickRef: CurrentRef<boolean>;
   readonly onLogScroll: () => void;
   readonly pendingQuestionScrollRef: CurrentRef<string | null>;
@@ -5449,7 +5449,7 @@ function ChatWindowLog({
   return (
     <div
       className="chatw-scroll"
-      ref={scrollRef}
+      ref={regionRef}
       role="log"
       aria-label={t("chat.conversation")}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
@@ -5793,6 +5793,7 @@ export function ChatWindow({
   const {
     stickRef,
     onScroll: onLogScroll,
+    regionRef: logRegionRef,
     resume: followNewest,
   } = useFollowNewest(
     scrollRef,
@@ -5905,7 +5906,7 @@ export function ChatWindow({
           live-region semantics the previous aria-live="polite" provided.
           C090 — onScroll tracks whether the reader is near the bottom. */}
       <ChatWindowLog
-        scrollRef={scrollRef}
+        regionRef={logRegionRef}
         stickRef={stickRef}
         onLogScroll={onLogScroll}
         pendingQuestionScrollRef={pendingQuestionScrollRef}
