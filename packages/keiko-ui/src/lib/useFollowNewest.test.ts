@@ -91,6 +91,8 @@ describe("useFollowNewest", () => {
     fireEvent.keyDown(view.getByRole("textbox"), { key: "Home" });
     fireEvent.keyDown(region, { key: "Home", shiftKey: true });
     fireEvent.keyDown(region, { key: "Home", altKey: true });
+    expect(fireEvent.keyDown(region, { key: "Home", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(region, { key: "End", metaKey: true })).toBe(true);
     fireEvent.keyDown(region, { key: "Home", isComposing: true });
     fireEvent.keyDown(region, { key: "ArrowUp" });
     expect(region.scrollTop).toBe(1720);

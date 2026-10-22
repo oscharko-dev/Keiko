@@ -42,13 +42,17 @@ function reportTranscriptNavigation(): void {
   });
 }
 
+function hasNavigationModifier(event: KeyboardEvent): boolean {
+  return event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
+}
+
 function navigateTranscript(
   event: KeyboardEvent,
   element: HTMLElement,
   stickRef: FollowNewest["stickRef"],
 ): void {
   if (event.target !== element || event.defaultPrevented) return;
-  if (event.shiftKey || event.altKey || event.isComposing) return;
+  if (event.isComposing || hasNavigationModifier(event)) return;
   if (event.key !== "Home" && event.key !== "End") return;
   event.preventDefault();
   stickRef.current = event.key === "End";
