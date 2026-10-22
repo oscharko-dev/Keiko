@@ -239,3 +239,27 @@ The receipt and acknowledgement unit controls now advance a test-owned monotonic
 retry and publish pending evidence through an explicit test hook. They perform no real sleep:
 exact retry counts and clock values assert both successful publication and the original timeout
 boundary. Native process integration continues to use the real clock; product code is unchanged.
+
+### First production release build after PR #4056
+
+PR #4056 was integrated as signed commit `53d88924c16289f6f368d9a29cc911b31abe8813` after
+all exact-head required checks passed and every review conversation was resolved. Owner release
+request 39848103550 bound `v1.2.6` to that commit. The Linux production build 39848171761 then
+failed before qualification because its manifest reader still imposed the 256-KiB receipt limit.
+The embedded stable-release catalog alone exceeds that limit. Staging and the installed updater
+already admit manifests up to 1 MiB.
+
+The Linux signing reader now imports the installed updater's existing manifest bound. Receipt and
+Sigstore bundle limits remain 256 KiB. Failure-first controls exercise the actual catalog and the
+exact manifest boundary; oversized manifests, receipts and bundles remain rejected. The existing
+Linux staging test now hands its real generated manifest to the production preparation function,
+including payload rebinding, instead of stopping before that release boundary.
+
+The same integrated commit exposes GitHub's skipped-job name behavior: job-level lifecycle name
+expressions remain unevaluated when the verified-tree path skips `ui` and the package build. The
+release verifier previously classified both required checks as missing. It now recognizes only
+the existing strict lifecycle-name grammar for completed, skipped checks. That produces a skipped
+verdict, never success: the existing same-app, identical-tree evidence is still mandatory. Tests
+reject different apps, unknown expressions, inactive names and successful or failed expression
+names, and preserve a newer canonical failure. Both positive regressions fail before their fixes.
+Publication and the actual production-release SSD update/eject proof remain pending.

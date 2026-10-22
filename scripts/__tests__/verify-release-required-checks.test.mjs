@@ -53,6 +53,64 @@ describe("latestCheckRunsByName", () => {
 });
 
 describe("evaluateRequiredChecks", () => {
+  const lifecycleName = (name) =>
+    `(github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && '${name}' || 'inactive PR - ${name}'`;
+
+  it.each(["ui", "Build, scan, SBOM, smoke"])(
+    "requires same-app tree evidence for GitHub's unevaluated skipped name: %s",
+    (name) => {
+      const result = evaluateRequiredChecks(
+        [name],
+        [
+          {
+            name: lifecycleName(name),
+            status: "completed",
+            conclusion: "skipped",
+            app: { id: 42 },
+          },
+        ],
+        [],
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        missing: [],
+        failed: [{ name, state: "skipped", appId: 42 }],
+      });
+      const evidence = (id) => [{ name, status: "completed", conclusion: "success", app: { id } }];
+      expect(resolveSkippedWithTreeEvidence(result, evidence(99)).ok).toBe(false);
+      expect(resolveSkippedWithTreeEvidence(result, evidence(42)).ok).toBe(true);
+    },
+  );
+
+  it.each(["success", "failure", "cancelled"])(
+    "does not reinterpret an unevaluated name with conclusion %s",
+    (conclusion) => {
+      const result = evaluateRequiredChecks(
+        ["ui"],
+        [{ name: lifecycleName("ui"), status: "completed", conclusion }],
+        [],
+      );
+      expect(result).toMatchObject({ ok: false, missing: ["ui"] });
+    },
+  );
+
+  it("preserves a newer canonical failure and refuses unknown or inactive names", () => {
+    const result = evaluateRequiredChecks(
+      ["ui"],
+      [
+        { id: 1, name: lifecycleName("ui"), status: "completed", conclusion: "skipped" },
+        { id: 2, name: "ui", status: "completed", conclusion: "failure" },
+      ],
+      [],
+    );
+    expect(result.failed).toEqual([{ name: "ui", source: "check-run", state: "failure" }]);
+    for (const name of ["inactive PR - ui", lifecycleName("ui").replace("'open'", "'closed'")]) {
+      expect(
+        evaluateRequiredChecks(["ui"], [{ name, status: "completed", conclusion: "skipped" }], []),
+      ).toMatchObject({ ok: false, missing: ["ui"] });
+    }
+  });
+
   it("passes when every required check succeeded as a check run or commit status", () => {
     const result = evaluateRequiredChecks(
       ["ci", "external/status"],
