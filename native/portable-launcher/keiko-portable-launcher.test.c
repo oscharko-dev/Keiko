@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <poll.h>
 #include <sys/wait.h>
+#include <time.h>
 
 static unsigned int coordinator_cleanup_kills;
 static const char *coordinator_pending_ack_link;
@@ -16,8 +17,22 @@ static int coordinator_pending_receipt = -1;
 static unsigned char coordinator_receipt_bytes[4096];
 static size_t coordinator_receipt_length;
 static int coordinator_forbid_receipt_sleep;
-static int coordinator_test_usleep(unsigned int microseconds) {
-  assert(!coordinator_forbid_receipt_sleep);
+static int coordinator_retry_clock_enabled;
+static uint64_t coordinator_retry_clock_ms;
+static unsigned int coordinator_retry_ticks;
+static int coordinator_test_clock_gettime(clockid_t clock, struct timespec *value) {
+#if defined(__APPLE__)
+  const clockid_t retry_clock = CLOCK_MONOTONIC_RAW;
+#else
+  const clockid_t retry_clock = CLOCK_MONOTONIC;
+#endif
+  if (!coordinator_retry_clock_enabled || clock != retry_clock)
+    return clock_gettime(clock, value);
+  value->tv_sec = (time_t)(coordinator_retry_clock_ms / 1000u);
+  value->tv_nsec = (long)((coordinator_retry_clock_ms % 1000u) * 1000000u);
+  return 0;
+}
+static void coordinator_publish_pending_evidence(void) {
   if (coordinator_pending_ack_link != NULL) {
     assert(unlink(coordinator_pending_ack_link) == 0);
     coordinator_pending_ack_link = NULL;
@@ -29,6 +44,16 @@ static int coordinator_test_usleep(unsigned int microseconds) {
     assert(close(coordinator_pending_receipt) == 0);
     coordinator_pending_receipt = -1;
   }
+}
+static int coordinator_test_usleep(unsigned int microseconds) {
+  assert(!coordinator_forbid_receipt_sleep);
+  if (coordinator_retry_clock_enabled) {
+    coordinator_publish_pending_evidence();
+    coordinator_retry_clock_ms += ((uint64_t)microseconds + 999u) / 1000u;
+    coordinator_retry_ticks += 1u;
+    return 0;
+  }
+  assert(coordinator_pending_ack_link == NULL && coordinator_pending_receipt == -1);
   return usleep(microseconds);
 }
 static const char *coordinator_cutover_failure;
@@ -93,6 +118,7 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 #define poll coordinator_test_poll
 #define waitid coordinator_test_waitid
 #define usleep coordinator_test_usleep
+#define clock_gettime coordinator_test_clock_gettime
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
@@ -100,6 +126,7 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 #undef poll
 #undef waitid
 #undef usleep
+#undef clock_gettime
 #undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
 #undef KEIKO_COORDINATOR_KILL
@@ -378,11 +405,16 @@ static void test_verified_ack_waits_for_durable_publication(void) {
   write_fixture_file(pending, content);
   assert(chmod(pending, 0600) == 0);
   assert(link(pending, ack) == 0);
+  coordinator_retry_clock_ms = 1000u;
+  coordinator_retry_ticks = 0;
+  coordinator_retry_clock_enabled = 1;
   coordinator_pending_ack_link = pending;
   assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 1);
   assert(coordinator_pending_ack_link == NULL);
+  assert(coordinator_retry_ticks == 1u && coordinator_retry_clock_ms == 1010u);
   assert(link(ack, pending) == 0);
   assert(keiko_coordinator_wait_verified_ack(&fixture.context, keiko_tree_now_ms() + 20u) == 0);
+  assert(coordinator_retry_ticks == 4u && coordinator_retry_clock_ms == 1040u);
   assert(unlink(pending) == 0);
   replace_fixture_file(ack, "KHV1wrong\n");
   assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
@@ -390,6 +422,7 @@ static void test_verified_ack_waits_for_durable_publication(void) {
   assert(symlink(fixture.registration, ack) == 0);
   assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
   assert(unlink(ack) == 0);
+  coordinator_retry_clock_enabled = 0;
   cutover_fixture_clear(&fixture);
 }
 
@@ -407,24 +440,32 @@ static void test_receipt_waits_for_complete_publication(void) {
   coordinator_receipt_length = (size_t)count;
   coordinator_pending_receipt = open(path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
   assert(coordinator_pending_receipt >= 0);
+  coordinator_retry_clock_ms = 1000u;
+  coordinator_retry_ticks = 0;
+  coordinator_retry_clock_enabled = 1;
   assert(keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
                                                  fixture_deadline()));
   assert(coordinator_pending_receipt == -1 && reader.receipt_sequence == 1u);
+  assert(coordinator_retry_ticks == 1u && coordinator_retry_clock_ms == 1010u);
   assert(strcmp(reader.receipt_sha256, fixture.context.receipt_sha256) == 0);
   reader.receipt_sequence = 0;
   memset(reader.receipt_sha256, 0, sizeof(reader.receipt_sha256));
   assert(!keiko_coordinator_wait_expected_receipt(&reader, "verify", "completed",
                                                   keiko_tree_now_ms() + 20u));
   assert(reader.receipt_sequence == 0u);
+  assert(coordinator_retry_ticks == 4u && coordinator_retry_clock_ms == 1040u);
   replace_fixture_file(path, "KHR1partial");
   assert(!keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
                                                   keiko_tree_now_ms() + 20u));
   assert(reader.receipt_sequence == 0u);
+  assert(coordinator_retry_ticks == 7u && coordinator_retry_clock_ms == 1070u);
   assert(unlink(path) == 0 && symlink(fixture.registration, path) == 0);
   assert(!keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
                                                   keiko_tree_now_ms() + 20u));
   assert(reader.receipt_sequence == 0u);
+  assert(coordinator_retry_ticks == 10u && coordinator_retry_clock_ms == 1100u);
   assert(unlink(path) == 0);
+  coordinator_retry_clock_enabled = 0;
   cutover_fixture_clear(&fixture);
 }
 

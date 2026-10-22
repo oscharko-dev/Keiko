@@ -234,3 +234,8 @@ failure passes its exact replay on macOS and in the pinned Linux Node 24.18 cont
 189-test suite also passes on macOS. The Windows fixed-entry EOF failure passes its exact replay on
 macOS, which does not qualify the Windows behavior. Neither unrelated failure has a reproduced
 cause yet; their required hosted lanes must pass before integration.
+
+The receipt and acknowledgement unit controls now advance a test-owned monotonic clock at each
+retry and publish pending evidence through an explicit test hook. They perform no real sleep:
+exact retry counts and clock values assert both successful publication and the original timeout
+boundary. Native process integration continues to use the real clock; product code is unchanged.
