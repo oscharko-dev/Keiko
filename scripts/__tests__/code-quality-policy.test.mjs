@@ -1173,30 +1173,33 @@ describe("Command parser unknown input obligations (#3918)", () => {
   it.each([
     {
       id: "command-request-public-parser",
+      rules: ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       producer: "parseCommandTaskRunRequest",
       witness: "parsePublicCommandRequest",
       assertions: 5,
     },
     {
       id: "command-catalog-public-parser",
+      rules: ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       producer: "validateCommandTaskCatalog",
       witness: "parsePublicCommandCatalog",
       assertions: 6,
     },
     {
       id: "command-result-public-parser",
+      rules: ["anti-slop/no-unknown-parameters"],
       producer: "validateCommandTaskRunResult",
       witness: "parsePublicCommandResult",
       assertions: 4,
     },
   ])(
     "retains declared raw input responsibility of $producer",
-    ({ id, producer, witness, assertions }) => {
+    ({ id, rules, producer, witness, assertions }) => {
       const record = policy.responsibilities.find((entry) => entry.id === id);
+      expect(record.rules).toEqual(rules);
       expect(record).toMatchObject({
         owner: "@oscharko-dev/keiko-contracts",
         kind: "public-parser",
-        rules: ["anti-slop/no-unknown-parameters"],
         input: { exportName: producer, parameterIndex: 0 },
         consumer: { exportName: witness, kind: "public-api-proof" },
       });

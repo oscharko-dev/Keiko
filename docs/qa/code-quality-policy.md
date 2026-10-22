@@ -1476,3 +1476,23 @@ initializers, outside callers, callback or persistence escapes, and alternate ke
 this form. No general call-result origin, helper body, return value, canonical DTO, cheap loss
 pre-count or writer authority follows. Both adaptation paths still require the same physical
 parent's current completed source/public/real-formatter proof obligations and bound consumer.
+
+### Command request raw dictionary checks
+
+The existing `command-request-public-parser` also declares the dictionary rule for the unchanged
+raw request-checking phase. The private required-field and optional-field predicates inspect the
+original request; their canonical `Record<string, unknown>` input and predicate-member annotations
+remain raw until the existing parser admits the checked request. Qualification must preserve the
+original unknown slots, public request identity, optional reads, closed field refusals and hostile
+inspection failure proofs. No result declaration, helper alias, runtime-typeof authority,
+new record or trusted arbitrary dictionary follows.
+
+### Command catalog raw dictionary checks
+
+The existing `command-catalog-public-parser` also declares the dictionary rule for its unchanged
+raw catalog-checking phase. Its private catalog-field and task-array predicates inspect the
+original catalog before admission. Only canonical raw input and predicate-member annotations
+supported by the existing resolver are eligible; the existing source/public identity, repeated
+task observations, malformed field, physical-array and hostile-inspection proofs remain required.
+Nested task/argument helpers, shared run-result validators and raw event payloads receive no
+additional authority. The original unknown slot and all six selected catalog proofs remain.

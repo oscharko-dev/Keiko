@@ -756,6 +756,19 @@ describe("Command request public parser (#3918)", () => {
       expect(parsePublicCommandRequest(input).ok).toBe(false);
   });
   it("preserves ordered closed field refusals and rejects extra data", () => {
+    const healthy = baseRequest();
+    expect(parseCommandTaskRunRequest(healthy)).toEqual({ ok: true, value: healthy });
+    expect(parsePublicCommandRequest(healthy)).toEqual({ ok: true, value: healthy });
+    for (const parse of [parseCommandTaskRunRequest, parsePublicCommandRequest]) {
+      expect(parse({ taskId: "npm-script:test" })).toEqual({
+        ok: false,
+        errors: ["projectId must be a non-empty string"],
+      });
+      expect(parse({ ...baseRequest(), projectId: 42 })).toEqual({
+        ok: false,
+        errors: ["projectId must be a non-empty string"],
+      });
+    }
     expect(
       parsePublicCommandRequest({
         extra: "fixture-private-body",
@@ -818,6 +831,9 @@ describe("Command catalog public parser (#3918)", () => {
     expect(admissionReads).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
   });
   it("refuses unknown and malformed catalog task fields", () => {
+    const healthy = baseCatalog();
+    expect(validateCommandTaskCatalog(healthy)).toEqual({ ok: true, value: healthy });
+    expect(parsePublicCommandCatalog(healthy)).toEqual({ ok: true, value: healthy });
     for (const input of [
       null,
       3,

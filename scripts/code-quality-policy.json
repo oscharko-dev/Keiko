@@ -4083,7 +4083,7 @@
       "id": "command-request-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
@@ -4135,7 +4135,7 @@
       "id": "command-catalog-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
