@@ -40,6 +40,8 @@ typedef struct {
   struct stat receipt_identity;
 #if defined(__APPLE__)
   keiko_macos_process_identity root_identity;
+  keiko_macos_process_identity scope_helper_identity;
+  pid_t scope_helper;
 #endif
 } keiko_runtime_owner;
 

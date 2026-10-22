@@ -1,14 +1,44 @@
+#include <libproc.h>
+#include <stdint.h>
+static int model_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int size);
+static int model_listpids(uint32_t type, uint32_t info, void *buffer, int size);
+#define proc_pidinfo model_pidinfo
+#define proc_listpids model_listpids
 #include "../runtime-supervisor/macos/keiko_runtime_process_scope.h"
+#undef proc_pidinfo
+#undef proc_listpids
 #include <assert.h>
-#include <poll.h>
 #include <stdio.h>
 #include <sys/wait.h>
-#include <time.h>
 
-static uint64_t now_ms(void) {
-  struct timespec now;
-  assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
-  return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+static int modeling, failure_errno, identity_reuse, identity_reads;
+static uint64_t foreign_generation = 202;
+
+static int model_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int size) {
+  if (!modeling) return proc_pidinfo(pid, flavor, arg, buffer, size);
+  if (pid == 303 && failure_errno != 0) { errno = failure_errno; return 0; }
+  if (flavor == KEIKO_MACOS_COALITION_FLAVOR) {
+    assert(size == (int)(sizeof(uint64_t) * 5u));
+    uint64_t values[5] = {pid == 202 ? 77u : 42u, 0, 0, 0, 0};
+    memcpy(buffer, values, sizeof(values));
+    return sizeof(values);
+  }
+  assert(flavor == KEIKO_MACOS_IDENTITY_FLAVOR && size == sizeof(keiko_macos_process_identity));
+  keiko_macos_process_identity value = {0};
+  value.unique_id = pid == 202 ? foreign_generation : (uint64_t)pid;
+  value.parent_unique_id = pid == 101 ? 100u : 999999u; /* Unobserved intermediate parents. */
+  value.version = 1;
+  if (pid == 303 && identity_reuse && ++identity_reads % 2 == 0) ++value.unique_id;
+  memcpy(buffer, &value, sizeof(value));
+  return sizeof(value);
+}
+
+static int model_listpids(uint32_t type, uint32_t info, void *buffer, int size) {
+  if (!modeling) return proc_listpids(type, info, buffer, size);
+  const pid_t pids[] = {101, 202, 303};
+  assert(size >= (int)sizeof(pids));
+  memcpy(buffer, pids, sizeof(pids));
+  return sizeof(pids);
 }
 
 static void identity_controls(void) {
@@ -46,133 +76,51 @@ static void identity_controls(void) {
 }
 
 static void scope_controls(void) {
-  keiko_macos_process_scope scope;
+  keiko_macos_process_scope scope = {0};
   unsigned int live, unknown;
-  int gate[2], status;
-  uint64_t deadline;
-  pid_t child;
-  assert(keiko_macos_scope_init(&scope));
-  assert(pipe(gate) == 0);
-  child = fork();
-  assert(child >= 0);
-  if (child == 0) {
-    char value;
-    close(gate[1]);
-    assert(read(gate[0], &value, 1) == 1);
-    for (;;) pause();
-  }
-  close(gate[0]);
-  assert(keiko_macos_scope_admit_root(&scope, child));
-  assert(keiko_macos_scope_signal(&scope, SIGKILL));
-  assert(waitpid(child, &status, 0) == child && WIFSIGNALED(status));
-  deadline = now_ms() + 3000u;
-  do {
+  /* A caller outside an authenticated, isolated launchd job cannot establish ownership. */
+  assert(!keiko_macos_scope_init(&scope));
+  keiko_macos_scope_destroy(&scope);
+  scope.members = calloc(KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*scope.members));
+  assert(scope.members != NULL);
+  scope.coalition_id = 42;
+  scope.supervisor_unique_id = 100;
+  modeling = 1;
+  assert(!keiko_macos_scope_admit_root(&scope, 303));
+  assert(keiko_macos_scope_admit_root(&scope, 101));
+  assert(keiko_macos_scope_live(&scope, &live, &unknown) && live == 2 && unknown == 0);
+  assert(scope.members[1].pid == 303); /* Detached child is owned without observed ancestry. */
+  for (uint64_t generation = 1000; generation < 81000; ++generation) {
+    foreign_generation = generation;
     assert(keiko_macos_scope_scan(&scope, 0));
-    if (keiko_macos_scope_live(&scope, &live, &unknown) && live == 0 && unknown == 0) break;
-    assert(poll(NULL, 0, 1) == 0);
-  } while (now_ms() < deadline);
-  assert(keiko_macos_scope_live(&scope, &live, &unknown) && live == 0 && unknown == 0);
-  scope.incomplete = 1;
-  assert(!keiko_macos_scope_live(&scope, &live, &unknown));
-  scope.incomplete = 0;
-  scope.failed = 1;
-  assert(!keiko_macos_scope_live(&scope, &live, &unknown));
-  close(gate[1]);
-  keiko_macos_scope_destroy(&scope);
-}
-
-static void churn_controls(void) {
-  keiko_macos_process_scope scope = {0};
-  uint64_t next = 10;
-  unsigned int live, unknown;
-  scope.members = calloc(KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*scope.members));
-  assert(scope.members != NULL);
-  scope.root_unique_id = 1;
-  keiko_macos_scope_member *root = keiko_macos_member(&scope, 1, 1);
-  root->membership = KEIKO_MACOS_OWNED;
-  for (unsigned int batch = 0; batch < 80; ++batch) {
-    ++scope.epoch;
-    if (scope.count >= KEIKO_MACOS_SCOPE_CAPACITY / 4u)
-      assert(keiko_macos_scope_reclaim(&scope));
-    for (unsigned int i = 0; i < 1000; ++i) {
-      keiko_macos_scope_member *member = keiko_macos_member(&scope, next++, 1);
-      assert(member != NULL);
-      member->membership = KEIKO_MACOS_UNRELATED;
-      member->seen = scope.epoch;
-    }
+    assert(scope.count == 2); /* Foreign churn is neither retained nor an app lifetime limit. */
   }
-  assert(next > KEIKO_MACOS_SCOPE_CAPACITY);
-  assert(keiko_macos_member(&scope, 1, 0)->membership == KEIKO_MACOS_OWNED);
-  keiko_macos_scope_member *child = keiko_macos_member(&scope, next++, 1);
-  child->identity.parent_unique_id = 1;
-  child->seen = scope.epoch;
-  keiko_macos_classify(&scope);
-  assert(child->membership == KEIKO_MACOS_OWNED);
-  keiko_macos_scope_member *unclassified = keiko_macos_member(&scope, next++, 1);
-  unclassified->identity.parent_unique_id = 9; /* Never-observed ancestor. */
-  unclassified->seen = scope.epoch;
-  assert(keiko_macos_scope_reclaim(&scope));
-  keiko_macos_classify(&scope);
+  failure_errno = ESRCH;
+  assert(keiko_macos_scope_scan(&scope, 0) && scope.incomplete);
+  assert(!keiko_macos_scope_live(&scope, &live, &unknown));
+  failure_errno = 0;
+  assert(keiko_macos_scope_scan(&scope, 0));
   assert(keiko_macos_scope_live(&scope, &live, &unknown));
-  assert(live == 1 && unknown == 1);
-  keiko_macos_scope_destroy(&scope);
-}
-
-static void retained_ancestry_controls(void) {
-  keiko_macos_process_scope scope = {0};
-  unsigned int live, unknown;
-  scope.members = calloc(KEIKO_MACOS_SCOPE_CAPACITY, sizeof(*scope.members));
-  assert(scope.members != NULL);
-  scope.root_unique_id = 1;
-  scope.epoch = 3;
-  keiko_macos_scope_member *root = keiko_macos_member(&scope, 1, 1);
-  root->membership = KEIKO_MACOS_OWNED;
-  keiko_macos_scope_member *unrelated = keiko_macos_member(&scope, 10, 1);
-  unrelated->membership = KEIKO_MACOS_UNRELATED;
-  unrelated->seen = 1;
-  keiko_macos_scope_member *child = keiko_macos_member(&scope, 11, 1);
-  child->identity.parent_unique_id = 10;
-  child->seen = scope.epoch;
-  keiko_macos_scope_member *unobserved = keiko_macos_member(&scope, 12, 1);
-  unobserved->identity.parent_unique_id = 9;
-  unobserved->seen = scope.epoch;
-  assert(keiko_macos_scope_reclaim(&scope));
-  keiko_macos_classify(&scope);
-  assert(keiko_macos_member(&scope, 11, 0)->membership == KEIKO_MACOS_UNRELATED);
-  assert(keiko_macos_member(&scope, 12, 0)->membership == KEIKO_MACOS_UNKNOWN);
-  assert(keiko_macos_scope_live(&scope, &live, &unknown) && live == 0 && unknown == 1);
-  keiko_macos_scope_destroy(&scope);
-}
-
-static void unrelated_history_controls(void) {
-  keiko_macos_process_scope scope = {0};
-  assert(!keiko_macos_remember_unrelated(&scope, 0));
-  const uint64_t identities[] = {10, 12, 11, 10, 20, 19, UINT64_MAX};
-  for (size_t i = 0; i < sizeof(identities) / sizeof(identities[0]); ++i)
-    assert(keiko_macos_remember_unrelated(&scope, identities[i]));
-  assert(scope.unrelated_count == 3);
-  assert(scope.unrelated_history[0].first == 10 && scope.unrelated_history[0].last == 12);
-  assert(scope.unrelated_history[1].first == 19 && scope.unrelated_history[1].last == 20);
-  assert(keiko_macos_known_unrelated(&scope, UINT64_MAX));
-  assert(!keiko_macos_known_unrelated(&scope, 0));
-  assert(!keiko_macos_known_unrelated(&scope, 13));
-  assert(!keiko_macos_known_unrelated(&scope, 18));
-  keiko_macos_scope_destroy(&scope);
-  for (uint64_t i = 0; i < KEIKO_MACOS_SCOPE_CAPACITY; ++i)
-    assert(keiko_macos_remember_unrelated(&scope, i * 2u + 1u));
-  assert(scope.unrelated_count == KEIKO_MACOS_SCOPE_CAPACITY);
-  assert(!keiko_macos_remember_unrelated(&scope, UINT64_MAX));
-  assert(!keiko_macos_known_unrelated(&scope, UINT64_MAX));
-  assert(!keiko_macos_known_unrelated(&scope, 2));
+  identity_reuse = 1;
+  assert(keiko_macos_scope_scan(&scope, 0) && scope.incomplete);
+  assert(!keiko_macos_scope_live(&scope, &live, &unknown));
+  identity_reuse = 0;
+  failure_errno = EPERM;
+  assert(!keiko_macos_scope_scan(&scope, 0) && scope.failed);
+  assert(!keiko_macos_scope_live(&scope, &live, &unknown));
+  failure_errno = 0;
+  scope.failed = 0;
+  scope.count = KEIKO_MACOS_SCOPE_CAPACITY;
+  assert(!keiko_macos_observe_pid(&scope, 303));
+  scope.count = KEIKO_MACOS_SCOPE_CAPACITY + 1u;
+  assert(!keiko_macos_scope_live(&scope, &live, &unknown));
+  modeling = 0;
   keiko_macos_scope_destroy(&scope);
 }
 
 int main(void) {
   identity_controls();
   scope_controls();
-  churn_controls();
-  retained_ancestry_controls();
-  unrelated_history_controls();
-  puts("macOS process identity, generation-bound signals and scope controls passed");
+  puts("macOS identity, coalition membership, churn and incomplete-observation controls passed");
   return 0;
 }

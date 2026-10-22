@@ -6,9 +6,10 @@
 /* The updater owns a trusted application generation separately from the optional Coding
  * sandbox's Endpoint Security backend. Its inherited private pipes carry lifecycle control. */
 static int keiko_app_probe(void) {
-  keiko_macos_process_scope scope;
-  int result = keiko_macos_scope_init(&scope);
-  keiko_macos_scope_destroy(&scope);
+  uint64_t coalition;
+  keiko_macos_process_identity identity;
+  int result = keiko_macos_identity(getpid(), &identity) &&
+    keiko_macos_coalition(getpid(), &coalition) && access("/bin/launchctl", X_OK) == 0;
   return result ? 0 : ERROR_TREE_OBSERVE;
 }
 
@@ -95,16 +96,18 @@ static int keiko_app_control_stop(void) {
 static int keiko_app_supervise(keiko_macos_process_scope *scope, pid_t *root) {
   unsigned int exit_code = 0;
   for (;;) {
-    struct pollfd control = {3, POLLIN | POLLHUP, 0};
-    int ready = poll(&control, 1, 50);
+    struct pollfd controls[2] = {{3, POLLIN | POLLHUP, 0}, {9, POLLIN | POLLHUP, 0}};
+    int ready = poll(controls, 2, 50);
     int reaped;
     if (ready < 0 && errno == EINTR) continue;
-    if (ready < 0 || (control.revents & (POLLERR | POLLNVAL)) != 0) return 0;
+    if (ready < 0 || (controls[0].revents & (POLLERR | POLLNVAL)) != 0) return 0;
     reaped = keiko_app_root_reaped(root, &exit_code);
-    if (reaped < 0 || !keiko_macos_scope_scan(scope, 0)) return 0;
-    if (reaped || (ready > 0 && (control.revents & (POLLIN | POLLHUP)) != 0)) {
+    if (reaped < 0) return 0;
+    int bridge_lost = controls[1].revents != 0;
+    if (reaped || bridge_lost || (ready > 0 && (controls[0].revents & (POLLIN | POLLHUP)) != 0)) {
       unsigned char proof[8] = {0};
-      if ((!reaped && !keiko_app_control_stop()) || !keiko_app_stop(scope, root, &exit_code)) return 0;
+      if ((!reaped && !bridge_lost && !keiko_app_control_stop()) ||
+          !keiko_app_stop(scope, root, &exit_code)) return 0;
       write_u32(proof, exit_code);
       /* Zero is published only after a complete scan proves no owned or unclassified process. */
       return send_response(RESPONSE_REAPED, proof, sizeof(proof));
@@ -113,8 +116,9 @@ static int keiko_app_supervise(keiko_macos_process_scope *scope, pid_t *root) {
 }
 
 static int keiko_app_report(pid_t root) {
-  unsigned char bytes[16] = {'K','R','I','1',1,0,1,0,4,0,0,0};
+  unsigned char bytes[20] = {'K','R','I','1',1,0,1,0,8,0,0,0};
   write_u32(bytes + 12, (uint32_t)root);
+  write_u32(bytes + 16, (uint32_t)getpid());
   int result = write_exact(6, bytes, sizeof(bytes));
   close(6);
   return result;

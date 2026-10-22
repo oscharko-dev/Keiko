@@ -384,9 +384,22 @@ expired or unavailable monotonic clock before spawning and checks expiry after w
 These legacy monitor checks do not establish immutable generation membership or replace Endpoint
 Security qualification for the Coding sandbox. The ordinary macOS application lifecycle instead
 uses the existing persistent native app-owner protocol with a separate account-free helper role.
-The helper admits a suspended direct child, records Darwin process unique IDs and original-parent
-unique IDs across exec and reparenting, and uses kernel audit-token signals to avoid PID reuse.
-Unclassified surviving processes or incomplete observation refuse zero-live proof. The persistent
+The helper runs in a temporary launchd job in the current user's GUI login domain. Each job receives
+its own kernel resource coalition. Its descendants inherit that membership through fork, exec,
+reparenting and `setsid`; an unprivileged descendant cannot select another resource coalition.
+The job is loaded from a private temporary definition with `KeepAlive` disabled, then removed after
+the helper exits. It is not installed as a persistent LaunchAgent. A same-user socket checks the
+peer's executable and transfers only the existing lifecycle descriptors. The receiver acknowledges
+their installation before the sender releases its copies; descriptor presence is preserved exactly.
+The platform-owned `/usr/bin/env -i` clears launchd's inherited loader environment before the native
+helper starts; the job role refuses a nonempty native environment. No application credentials or
+task arguments enter the launchd definition or launchctl arguments.
+The helper admits a suspended direct child in that coalition, with a separate job-control process
+group so orphan-group hangup signals cannot terminate its supervisor. Darwin unique IDs and kernel
+audit-token signals retain protection against PID reuse. Complete current coalition membership
+replaces inference from snapshots of the whole host's ancestry. An unobserved intermediate parent
+therefore cannot hide an owned detached child or make a foreign orphan block cleanup. Incomplete
+membership or identity observations still refuse zero-live proof. The persistent
 owner creates update coordinators outside the previous app generation and releases its private
 old-generation proof only after the helper reports zero live processes and is successfully reaped.
 The updater never substitutes EOF, a missing PID or a free port for that proof. Application
@@ -398,12 +411,12 @@ Node/libuv (`CLOCK_MONOTONIC_RAW`); Linux uses `CLOCK_MONOTONIC`. Admission reta
 15-minute maximum. The validated plan's cleanup grant is bounded by that original admission
 deadline plus its existing ten-minute restoration tail; a delayed response cannot extend it.
 The Darwin stop loop retains the original stop deadline across its 50-ms observation ticks.
-The process scope reclaims only stale unrelated identities, rehashing its bounded table while
-retaining every owned or unclassified ancestor. Exact, positively established unrelated ancestry
-survives reclamation in bounded compact identity ranges. Only adjacent observed identities merge;
-an unobserved gap never becomes unrelated evidence. Exhausted history storage fails closed.
-Unknown surviving processes still block proof. Existing native-owner Activity Log outcomes record
-whether cleanup was reaped or remains held.
+The process scope reads current kernel membership at admission and cleanup instead of continuously
+accumulating global process history. Foreign churn is not an application lifetime limit. Bounded
+enumeration, identity changes during a read, inaccessible membership and incomplete scans still
+refuse proof. Existing native-owner Activity Log outcomes record whether cleanup was reaped or
+remains held. The bridge, persistent owner and update coordinators remain outside the app's resource
+coalition; the supervisor itself is excluded by its exact Darwin unique ID.
 
 The private application environment also retains the running app's canonical working directory.
 The coordinator requires that directory to remain real, canonical and available before launching

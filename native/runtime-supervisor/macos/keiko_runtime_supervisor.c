@@ -76,7 +76,11 @@ static int spawn_runtime_environment(const struct launch_request *request, pid_t
     posix_spawn_file_actions_destroy(&actions);
     goto cleanup;
   }
-  if (posix_spawnattr_setflags(&attributes, flags) != 0) {
+  /* The application has its own job-control group. An orphaned stopped child
+   * group must never deliver SIGHUP to its still-running lifecycle supervisor. */
+  if ((flags != 0 && posix_spawnattr_setpgroup(&attributes, 0) != 0) ||
+      posix_spawnattr_setflags(&attributes,
+          flags == 0 ? 0 : (short)(flags | POSIX_SPAWN_SETPGROUP)) != 0) {
     posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     goto cleanup;
@@ -228,6 +232,7 @@ static int probe_monitor(void) {
 
 #if defined(__APPLE__)
 #include "keiko_app_runtime.h"
+#include "keiko_app_job.h"
 #endif
 
 int main(int argc, char **argv) {
@@ -238,8 +243,9 @@ int main(int argc, char **argv) {
   int result = 1;
 #if defined(__APPLE__)
   if (argc == 2 && strcmp(argv[1], "--probe-app-runtime") == 0) return keiko_app_probe();
-  if (argc == 2 && strcmp(argv[1], "--app-runtime") == 0) return keiko_app_runtime(0);
-  if (argc == 2 && strcmp(argv[1], "--app-owner-report") == 0) return keiko_app_runtime(1);
+  if (argc == 2 && strcmp(argv[1], "--app-runtime") == 0) return keiko_job_bridge(0);
+  if (argc == 2 && strcmp(argv[1], "--app-owner-report") == 0) return keiko_job_bridge(1);
+  if (argc == 3 && strcmp(argv[1], "--app-job") == 0) return keiko_job_run(argv[2]);
 #endif
   if (argc == 2 && strcmp(argv[1], "--probe-monitor") == 0) return probe_monitor();
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile(argv[2]);

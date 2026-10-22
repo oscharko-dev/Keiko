@@ -5,8 +5,9 @@
 static int keiko_owner_root_reference(const keiko_runtime_owner *owner, uint64_t deadline) {
   keiko_macos_process_identity root, helper;
   return keiko_tree_before_deadline(deadline) && keiko_macos_identity(owner->root, &root) &&
-         keiko_macos_identity(owner->supervisor, &helper) &&
+         keiko_macos_identity(owner->scope_helper, &helper) &&
          root.unique_id == owner->root_identity.unique_id &&
+         helper.unique_id == owner->scope_helper_identity.unique_id &&
          root.parent_unique_id == helper.unique_id;
 }
 
@@ -85,13 +86,16 @@ cleanup:
 }
 
 static int keiko_owner_capture(keiko_runtime_owner *owner, uint64_t deadline) {
-  unsigned char bytes[16];
+  unsigned char bytes[20];
   if (!keiko_coordinator_read_exact_deadline(owner->identity, bytes, sizeof(bytes), deadline) ||
       memcmp(bytes, "KRI1", 4) != 0 || read_u16(bytes + 4) != 1 ||
-      read_u16(bytes + 6) != 1 || read_u32(bytes + 8) != 4 ||
-      read_u32(bytes + 12) <= 1 || read_u32(bytes + 12) > INT_MAX) return 0;
+      read_u16(bytes + 6) != 1 || read_u32(bytes + 8) != 8 ||
+      read_u32(bytes + 12) <= 1 || read_u32(bytes + 12) > INT_MAX ||
+      read_u32(bytes + 16) <= 1 || read_u32(bytes + 16) > INT_MAX) return 0;
   owner->root = (pid_t)read_u32(bytes + 12);
+  owner->scope_helper = (pid_t)read_u32(bytes + 16);
   if (!keiko_macos_identity(owner->root, &owner->root_identity) ||
+      !keiko_macos_identity(owner->scope_helper, &owner->scope_helper_identity) ||
       !keiko_owner_root_reference(owner, deadline)) return 0;
   owner->scope_bound = 1;
   return 1;

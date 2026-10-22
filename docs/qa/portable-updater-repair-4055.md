@@ -11,13 +11,25 @@ After the long-running SSD session, the root process exited but its native recei
 `owned`. The stop command therefore refused completion. Normal work-image and physical SSD ejects
 succeeded after no open work-volume files remained; no reap receipt was fabricated.
 
-A failure-first native regression separately reproduces loss of previously established unrelated
-ancestry during scope reclamation. The corrected scope retains exact positive ancestry in bounded
-compact ranges, while never-observed ancestry, incomplete observation and exhausted storage still
-refuse zero-live proof. Existing unknown-ancestry controls remain negative; the positive regression
-requires retained evidence for an ancestor that was actually observed. The historical SSD failure
-has no retained helper error detail, so this regression alone is not its complete diagnosis or the
-final SSD acceptance. A new live stop/update/eject qualification remains required.
+A first regression reproduced loss of previously established unrelated ancestry during reclamation.
+Preserving that history fixed the regression and short stops, but the complete application failed
+normal stop again after 1,665 seconds. That correction was insufficient and was not released.
+
+A controlled follow-up reproduces the underlying ambiguity: a foreign process forks through an
+intermediate parent that exits between host snapshots. Its surviving child remains unclassified,
+even after every owned process exits. Ignoring unknown processes would also lose real detached
+Keiko descendants, so the repair replaces host-ancestry inference with a distinct kernel resource
+coalition created by a temporary launchd job. No Apple membership, entitlement or administrative
+operation is involved. The existing private owner protocol, exact process identities, audit-token
+signals and zero-live requirement remain enforced. Unavailable or incomplete observations still
+refuse proof. Normal ownership lifecycle outcomes use the existing Activity Log.
+
+The executable regression pauses the observer, creates both an owned detached descendant and a
+foreign orphan through already-exited intermediate parents, then resumes observation. Cleanup must
+remove the owned descendant, preserve the foreign process and emit a real zero-live proof. The
+temporary job disables keepalive and is removed on completion. Separate model controls cover
+80,000 foreign generations, identity reuse, inaccessible observations and exhausted enumeration.
+Long-running full-application stop and actual SSD update/eject acceptance remain required.
 
 ## Full-package update qualification
 

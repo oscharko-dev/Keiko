@@ -464,6 +464,12 @@
       "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
     },
     {
+      "path": "native/runtime-supervisor/macos/keiko_app_job.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
       "path": "native/runtime-supervisor/macos/keiko_runtime_process_scope.h",
       "language": "c",
       "platforms": ["macos"],
