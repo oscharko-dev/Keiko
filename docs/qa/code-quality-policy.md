@@ -1459,3 +1459,20 @@ native matches and require fresh measured helper closure, current source/proof b
 completed semantic qualification. The capture input and shared or unsupported helpers are not
 additional roots. No dictionary, runtime-typeof, known-value, object or output authority is
 implied; remaining rule scopes and owner obligations stay unchanged.
+
+### Original raw registration in physical comparison
+
+The existing `directRawCheckerInputs` observation form also recognizes the physical validator's
+closed original-attachment comparison. It reuses the canonical registration reader's unchanged
+nonnull-object/undefined result, matching registration key and immutable descriptor writer. The
+root must retain the original reader result in one immutable local, refuse its undefined value,
+and forward that same object through the private physical check and its canonical comparison.
+Only the two raw attachment input annotations are accounted; the original whole-event form and
+all existing slots remain unchanged.
+
+Complete callable and receiver references, owned canonical type identity, original read order,
+resource bounds and currentness remain mandatory. Copies, casts, mutable aliases, default
+initializers, outside callers, callback or persistence escapes, and alternate keys do not gain
+this form. No general call-result origin, helper body, return value, canonical DTO, cheap loss
+pre-count or writer authority follows. Both adaptation paths still require the same physical
+parent's current completed source/public/real-formatter proof obligations and bound consumer.

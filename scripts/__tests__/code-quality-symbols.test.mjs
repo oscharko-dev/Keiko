@@ -26,6 +26,7 @@ import {
   createObjectValidatorFixture,
   createMetadataSourceFixture,
   createDirectObservationCheckerFixture,
+  createPhysicalRegistrationObservationFixture,
   createResponsibilityFixture,
   createEnforcementFixture,
   createCrossOwnerEnforcementFixture,
@@ -3713,5 +3714,58 @@ describe("owned raw-registration transport facts (#3918)", () => {
     expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
       "symbol-subject-changed",
     );
+  });
+});
+
+describe("physical raw registration comparison inputs (#3918)", () => {
+  it("retains legacy slots and adds only the two original attachment inputs", async () => {
+    const own = createPhysicalRegistrationObservationFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport({
+      ...own.record.input,
+      consumerPath: "src/consumer.ts",
+    }).identities[0];
+    const options = { rawObjectInput: true, additionalObservationForms: ["own-key-identity"] };
+    const original = own.resolver.propertyObservationFacts(identity, options);
+    expect(original.slots).toHaveLength(6);
+    const expanded = own.resolver.propertyObservationFacts(identity, {
+      ...options,
+      directRawCheckerInputs: true,
+    });
+    expect(expanded.slots).toHaveLength(10);
+    expect(expanded.slots.slice(0, 6)).toEqual(original.slots);
+    const added = expanded.slots.filter((slot) => slot.physicalRegistrationInput);
+    expect(added).toHaveLength(2);
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const starts = ["function checkRegistration(", "function matchesRegistration("].map(
+      (name) =>
+        source.indexOf("registration: object", source.indexOf(name)) + "registration: ".length,
+    );
+    expect(added.map((slot) => slot.start)).toEqual(starts);
+    expect(added.map((slot) => slot.index)).toEqual([1, 0]);
+    expect(added.every((slot) => slot.observationRoots[0].identity === identity)).toBe(true);
+  });
+
+  it.each([
+    "missing-refusal",
+    "copied-registration",
+    "receiver-escape",
+    "outside-caller",
+    "foreign-key",
+  ])("withholds original attachment inputs for %s", async (variant) => {
+    const own = createPhysicalRegistrationObservationFixture(variant);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport({
+      ...own.record.input,
+      consumerPath: "src/consumer.ts",
+    }).identities[0];
+    const facts = own.resolver.propertyObservationFacts(identity, {
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+      directRawCheckerInputs: true,
+    });
+    expect(facts.slots.filter((slot) => slot.physicalRegistrationInput)).toEqual([]);
   });
 });

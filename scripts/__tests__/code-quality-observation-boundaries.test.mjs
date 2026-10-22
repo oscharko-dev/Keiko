@@ -16,6 +16,7 @@ import {
   metadataSourceRecord,
   createMetadataSourceFixture,
   createDirectObservationCheckerFixture,
+  createPhysicalRegistrationObservationFixture,
   responsibilityPolicy,
   createRawHelperEnforcementFixture,
   installResponsibilityFixtureTools,
@@ -784,6 +785,54 @@ describe("owned raw-registration transport responsibility (#3918)", () => {
         const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
         expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
         expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+      } finally {
+        own.put(runtime, original);
+      }
+    },
+  );
+});
+
+describe("physical raw registration contributor proofs (#3918)", () => {
+  it.skipIf(process.platform === "win32").each(["valid", "unchecked-runtime"])(
+    "requires completed real public comparison proofs for %s",
+    async (variant) => {
+      const own = createPhysicalRegistrationObservationFixture();
+      await installSemanticFixtureTools(own);
+      const path = "packages/alpha/tsconfig.json";
+      const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+      config.compilerOptions.lib.push("DOM");
+      own.put(path, config);
+      const runtime = "packages/alpha/dist/owner.js";
+      const original = readFileSync(join(own.root, runtime), "utf8");
+      if (variant === "unchecked-runtime") {
+        const changed = original.replace(
+          'return exactKeys(registration, expected) && observeRefusal(registration, "code") === expected.code;',
+          "return true;",
+        );
+        expect(changed).not.toBe(original);
+        own.put(runtime, changed);
+      }
+      try {
+        const subject = await collectPolicySubject(own.root);
+        const pending = assessPolicyResponsibilities(subject, own.policy);
+        expect(pending.counts).toMatchObject({ ready: 1, pending: 1 });
+        const added = pending.assessments[0].slots.filter((slot) => slot.physicalRegistrationInput);
+        expect(added).toHaveLength(2);
+        expect(adaptResponsibilityDiagnostics({ violations: added }, pending).violations).toEqual(
+          added,
+        );
+        if (variant === "unchecked-runtime") {
+          await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+            "semantic-proof-execution-failed",
+          );
+          return;
+        }
+        const report = await qualifyPolicyResponsibilities(subject, own.policy);
+        expect(report.counts.qualified).toBe(1);
+        expect(report.assessments[0].slots).toEqual(pending.assessments[0].slots);
+        expect(adaptResponsibilityDiagnostics({ violations: added }, report).violations).toEqual(
+          [],
+        );
       } finally {
         own.put(runtime, original);
       }
