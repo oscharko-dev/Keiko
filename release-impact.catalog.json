@@ -3614,7 +3614,9 @@
         "Updates retain the selected workspace, finish native cleanup before reporting success and release completed session ownership so consecutive updates can proceed.",
         "Release archives carry measured expanded sizes, and authenticated manifests provide future release-impact metadata. Malformed, oversized or altered update inputs remain refused.",
         "Existing published 1.2.5 installations require a verified updater bootstrap before automatic updates. A local repair build is identified separately from a published release; back up local state before applying the bootstrap.",
-        "Linux compiler and protocol controls and Windows manifest and signing regressions were checked. This release does not claim an installed Windows or Linux cross-version canary."
+        "Linux compiler and protocol controls and Windows manifest and signing regressions were checked. This release does not claim an installed Windows or Linux cross-version canary.",
+        "Background folder refreshes keep visible rows in place so pointer clicks still open the selected folder.",
+        "The bundled web framework and its matching lint configuration update to Next.js 16.4.1 for the newly reviewed security advisories."
       ],
       "review": {
         "status": "reviewed",

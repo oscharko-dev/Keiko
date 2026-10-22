@@ -157,5 +157,19 @@ a bounded read-only domain query, and timeout cleanup reaps its owned query proc
 The earlier-head Intel macOS CI failure in the unchanged OpenCode cold-refusal test was replayed
 locally: the exact test and its complete 68-test native-host suite pass on this ARM Mac. Intel
 execution is unavailable locally (no Rosetta); the required Intel CI lane remains authoritative.
-The Firefox Files journey also fails in CI and intermittently in the Linux local shard; its root
-cause is still under investigation, so this change is not yet ready for integration or release.
+The Firefox Files journey's lost click was reproduced in a Linux browser event trace: a retained
+folder receives `pointerdown`, then an asynchronous status line changes its position before
+`pointerup`, which targets the tree's free area. Two deterministic real-pointer controls hold the
+directory and Git-status responses between press and release after browser actionability has
+settled. Both fail against the earlier rendering. Refreshes retain stable rows and report their busy
+state with `aria-busy`; initial empty loads retain their visible loading notice. Git results retain
+their reserved line without displaying a message for an ordinary non-repository folder. Existing
+read lifecycle evidence remains on the Activity Log. Complete affected browser qualification and
+current-head CI are still required before integration or release. Both corrected pointer cases pass
+three consecutive runs each with the patched Next.js runtime; the complete affected shard is
+running separately.
+
+The 2026-10-22 OSV scan newly matched `next@16.3.8` against GHSA-2464-fhr4-w9xw and
+GHSA-p3m5-59mp-jv5r. The same local scanner reproduces both findings on the earlier lockfile and
+reports no open findings after the aligned `next` / `eslint-config-next` update to the advisory's
+patched 16.4.1 release. No exception was added to the vulnerability policy.
