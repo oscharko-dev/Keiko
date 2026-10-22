@@ -212,3 +212,25 @@ The wait now reports unavailable verification as soon as the private outcome is 
 consuming or trusting it. The existing stop/reconcile path must still read the complete zero-live
 frame, reap its exact child and validate the durable owner receipt before restoration can proceed.
 The exact restoration replay then passes in 28.4 seconds within the original unchanged plan grants.
+
+The following macOS CI failure reaches the second successor's `start/completed` receipt but its
+fixture stops observing after 15 seconds, before the plan's verification and cleanup deadlines.
+Six ordinary local restoration/re-update runs pass. Delaying the second successor's JavaScript
+startup by 16 seconds then reproduces the same provisional-owner/missing-verification failure
+against the old observation cutoff. The fixture now derives its remaining observation time from
+the admitted plan's absolute cleanup deadline, without extending any native phase grant. The same
+delayed-start control passes afterward, including restoration, the subsequent update, ownership,
+environment/data markers, receipt completion and normal final shutdown. That delay remains in the
+restoration fixture as a regression control. Failed observations now include the expected version,
+elapsed observation, expected-owner classification and receipt timestamps; invariant assertion
+failures propagate immediately instead of being retried as transient connection failures. This
+establishes a test defect and does not by itself establish the cause of every prior hosted failure.
+Public-release deployment and the actual SSD update/eject acceptance remain required.
+
+Local qualification of this fixture correction passes the complete macOS native gate, including
+compiler/analyzer checks, all three handoffs and all five containment controls, plus scoped ESLint,
+Prettier, JavaScript syntax and the real local Sonar analyzer. The separate hosted elapsed-deadline
+failure passes its exact replay on macOS and in the pinned Linux Node 24.18 container; its complete
+189-test suite also passes on macOS. The Windows fixed-entry EOF failure passes its exact replay on
+macOS, which does not qualify the Windows behavior. Neither unrelated failure has a reproduced
+cause yet; their required hosted lanes must pass before integration.

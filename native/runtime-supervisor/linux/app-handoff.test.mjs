@@ -87,6 +87,11 @@ async function fixturePackage(root, launcher, helper, version) {
     `process.env.KEIKO_HANDOFF_FIXTURE_VERSION=${JSON.stringify(version)};\n` +
     `process.env.KEIKO_HANDOFF_FIXTURE_RESUME="1";\n` +
     `process.env.KEIKO_HANDOFF_FIXTURE_FAIL_BOOT=${JSON.stringify(restoration && version === "1.0.1" ? "1" : "0")};\n` +
+    // A valid successor may start after the former 15-second observation cutoff.
+    // Exercise that scheduling delay inside the unchanged native verification grant.
+    (restoration && version === "1.0.2"
+      ? `await new Promise(resolve => setTimeout(resolve, 16_000));\n`
+      : "") +
     `await import(${JSON.stringify(rootFixture)});\n`;
   await writeFile(join(resources(root), "app/dist/cli/index.js"), entry, { mode: 0o600 });
   await writeFile(
@@ -137,7 +142,7 @@ function updateOutcome(plan, previous, index, newLaunchId) {
   return {
     launchId: restores ? plan.restoreLaunchId : newLaunchId,
     version: restores ? previous.version : plan.targetVersion,
-    timeoutMs: restores ? 70_000 : 15_000,
+    timeoutMs: Math.max(0, plan.deadlines.cleanupAt - Date.now()),
     receiptKind: restores ? "restored-verify" : "complete",
   };
 }
@@ -170,9 +175,16 @@ async function assertClosedNativeLoader(launchId) {
   );
 }
 
+function unavailableObservation(error) {
+  if (error?.code === "ERR_ASSERTION") throw error;
+  return error instanceof Error ? error.name : "unknown";
+}
+
 async function awaitState(version, launchId, timeoutMs = 15_000) {
+  const startedAt = performance.now();
   const deadline = performance.now() + timeoutMs;
   let last;
+  let unavailable;
   while (performance.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/state`, {
@@ -190,7 +202,8 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
         assert.equal(record, `${body.pid}\n${launchId}\nbrowser-open-v1\nnative-app-v1\n`);
         return body;
       }
-    } catch {
+    } catch (error) {
+      unavailable = unavailableObservation(error);
       // A replacement has a bounded interval with no listener or only a provisional receipt.
     }
     await delay(20);
@@ -198,13 +211,17 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
   console.error(
     JSON.stringify({
       classification: "native-fixture-failure",
+      expectedVersion: version,
+      observationMs: Math.round(performance.now() - startedAt),
+      timeoutMs,
+      unavailable,
       last,
       owners: await Promise.all(
         (await readdir(join(stateDir, ".keiko/ui-runtime"))).map(async (name) => {
           const record = (await readFile(join(stateDir, ".keiko/ui-runtime", name), "utf8")).split(
             "\n",
           );
-          return { pid: record[1], phase: record[4] };
+          return { pid: record[1], phase: record[4], expected: record[2] === launchId };
         }),
       ),
       startupFailures: await Promise.all(
@@ -215,10 +232,13 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
       receipts:
         currentActivation === undefined
           ? []
-          : readPortableHandoffReceipts(stateDir, currentActivation).map(({ kind, outcome }) => ({
-              kind,
-              outcome,
-            })),
+          : readPortableHandoffReceipts(stateDir, currentActivation).map(
+              ({ kind, outcome, at }) => ({
+                kind,
+                outcome,
+                at,
+              }),
+            ),
     }),
   );
   throw new Error("native fixture did not reach the selected owned version");
