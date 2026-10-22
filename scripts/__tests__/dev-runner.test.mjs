@@ -14,6 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { URL } from "node:url";
 import { clearTimeout, setTimeout } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -714,7 +715,19 @@ describe("nextChildEnv", () => {
   it("runs next dev as the development server even when the runner itself runs under test", () => {
     // The e2e harness starts this runner with NODE_ENV=test for its own test gates. Inherited by
     // next dev, that value made Next's tsconfig verifier rewrite packages/keiko-ui/tsconfig.json.
-    expect(nextChildEnv(3001)).toStrictEqual({ NODE_ENV: "development", PORT: "3001" });
+    const bootstrap = new URL("../next-dev-bootstrap.mjs", import.meta.url).href;
+    expect(nextChildEnv(3001, "")).toStrictEqual({
+      NODE_ENV: "development",
+      PORT: "3001",
+      NODE_OPTIONS: `--import=${bootstrap}`,
+    });
+  });
+
+  it("retains existing Node options when adding the bounded framework metadata bootstrap", () => {
+    const existing = '--max-old-space-size=3072 --conditions="custom condition"';
+    expect(nextChildEnv(3001, existing).NODE_OPTIONS).toBe(
+      `${existing} --import=${new URL("../next-dev-bootstrap.mjs", import.meta.url).href}`,
+    );
   });
 });
 
