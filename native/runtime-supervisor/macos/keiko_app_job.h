@@ -61,6 +61,19 @@ cleanup:
   return result;
 }
 
+static int keiko_app_probe(void) {
+  uint64_t coalition = 0, now = 0;
+  keiko_macos_process_identity identity;
+  char domain[48];
+  if (!keiko_macos_identity(getpid(), &identity) ||
+      !keiko_macos_coalition(getpid(), &coalition) || access("/bin/launchctl", X_OK) != 0 ||
+      !child_reap_time(&now) || now > UINT64_MAX - 1000u ||
+      snprintf(domain, sizeof(domain), "gui/%lu", (unsigned long)geteuid()) <= 0)
+    return ERROR_TREE_OBSERVE;
+  char *const arguments[] = {"/bin/launchctl", "print", domain, NULL};
+  return keiko_job_launchctl(arguments, now + 1000u) ? 0 : ERROR_TREE_OBSERVE;
+}
+
 static int keiko_job_send_descriptors(int channel, int owner_report,
                                       unsigned int inherited, uint64_t deadline) {
   union { struct cmsghdr alignment; unsigned char bytes[CMSG_SPACE(sizeof(int) * 9)]; } control;
@@ -194,16 +207,23 @@ static int keiko_job_plist(const char *path, const char *label,
 static int keiko_job_bridge(int owner_report) {
   char directory[] = "/tmp/keiko-app-XXXXXX", path[PATH_MAX] = {0}, label[80], self[PATH_MAX];
   char plist[PATH_MAX] = {0}, domain[48], service[128];
-  int listener = -1, channel = -1, result = 1, submitted = 0;
+  int listener = -1, channel = -1, result = 1, submitted = 0, handed_off = 0;
   uint64_t deadline;
   unsigned int inherited = 0;
   keiko_macos_process_identity identity = {0};
   pid_t peer = -1;
   for (int fd = 0; fd < KEIKO_JOB_DESCRIPTOR_COUNT; ++fd)
     if (fcntl(fd, F_GETFD) >= 0) inherited |= 1u << fd;
-  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR || !child_reap_time(&deadline)) return 1;
+  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR || !child_reap_time(&deadline) ||
+      deadline > UINT64_MAX - 5000u) {
+    (void)send_error(ERROR_TREE_OBSERVE);
+    return 1;
+  }
   deadline += 5000u;
-  if (mkdtemp(directory) == NULL) return 1;
+  if (mkdtemp(directory) == NULL) {
+    (void)send_error(ERROR_TREE_OBSERVE);
+    return 1;
+  }
   struct sockaddr_un address = {0};
   address.sun_family = AF_UNIX;
   if (snprintf(path, sizeof(path), "%s/control", directory) <= 0 ||
@@ -229,6 +249,9 @@ static int keiko_job_bridge(int owner_report) {
       proc_pidinfo(peer, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info) ||
       info.pbi_ppid != 1 || !keiko_macos_identity(peer, &identity) ||
       !keiko_job_send_descriptors(channel, owner_report, inherited, deadline)) goto cleanup;
+  /* The job may now write KRS1. Never introduce a second response writer, even
+   * when its installation acknowledgement cannot be observed. */
+  handed_off = 1;
   unsigned char installed = 0;
   if (!keiko_job_ready(channel, POLLIN, deadline) || read(channel, &installed, 1) != 1 ||
       installed != 0xa5) goto cleanup;
@@ -258,6 +281,7 @@ cleanup:
         !keiko_job_launchctl(remove, now + 6000u)) result = 1;
   }
   (void)unlink(plist); (void)unlink(path); (void)rmdir(directory);
+  if (result != 0 && !handed_off) (void)send_error(ERROR_TREE_OBSERVE);
   return result;
 }
 

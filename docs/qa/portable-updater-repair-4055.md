@@ -123,3 +123,39 @@ Coverage aggregation retains the successful full-run measurements for unchanged 
 uses fresh affected-suite measurements for the changed startup source. Istanbul's standard merge
 and report writers produce the combined reports; stale source offsets and failed-run reports are
 not reused. This qualification does not replace the pending public-release update on the SSD.
+
+## Kernel-coalition application acceptance (2026-10-22)
+
+The committed coalition implementation `22f674821` completed a normal full-application stop after
+2,256 seconds (over 37 minutes); the PID record was removed by the normal stop path. The earlier
+ancestry implementation had failed after 1,665 seconds. This longer run used the complete packaged
+application with an isolated state directory, not only a native process fixture.
+
+A fresh isolated full-application update fixture with the coalition implementation completed
+**99.0.0 → 99.0.1 → 99.0.2**, preserving its synthetic workspace marker and synthetic key-file digest.
+Both sessions reached `succeeded`, and the final application stopped normally. Its release transport
+and Ed25519 test trust were process-local fixture inputs; no fixture bundle or trust was installed on
+the SSD. This does not replace public-release acceptance.
+
+The SSD baseline was normally stopped, its genuine reaped receipt retained, and its closed state and
+original application backed up inside the encrypted work volume. The local 1.2.5 bootstrap now uses
+the committed coalition native components. All 17 existing record identities remain: 16 rows retain
+every value, while the workspace project's `last_opened_at` advances through the existing startup
+`createProject`/UPSERT path. All other existing column hashes and the key file, launcher secret and
+private wrapper bytes remain unchanged. The resolved configuration loads its three providers. The
+actual packaged UI loads with zero page errors or CSP violations. The provided Close command normally
+ejects the work image, and the provided Open command remounts it through the existing keychain and
+starts Keiko again. Public 1.2.6 deployment, actual SSD update and final physical-eject acceptance
+remain pending.
+
+Review follow-up adds failure-first controls for an early bridge setup error and an unavailable GUI
+login domain. The existing KRS1 observation error is emitted before descriptor transfer. After rights
+transfer the job remains the sole response writer, including a lost installation acknowledgement;
+a real transferred-descriptor negative control requires exactly one error frame. GUI admission uses
+a bounded read-only domain query, and timeout cleanup reaps its owned query process.
+
+The earlier-head Intel macOS CI failure in the unchanged OpenCode cold-refusal test was replayed
+locally: the exact test and its complete 68-test native-host suite pass on this ARM Mac. Intel
+execution is unavailable locally (no Rosetta); the required Intel CI lane remains authoritative.
+The Firefox Files journey also fails in CI and intermittently in the Linux local shard; its root
+cause is still under investigation, so this change is not yet ready for integration or release.

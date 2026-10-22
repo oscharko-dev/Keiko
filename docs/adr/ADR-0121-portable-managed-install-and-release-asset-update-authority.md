@@ -388,9 +388,12 @@ The helper runs in a temporary launchd job in the current user's GUI login domai
 its own kernel resource coalition. Its descendants inherit that membership through fork, exec,
 reparenting and `setsid`; an unprivileged descendant cannot select another resource coalition.
 The job is loaded from a private temporary definition with `KeepAlive` disabled, then removed after
-the helper exits. It is not installed as a persistent LaunchAgent. A same-user socket checks the
+the helper exits. Admission first checks that the target GUI domain is available under a bounded
+read-only launchctl query. It is not installed as a persistent LaunchAgent. A same-user socket checks the
 peer's executable and transfers only the existing lifecycle descriptors. The receiver acknowledges
 their installation before the sender releases its copies; descriptor presence is preserved exactly.
+Setup errors before descriptor transfer return the existing KRS1 observation error. Once descriptors
+transfer, the job alone owns that response stream, including when its acknowledgement is uncertain.
 The platform-owned `/usr/bin/env -i` clears launchd's inherited loader environment before the native
 helper starts; the job role refuses a nonempty native environment. No application credentials or
 task arguments enter the launchd definition or launchctl arguments.

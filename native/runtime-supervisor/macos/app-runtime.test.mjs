@@ -58,6 +58,7 @@ async function qualify(controlBytes, expectedKind) {
     assert.equal(proof.kind, expectedKind);
     if (expectedKind === 2) assert.equal(proof.payload.readUInt32LE(4), 0);
     const result = await exit;
+    await assert.rejects(readBytes(results, 1), /ended before producing bounded response/u);
     for (const offset of [4, 8]) {
       assert.throws(() => process.kill(observed.readUInt32LE(offset), 0), { code: "ESRCH" });
     }

@@ -5,14 +5,6 @@
 
 /* The updater owns a trusted application generation separately from the optional Coding
  * sandbox's Endpoint Security backend. Its inherited private pipes carry lifecycle control. */
-static int keiko_app_probe(void) {
-  uint64_t coalition;
-  keiko_macos_process_identity identity;
-  int result = keiko_macos_identity(getpid(), &identity) &&
-    keiko_macos_coalition(getpid(), &coalition) && access("/bin/launchctl", X_OK) == 0;
-  return result ? 0 : ERROR_TREE_OBSERVE;
-}
-
 static int keiko_app_overridden(const char *entry, const struct launch_request *request) {
   for (uint16_t index = 0; index < request->environment_count; ++index) {
     size_t length = strlen(request->environment_names[index]);
