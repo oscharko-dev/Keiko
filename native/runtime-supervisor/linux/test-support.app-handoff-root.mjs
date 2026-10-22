@@ -29,6 +29,18 @@ import {
   publishPortableHandoffVerifiedAck,
 } from "../../../packages/keiko-server/dist/update-portable-handoff-receipts.js";
 
+let startupStage = "ownership";
+process.on("uncaughtExceptionMonitor", (error) => {
+  writeFileSync(
+    join(process.env.KEIKO_STATE_DIR, `fixture-failure-${process.env.KEIKO_UI_LAUNCH_ID}.json`),
+    JSON.stringify({
+      stage: startupStage,
+      messageSha256: createHash("sha256").update(error.message).digest("hex"),
+    }),
+    { mode: 0o600 },
+  );
+});
+
 if (process.platform === "darwin") process.env.KEIKO_APP_RUNTIME_OWNER = "1";
 else bindProcessScope(createNativeProcessScope());
 if (!isProcessAlive(currentProcessId()))
@@ -180,6 +192,7 @@ if (process.env.KEIKO_HANDOFF_FIXTURE_RESUME === "1") {
   const restored = process.env.KEIKO_UI_LAUNCH_ID === plan.restoreLaunchId;
   const kind = restored ? "restored-verify" : "verify";
   for (const outcome of ["intent", "completed"]) {
+    startupStage = `verification-${outcome}`;
     const previous = readPortableHandoffReceipts(stateDir, wal.activationId).at(-1);
     appendPortableHandoffReceipt({
       stateDir,
@@ -193,4 +206,5 @@ if (process.env.KEIKO_HANDOFF_FIXTURE_RESUME === "1") {
   }
   if (!restored)
     publishPortableHandoffVerifiedAck({ stateDir, activationId: wal.activationId, planSha256 });
+  startupStage = "verified";
 }

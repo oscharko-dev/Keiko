@@ -207,6 +207,11 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
           return { pid: record[1], phase: record[4] };
         }),
       ),
+      startupFailures: await Promise.all(
+        (await readdir(stateDir))
+          .filter((name) => /^fixture-failure-[a-f0-9]{32}\.json$/u.test(name))
+          .map(async (name) => JSON.parse(await readFile(join(stateDir, name), "utf8"))),
+      ),
       receipts:
         currentActivation === undefined
           ? []
