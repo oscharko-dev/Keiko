@@ -15,7 +15,9 @@ static const char *coordinator_pending_ack_link;
 static int coordinator_pending_receipt = -1;
 static unsigned char coordinator_receipt_bytes[4096];
 static size_t coordinator_receipt_length;
+static int coordinator_forbid_receipt_sleep;
 static int coordinator_test_usleep(unsigned int microseconds) {
+  assert(!coordinator_forbid_receipt_sleep);
   if (coordinator_pending_ack_link != NULL) {
     assert(unlink(coordinator_pending_ack_link) == 0);
     coordinator_pending_ack_link = NULL;
@@ -423,6 +425,27 @@ static void test_receipt_waits_for_complete_publication(void) {
                                                   keiko_tree_now_ms() + 20u));
   assert(reader.receipt_sequence == 0u);
   assert(unlink(path) == 0);
+  cutover_fixture_clear(&fixture);
+}
+
+static void test_receipt_wait_preserves_early_runtime_outcome(void) {
+  cutover_fixture fixture;
+  int channel[2];
+  unsigned char outcome[20] = {'K','R','S','1',1,0,2,0,8,0,0,0,73,0,0,0,0,0,0,0};
+  unsigned char observed[sizeof(outcome)];
+  cutover_fixture_init(&fixture);
+  assert(pipe(channel) == 0);
+  fixture.context.supervisor_response = channel[0];
+  assert(write(channel[1], outcome, sizeof(outcome)) == sizeof(outcome));
+  coordinator_forbid_receipt_sleep = 1;
+  assert(!keiko_coordinator_wait_expected_receipt(&fixture.context, "verify", "intent",
+                                                  fixture_deadline()));
+  coordinator_forbid_receipt_sleep = 0;
+  assert(fixture.context.receipt_sequence == 0u);
+  /* Observation is not a reap proof. The existing stop/reconcile path must consume it. */
+  assert(read(channel[0], observed, sizeof(observed)) == sizeof(observed));
+  assert(memcmp(observed, outcome, sizeof(outcome)) == 0);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
   cutover_fixture_clear(&fixture);
 }
 
@@ -986,6 +1009,7 @@ int main(int argc, char **argv) {
   test_native_update_retains_only_canonical_working_directory();
   test_verified_ack_waits_for_durable_publication();
   test_receipt_waits_for_complete_publication();
+  test_receipt_wait_preserves_early_runtime_outcome();
   test_atomic_promote_survives_each_cutover_boundary();
   test_atomic_cutover_rejects_untrusted_states();
   test_registration_and_restore_are_crash_idempotent();

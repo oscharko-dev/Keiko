@@ -565,6 +565,14 @@ static int keiko_coordinator_wait_expected_receipt(keiko_coordinator_context *co
        * advances receipt_sequence. Malformed or foreign evidence never advances it. */
       if (keiko_coordinator_read_expected_receipt(context, kind, outcome, deadline_ms)) return 1;
     } else if (errno != ENOENT) return 0;
+    /* A failed successor cannot publish verification. Preserve its private KRS1
+     * outcome for stop/reconcile instead of spending the restoration grant idle. */
+    if (context->supervisor_response >= 0) {
+      struct pollfd runtime = {context->supervisor_response, POLLIN | POLLHUP, 0};
+      int ready = poll(&runtime, 1, 0);
+      if (ready < 0 && errno != EINTR) return 0;
+      if (ready > 0 && runtime.revents != 0) return 0;
+    }
     usleep(10000);
   }
   return 0;

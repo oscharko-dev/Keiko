@@ -203,3 +203,12 @@ The fragmented-packet test now observes refusal with the same existing ten-secon
 as the dedicated stale-database test, requiring no ready endpoint, exit 1 and the constant refusal
 verdict. The separate five-second acquired-process shutdown bound is unchanged. All 68 native host
 tests pass locally; Intel execution remains CI-owned on this ARM Mac.
+
+The next CI run clears Intel but still fails restoration after consuming nearly the entire cleanup
+grant. The native receipt wait previously ignored an already queued private runtime outcome and
+waited until the verification deadline before starting recovery. A deterministic C control queues
+the canonical failed-root outcome and forbids idle waiting; it fails against that implementation.
+The wait now reports unavailable verification as soon as the private outcome is readable, without
+consuming or trusting it. The existing stop/reconcile path must still read the complete zero-live
+frame, reap its exact child and validate the durable owner receipt before restoration can proceed.
+The exact restoration replay then passes in 28.4 seconds within the original unchanged plan grants.
