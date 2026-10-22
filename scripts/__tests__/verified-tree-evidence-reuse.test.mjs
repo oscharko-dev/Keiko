@@ -674,16 +674,18 @@ function runFirefoxDependency(overrides) {
 }
 
 describe("complete isolated Firefox smoke shards", () => {
-  it("keeps both mandatory partitions and the unchanged literal smoke command", () => {
+  it("keeps all four mandatory partitions and the unchanged literal smoke command", () => {
     const job = jobs["firefox-smoke"];
     expect(job.strategy).toEqual({
       "fail-fast": false,
       "max-parallel": 2,
-      matrix: { shard: [1, 2] },
+      matrix: { shard: [1, 2, 3, 4] },
     });
     expect(gatedDisplayNames("firefox-smoke")).toEqual([
-      "Firefox smoke (shard 1/2)",
-      "Firefox smoke (shard 2/2)",
+      "Firefox smoke (shard 1/4)",
+      "Firefox smoke (shard 2/4)",
+      "Firefox smoke (shard 3/4)",
+      "Firefox smoke (shard 4/4)",
     ]);
     expect(job["runs-on"]).toBe("ubuntu-latest");
     expect(job["timeout-minutes"]).toBe(20);
@@ -695,7 +697,7 @@ describe("complete isolated Firefox smoke shards", () => {
       "npm run build:packages",
       "npm run build --workspace @oscharko-dev/keiko-ui",
       "./node_modules/.bin/playwright install --with-deps firefox",
-      "npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/2",
+      "npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/4",
     ]);
     expect(job.steps.find((step) => step.name === "Release smoke E2E (Firefox)")).toMatchObject({
       "timeout-minutes": 20,
@@ -723,14 +725,14 @@ describe("complete isolated Firefox smoke shards", () => {
     const upload = steps.find((step) => step.name === "Upload Firefox smoke traces on failure");
     expect(upload.if).toBe("${{ failure() }}");
     expect(upload.with).toEqual({
-      name: "playwright-smoke-firefox-shard-${{ matrix.shard }}-of-2",
+      name: "playwright-smoke-firefox-shard-${{ matrix.shard }}-of-4",
       path: "test-results/",
       "if-no-files-found": "ignore",
       "retention-days": 7,
     });
   });
 
-  it("requires both shards before the existing protected UI work", () => {
+  it("requires all four shards before the existing protected UI work", () => {
     expect(jobs.ui.needs).toEqual(["verified-tree", "firefox-smoke"]);
     expect(jobs.ui["timeout-minutes"]).toBe(60);
     expect(jobs.ci.needs).toContain("ui");

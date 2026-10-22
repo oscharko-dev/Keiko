@@ -47,8 +47,10 @@ export const REUSED_JOB_NAMES = Object.freeze([
   "Portable secure-read smoke (windows-x64)",
   "Portable secure-read smoke (macos-arm64)",
   "Portable secure-read smoke (macos-x64)",
-  "Firefox smoke (shard 1/2)",
-  "Firefox smoke (shard 2/2)",
+  "Firefox smoke (shard 1/4)",
+  "Firefox smoke (shard 2/4)",
+  "Firefox smoke (shard 3/4)",
+  "Firefox smoke (shard 4/4)",
   "ui",
 ]);
 
