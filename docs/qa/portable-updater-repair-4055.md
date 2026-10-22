@@ -187,3 +187,19 @@ The subsequent required scan newly matches three DOMPurify advisories and `ip-ad
 dependency lockfiles. The exact local OSV invocation reproduces all five findings. Updating the
 existing DOMPurify override to 3.4.17 and the two `ip-address` resolutions to 10.7.4 clears them;
 the same scanner reports no open findings. Existing vulnerability exceptions remain unchanged.
+
+The subsequent macOS CI restoration failure is reproduced locally. Receipt writers create the
+exclusive destination before writing its bytes; the native reader previously treated that visible
+empty or incomplete file as a terminal failure. A deterministic C control pauses publication after
+creation and fails against that reader. The corrected reader retries unavailable evidence within
+the original phase deadline and advances only after full chain validation. Permanent malformed
+receipts, wrong kinds and symlinks still fail without advancing the sequence. The complete native
+macOS gate passes afterward, including restoration, consecutive handoffs, compiler/static analysis
+and all five containment controls. Existing handoff lifecycle evidence remains authoritative.
+
+Intel CI also observes the expected stale-database refusal at 5,262 ms, after the five-second EOF
+shutdown helper has already failed. That fresh process is still loading its fixed module graph.
+The fragmented-packet test now observes refusal with the same existing ten-second startup helper
+as the dedicated stale-database test, requiring no ready endpoint, exit 1 and the constant refusal
+verdict. The separate five-second acquired-process shutdown bound is unchanged. All 68 native host
+tests pass locally; Intel execution remains CI-owned on this ARM Mac.

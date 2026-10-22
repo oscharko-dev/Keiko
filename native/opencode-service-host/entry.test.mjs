@@ -536,7 +536,13 @@ test("a fragmented bounded packet boots once and an old native database cannot r
     const reused = start(own);
     children.push(reused);
     reused.child.stdin.write(JSON.stringify(own.input) + "\n");
-    const result = await finishColdRefusal(reused, t);
+    // A fresh process must load its fixed graph before it can reject prior state.
+    // Observe that startup under the same bound as the dedicated stale-state test;
+    // the separate five-second EOF shutdown bound applies after acquisition.
+    const result = await Promise.race([
+      reused.exited,
+      ready(reused).then(() => ({ code: 0, stdout: "unexpected-ready", stderr: "" })),
+    ]);
     t.diagnostic(JSON.stringify({ phase: "cold-refusal", ...reused.observation() }));
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");

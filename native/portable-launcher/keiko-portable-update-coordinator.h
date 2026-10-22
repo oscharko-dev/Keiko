@@ -559,9 +559,12 @@ static int keiko_coordinator_wait_expected_receipt(keiko_coordinator_context *co
                context->receipt_sequence + 1u) <= 0 ||
       !keiko_coordinator_join(path, sizeof(path), context->capsule, suffix)) return 0;
   while (keiko_tree_before_deadline(deadline_ms)) {
-    if (lstat(path, &status) == 0)
-      return keiko_coordinator_read_expected_receipt(context, kind, outcome, deadline_ms);
-    if (errno != ENOENT) return 0;
+    if (lstat(path, &status) == 0) {
+      /* O_EXCL publishes the name before its writer finishes. Unavailable evidence
+       * is retried within the original grant; only the complete validated chain
+       * advances receipt_sequence. Malformed or foreign evidence never advances it. */
+      if (keiko_coordinator_read_expected_receipt(context, kind, outcome, deadline_ms)) return 1;
+    } else if (errno != ENOENT) return 0;
     usleep(10000);
   }
   return 0;

@@ -12,10 +12,20 @@
 
 static unsigned int coordinator_cleanup_kills;
 static const char *coordinator_pending_ack_link;
+static int coordinator_pending_receipt = -1;
+static unsigned char coordinator_receipt_bytes[4096];
+static size_t coordinator_receipt_length;
 static int coordinator_test_usleep(unsigned int microseconds) {
   if (coordinator_pending_ack_link != NULL) {
     assert(unlink(coordinator_pending_ack_link) == 0);
     coordinator_pending_ack_link = NULL;
+  }
+  if (coordinator_pending_receipt >= 0) {
+    assert(write(coordinator_pending_receipt, coordinator_receipt_bytes,
+                 coordinator_receipt_length) == (ssize_t)coordinator_receipt_length);
+    assert(fsync(coordinator_pending_receipt) == 0);
+    assert(close(coordinator_pending_receipt) == 0);
+    coordinator_pending_receipt = -1;
   }
   return usleep(microseconds);
 }
@@ -378,6 +388,41 @@ static void test_verified_ack_waits_for_durable_publication(void) {
   assert(symlink(fixture.registration, ack) == 0);
   assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
   assert(unlink(ack) == 0);
+  cutover_fixture_clear(&fixture);
+}
+
+static void test_receipt_waits_for_complete_publication(void) {
+  cutover_fixture fixture;
+  char path[PATH_MAX];
+  cutover_fixture_init(&fixture);
+  keiko_coordinator_context reader = fixture.context;
+  assert(keiko_coordinator_append_receipt(&fixture.context, "prepared", "completed"));
+  assert(join_path(path, sizeof(path), fixture.receipts, "/000001.khr"));
+  int descriptor = open(path, O_RDONLY | O_NOFOLLOW);
+  assert(descriptor >= 0);
+  ssize_t count = read(descriptor, coordinator_receipt_bytes, sizeof(coordinator_receipt_bytes));
+  assert(count > 0 && close(descriptor) == 0);
+  coordinator_receipt_length = (size_t)count;
+  coordinator_pending_receipt = open(path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+  assert(coordinator_pending_receipt >= 0);
+  assert(keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
+                                                 fixture_deadline()));
+  assert(coordinator_pending_receipt == -1 && reader.receipt_sequence == 1u);
+  assert(strcmp(reader.receipt_sha256, fixture.context.receipt_sha256) == 0);
+  reader.receipt_sequence = 0;
+  memset(reader.receipt_sha256, 0, sizeof(reader.receipt_sha256));
+  assert(!keiko_coordinator_wait_expected_receipt(&reader, "verify", "completed",
+                                                  keiko_tree_now_ms() + 20u));
+  assert(reader.receipt_sequence == 0u);
+  replace_fixture_file(path, "KHR1partial");
+  assert(!keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
+                                                  keiko_tree_now_ms() + 20u));
+  assert(reader.receipt_sequence == 0u);
+  assert(unlink(path) == 0 && symlink(fixture.registration, path) == 0);
+  assert(!keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
+                                                  keiko_tree_now_ms() + 20u));
+  assert(reader.receipt_sequence == 0u);
+  assert(unlink(path) == 0);
   cutover_fixture_clear(&fixture);
 }
 
@@ -940,6 +985,7 @@ int main(int argc, char **argv) {
   test_reconcile_requires_zero_live_proof(argv[0]);
   test_native_update_retains_only_canonical_working_directory();
   test_verified_ack_waits_for_durable_publication();
+  test_receipt_waits_for_complete_publication();
   test_atomic_promote_survives_each_cutover_boundary();
   test_atomic_cutover_rejects_untrusted_states();
   test_registration_and_restore_are_crash_idempotent();
