@@ -7,9 +7,13 @@ import type {
   CodingSafeActivityPlanStepInput,
   CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
-import { isOpenCodeFacadeDispatchedTool, parseOpenCodeHistory } from "./opencodeProtocol.js";
+import {
+  isOpenCodeFacadeDispatchedTool,
+  OPENCODE_PLAN_CARRIER_TOOLS,
+  OPENCODE_PLAN_SURFACE_TOOLS,
+  parseOpenCodeHistory,
+} from "./opencodeProtocol.js";
 
-const PLAN_TOOL = "todowrite";
 /** Closed upstream-status vocabulary (#2480); anything else fails the whole plan update closed. */
 const PLAN_STEP_STATES: Readonly<Record<string, CodingSafeActivityPlanStepState>> = {
   pending: "pending",
@@ -165,7 +169,11 @@ function partSignal(data: Record<string, unknown>): CodingSafeActivitySignalOutc
   const occurredAt = instantFrom(data.time);
   if (part === undefined || occurredAt === undefined) return { kind: "dropped" };
   if (part.type === "text") return textSignal(part, occurredAt);
-  if (part.type === "tool" && part.tool === PLAN_TOOL) return planSignal(part, occurredAt);
+  if (part.type === "tool" && typeof part.tool === "string") {
+    if (OPENCODE_PLAN_CARRIER_TOOLS.has(part.tool)) return planSignal(part, occurredAt);
+    // The read side of the plan surface carries nothing the projection admits (#2480).
+    if (OPENCODE_PLAN_SURFACE_TOOLS.has(part.tool)) return { kind: "dropped" };
+  }
   if (part.type === "tool") return toolPartSignal(part, occurredAt);
   return { kind: "skip" };
 }
@@ -228,8 +236,9 @@ function toolPartSignal(
   // A completed part is a silent no-op for a facade-dispatched (keiko_*) tool: the Keiko tool
   // facade supplies "succeeded" once its closed result is known (opencodeRuntimeComposition.ts
   // settleTool), so inferring it again here would race a value the facade already owns. The only
-  // native tool that ever reaches this function is "question" ("todowrite" is projected as a plan
-  // by partSignal before reaching here, and never as productive tool activity, #2480); it has no
+  // mapped non-facade tool that reaches this function is "question" (plan carriers are projected
+  // as a plan by partSignal before reaching here, never as productive tool activity, #2480); in
+  // the native profile (#3897) every admitted native tool part arrives here the same way. It has no
   // other terminal source, so for a non-facade tool the completed part IS the terminal signal
   // (#3390) -- fed through the same idempotent running->succeeded transition the facade path
   // relies on (codingSafeActivityProjection.ts allowedToolTransition).

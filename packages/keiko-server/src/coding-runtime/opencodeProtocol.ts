@@ -151,6 +151,17 @@ export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
   return APPROVED_PRODUCTIVE_TOOLS.has(tool);
 }
 
+/**
+ * The plan surfaces (#2480): a completed carrier part projects as a governed plan snapshot and
+ * none of them ever surfaces as productive tool activity, in any tool profile. OpenCode 2.1.4
+ * ships the merged `todo` tool next to the older `todowrite`/`todoread` ids (#3897).
+ */
+export const OPENCODE_PLAN_CARRIER_TOOLS: ReadonlySet<string> = new Set(["todowrite", "todo"]);
+export const OPENCODE_PLAN_SURFACE_TOOLS: ReadonlySet<string> = new Set([
+  ...OPENCODE_PLAN_CARRIER_TOOLS,
+  "todoread",
+]);
+
 const APPROVED_MAPPED_RUNTIME_TOOLS = new Set<string>([
   "question",
   // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
@@ -1680,14 +1691,18 @@ function classifiedToolEvent(
 ): "question" | "tool" | undefined {
   if (!toolEvent(type, data)) return undefined;
   if (type === "session.next.tool.called" && data.tool === "question") return "question";
-  if (
-    type === "session.next.tool.called" &&
-    (!nonEmpty(data.tool) ||
-      !(APPROVED_PRODUCTIVE_TOOLS.has(data.tool) || isAdmissibleOpenCodeToolName(data.tool)))
-  )
-    return undefined;
+  if (type === "session.next.tool.called" && !productiveToolCall(data.tool)) return undefined;
   return "tool";
 }
+/** A plan surface is never a productive tool call, whatever profile admitted its name (#2480). */
+function productiveToolCall(tool: unknown): boolean {
+  return (
+    nonEmpty(tool) &&
+    !OPENCODE_PLAN_SURFACE_TOOLS.has(tool) &&
+    (APPROVED_PRODUCTIVE_TOOLS.has(tool) || isAdmissibleOpenCodeToolName(tool))
+  );
+}
+
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }

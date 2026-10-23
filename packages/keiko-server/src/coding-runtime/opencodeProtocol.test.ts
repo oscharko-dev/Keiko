@@ -1171,8 +1171,9 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
         syncRow(27, "message.part.updated.1", { sessionID: "ses_1", part: planPart, time: 27 }),
       ]),
     ).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
-    // #3897: a native tool part (`todoread`, `todo`) is an ordinary tool observation; the
-    // unchosen plan event type stays refused.
+    // #3897: a native tool part (`todoread`, `todo`) parses as an observation (the safe-activity
+    // projection decides what it becomes, #2480); a plan-surface tool *call* stays refused in
+    // every profile, and so does the unchosen plan event type.
     expect(
       parseOpenCodeHistory([
         syncRow(27, "message.part.updated.1", {
@@ -1182,6 +1183,20 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
         }),
       ]),
     ).toMatchObject({ ok: true });
+    for (const tool of ["todowrite", "todoread", "todo"]) {
+      expect(
+        parseOpenCodeHistory([
+          syncRow(28, "session.next.tool.called", {
+            timestamp: "2026-07-12T00:00:00.000Z",
+            sessionID: "ses_1",
+            assistantMessageID: "msg_1",
+            callID: "call_plan",
+            tool,
+            provider: "keiko",
+          }),
+        ]),
+      ).toEqual({ ok: false, reason: "event-unknown" });
+    }
     expect(
       parseOpenCodeHistory([syncRow(27, "todo.updated", { sessionID: "ses_1", todos })]),
     ).toEqual({ ok: false, reason: "event-unknown" });

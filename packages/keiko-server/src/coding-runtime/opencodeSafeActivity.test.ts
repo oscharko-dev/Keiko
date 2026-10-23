@@ -442,6 +442,32 @@ describe("OpenCode safe-activity normalization", () => {
     expect(normalized).toEqual({ signals: [], dropped: 2 });
   });
 
+  // #3897: the pinned 2.1.4 runtime ships the merged `todo` plan tool; it is the same governed
+  // plan surface as `todowrite`: a completed part projects as a plan, a call never as a tool.
+  it("projects the native todo carrier as a plan and keeps its call dead", () => {
+    const todos = [{ content: "Read the entry point", status: "in_progress", priority: "high" }];
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: { ...planToolPart(completedPlanState(todos)), tool: "todo" },
+        time: 1_721_323_200_002,
+      }),
+      row(2, "session.next.tool.called", {
+        timestamp: "2024-07-18T17:20:00Z",
+        sessionID: "ses_safe",
+        assistantMessageID: "msg_assistant",
+        callID: "call_plan",
+        tool: "todo",
+        provider: "keiko",
+      }),
+    ]);
+    expect(normalized.dropped).toBe(1);
+    expect(normalized.signals.map(({ signal }) => signal)).toMatchObject([
+      { kind: "plan", steps: [{ text: "Read the entry point", state: "active" }] },
+    ]);
+    expect(JSON.stringify(normalized)).not.toContain('"tool"');
+  });
+
   it("counts malformed relevant rows and remains total for non-array input", () => {
     expect(normalizeOpenCodeSafeActivityHistory({ rows: [] })).toEqual({
       signals: [],
