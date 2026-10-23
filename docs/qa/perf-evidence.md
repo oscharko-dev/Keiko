@@ -108,12 +108,15 @@ ceilings. A ruler recalibration rebinds the calibration digest but carries every
 forward unchanged; it cannot widen or opportunistically tighten a threshold from one noisy run.
 The candidate binds the measured tool-catalog source tree and lockfile; both documents bind the
 measurement ruler and reference environment. A routine source or lockfile update therefore writes
-a new candidate against the frozen calibration and budget. It never moves the threshold.
+a new candidate against the frozen calibration and budget in the original container procedure;
+the portable procedure below replaces both measurements while preserving the budget. Neither moves
+the threshold.
 `npm run check:tool-catalog-performance` runs a fresh deterministic work check on every invocation,
 then evaluates the committed reference evidence. Fresh local or CI wall-clock values are reported
 for diagnosis and are never compared with the reference threshold.
 
-The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
+There are two explicit reference procedures. The original reference environment is the pinned
+Linux arm64 Node image below with at least 14 logical cores.
 The repository command creates a self-contained clone at the exact source revision, installs and
 builds inside the container, supplies the image identity to the producer, validates the candidate,
 and copies only the candidate document back. It refuses a dirty working tree because a clean clone
@@ -122,6 +125,33 @@ could not reproduce that subject.
 ```bash
 npm run perf:evidence:regen:tool-catalog
 ```
+
+For a machine without that original environment, or to refresh an existing portable pair, use:
+
+```bash
+npm run perf:evidence:regen:tool-catalog:portable -- --baseline origin/dev
+```
+
+Commit the implementation first and fetch the intended baseline before running this command.
+It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 24.18.0, npm 11.16.0,
+and a dedicated Linux, macOS or Windows x64/arm64 host with at least 14 logical cores. It archives
+the baseline into a separate directory, installs both lockfiles with `npm ci --ignore-scripts`,
+and builds both package trees. Two fresh Node processes then measure the baseline and candidate
+with the candidate's identical measurement ruler. Do not run other builds or benchmarks concurrently.
+
+Schema 2 (`functional-performance-paired-host`) records both commit IDs, the previous calibration
+and budget digests, and matching host fingerprints: OS release, CPU model digest, core count,
+memory, Node version and Node binary digest. It replaces calibration and candidate together and
+carries all six numeric maxima and ceilings forward exactly. Both runs must pass those limits;
+there is no host-speed multiplier or automatic threshold recalibration. Case identities and the
+complete sampling procedure must match, and source, ruler or host changes during the run abort it.
+The old single-candidate writer refuses a portable calibration. A portable refresh always measures
+both revisions again; it cannot attach new samples to a previous host's measurements.
+
+Review and commit all three generated documents. Their commit IDs identify the measured source
+commits before the evidence-only commit; the documents themselves are outside the subject digest.
+The retained baseline directory allows inspection. This procedure applies only to the tool-catalog
+target and does not change the editor D12 or coding-runtime reference environments.
 
 The V2 case is added with the explicit one-time extension mode:
 

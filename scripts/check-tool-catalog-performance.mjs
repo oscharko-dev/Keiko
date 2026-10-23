@@ -9,7 +9,7 @@ import { compareStrings } from "./lib/compare-strings.mjs";
 // `measureToolCatalogPerformance` only records samples and throws on incomplete/invalid work; it
 // never decides pass/fail on wall-clock numbers. Threshold *interpretation* for any wall-clock
 // figures this document carries belongs to the reader (#3415 owns calibrating them against the
-// D12 reference environment, ADR-0156 D6 — a developer-class container, never a hosted runner).
+// reference environment, ADR-0156 D6/D8 — a developer container or an explicit paired host).
 //
 // Three measured cases:
 //   - "legacy-native-6-tool": the real, shipped `createInitialToolCatalog()` (unchanged pin).
@@ -78,6 +78,7 @@ export const TOOL_CATALOG_OVERFLOW_TOOL_COUNT = 320;
 const SYNTHETIC_HANDLER_ID = "tool-catalog-performance-fixture";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const TOOL_CATALOG_PERFORMANCE_CLASS = "functional-performance-reference-container";
+const PORTABLE_PERFORMANCE_CLASS = "functional-performance-paired-host";
 const TOOL_CATALOG_PERFORMANCE_METRICS = ["coldCompileMs", "lookupBatchMs"];
 const TOOL_CATALOG_FROZEN_BUDGET_POLICY = "reviewed-non-widening-ceilings-v1";
 const MANAGED_PERFORMANCE_CASE_ID = "managed-opencode-v2";
@@ -91,6 +92,7 @@ const TOOL_CATALOG_RULER_PATHS = [
   "scripts/check-tool-catalog-performance.mjs",
   "scripts/coding-runtime-performance-evidence.mjs",
   "scripts/stage-dev-coding-runtime.mjs",
+  "scripts/regenerate-tool-catalog-portable-evidence.mjs",
 ];
 export const TOOL_CATALOG_PERFORMANCE_FILES = Object.freeze({
   calibration: "docs/release/3415-tool-catalog-calibration.json",
@@ -314,8 +316,13 @@ process.stdout.write(JSON.stringify(await measureToolCatalogPerformance(root)));
  * Runs one complete measurement in a new VM and heap. Calibration's synthetic-catalog allocation
  * therefore cannot perturb the candidate through retained JIT or garbage-collector state.
  */
-export async function measureToolCatalogPerformanceInFreshProcess(root = process.cwd()) {
-  const moduleUrl = pathToFileURL(join(root, "scripts/check-tool-catalog-performance.mjs")).href;
+export async function measureToolCatalogPerformanceInFreshProcess(
+  root = process.cwd(),
+  harnessRoot = root,
+) {
+  const moduleUrl = pathToFileURL(
+    join(harnessRoot, "scripts/check-tool-catalog-performance.mjs"),
+  ).href;
   const output = execFileSync(
     process.execPath,
     [
@@ -408,6 +415,10 @@ export function sealToolCatalogPerformanceDocument(document) {
 }
 
 function validateReferenceEnvironment(environment) {
+  if (environment?.kind === "paired-host-v1") {
+    validatePortableEnvironment(environment);
+    return;
+  }
   exactKeys(
     environment,
     [
@@ -436,6 +447,64 @@ function validateReferenceEnvironment(environment) {
   );
 }
 
+function validatePortableEnvironment(environment) {
+  exactKeys(
+    environment,
+    [
+      "kind",
+      "platform",
+      "architecture",
+      "nodeVersion",
+      "logicalCores",
+      "totalMemoryBytes",
+      "osRelease",
+      "cpuModelsSha256",
+      "nodeBinarySha256",
+    ],
+    "catalog portable environment",
+  );
+  assertEvidence(
+    new Set(["linux", "darwin", "win32"]).has(environment.platform) &&
+      new Set(["x64", "arm64"]).has(environment.architecture),
+    "unsupported catalog portable host",
+  );
+  assertEvidence(environment.nodeVersion === "v24.18.0", "catalog performance Node differs");
+  assertEvidence(
+    Number.isSafeInteger(environment.logicalCores) && environment.logicalCores >= 14,
+    "catalog performance requires fourteen cores",
+  );
+  assertEvidence(
+    Number.isSafeInteger(environment.totalMemoryBytes) && environment.totalMemoryBytes > 0,
+    "catalog performance memory aggregate is invalid",
+  );
+  assertEvidence(
+    typeof environment.osRelease === "string" &&
+      environment.osRelease.length > 0 &&
+      environment.osRelease.length <= 128,
+    "invalid catalog host OS release",
+  );
+  assertEvidence(
+    SHA256.test(environment.cpuModelsSha256) && SHA256.test(environment.nodeBinarySha256),
+    "invalid catalog host fingerprint",
+  );
+}
+
+function validatePortablePair(pair) {
+  exactKeys(
+    pair,
+    ["baselineCommit", "candidateCommit", "previousCalibrationSha256", "previousBudgetSha256"],
+    "catalog portable pair",
+  );
+  assertEvidence(
+    /^[a-f0-9]{40}$/u.test(pair.baselineCommit) && /^[a-f0-9]{40}$/u.test(pair.candidateCommit),
+    "invalid catalog pair revisions",
+  );
+  assertEvidence(
+    SHA256.test(pair.previousCalibrationSha256) && SHA256.test(pair.previousBudgetSha256),
+    "invalid catalog pair ancestry",
+  );
+}
+
 function validatePerformanceCase(testCase) {
   exactKeys(testCase, ["toolCount", "samples", "aggregates"], "catalog performance case");
   assertEvidence(
@@ -457,6 +526,7 @@ function expectedPerformanceCaseIds() {
 }
 
 function validatePerformanceDocumentHeader(document) {
+  const portable = document.schemaVersion === 2;
   const base = [
     "schemaVersion",
     "target",
@@ -470,6 +540,7 @@ function validatePerformanceDocumentHeader(document) {
     "overflow",
     "cases",
     "documentSha256",
+    ...(portable ? ["portablePair"] : []),
   ];
   exactKeys(
     document,
@@ -477,11 +548,12 @@ function validatePerformanceDocumentHeader(document) {
     "catalog performance evidence",
   );
   assertEvidence(
-    document.schemaVersion === 1 && document.target === "tool-catalog",
+    (document.schemaVersion === 1 || portable) && document.target === "tool-catalog",
     "invalid catalog performance version",
   );
   assertEvidence(
-    document.evidenceClass === TOOL_CATALOG_PERFORMANCE_CLASS,
+    document.evidenceClass ===
+      (portable ? PORTABLE_PERFORMANCE_CLASS : TOOL_CATALOG_PERFORMANCE_CLASS),
     "invalid catalog performance class",
   );
   assertEvidence(
@@ -489,6 +561,11 @@ function validatePerformanceDocumentHeader(document) {
     "invalid catalog performance role",
   );
   assertEvidence(document.thresholdOwnerIssue === 3415, "invalid catalog performance owner");
+  assertEvidence(
+    portable === (document.environment?.kind === "paired-host-v1"),
+    "catalog evidence environment class differs",
+  );
+  if (portable) validatePortablePair(document.portablePair);
   assertEvidence(
     new Date(document.measuredAtIso).toISOString() === document.measuredAtIso,
     "invalid catalog performance timestamp",
@@ -540,9 +617,12 @@ function validateToolCatalogPerformanceDocument(document, caseIds = expectedPerf
 
 export function buildToolCatalogPerformanceDocument(raw, input) {
   const document = sealToolCatalogPerformanceDocument({
-    schemaVersion: 1,
+    schemaVersion: input.portablePair === undefined ? 1 : 2,
     target: "tool-catalog",
-    evidenceClass: TOOL_CATALOG_PERFORMANCE_CLASS,
+    evidenceClass:
+      input.portablePair === undefined
+        ? TOOL_CATALOG_PERFORMANCE_CLASS
+        : PORTABLE_PERFORMANCE_CLASS,
     role: input.role,
     thresholdOwnerIssue: 3415,
     measuredAtIso: input.measuredAtIso,
@@ -551,6 +631,7 @@ export function buildToolCatalogPerformanceDocument(raw, input) {
     procedure: raw.procedure,
     overflow: raw.overflow,
     cases: raw.cases,
+    ...(input.portablePair === undefined ? {} : { portablePair: input.portablePair }),
     ...(input.calibrationSha256 === undefined
       ? {}
       : { calibrationSha256: input.calibrationSha256 }),
@@ -652,6 +733,9 @@ export function ratchetToolCatalogPerformanceBudgets(calibration, previousBudget
 
 function performancePairDefects(measurement, calibration, budget) {
   return [
+    ...(!isDeepStrictEqual(measurement.portablePair, calibration.portablePair)
+      ? ["catalog portable pair differs"]
+      : []),
     ...performanceBudgetDefects(budget, calibration),
     ...(measurement.calibrationSha256 !== calibration.documentSha256
       ? ["catalog performance calibration binding differs"]
@@ -715,7 +799,15 @@ export function evaluateToolCatalogPerformanceEvidence(measurement, calibration,
     const defects = performancePairDefects(measurement, calibration, budget);
     return {
       defects,
-      verdicts: defects.length === 0 ? performanceVerdicts(measurement, budget) : [],
+      verdicts:
+        defects.length === 0
+          ? [
+              ...performanceVerdicts(measurement, budget),
+              ...(calibration.schemaVersion === 2
+                ? performanceVerdicts(calibration, budget).map((reason) => `baseline ${reason}`)
+                : []),
+            ]
+          : [],
     };
   } catch (error) {
     const defects = [
@@ -883,6 +975,8 @@ export async function extendManagedToolCatalogPerformance(root = process.cwd(), 
 export async function writeToolCatalogPerformanceMeasurement(root = process.cwd(), overrides = {}) {
   const deps = evidenceWriterDependencies(overrides);
   const calibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
+  if (calibration.schemaVersion === 2)
+    throw new TypeError("portable evidence requires a fresh baseline/candidate pair");
   const budget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
   const environment = deps.environment();
   const measurementHarnessSha256 = deps.rulerDigest(root);
