@@ -1364,6 +1364,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   ambiguous one) and spends only its call; a diff the plugin cannot measure is a malformed ask and
   is never allowed. A refused, revoked, expired, exhausted or aborted action is denied and
   recorded as `authority-refused` or `cancelled`; a wiring without the owner refuses every action.
+- **A selected private skill reaches every productive dispatch.** The Markdown skill pinned on a
+  Coding conversation (#4025) is bound to the run's task turn when the run begins, through the
+  conversation store's existing immutable turn binding. The coding gateway route resolves that
+  binding per dispatch, after the readiness challenge, prefixes the skill's instructions to the
+  request's first user message and admits the request again with them counted. It is one owner for
+  the native and the mapped profile; no private text enters generated plugin source or runtime
+  configuration. A replaced skill keeps the bound revision, a deleted one refuses the dispatch
+  (`skill-unavailable`), and `coding-sidecar.gateway.skill-attached` records the identity and sizes
+  only.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's

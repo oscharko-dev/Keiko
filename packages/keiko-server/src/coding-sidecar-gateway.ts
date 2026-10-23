@@ -37,6 +37,8 @@ import {
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
+import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { renderMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
 import type {
   ChatMessageContentPart,
   CodingWorkbenchModelSource,
@@ -320,6 +322,33 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
   releaseImpact: "patch",
 });
 
+// #4025, #3897 review: the private skill a run's task turn was bound to, attached to one productive
+// dispatch. Its identity (revision and digest) and sizes only; the skill body is never recorded.
+const CODING_SIDECAR_GATEWAY_SKILL_ATTACHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.skill-attached",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logSkillAttached",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    skillRevision: { type: "integer", dataClass: "count", required: true },
+    skillDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    skillByteCount: { type: "integer", dataClass: "count", required: true },
+    // The request's estimate with the skill attached, the figure admission is checked against.
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.skill-attached.line"],
+  releaseImpact: "minor",
+});
+
 const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -437,6 +466,7 @@ type CodingSidecarGatewayRejectionReason =
   | "spend-budget-invalid"
   | "spend-pricing-unavailable"
   | "spend-budget-exceeded"
+  | "skill-unavailable"
   | "unclassified-rejection";
 
 const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
@@ -480,6 +510,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "spend-budget-invalid",
         "spend-pricing-unavailable",
         "spend-budget-exceeded",
+        "skill-unavailable",
         "unclassified-rejection",
       ],
     },
@@ -4685,24 +4716,168 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     resolved.result.modelAlias,
   );
   if (admission.kind === "handled") return admission.result;
+  const productive = withBoundRunSkill(ctx, deps, resolved, authentication, validated);
+  if (isRouteResult(productive)) return productive;
   return executeBudgetedGatewayChat(
     ctx,
     deps,
     resolved,
-    parsed,
+    productive.parsed,
     authentication,
-    estimatedPromptTokens,
-    {
-      modelAlias: resolved.result.modelAlias,
-      maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
-      upstreamStreamingSupported: upstreamGatewayStreamingSupported(
-        deps,
-        resolved.result.supportsStreaming,
+    productive.estimatedPromptTokens,
+    productiveChatOptions(deps, resolved, authentication, productive.estimatedPromptTokens),
+  );
+}
+
+function productiveChatOptions(
+  deps: UiHandlerDeps,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+  estimatedPromptTokens: number,
+): Parameters<typeof executeBudgetedGatewayChat>[6] {
+  return {
+    modelAlias: resolved.result.modelAlias,
+    maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
+    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
+      deps,
+      resolved.result.supportsStreaming,
+    ),
+    ...(authentication.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: authentication.reasoningEffort }),
+  };
+}
+
+type BoundRunSkill =
+  | { readonly kind: "none" }
+  | { readonly kind: "bound"; readonly skill: MarkdownSkillDocument }
+  | { readonly kind: "unavailable" };
+
+/**
+ * The private Markdown skill the run's task turn was bound to when the run began (#4025, #3897
+ * review): Coding History stores the task intent as the conversation's user message, which takes
+ * the conversation's skill selection of that moment as its immutable turn binding. The binding is
+ * resolved again for every dispatch, as Chat does for every attempt: a replaced skill keeps its
+ * bound revision, and a deleted one is unavailable, so it never keeps flowing silently.
+ */
+function boundRunSkill(ctx: RouteContext, deps: UiHandlerDeps, runId: string): BoundRunSkill {
+  const messageId = deps.store.codingHistory?.intentMessageId(runId);
+  if (messageId === undefined) return { kind: "none" };
+  try {
+    const skill = deps.store.markdownSkills.forTurn(messageId);
+    return skill === undefined ? { kind: "none" } : { kind: "bound", skill };
+  } catch {
+    // The store refuses a deleted skill or a failed integrity check (409/500): the dispatch is
+    // refused with that closed reason instead of being sent without the selected method.
+    logGatewayRejection(ctx, runId, 409, "skill-unavailable");
+    return { kind: "unavailable" };
+  }
+}
+
+/** The skill's instructions lead the request's first user message, the task turn of the run. */
+function withSkillInstructions(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  skill: MarkdownSkillDocument,
+): CodingSidecarGatewayChatCompletionRequest {
+  const instructions = renderMarkdownSkillInstructions(skill);
+  const index = parsed.messages.findIndex((message) => message.role === "user");
+  if (index < 0) {
+    const leading = parsed.messages.findIndex((message) => message.role !== "system");
+    const at = leading < 0 ? parsed.messages.length : leading;
+    const messages = [...parsed.messages];
+    messages.splice(at, 0, { role: "user", content: instructions });
+    return { ...parsed, messages };
+  }
+  return {
+    ...parsed,
+    messages: parsed.messages.map((message, position) =>
+      position === index ? withLeadingText(message, instructions) : message,
+    ),
+  };
+}
+
+function withLeadingText(
+  message: CodingSidecarGatewayChatMessage,
+  text: string,
+): CodingSidecarGatewayChatMessage {
+  const { contentParts } = message;
+  return {
+    ...message,
+    content: text + message.content,
+    ...(contentParts === undefined
+      ? {}
+      : { contentParts: [{ type: "text" as const, text }, ...contentParts] }),
+  };
+}
+
+/**
+ * Attaches the run's bound skill to a productive dispatch and admits the request again with it, so
+ * the estimate, the prompt bound and the output allowance all count the skill like any other
+ * prompt content (#3897 review: no unbudgeted text). Readiness challenges were answered before.
+ */
+function withBoundRunSkill(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+  validated: ValidatedChatRequest,
+): RouteResult | ValidatedChatRequest {
+  const bound = boundRunSkill(ctx, deps, authentication.runId);
+  if (bound.kind === "none") return validated;
+  if (bound.kind === "unavailable") {
+    const refusal: RouteResult = {
+      status: 409,
+      body: errorBody(
+        "SKILL_SELECTION_CHANGED",
+        "The skill selected for this coding task is no longer available.",
+        ctx.correlationId,
       ),
-      ...(authentication.reasoningEffort === undefined
-        ? {}
-        : { reasoningEffort: authentication.reasoningEffort }),
-    },
+    };
+    reportGatewayTurnRejection(ctx, deps, authentication.runId, refusal);
+    return refusal;
+  }
+  const parsed = withSkillInstructions(validated.parsed, bound.skill);
+  const estimatedPromptTokens = promptTokenEstimate(parsed, promptTokenAccounting(resolved));
+  const validationError = validationErrorForChatRequest(
+    parsed,
+    resolved.result.modelAlias,
+    resolved.result.runMetadata,
+    authentication.runtimeAuthenticated,
+    estimatedPromptTokens,
+    gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+  );
+  if (validationError !== undefined) {
+    logChatRequestRejection(ctx, deps, authentication.runId, validationError, {
+      parsed,
+      bounds: resolved.result.runMetadata,
+      estimatedPromptTokens,
+    });
+    return validationError;
+  }
+  logSkillAttached(ctx, authentication.runId, bound.skill, estimatedPromptTokens);
+  return { parsed, estimatedPromptTokens };
+}
+
+function logSkillAttached(
+  ctx: RouteContext,
+  runId: string,
+  skill: MarkdownSkillDocument,
+  estimatedPromptTokens: number,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_SKILL_ATTACHED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      {
+        runId,
+        skillRevision: skill.revision,
+        skillDigest: skill.digest,
+        skillByteCount: skill.byteCount,
+        estimatedPromptTokens,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
   );
 }
 

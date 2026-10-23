@@ -9,7 +9,9 @@ import {
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9985,5 +9987,177 @@ describe("coding-sidecar gateway native image input", () => {
         }),
       ).toBe(reason);
     }
+  });
+});
+
+describe("coding sidecar gateway carries the run's bound private skill (#4025, #3897 review)", () => {
+  afterEach(resetServerLogger);
+  const RUN_ID = "run-gateway-test";
+  const MARKER = "AUDIT_SKILL_RECEIPT_4064";
+  const BODY = `# Audit method\nFor the audit receipt task, include ${MARKER} in the reply.\n`;
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** A Coding History task whose run began with `body` selected (or nothing selected). */
+  function runStore(body?: string): {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly skill?: { readonly id: string; readonly revision: number; readonly digest: string };
+  } {
+    const root = mkdtempSync(join(tmpdir(), "keiko-gateway-skill-"));
+    roots.push(root);
+    const store = createInMemoryUiStore();
+    const history = store.codingHistory;
+    if (history === undefined) throw new Error("Coding History store missing");
+    const task = {
+      projectPath: root,
+      title: "Audit receipt",
+      modelId: "coding",
+      workspaceId: "ws_skill",
+      taskId: "task_skill",
+      branch: "keiko/task/skill",
+      operatorDigest: "a".repeat(64),
+    };
+    const created = history.create(task);
+    const imported =
+      body === undefined
+        ? undefined
+        : store.markdownSkills.import({
+            fileName: "audit.md",
+            contentBase64: Buffer.from(body).toString("base64"),
+          });
+    const skill =
+      imported === undefined
+        ? undefined
+        : { id: imported.id, revision: imported.revision, digest: imported.digest };
+    if (skill !== undefined) store.markdownSkills.select(created.id, skill, 0);
+    history.begin({
+      ...task,
+      conversationId: created.id,
+      runId: RUN_ID,
+      intent: "Give a receipt.",
+    });
+    return { store, ...(skill === undefined ? {} : { skill }) };
+  }
+
+  async function dispatch(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    contextWindow = 128_000,
+  ): Promise<{ readonly result: RouteResult; readonly sent: GatewayCallRequest[] }> {
+    resetGatewayInstanceCacheForTests();
+    const sent: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      sent.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [
+            { role: "system", content: "You are the coding runtime." },
+            { role: "user", content: "Give a receipt." },
+            { role: "assistant", content: "Reading." },
+            { role: "user", content: "Continue." },
+          ],
+          tools: [],
+        }),
+        { ...depsValue(configValue(provider(), capability({ contextWindow }))), store },
+      );
+      assertRouteResult(result);
+      return { result, sent };
+    } finally {
+      chat.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  }
+
+  const occurrences = (request: GatewayCallRequest | undefined, text: string): number =>
+    JSON.stringify(request?.messages ?? []).split(text).length - 1;
+
+  it("sends the selected skill exactly once, in the task turn, and records only its identity", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(occurrences(sent[0], MARKER)).toBe(1);
+    const messages = sent[0]?.messages ?? [];
+    expect(JSON.stringify(messages[1])).toContain(MARKER);
+    expect(JSON.stringify(messages[1])).toContain("Give a receipt.");
+    expect(JSON.stringify(messages[3])).not.toContain(MARKER);
+    const attached = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.skill-attached",
+    );
+    expect(attached?.extra).toMatchObject({
+      runId: RUN_ID,
+      skillRevision: skill?.revision,
+      skillDigest: skill?.digest,
+      skillByteCount: Buffer.byteLength(BODY),
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+    expectActivityLogProof(
+      "coding-sidecar.gateway.skill-attached.line",
+      formatActivityLogProofLine(attached ?? {}),
+    );
+  });
+
+  it("sends no skill text and records no attachment for a run that began without a selection", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore();
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(200);
+    expect(occurrences(sent[0], "Selected skill instructions")).toBe(0);
+    expect(sink.events.some((event) => event.op === "coding-sidecar.gateway.skill-attached")).toBe(
+      false,
+    );
+  });
+
+  it("keeps the revision the run was bound to when the skill is replaced afterwards", async () => {
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+    store.markdownSkills.replace(skill.id, skill.revision, {
+      fileName: "audit.md",
+      contentBase64: Buffer.from("# Audit method\nA REPLACED METHOD.\n").toString("base64"),
+    });
+
+    const { sent } = await dispatch(store);
+
+    expect(occurrences(sent[0], MARKER)).toBe(1);
+    expect(occurrences(sent[0], "A REPLACED METHOD")).toBe(0);
+  });
+
+  it("refuses the dispatch once the bound skill was deleted, before any provider call", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+    store.markdownSkills.delete(skill.id, skill.revision);
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(409);
+    expect(sent).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+  });
+
+  it("counts the skill against the prompt bound: a skill that does not fit refuses as overflow", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore(`${BODY}${"Keep every step of this method in mind. ".repeat(600)}`);
+
+    const { result, sent } = await dispatch(store, 8_192);
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "context_length_exceeded" } });
+    expect(sent).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "prompt-tokens-exceeded" });
   });
 });

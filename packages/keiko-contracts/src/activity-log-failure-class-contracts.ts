@@ -2812,7 +2812,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["coding-sidecar.gateway.request-validated"],
+      state: ["coding-sidecar.gateway.request-validated", "coding-sidecar.gateway.skill-attached"],
       end: ["coding-sidecar.gateway.outcome", "coding-sidecar.gateway.usage-settled"],
       failure: [],
       loss: [],
@@ -2820,18 +2820,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "coding-sidecar.gateway.outcome",
       "coding-sidecar.gateway.request-validated",
+      "coding-sidecar.gateway.skill-attached",
       "coding-sidecar.gateway.usage-settled",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "coding-sidecar.gateway.outcome",
       "coding-sidecar.gateway.request-validated",
+      "coding-sidecar.gateway.skill-attached",
       "coding-sidecar.gateway.usage-settled",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-sidecar.gateway.outcome",
       "coding-sidecar.gateway.request-validated",
+      "coding-sidecar.gateway.skill-attached",
       "coding-sidecar.gateway.usage-settled",
     ],
     // `duration`: the route backstop the outcome line records (`deadlineMs`, #3602 review).
@@ -2839,6 +2842,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "closed-enum",
       "completeness-state",
       "count",
+      "digest",
       "duration",
       "loss-state",
       "opaque-id",

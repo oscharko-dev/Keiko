@@ -178,6 +178,17 @@ All points are [R] unless tagged.
   the agent that Git delivery belongs to Keiko, names the delivery tools and says that a refusal is a
   policy decision
   ([native context](../../packages/keiko-server/src/coding-runtime/opencodeNativeContext.ts)).
+- **Selected private skill (#4025).** A Markdown skill pinned on a Coding conversation is bound to
+  the run's task turn when the run begins: the intent is stored as the conversation's user message,
+  which takes the selection of that moment as its immutable turn binding. Keiko's coding gateway
+  route resolves that binding for every productive dispatch, after the readiness challenge, and
+  places the skill's instructions at the start of the request's first user message, so it arrives
+  exactly once per request on the native and the mapped profile. The request is then admitted
+  again with the skill counted, so the prompt bound and the output allowance include it and an
+  overflow is answered as `context_length_exceeded`, which the runtime compacts. A replaced skill
+  keeps the run's bound revision; a deleted one refuses the dispatch (`skill-unavailable`). The
+  body never leaves Keiko's dispatch path for a log: `coding-sidecar.gateway.skill-attached`
+  records the revision, digest and sizes ([gateway][gateway]).
 - **Mapped profile (Linux, Windows).** The default direct profile advertises 18 tools: native
   `question` plus 17 `keiko_*` tools ([advertised fixture][tools-fixture]). The Model Gateway
   refuses a request that declares a different tool set (`tool-contract-drift`,

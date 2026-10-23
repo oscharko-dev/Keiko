@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "30be5590d6f27406eb134a92ac4c7762c82a122d1dc99ffbdb216f7be7092066" as const;
+  "315a8c8eb7932a1402209d5f9d067d53b38301f1505ab2ae6a8718d4ddbbd2de" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -11923,7 +11923,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-sidecar.gateway.request-validated"],
+        state: [
+          "coding-sidecar.gateway.request-validated",
+          "coding-sidecar.gateway.skill-attached",
+        ],
         end: ["coding-sidecar.gateway.outcome", "coding-sidecar.gateway.usage-settled"],
         failure: [],
         loss: [],
@@ -11938,6 +11941,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-sidecar.gateway.skill-attached",
+          mode: "correlation",
+        },
+        {
           op: "coding-sidecar.gateway.usage-settled",
           mode: "correlation",
         },
@@ -11946,6 +11953,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       resourceSignals: [
         "coding-sidecar.gateway.outcome",
         "coding-sidecar.gateway.request-validated",
+        "coding-sidecar.gateway.skill-attached",
         "coding-sidecar.gateway.usage-settled",
       ],
       replayReferences: [],
@@ -12128,6 +12136,54 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-sidecar.gateway.request-validated.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-sidecar.gateway.skill-attached",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "estimatedPromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "skillByteCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "skillDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "skillRevision",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "digest", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-sidecar.gateway.skill-attached.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -43377,6 +43433,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-sidecar.gateway.rejected": "tools-workflows",
     "coding-sidecar.gateway.request-validated": "tools-workflows",
     "coding-sidecar.gateway.retry-surfaced": "tools-workflows",
+    "coding-sidecar.gateway.skill-attached": "tools-workflows",
     "coding-sidecar.gateway.tool-availability": "tools-workflows",
     "coding-sidecar.gateway.turn-failed": "tools-workflows",
     "coding-sidecar.gateway.usage-settled": "tools-workflows",

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "30be5590d6f27406eb134a92ac4c7762c82a122d1dc99ffbdb216f7be7092066"
+    "catalogDigest": "315a8c8eb7932a1402209d5f9d067d53b38301f1505ab2ae6a8718d4ddbbd2de"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 563,
-    "proofCount": 576,
-    "resolvedProofCount": 576,
+    "operationCount": 564,
+    "proofCount": 577,
+    "resolvedProofCount": 577,
     "failureClassCount": 356,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -384,6 +384,7 @@
         "coding-sidecar.gateway.rejected",
         "coding-sidecar.gateway.request-validated",
         "coding-sidecar.gateway.retry-surfaced",
+        "coding-sidecar.gateway.skill-attached",
         "coding-sidecar.gateway.tool-availability",
         "coding-sidecar.gateway.turn-failed",
         "coding-sidecar.gateway.usage-settled",
@@ -1605,6 +1606,9 @@
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.retry-surfaced.emitted-line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
+    "coding-sidecar.gateway.skill-attached.line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.tool-availability.line": [

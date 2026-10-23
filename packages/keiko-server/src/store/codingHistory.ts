@@ -32,6 +32,11 @@ export interface CodingHistoryStore {
   readonly messagesBeforeRun: (id: string, runId: string) => readonly ChatMessage[];
   readonly detail: (id: string, operatorDigest: string) => CodingHistoryDetail | undefined;
   readonly forRun: (runId: string) => CodingHistoryTask | undefined;
+  /**
+   * The user message that carries the run's task intent: created when the run began, it holds the
+   * conversation's skill selection of that moment as its immutable turn binding (#4025).
+   */
+  readonly intentMessageId: (runId: string) => string | undefined;
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
@@ -132,6 +137,9 @@ function createTask(
   });
 }
 
+/** The source id of the user message a run's task intent is stored as. */
+const INTENT_SOURCE_ID = "intent";
+
 function beginTask(
   db: DatabaseSync,
   store: UiStore,
@@ -148,7 +156,7 @@ function beginTask(
     appendMessage(db, store, now, {
       id: task.id,
       runId: input.runId,
-      sourceId: "intent",
+      sourceId: INTENT_SOURCE_ID,
       role: "user",
       content: input.intent,
     });
@@ -338,6 +346,15 @@ function updateTask(
   });
 }
 
+function readIntentMessageId(db: DatabaseSync, runId: string): string | undefined {
+  const row = db
+    .prepare(
+      "SELECT message_id FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?",
+    )
+    .get(runId, INTENT_SOURCE_ID);
+  return typeof row?.message_id === "string" ? row.message_id : undefined;
+}
+
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -370,6 +387,7 @@ export function createCodingHistoryStore(
       const row = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
       return typeof row?.chat_id === "string" ? readTask(db, store, row.chat_id) : undefined;
     },
+    intentMessageId: (runId) => readIntentMessageId(db, runId),
     bindRun: (id, runId): void => {
       bindRun(db, store, id, runId, now);
     },
