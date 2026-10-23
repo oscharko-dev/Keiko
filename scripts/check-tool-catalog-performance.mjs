@@ -882,15 +882,30 @@ export async function writeToolCatalogPerformanceCalibration(root = process.cwd(
   return { calibration, budget };
 }
 
-export async function recalibrateToolCatalogPerformance(root = process.cwd(), overrides = {}) {
-  const deps = evidenceWriterDependencies(overrides);
+function referenceMigrationInputs(root, deps, operation) {
   const previousCalibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
   const previousBudget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
   const previousBudgetDefects = performanceBudgetDefects(previousBudget, previousCalibration);
   if (previousBudgetDefects.length > 0) throw new TypeError(previousBudgetDefects.join("; "));
   const environment = deps.environment();
   if (!isDeepStrictEqual(environment, previousCalibration.environment))
-    throw new TypeError("catalog recalibration reference environment differs");
+    throw new TypeError(`catalog ${operation} reference environment differs`);
+  return { previousCalibration, previousBudget, environment };
+}
+
+function writeCalibrationBudget(root, deps, calibration, budget) {
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
+  return { calibration, budget };
+}
+
+export async function recalibrateToolCatalogPerformance(root = process.cwd(), overrides = {}) {
+  const deps = evidenceWriterDependencies(overrides);
+  const { previousCalibration, previousBudget, environment } = referenceMigrationInputs(
+    root,
+    deps,
+    "recalibration",
+  );
   const calibrationRaw = await deps.measure(root);
   const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
     role: "calibration",
@@ -901,9 +916,7 @@ export async function recalibrateToolCatalogPerformance(root = process.cwd(), ov
   const identityDefects = performanceCaseIdentityDefects(calibration, previousCalibration);
   if (identityDefects.length > 0) throw new TypeError(identityDefects.join("; "));
   const budget = ratchetToolCatalogPerformanceBudgets(calibration, previousBudget);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
-  return { calibration, budget };
+  return writeCalibrationBudget(root, deps, calibration, budget);
 }
 
 export async function rebindToolCatalogPerformanceCaseIdentity(
@@ -911,13 +924,11 @@ export async function rebindToolCatalogPerformanceCaseIdentity(
   overrides = {},
 ) {
   const deps = evidenceWriterDependencies(overrides);
-  const previousCalibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
-  const previousBudget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
-  const previousBudgetDefects = performanceBudgetDefects(previousBudget, previousCalibration);
-  if (previousBudgetDefects.length > 0) throw new TypeError(previousBudgetDefects.join("; "));
-  const environment = deps.environment();
-  if (!isDeepStrictEqual(environment, previousCalibration.environment))
-    throw new TypeError("catalog case-identity rebind reference environment differs");
+  const { previousCalibration, previousBudget, environment } = referenceMigrationInputs(
+    root,
+    deps,
+    "case-identity rebind",
+  );
   const measurementHarnessSha256 = deps.rulerDigest(root);
   if (measurementHarnessSha256 !== previousCalibration.subject.measurementHarnessSha256)
     throw new TypeError("catalog case-identity rebind measurement ruler differs");
@@ -934,9 +945,7 @@ export async function rebindToolCatalogPerformanceCaseIdentity(
   if (identityDefects.length === 0)
     throw new TypeError("catalog case identity did not change; use candidate measurement mode");
   const budget = ratchetToolCatalogPerformanceBudgets(calibration, previousBudget);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
-  return { calibration, budget };
+  return writeCalibrationBudget(root, deps, calibration, budget);
 }
 
 /** One explicit inventory migration. Existing numeric ceilings and case identities stay pinned. */
