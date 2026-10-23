@@ -1118,19 +1118,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   volume alias are refused for a shell child, an interpreter and a descendant; loopback works in
   every mode; a non-loopback destination is refused before traffic below Full access; Git, node
   and npm still run from the workspace; the nested workspace inside the denied state root still
-  works). On Linux the profile is a bubblewrap mount allowlist: read-only system and toolchain
-  roots, the runtime payload read-only, a private `/tmp`, writable workspace and private state,
-  an empty `tmpfs` over any denied root inside a mounted tree, a private PID namespace,
-  `--die-with-parent`, and a fresh network namespace below Full access; the home directory and
-  Keiko's state directory are simply not mounted. The `unshare` fallback and a run without an
-  accepted filesystem are refused rather than launched with the host mounts. Those Linux
-  guarantees are pinned as argv plans (`backends.test.ts`, `plan.test.ts`); they have not been
-  executed against a Linux kernel, and two limits are explicit: credential-NAMED files inside the
-  workspace cannot be named in a mount namespace without enumerating the tree, so on Linux they
-  remain the native read tool's guard, and a fresh network namespace cannot reach the host
-  loopback Model Gateway until the namespace relay launcher learns the native mounts, so Linux
-  native runs below Full access fail at their first model call instead of running unconfined.
-  Windows keeps its Job Object supervision. The spawned-confinement line records `keiko-native`,
+  works). The native profile is selected on macOS only (`productionOpenCodeToolProfile`); Linux
+  and Windows keep the governed mapped profile until their boundary is qualified, and both Linux
+  wrappers refuse a native plan (`native-linux-backend-unqualified`). The PR audit executed the
+  earlier bubblewrap mount plan in a Linux container: a shell child still read a workspace `.env`
+  (credential-named files cannot be named in a mount namespace without enumerating the tree), and
+  a fresh network namespace could not reach the host-loopback Model Gateway. A qualified Linux
+  boundary must enforce the shared sensitive exclusions for descendants and keep the gateway
+  reachable before the native profile is offered there (#3901).
+  The spawned-confinement line records `keiko-native`,
   `native-workspace-rw-v1`, `read-write`, `toolchain-inherited` and the `egressDisposition`
   (`loopback-only` or `inherited`).
 - **Native asks ride the approval lane without a Keiko action kind.** A policy `ask` reaches the

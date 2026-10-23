@@ -3762,3 +3762,12 @@ describe("runtime gateway accepted source and active inventory", () => {
     });
   });
 });
+
+describe("production OpenCode tool profile (#3897)", () => {
+  it("runs the native service only where its kernel boundary is qualified", async () => {
+    const { productionOpenCodeToolProfile } = await import("./deps.js");
+    expect(productionOpenCodeToolProfile("darwin")).toBe("native");
+    expect(productionOpenCodeToolProfile("linux")).toBe("direct");
+    expect(productionOpenCodeToolProfile("win32")).toBe("direct");
+  });
+});

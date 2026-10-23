@@ -487,122 +487,37 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
   });
 });
 
-describe("Linux native profile (#3897, plan proofs: argv, not OS execution)", () => {
+describe("Linux native profile (#3897): refused until a Linux boundary is qualified", () => {
   const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
-  const filesystem = {
-    workspaceRoot: "/work/ws",
-    workspaceAccess: "read-write" as const,
-    privateStateRoot: "/state/run-1",
-    runtimeReadRoot: "/opt/keiko/runtime",
-    deniedReadRoots: ["/work/ws/.ssh", "/home/owner/.ssh"],
-    toolchainReadRoots: ["/home/owner/.nvm/versions/node/v24"],
-  };
   const nativePlan: IsolatedRunPlan = {
     command: "/opt/keiko/runtime/opencode",
     args: ["serve"],
     cwd: "/work/ws",
     network: gateway,
     gatewayProfile: "keiko-native",
-    gatewayFilesystem: filesystem,
+    gatewayFilesystem: {
+      workspaceRoot: "/work/ws",
+      workspaceAccess: "read-write",
+      privateStateRoot: "/state/run-1",
+      runtimeReadRoot: "/opt/keiko/runtime",
+    },
   };
-  const mounts = [
-    "--ro-bind-try",
-    "/usr",
-    "/usr",
-    "--ro-bind-try",
-    "/bin",
-    "/bin",
-    "--ro-bind-try",
-    "/lib",
-    "/lib",
-    "--ro-bind-try",
-    "/lib64",
-    "/lib64",
-    "--ro-bind-try",
-    "/opt",
-    "/opt",
-    "--ro-bind-try",
-    "/nix/store",
-    "/nix/store",
-    "--ro-bind-try",
-    "/sbin",
-    "/sbin",
-    "--ro-bind-try",
-    "/etc",
-    "/etc",
-    "--ro-bind-try",
-    "/home/owner/.nvm/versions/node/v24",
-    "/home/owner/.nvm/versions/node/v24",
-    "--ro-bind",
-    "/opt/keiko/runtime",
-    "/opt/keiko/runtime",
-    "--tmpfs",
-    "/tmp",
-    "--bind",
-    "/work/ws",
-    "/work/ws",
-    "--bind",
-    "/state/run-1",
-    "/state/run-1",
-    // Only the denied root inside a mounted tree is masked; `/home/owner/.ssh` is never mounted.
-    "--tmpfs",
-    "/work/ws/.ssh",
-  ];
-  const isolation = [
-    "--die-with-parent",
-    "--new-session",
-    "--unshare-pid",
-    "--proc",
-    "/proc",
-    "--dev",
-    "/dev",
-  ];
-  const launch = ["--chdir", "/work/ws", "--", "/opt/keiko/runtime/opencode", "serve"];
 
-  it("mounts an allowlist with a fresh network namespace below Full access", () => {
-    const wrapped = expectWrapped(buildWrappedCommand("bubblewrap", nativePlan));
-    expect(wrapped.command).toBe("bwrap");
-    expect(wrapped.args).toEqual(["--unshare-net", ...isolation, ...mounts, ...launch]);
-    expect(wrapped.args).not.toContain("--dev-bind");
-    expect(wrapped.args).not.toContain("/");
-    const inherited = expectWrapped(
-      buildWrappedCommand("bubblewrap", { ...nativePlan, gatewayEgress: "loopback-only" }),
-    );
-    expect(inherited.args).toEqual(wrapped.args);
+  // The PR audit executed the previous bubblewrap mount plan in a Linux container: a shell child
+  // read a workspace `.env`, and below Full access the runtime could not reach the gateway. Both
+  // Linux wrappers therefore refuse a native run instead of launching a weaker boundary.
+  it("refuses a native run under bubblewrap and under unshare, in both egress dispositions", () => {
+    for (const backend of ["bubblewrap", "unshare"] as const) {
+      for (const gatewayEgress of ["loopback-only", "inherited"] as const) {
+        expect(() => buildWrappedCommand(backend, { ...nativePlan, gatewayEgress })).toThrow(
+          "native-linux-backend-unqualified",
+        );
+      }
+    }
   });
 
-  it("keeps egress and the same mounts at Full access", () => {
-    const wrapped = expectWrapped(
-      buildWrappedCommand("bubblewrap", { ...nativePlan, gatewayEgress: "inherited" }),
-    );
-    expect(wrapped.args).toEqual([...isolation, ...mounts, ...launch]);
-    expect(wrapped.args).not.toContain("--unshare-net");
-    expect(wrapped.args).not.toContain("--dev-bind");
-  });
-
-  it("never mounts the home directory, the host root or a denied root's parent", () => {
-    const args = expectWrapped(buildWrappedCommand("bubblewrap", nativePlan)).args;
-    for (const forbidden of ["/home", "/home/owner", "/root", "/var", "/run", "/Users"])
-      expect(args).not.toContain(forbidden);
-    expect(args.slice(args.indexOf("--bind"))).not.toContain("/home/owner/.ssh");
-  });
-
-  it("refuses to launch without an accepted writable filesystem", () => {
-    const { gatewayFilesystem: _omitted, ...withoutFilesystem } = nativePlan;
-    expect(() => buildWrappedCommand("bubblewrap", withoutFilesystem)).toThrow(
-      "native-linux-filesystem-invalid",
-    );
-    expect(() =>
-      buildWrappedCommand("bubblewrap", {
-        ...nativePlan,
-        gatewayFilesystem: { ...filesystem, workspaceAccess: "read-only" },
-      }),
-    ).toThrow("native-linux-filesystem-invalid");
-  });
-
-  it("refuses the unshare fallback because it would keep the host mounts", () => {
-    expect(() => buildWrappedCommand("unshare", nativePlan)).toThrow(
-      "native-linux-backend-unqualified",
-    );
+  it("still wraps the qualified gateway profile under bubblewrap", () => {
+    const { gatewayProfile: _native, gatewayFilesystem: _filesystem, ...gatewayPlan } = nativePlan;
+    expect(() => buildWrappedCommand("bubblewrap", gatewayPlan)).not.toThrow();
   });
 });

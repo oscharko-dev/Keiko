@@ -257,18 +257,12 @@ describe("planIsolatedRun native profile (#3897)", () => {
     }
   });
 
-  it("wraps a Linux native run with bubblewrap only and refuses the unshare fallback", () => {
-    const wrapped = planIsolatedRun(nativePlan, { ...NONE, bubblewrap: true }, "linux");
-    expect(wrapped.kind).toBe("wrapped");
-    expect(wrapped.attestation).toEqual({
-      backend: "bubblewrap",
-      networkEnforced: true,
-      filesystemEnforced: true,
-      platform: "linux",
-    });
-    const unqualified = planIsolatedRun(nativePlan, { ...NONE, unshare: true }, "linux");
-    expect(unqualified.kind).toBe("fail-closed");
-    expect(unqualified.attestation.filesystemEnforced).toBe(false);
+  it("refuses a Linux native run under bubblewrap and under unshare (#3897)", () => {
+    for (const backend of [{ bubblewrap: true }, { unshare: true }]) {
+      const decision = planIsolatedRun(nativePlan, { ...NONE, ...backend }, "linux");
+      expect(decision.kind).toBe("fail-closed");
+      expect(decision.attestation.filesystemEnforced).toBe(false);
+    }
   });
 
   it("attests network enforcement only below Full access", () => {

@@ -272,7 +272,7 @@ const WRAPPER_OPTIONS_WITH_VALUE = new Set([
 function stripInvocationPrefix(tokens: readonly string[]): readonly string[] {
   const [first] = tokens;
   if (first === undefined) return tokens;
-  if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(first)) return tokens.slice(1);
+  if (/^[A-Za-z_]\w*=/u.test(first)) return tokens.slice(1);
   const program = first.slice(first.lastIndexOf("/") + 1);
   if (!WRAPPER_PROGRAMS.has(program)) return tokens;
   let index = 1;
@@ -543,20 +543,20 @@ export function workspaceRelative(resource: string, workspaceRoot: string): stri
 /**
  * A reserved Git or gh invocation at a command position anywhere in the text: the start, after a
  * list operator or `(`, or opening a quoted sub-shell (`sh -c "git push"`, `execSync('git push')`),
- * behind `-C`/`-c`/`--git-dir` options. A mention inside a word list (`echo git push`) is not one.
+ * behind wrappers and `-C`/`-c`/`--git-dir` options. A mention inside a word list (`echo git push`)
+ * is not one. Each fragment between command-position delimiters is read by the same tokenizer as a
+ * plain segment, so the scan stays linear in the command.
  */
-const RESERVED_INVOCATION =
-  /(?:^|[;&|(`'"])\s*(?:\S*\/)?(git|gh)(?:\s+(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path)\s+\S+|\s+--?[\w-]+(?:=\S*)?)*\s+([a-z-]+)/gu;
-
 function reservedInvocationInText(command: string): boolean {
-  for (const match of command.matchAll(RESERVED_INVOCATION)) {
-    const [, program, subcommand] = match;
-    if (program === "git" && subcommand !== undefined && RESERVED_GIT_SUBCOMMANDS.has(subcommand))
-      return true;
-    if (program === "gh" && subcommand !== undefined && RESERVED_GH_SUBCOMMANDS.has(subcommand))
-      return true;
-  }
-  return false;
+  return command.split(/[;&|(`'"]/u).some((fragment) => reservedTokens(commandTokens(fragment)));
+}
+
+function reservedTokens(tokens: readonly string[]): boolean {
+  const [program] = tokens;
+  const subcommand = subcommandOf(tokens);
+  if (subcommand === undefined) return false;
+  if (program === "git") return RESERVED_GIT_SUBCOMMANDS.has(subcommand);
+  return program === "gh" && RESERVED_GH_SUBCOMMANDS.has(subcommand);
 }
 
 function classifyShell(resources: readonly string[]): Classified {

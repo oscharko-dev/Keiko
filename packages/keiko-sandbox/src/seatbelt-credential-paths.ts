@@ -61,7 +61,7 @@ function buildCredentialPathRule(): string {
     `(deny file-read* file-write* (regex ${pathRegexArguments(plain)}))` +
     "(deny file-read* file-write* (require-all " +
     `(regex ${pathRegexArguments(exemptable)}) ` +
-    `(require-not (regex ${JSON.stringify(`/${exemptSegment}$`)}))))`
+    `(require-not (regex ${JSON.stringify("/" + exemptSegment + "$")}))))`
   );
 }
 

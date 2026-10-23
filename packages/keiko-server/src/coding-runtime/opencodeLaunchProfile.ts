@@ -341,8 +341,10 @@ export function createFixedOpenCodeV2Config(
 }
 
 /**
- * Standalone-equivalent configuration (#3897): every native tool, agent and command stays enabled
- * and the repository's own instructions and configuration load as they do standalone. The only
+ * Standalone-equivalent configuration (#3897): every native tool, agent and command stays enabled.
+ * The repository's own OpenCode configuration layer stays off until #3903 admits its executable
+ * effects (plugins would load before any permission); the workspace AGENTS.md reaches the model
+ * through Keiko's bounded loader. The only
  * fixed rules are the ones Keiko owns regardless of mode: no self-update, no sharing, one
  * provider reached through the Model Gateway, and the mode-independent hard denial of external
  * directories. Every other permission is decided per call by the Keiko policy hook

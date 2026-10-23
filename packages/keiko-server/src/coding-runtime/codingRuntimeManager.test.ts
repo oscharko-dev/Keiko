@@ -798,6 +798,7 @@ interface PermissionLineInput {
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
+  readonly nativeAction?: { readonly permission: string; readonly resources: readonly string[] };
   readonly fileCount?: number | undefined;
   readonly addedLines?: number | undefined;
   readonly deletedLines?: number | undefined;

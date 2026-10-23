@@ -465,8 +465,17 @@ import {
 } from "./coding-sidecar-gateway.js";
 import type { OpenCodeToolProfile } from "./coding-runtime/opencodeToolSchemas.js";
 
-/** The one production selection of the OpenCode tool profile (#3897): the native service. */
-const PRODUCTION_OPENCODE_TOOL_PROFILE: OpenCodeToolProfile = "native";
+/**
+ * The one production selection of the OpenCode tool profile (#3897). The native service runs where
+ * its kernel boundary is qualified, macOS (Seatbelt read allowlist, credential denials, egress by
+ * mode). Linux and Windows keep the governed mapped profile: the audited Linux mount plan still
+ * let a shell child read a workspace `.env`, and Windows has no native filesystem boundary yet.
+ */
+export function productionOpenCodeToolProfile(
+  platform: NodeJS.Platform = process.platform,
+): OpenCodeToolProfile {
+  return platform === "darwin" ? "native" : "direct";
+}
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -6074,7 +6083,7 @@ function productionRuntimeResolver(
   const envelopeBounds = configuredRuntimeEnvelopeBounds(args.options.env);
   // The Coding Workbench runs the original OpenCode service with its native tools (#3897); the
   // mapped `direct`/`code-mode` profiles remain selectable only through this server-owned value.
-  const readiness = createOpenCodeGatewayReadinessRegistry(PRODUCTION_OPENCODE_TOOL_PROFILE);
+  const readiness = createOpenCodeGatewayReadinessRegistry(productionOpenCodeToolProfile());
   const resolution = resolveProductionRuntimePorts(
     args,
     runtimeEvidence,

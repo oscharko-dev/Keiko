@@ -2,11 +2,10 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { linuxGatewayLauncherPath } from "./runtime.js";
 import {
-  copyRuntimeGatewayFilesystem,
   executionRootSeatbeltProfile,
   gatewayFilesystemSeatbeltRules,
   nativeWorkspaceSeatbeltRules,
@@ -157,90 +156,15 @@ function buildLinuxGatewayCommand(
   };
 }
 
-// The Linux native profile mounts only what the work needs (#3897). Unlike the execution-root
-// profile it keeps the host PID namespace's usual `/etc` (resolver, certificates, `passwd`) and
-// `/sbin`, and it adds the server-named toolchain roots.
-const NATIVE_LINUX_READONLY_BINDS: readonly string[] = Object.freeze([
-  ...EXECUTION_ROOT_READONLY_BINDS,
-  "/sbin",
-  "/etc",
-]);
-
-function insideOrEqual(root: string, candidate: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (path !== ".." && !path.startsWith("../") && !isAbsolute(path));
-}
-
-/**
- * Linux native profile (#3897): a mount-namespace allowlist, not the host filesystem. Only the
- * read-only system and toolchain roots, the runtime's own payload, a private `/tmp`, and the
- * writable workspace and run-private state exist inside the sandbox; the user's home, other
- * workspaces and Keiko's state directory are not mounted at all. A denied root that lies inside a
- * mounted tree (a credential directory in a toolchain prefix or in the workspace) is masked with an
- * empty `tmpfs` after that tree is mounted. Below Full access the sandbox also gets a fresh network
- * namespace. Credential-NAMED files inside the workspace (`.env`) cannot be named in a mount
- * namespace without enumerating the tree, so on Linux they remain the native read tool's guard.
- */
-function nativeBubblewrapArgs(
-  plan: IsolatedRunPlan,
-  filesystem: RuntimeGatewayFilesystem,
-  egress: RuntimeGatewayEgress,
-): readonly string[] {
-  if (!isAbsolute(plan.command) || !isAbsolute(plan.cwd))
-    throw new TypeError("linux-gateway-launch-input-invalid");
-  const mounted = [
-    ...NATIVE_LINUX_READONLY_BINDS,
-    ...(filesystem.toolchainReadRoots ?? []),
-    filesystem.runtimeReadRoot,
-    filesystem.workspaceRoot,
-    filesystem.privateStateRoot,
-  ];
-  const masked = (filesystem.deniedReadRoots ?? []).filter((denied) =>
-    mounted.some((root) => insideOrEqual(root, denied)),
-  );
-  return [
-    ...(egress === "inherited" ? [] : ["--unshare-net"]),
-    "--die-with-parent",
-    "--new-session",
-    "--unshare-pid",
-    "--proc",
-    "/proc",
-    "--dev",
-    "/dev",
-    ...roBindTryArgs(NATIVE_LINUX_READONLY_BINDS),
-    ...roBindTryArgs(filesystem.toolchainReadRoots ?? []),
-    "--ro-bind",
-    filesystem.runtimeReadRoot,
-    filesystem.runtimeReadRoot,
-    "--tmpfs",
-    "/tmp",
-    "--bind",
-    filesystem.workspaceRoot,
-    filesystem.workspaceRoot,
-    "--bind",
-    filesystem.privateStateRoot,
-    filesystem.privateStateRoot,
-    ...masked.flatMap((denied) => ["--tmpfs", denied]),
-    "--chdir",
-    plan.cwd,
-    "--",
-    plan.command,
-    ...plan.args,
-  ];
-}
-
 function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
   const gateway = copyNetworkGatewayPolicy(plan.network);
-  if (gateway !== undefined && plan.gatewayProfile === "keiko-native") {
-    const filesystem = copyRuntimeGatewayFilesystem(plan.gatewayFilesystem);
-    // Without an accepted filesystem the sandbox would have to expose the host: refuse instead.
-    if (filesystem?.workspaceAccess !== "read-write")
-      throw new TypeError("native-linux-filesystem-invalid");
-    return {
-      command: "bwrap",
-      args: nativeBubblewrapArgs(plan, filesystem, plan.gatewayEgress ?? "loopback-only"),
-    };
-  }
+  // The native profile is qualified on macOS only (#3897). A bubblewrap mount plan was executed in a
+  // Linux container by the PR audit: a shell child still read a workspace `.env`, and a fresh
+  // network namespace could not reach the host-loopback Model Gateway. Until a Linux boundary
+  // enforces the shared sensitive exclusions and keeps the gateway reachable, a native run is
+  // refused here, never launched with a weaker boundary; Linux runs use the mapped profile.
+  if (gateway !== undefined && plan.gatewayProfile === "keiko-native")
+    throw new TypeError("native-linux-backend-unqualified");
   if (gateway !== undefined) return buildLinuxGatewayCommand("bubblewrap", plan, gateway);
   if (
     plan.network !== "none" &&

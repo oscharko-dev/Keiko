@@ -208,13 +208,13 @@ const MESSAGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-const IDLE_ERROR_FIELDS: readonly string[] = [
+const IDLE_ERROR_FIELDS: ReadonlySet<string> = new Set([
   "type",
   "message",
   "status",
   "response",
   "retryAfterMs",
-];
+]);
 
 /**
  * OpenCode 2.1.4 ends a failed turn with an idle message carrying `Session.StructuredError`
@@ -231,7 +231,7 @@ function assertIdleErrorShape(value: unknown): void {
 
 function isIdleErrorIdentity(error: Readonly<Record<string, unknown>>): boolean {
   return (
-    Object.keys(error).every((key) => IDLE_ERROR_FIELDS.includes(key)) &&
+    Object.keys(error).every((key) => IDLE_ERROR_FIELDS.has(key)) &&
     typeof error.type === "string" &&
     typeof error.message === "string" &&
     (error.status === undefined || isHttpStatus(error.status)) &&

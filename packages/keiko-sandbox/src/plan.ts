@@ -54,10 +54,10 @@ function gatewayFilesystemIsAdmissible(
   // host would be exposed, so it is refused on every platform (#3897).
   if (plan.gatewayProfile === "keiko-native" && plan.gatewayFilesystem === undefined) return false;
   if (plan.gatewayFilesystem === undefined) return true;
-  // macOS confines any gateway profile with Seatbelt; Linux confines only the native profile, with
-  // a bubblewrap mount namespace (the gateway profile's Linux bridge launcher has no filesystem).
-  const platformConfines =
-    platform === "darwin" || (platform === "linux" && plan.gatewayProfile === "keiko-native");
+  // Only macOS confines a gateway filesystem (Seatbelt). The native profile has no qualified Linux
+  // boundary (#3897 audit: a bubblewrap mount plan still let a shell read a workspace `.env`), and
+  // the gateway profile's Linux bridge launcher has no filesystem.
+  const platformConfines = platform === "darwin";
   return (
     gateway !== undefined &&
     platformConfines &&
@@ -149,12 +149,8 @@ function planGatewayRun(
   platform: NodeJS.Platform,
 ): IsolatedRunDecision {
   const backend = selectGatewayBackend(platform, availability);
-  // Only bubblewrap can mount the native Linux allowlist; `unshare` would keep the host mounts.
-  const qualified = !(
-    plan.gatewayProfile === "keiko-native" &&
-    platform === "linux" &&
-    backend !== "bubblewrap"
-  );
+  // The native profile is qualified on macOS only; elsewhere it is refused before any wrapper.
+  const qualified = plan.gatewayProfile !== "keiko-native" || platform === "darwin";
   const wrapped = qualified ? buildWrappedCommand(backend, plan) : undefined;
   if (backend === "none" || wrapped === undefined) {
     return {

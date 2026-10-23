@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { realpathSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, relative } from "node:path";
 
@@ -70,7 +71,7 @@ export function nativeToolchainReadRoots(
         .map((entry) => rootFor(entry, home))
         .filter((root): root is string => root !== undefined),
     ),
-  ].sort();
+  ].sort(compareStrings);
   return roots
     .filter((root) => !roots.some((other) => other !== root && insideOrEqual(other, root)))
     .slice(0, ROOTS_MAX);
