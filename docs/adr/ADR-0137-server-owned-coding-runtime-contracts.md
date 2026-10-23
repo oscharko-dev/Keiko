@@ -1054,7 +1054,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   access), not by the process wrapper. The child inherits the launcher's allowlisted environment
   (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the agent's
   shell finds the project's toolchains the way it does standalone; the mapped profiles still
-  inherit nothing. On macOS this is the real Seatbelt profile proven by `runtime-gateway.test.ts`
+  inherit nothing. The launch gate that keeps a host secret out of the child compares the child
+  env (allowlisted non-secret names plus Keiko's own run projection) against the host values
+  whose name says they carry a credential; comparing against every host value refused each
+  Full-access run on a host that also exports the deployment ceiling, because the projected mode
+  equalled it. On macOS this is the real Seatbelt profile proven by `runtime-gateway.test.ts`
   (with the workspace nested inside the denied state root); on Linux the namespace wrapper keeps
   the tree bound to the parent without a network namespace; Windows keeps its Job Object
   supervision. The spawned-confinement line records `keiko-native`, `native-workspace-rw-v1`,
