@@ -99,19 +99,24 @@ values live in `scripts/editor-bundle-size.budget.json`. The gate runs in `ci` d
 the prepack chain (`smoke:install` → `npm pack` → `prepack`) via `check:package-surface`; it is also
 available standalone via `npm run check:editor-bundle-size`.
 
-**Baselines (monaco-editor 0.56.0):**
+**Baselines (monaco-editor 0.57.0, Linux arm64 Node 24.18, 2026-10-23):**
 
-- Editor package own code (`keiko-editor/dist/**/*.js`): **~77 KiB gzip** (observed 79,041 B
-  across 78 files after a clean `@oscharko-dev/keiko-editor` build). Committed ceiling **100 KiB**
+- Editor package own code (`keiko-editor/dist/**/*.js`): **~76.4 KiB gzip** (observed 78,238 B
+  across 80 files after a clean `@oscharko-dev/keiko-editor` build). Committed ceiling **100 KiB**
   (`editorOwnCodeGzipBytesCeiling = 102400`) — ≈ 23 KiB headroom while still catching the headline
   regression (a heavy dependency, or Monaco itself, accidentally bundled into the editor package's
   own code, which would balloon this by orders of magnitude). Re-baseline by updating
   `editorOwnCodeGzipBytesObserved` and, if intentional, the ceiling, with a rationale in the PR.
-- Monaco runtime footprint (informational): the full installed `monaco-editor/esm` tree is ~27 MB raw
-  / ~5.2 MB gzip across 1,601 files; the governed v1 production bundle ships only the tree-shaken
+- Monaco runtime footprint (informational): the full installed `monaco-editor/esm` JavaScript is
+  28,938,724 B raw / 5,336,323 B gzip across 1,338 files; the governed v1 production bundle ships only the tree-shaken
   editor runtime plus `editor.worker.js`. #1209 measures that shipped static export against B2
   (≤ 2.5 MB gzip) and B3 (≤ 750 KB gzip per worker). Keiko's server-governed TS/JS provider remains
   the language-intelligence source of truth; #1213 owns any future multi-language worker expansion.
+
+The owner-requested Dependabot #4062 update retains every existing ceiling and runtime-import
+allow-list entry. The Linux production export has zero first-load Monaco markers, 1,002.5 KiB
+shipped lazy runtime against B2's 2,560-KiB budget, and a 108.3-KiB largest worker against B3's
+750-KiB budget. The detailed measured export is `docs/release/1209-bundle-evidence.json`.
 
 **Why the editor package is bundle-excluded from the published product tarball.** `keiko-editor` is a
 browser-tier workspace consumed by `keiko-ui`, whose runtime artifact is copied into `dist/ui/static`;

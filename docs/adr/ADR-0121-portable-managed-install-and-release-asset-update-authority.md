@@ -263,6 +263,12 @@ capsule is private local control data: authenticated fixed paths and mechanical 
 are permitted there, but are never copied into API projections, activity logs, support evidence, or
 release artifacts. It is not a package backup or another update state store.
 
+The plan builder, native coordinator, session lock and startup recovery use the same canonical
+runtime-state directory resolved from the launch environment. The UI database may live in a
+separate directory, including a `ui` child of that state root; its parent directory does not select
+update authority or handoff storage. Production-composition regression coverage exercises both
+nested and separately configured UI storage with real handoff plans, receipts and session locks.
+
 POSIX activation and native-copy preparation share the existing target-layout owner: Linux uses
 the flat root launcher, setup manifest and runtime supervisor; macOS uses its app-bundle paths.
 Current and candidate setup lookup follow that same grammar before layout validation. This path
