@@ -21,14 +21,18 @@ import { ExportBar } from "./ExportBar";
 import type { QiExportResult } from "@/lib/quality-intelligence-api";
 
 let anchorClickSpy: ReturnType<typeof vi.spyOn>;
+let objectUrlSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
+  // jsdom has no browser object-URL store; Vitest's adapter uses pre-jsdom-30 private Blob fields.
+  objectUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:qi-export-fixture");
   anchorClickSpy = vi
     .spyOn(HTMLAnchorElement.prototype, "click")
     .mockImplementation(() => undefined);
 });
 
 afterEach(() => {
+  objectUrlSpy.mockRestore();
   anchorClickSpy.mockRestore();
 });
 

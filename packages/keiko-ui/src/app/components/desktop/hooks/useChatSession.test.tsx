@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
@@ -2890,6 +2890,15 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
 });
 
 describe("useChatSession sendMessage — ungrounded attachment descriptors", () => {
+  let objectUrlSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    // Preview URLs are a browser port; exercise the real byte hashing and governed upload below.
+    objectUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:chat-attachment-fixture");
+  });
+  afterEach(() => {
+    objectUrlSpy.mockRestore();
+  });
+
   async function setupUngroundedAttachmentSession(): Promise<
     ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
   > {
