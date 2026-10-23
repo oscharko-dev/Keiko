@@ -2220,7 +2220,9 @@ export function FilesWidget({
   ): ReactNode => {
     return (
       <>
-        {state?.loading === true ? (
+        {/* A refresh retains its rows. Inserting a loading line above them moves a pressed row
+            before mouseup and loses the click; aria-busy reports refreshes without that reflow. */}
+        {state?.loading === true && state.entries.length === 0 ? (
           <output
             className="files-note"
             style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
@@ -2340,6 +2342,7 @@ export function FilesWidget({
       <div // NOSONAR typescript:S6819 — required ARIA tree level, see the note above.
         className="tr-dir"
         role="group"
+        aria-busy={state?.loading === true}
       >
         {notices}
         {rows}
@@ -2466,13 +2469,33 @@ export function FilesWidget({
   );
 
   const renderGitSummary = (): ReactNode => {
-    if (gitSummary === null) return null;
     const state =
       gitStatusState.status?.state ?? (gitStatusState.error === null ? "loading" : "error");
     return (
-      <output className="files-git-status" data-state={state}>
+      // A non-repository result removes the message, while retaining its line prevents an
+      // asynchronous status response from moving the folder under an in-flight pointer press.
+      <output
+        className="files-git-status"
+        data-state={state}
+        aria-hidden={gitSummary === null ? true : undefined}
+        style={{
+          height: 33,
+          flexShrink: 0,
+          visibility: gitSummary === null ? "hidden" : undefined,
+        }}
+      >
         <GitIcon size={13} />
-        <span>{gitSummary}</span>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={gitSummary ?? undefined}
+        >
+          {gitSummary ?? "\u00a0"}
+        </span>
         {canOpenGitDelivery ? (
           <button
             className="files-root-up"
@@ -2542,6 +2565,7 @@ export function FilesWidget({
         <div
           role="tree"
           aria-label={t("filesWidget.tree.label")}
+          aria-busy={directories[currentDirectoryPath ?? ""]?.loading === true}
           tabIndex={-1}
           onKeyDown={onTreeKeyDown}
         >

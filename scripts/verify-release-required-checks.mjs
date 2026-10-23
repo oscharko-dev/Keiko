@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { pullRequestJobNames } from "./lib/workflow-trigger-scenarios.mjs";
 
 const githubApiVersion = "2022-11-28";
 const defaultBaseBranch = "release/1.0";
@@ -109,7 +110,18 @@ function latestByStringField(items, field) {
 }
 
 export function latestCheckRunsByName(checkRuns) {
-  return latestByStringField(checkRuns, "name");
+  return latestByStringField(checkRuns.map(normalizeSkippedJobName), "name");
+}
+
+// GitHub leaves a job-level name expression unevaluated when the job is skipped. Recognize only
+// the existing lifecycle grammar; this remains a skipped verdict requiring same-app, identical-tree
+// evidence. It cannot turn a successful, failed, unknown or inactive name into a required check.
+function normalizeSkippedJobName(run) {
+  if (run?.status !== "completed" || run?.conclusion !== "skipped") return run;
+  const name = stringField(run, "name");
+  if (name === undefined) return run;
+  const lifecycle = pullRequestJobNames(`\${{ ${name} }}`);
+  return lifecycle === undefined ? run : { ...run, name: lifecycle.admitted };
 }
 
 export function latestStatusesByContext(statuses) {

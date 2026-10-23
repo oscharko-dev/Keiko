@@ -23,6 +23,14 @@ export { nativeUiCommitPacket as commitPacket } from "../../../packages/keiko-cl
 
 export async function compileOwnerFixture(directory, name, source) {
   const target = join(directory, name);
+  const darwin = process.platform === "darwin";
+  const platformTarget = darwin ? "macos-" + process.arch : "linux-x64";
+  const definitions = darwin ? ["-Wno-deprecated-declarations"] : [];
+  if (!darwin && name === "launcher") definitions.push("-D_GNU_SOURCE");
+  const selectedSource =
+    darwin && source === "./keiko_runtime_supervisor.c"
+      ? "../macos/keiko_runtime_supervisor.c"
+      : source;
   await promisify(execFile)(
     "/usr/bin/cc",
     [
@@ -32,9 +40,9 @@ export async function compileOwnerFixture(directory, name, source) {
       "-Wpedantic",
       "-Werror",
       "-O2",
-      ...(name === "launcher" ? ["-D_GNU_SOURCE"] : []),
-      '-DKEIKO_PORTABLE_TARGET="linux-x64"',
-      fileURLToPath(new URL(source, import.meta.url)),
+      ...definitions,
+      '-DKEIKO_PORTABLE_TARGET="' + platformTarget + '"',
+      fileURLToPath(new URL(selectedSource, import.meta.url)),
       "-o",
       target,
     ],

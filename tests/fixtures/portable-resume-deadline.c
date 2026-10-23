@@ -54,7 +54,11 @@ static int fixture_gettimeofday(struct timeval *value, void *zone) {
 }
 
 static int fixture_clock_gettime(clockid_t clock, struct timespec *value) {
+#if defined(__APPLE__)
+  assert(clock == CLOCK_MONOTONIC_RAW);
+#else
   assert(clock == CLOCK_MONOTONIC);
+#endif
   if (fixture_clock_unavailable) return -1;
   value->tv_sec = (time_t)(fixture_monotonic / 1000u);
   value->tv_nsec = (long)((fixture_monotonic % 1000u) * 1000000u);

@@ -21,7 +21,11 @@ import { URL, fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
 import { loadPortableRuntimeApprovals } from "./portable-runtime-approvals.mjs";
-import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import {
+  readZipArchiveUncompressedSize,
+  writeZipArchiveEntries,
+  writeZipArchiveFromDirectory,
+} from "./lib/zip-archive.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
@@ -1142,6 +1146,7 @@ function portableManifestArtifact(input) {
     assetName: input.archive.name,
     archiveFormat: "zip",
     sizeBytes: input.archive.size,
+    uncompressedSizeBytes: input.archive.uncompressedSizeBytes,
     sha256: input.archiveSha,
   };
 }
@@ -1245,6 +1250,7 @@ function createScenarioReleaseFiles(
   payload,
 ) {
   const archive = releaseAsset(100 + targetIndex(target), assetName(target), fileSize(archivePath));
+  archive.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
   let archiveSha = sha256File(archivePath);
   const manifest = portableManifest({
     target,
@@ -1259,6 +1265,7 @@ function createScenarioReleaseFiles(
     rmSync(archivePath);
     zipDirectory(payloadSource, archivePath);
     archive.size = fileSize(archivePath);
+    archive.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
     archiveSha = sha256File(archivePath);
     syncPortableArchiveIdentity(manifest, archive, archiveSha);
   }
@@ -1279,6 +1286,7 @@ function createScenarioReleaseFiles(
 
 function syncPortableArchiveIdentity(manifest, archive, archiveSha) {
   manifest.artifact.sizeBytes = archive.size;
+  manifest.artifact.uncompressedSizeBytes = archive.uncompressedSizeBytes;
   manifest.artifact.sha256 = archiveSha;
   manifest.releaseImpact.reviewedBinding.assetSizeBytes = archive.size;
   manifest.releaseImpact.reviewedBinding.archiveSha256 = archiveSha;

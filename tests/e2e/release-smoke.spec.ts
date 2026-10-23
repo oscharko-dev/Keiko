@@ -218,10 +218,22 @@ async function seedModalProofWindow(
   }, windowEntry);
 }
 
+async function expectFilesNavigationLayout(
+  filesWindow: ReturnType<Page["getByRole"]>,
+): Promise<void> {
+  // The lazy widget can expose its buttons before its navigation stylesheet is applied.
+  // Require its real layout before a pointer action, as well as retaining row actionability.
+  const controls = filesWindow
+    .getByRole("button", { name: "Open parent folder", exact: true })
+    .locator("..");
+  await expect(controls).toHaveCSS("display", "flex");
+}
+
 async function openTreePath(
   filesWindow: ReturnType<Page["getByRole"]>,
   path: string,
 ): Promise<void> {
+  await expectFilesNavigationLayout(filesWindow);
   const row = filesWindow.locator(`[role="treeitem"].tr-row[data-path="${path}"]`);
   await expect(row).toBeVisible();
   await row.click();
@@ -518,6 +530,54 @@ test("window-owned AI confirm preserves viewport modality @smoke", async ({ page
   await expectViewportModal(page, aiDialog);
   await aiDialog.getByRole("button", { name: "Cancel" }).click();
 });
+
+for (const surface of ["directory", "git"] as const) {
+  test(`files pointer navigation survives a background ${surface} read @smoke`, async ({
+    page,
+    request,
+  }) => {
+    const projectPath = createProjectFixture();
+    await ensureProject(request, projectPath);
+    await seedFilesWindow(page, projectPath);
+    let held = false;
+    let armed = surface === "git";
+    let release: (() => Promise<void>) | undefined;
+    const pattern = surface === "git" ? "**/api/git/status**" : "**/api/files/tree**";
+    await page.route(pattern, async (route) => {
+      if (!armed || held) return route.continue();
+      held = true;
+      const response = await route.fetch();
+      release = (): Promise<void> => route.fulfill({ response });
+    });
+    await page.goto("/");
+    const filesWindow = page.getByRole("region", { name: /^Files/u });
+    const row = filesWindow.locator('[role="treeitem"].tr-row[data-path="packages"]');
+    await expect(row).toBeVisible();
+    if (surface === "directory") {
+      armed = true;
+      await filesWindow.getByRole("button", { name: "Refresh folder", exact: true }).click();
+    }
+    await expect.poll(() => release !== undefined).toBe(true);
+    const completeRead = release;
+    if (completeRead === undefined) throw new Error("The background read must be held");
+    await expectFilesNavigationLayout(filesWindow);
+    await row.hover();
+    const bounds = await row.boundingBox();
+    if (bounds === null) throw new Error("The retained folder row must remain visible");
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await completeRead();
+    if (surface === "directory") {
+      await expect(filesWindow.getByRole("tree")).toHaveAttribute("aria-busy", "false");
+    } else {
+      await expect(filesWindow.getByText("Git status loading", { exact: true })).toBeHidden();
+    }
+    await page.mouse.up();
+    await expect(filesWindow.getByRole("textbox", { name: "Current folder path" })).toHaveValue(
+      join(projectPath, "packages"),
+    );
+  });
+}
 
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,

@@ -39,6 +39,7 @@ import {
 import {
   extractZipArchiveEntries,
   readZipArchiveEntryNames,
+  readZipArchiveUncompressedSize,
   writeZipArchiveFromDirectory,
 } from "./lib/zip-archive.mjs";
 import {
@@ -54,6 +55,7 @@ import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { NPM_PACK_STDIO_MAX_BUFFER } from "./package-surface-pack.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { parseStableVersion } from "./lib/stable-version.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -1514,10 +1516,11 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
 
 function writeManifest(stageRoot, manifest) {
   mkdirSync(join(stageRoot, "manifest"), { recursive: true });
-  writeFileSync(
-    join(stageRoot, "manifest", "portable-manifest.json"),
-    JSON.stringify(manifest, null, 2) + "\n",
-  );
+  const bytes = JSON.stringify(manifest, null, 2) + "\n";
+  // Match the installed readers' MAX_PORTABLE_MANIFEST_BYTES (staging-shared owner).
+  if (Buffer.byteLength(bytes) > 1_048_576)
+    fail("portable manifest exceeds the installed reader limit");
+  writeFileSync(join(stageRoot, "manifest", "portable-manifest.json"), bytes);
 }
 
 function provenanceStatementFor(
@@ -2130,6 +2133,7 @@ function manifestArtifact(_options, target, digests) {
     assetName: target.assetName,
     archiveFormat: "zip",
     sizeBytes: digests.sizeBytes,
+    uncompressedSizeBytes: digests.uncompressedSizeBytes,
     sha256: digests.assetSha256,
   };
 }
@@ -2251,6 +2255,14 @@ function manifestReleaseImpact(input) {
   const { options } = input;
   return {
     catalogPath: "app/release-impact.catalog.json",
+    catalog: {
+      schemaVersion: 1,
+      entries: cloneJson(
+        releaseImpactCatalog.entries.filter(
+          (entry) => parseStableVersion(entry.packageVersion) !== undefined,
+        ),
+      ),
+    },
     entryId: input.releaseImpactEntry.id,
     entryPackageVersion: rootPackage.version,
     entryReleaseTag: options.releaseTag,
@@ -2449,6 +2461,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
         nodeArchiveSha256: staged.nodeArchiveSha256,
         provenanceSha256,
         sizeBytes: statSync(assetPath).size,
+        uncompressedSizeBytes: readZipArchiveUncompressedSize(assetPath),
         tarballSha256: await sha256File(tarball),
       },
       staged.sidecarRuntimes,

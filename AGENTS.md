@@ -97,6 +97,10 @@ This shapes the product _and_ how you work on it:
   Shared runtime contracts remain only where active consumers need them (ADR-0061).
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
+- Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
+  handoff copies against the exact current artifact digests in the validated plan after managed
+  registration admission; preserve candidate authenticity, containment and process ownership.
+  Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;

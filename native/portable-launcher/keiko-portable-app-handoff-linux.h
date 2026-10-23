@@ -1,7 +1,9 @@
 #ifndef KEIKO_PORTABLE_APP_HANDOFF_LINUX_H
 #define KEIKO_PORTABLE_APP_HANDOFF_LINUX_H
 
+#if defined(__linux__)
 #include <linux/memfd.h>
+#endif
 
 /* One selected activation, dispatched by the held main app root to its existing outer owner. */
 typedef struct keiko_app_handoff {
@@ -25,6 +27,7 @@ typedef struct keiko_app_handoff {
   size_t acceptance_bytes;
 } keiko_app_handoff;
 
+#if defined(__linux__)
 static int keiko_handoff_environment(const keiko_runtime_owner *owner, uint64_t deadline) {
   const struct app_environment_packet *environment = owner->application_environment;
   unsigned char header[12] = {'K','A','E','1',1,0,1,0,0,0,0,0};
@@ -46,6 +49,8 @@ refused:
   return -1;
 }
 
+#endif
+
 static int keiko_handoff_capsule(const keiko_runtime_owner *owner, const char *activation) {
   const char *names[] = {"updates", "handoff", activation};
   int descriptor = fcntl(owner->state, F_DUPFD_CLOEXEC, 16);
@@ -61,6 +66,7 @@ static int keiko_handoff_capsule(const keiko_runtime_owner *owner, const char *a
   return descriptor;
 }
 
+#if defined(__linux__)
 static int keiko_handoff_executable(const keiko_runtime_owner *owner,
                                      const keiko_app_handoff *handoff, char path[PATH_MAX]) {
   char self_path[PATH_MAX], self_digest[65], copy_digest[65];
@@ -125,6 +131,8 @@ static void keiko_handoff_child(const keiko_runtime_owner *owner, keiko_app_hand
   _exit(126);
 }
 
+#endif
+
 static int keiko_handoff_envelope(const keiko_runtime_owner *owner, uint16_t kind,
                                    uint64_t deadline) {
   const keiko_app_handoff *handoff = owner->handoff;
@@ -138,6 +146,7 @@ static int keiko_handoff_envelope(const keiko_runtime_owner *owner, uint16_t kin
   return keiko_owner_write(handoff->proof, bytes, sizeof(bytes), deadline);
 }
 
+#if defined(__linux__)
 static int keiko_handoff_spawn(keiko_runtime_owner *owner) {
   keiko_app_handoff *handoff = owner->handoff;
   int input[2] = {-1, -1}, response[2] = {-1, -1}, proof[2] = {-1, -1};
@@ -164,6 +173,10 @@ cleanup:
   }
   return result;
 }
+
+#else
+#include "keiko-portable-app-handoff-macos.h"
+#endif
 
 static int keiko_handoff_reply(keiko_runtime_owner *owner, uint16_t kind,
                                 uint16_t reason, uint64_t deadline) {
@@ -242,6 +255,9 @@ static int keiko_handoff_action(keiko_runtime_owner *owner, uint16_t kind,
   if (kind == 4 && !handoff->authorized) {
     char control[65]; memcpy(control, handoff->plan, 64); control[64] = '\n';
     if (!keiko_owner_write(handoff->control, control, sizeof(control), handoff->deadline)) return 0;
+#if defined(__APPLE__)
+    if (!keiko_macos_handoff_environment(owner, handoff->deadline)) return 0;
+#endif
     handoff->authorized = 1;
     return 1;
   }
@@ -252,6 +268,7 @@ static int keiko_handoff_action(keiko_runtime_owner *owner, uint16_t kind,
   return 0;
 }
 
+#if defined(__linux__)
 static int keiko_handoff_receive(keiko_runtime_owner *owner) {
   union { struct cmsghdr alignment;
     char bytes[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * 8)]; } control = {0};
@@ -285,6 +302,19 @@ static int keiko_handoff_receive(keiko_runtime_owner *owner) {
   return result;
 }
 
+#else
+#include "keiko-portable-app-control-macos.h"
+#endif
+
+/* The admitted start grant is at most 15 minutes. The validated production plan
+ * reserves a further 10 minutes for start/verification/restoration. Anchor that
+ * tail to the original grant, never to the time a response happens to arrive. */
+static int keiko_handoff_cleanup_grant(const keiko_app_handoff *handoff, uint64_t now) {
+  const uint64_t tail = keiko_khp_phase_tail(KEIKO_KHP_CLEANUP_AT);
+  return now < handoff->cleanup_deadline && handoff->deadline <= UINT64_MAX - tail &&
+         handoff->cleanup_deadline <= handoff->deadline + tail;
+}
+
 static int keiko_handoff_acceptance(keiko_runtime_owner *owner) {
   keiko_app_handoff *handoff = owner->handoff;
   if (handoff == NULL || !handoff->authorized || handoff->prepared ||
@@ -301,8 +331,7 @@ static int keiko_handoff_acceptance(keiko_runtime_owner *owner) {
     return 0;
   handoff->cleanup_deadline = keiko_scope_read_u64(handoff->acceptance + 68);
   uint64_t now = keiko_tree_now_ms();
-  if (now >= handoff->cleanup_deadline ||
-      handoff->cleanup_deadline - now > KEIKO_COORDINATOR_MAX_CONTROL_MS) return 0;
+  if (!keiko_handoff_cleanup_grant(handoff, now)) return 0;
   handoff->prepared = 1;
   keiko_owner_close(&handoff->response);
   return keiko_handoff_reply(owner, 5, 0, handoff->deadline);

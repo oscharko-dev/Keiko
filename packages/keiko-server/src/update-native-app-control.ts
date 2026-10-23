@@ -181,18 +181,34 @@ function nativeControlDeadline(deadline: number): bigint {
   return native + BigInt(remaining);
 }
 
+function validAppLaunchId(launchId: string): boolean {
+  return isKeikoUiLaunchId(launchId) && launchId === process.env.KEIKO_UI_LAUNCH_ID;
+}
+
+function isMacosAppRuntime(kind: ReturnType<typeof currentProcessScopeKind>): boolean {
+  return (
+    kind === "local" && process.platform === "darwin" && process.env.KEIKO_APP_RUNTIME_OWNER === "1"
+  );
+}
+
 let claimed = false;
 let selected: Promise<NativeAppControl> | undefined;
+
+function localAppControl(): Promise<undefined> {
+  return process.platform === "darwin"
+    ? Promise.reject(new NativeAppControlError(false))
+    : Promise.resolve(undefined);
+}
 
 /** Only the explicitly admitted main application consumes FD8. Workers never inspect or close it. */
 export function currentNativeAppControl(launchId: string): Promise<NativeAppControl | undefined> {
   if (!isMainThread) return Promise.reject(new NativeAppControlError(false));
   const kind = currentProcessScopeKind();
-  if (kind === "local") return Promise.resolve(undefined);
-  if (kind !== "outer-native" || process.platform !== "linux")
+  const macosApp = isMacosAppRuntime(kind);
+  if (kind === "local" && !macosApp) return localAppControl();
+  if (!macosApp && (kind !== "outer-native" || process.platform !== "linux"))
     return Promise.reject(new NativeAppControlError(false));
-  if (!isKeikoUiLaunchId(launchId) || launchId !== process.env.KEIKO_UI_LAUNCH_ID)
-    return Promise.reject(new NativeAppControlError(false));
+  if (!validAppLaunchId(launchId)) return Promise.reject(new NativeAppControlError(false));
   if (selected !== undefined) return selected;
   if (claimed) return Promise.reject(new NativeAppControlError(false));
   claimed = true;

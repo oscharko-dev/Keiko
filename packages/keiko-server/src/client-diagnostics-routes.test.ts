@@ -3413,13 +3413,18 @@ describe("actual source reveal lifecycle", () => {
   );
 });
 
-it.each(["started", "settled"] as const)(
-  "persists code copy feedback %s through the existing activity log",
-  async (phase) => {
+it.each([
+  ["markdown copy feedback", "started", "markdown-copy-feedback"],
+  ["markdown copy feedback", "settled", "markdown-copy-feedback"],
+  ["transcript navigation", "started", "transcript-navigation"],
+  ["transcript navigation", "settled", "transcript-navigation"],
+] as const)(
+  "persists %s %s through the existing activity log",
+  async (stage, phase, activityStage) => {
     const sink = captureServerLog();
     const body = {
       kind: "stage",
-      stage: "markdown copy feedback",
+      stage,
       phase,
       ordinal: 1,
       correlationId: "copy-feedback-123",
@@ -3434,7 +3439,7 @@ it.each(["started", "settled"] as const)(
     expect(JSON.parse(line)).toMatchObject({
       level: "info",
       correlationId: body.correlationId,
-      stage: "markdown-copy-feedback",
+      stage: activityStage,
       completeness: "complete",
       loss: "none",
     });

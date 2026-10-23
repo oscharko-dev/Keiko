@@ -14,6 +14,12 @@ Governing decisions:
 - [Portable Launch And Setup Guide](portable-launch-setup-guide.md)
 - [Release / Publish Workflow](release-publish-workflow.md)
 
+The archive's `artifact.uncompressedSizeBytes` is measured from the finished ZIP after each
+repack and checked again during assembly and publication. Portable manifests are bounded to
+1 MiB and may carry the stable release-impact catalog in `releaseImpact.catalog`. The full
+catalog is covered by the Keiko release signature; an installed reader must validate its entries
+and exact target binding before using it for future compatibility decisions.
+
 ## Product Contract
 
 Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
@@ -477,6 +483,7 @@ required contract vocabulary.
     "assetName": "keiko-windows-x64.zip",
     "archiveFormat": "zip",
     "sizeBytes": 12345678,
+    "uncompressedSizeBytes": 23456789,
     "sha256": "64-hex-artifact-digest"
   },
   "provenance": {

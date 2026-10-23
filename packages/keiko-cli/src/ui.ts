@@ -20,13 +20,14 @@ import { createNativeProcessScope } from "@oscharko-dev/keiko-security/native-pr
 // code. Injected-test invocations skip the guard entirely.
 
 import type { Server } from "node:http";
-import { existsSync, readFileSync, unwatchFile, watchFile } from "node:fs";
+import { existsSync, fstatSync, readFileSync, unwatchFile, watchFile } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
 import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -1547,10 +1548,7 @@ async function reconcileAfterListen(
     if (!serverMatchesExpectedBinding(context.server, context.parsed.port)) {
       throw new Error("Portable update startup recovery observed an unexpected listener binding.");
     }
-    const result = await context.startupRecovery.reconcile({
-      phase: "post-listen",
-      current: context.current,
-    });
+    const result = await awaitStartupRecoveryCompletion(context.startupRecovery, context.current);
     context.handlerDeps.updateSession?.refreshDurableProjection?.();
     if (result.status !== "ready") {
       throw startupRecoveryRequiredError(
@@ -1568,6 +1566,36 @@ async function reconcileAfterListen(
       closeStartupActivityLog(context.activityLog, context.closeActivityLog);
     }
     throw error;
+  }
+}
+
+async function awaitStartupRecoveryCompletion(
+  recovery: UpdateStartupRecoveryPort,
+  current: UpdateStartupRecoveryCurrent,
+): Promise<StartupRecoveryResult> {
+  let result = await recovery.reconcile({ phase: "post-listen", current });
+  // Each cleanup observation depends on its predecessor and must remain sequential.
+  for await (const poll of startupRecoveryPolls(() =>
+    result.status === "ready" ? result.completionDeadline : undefined,
+  )) {
+    if (poll === "expired") return { status: "recovery-required", reason: "interrupted" };
+    result = await recovery.reconcile({ phase: "post-listen", current });
+  }
+  return result;
+}
+
+async function* startupRecoveryPolls(
+  completionDeadline: () => number | undefined,
+): AsyncGenerator<"retry" | "expired", void, unknown> {
+  for (let pollDelayMs = 250; ; pollDelayMs = Math.min(pollDelayMs * 2, 5_000)) {
+    const deadline = completionDeadline();
+    if (deadline === undefined) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      yield "expired";
+      return;
+    }
+    yield delay<"retry">(Math.min(pollDelayMs, remaining), "retry");
   }
 }
 
@@ -1995,7 +2023,10 @@ export async function runUiCli(
 function prepareUiProcessScope(parsed: UiCliArgs, io: CliIo): boolean {
   if (parsed.runtimeOwner === undefined) return true;
   try {
-    bindProcessScope(createNativeProcessScope());
+    if (process.platform === "darwin") {
+      if (!fstatSync(8).isSocket()) throw new Error("native app control unavailable");
+      process.env.KEIKO_APP_RUNTIME_OWNER = "1";
+    } else bindProcessScope(createNativeProcessScope());
     return true;
   } catch {
     io.err("Native runtime process identity could not be verified.\n");

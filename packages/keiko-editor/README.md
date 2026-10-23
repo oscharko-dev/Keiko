@@ -80,7 +80,7 @@ embed it. A standalone host performs three steps — install the local Monaco ru
 the host port, and render the controlled `KeikoCodeEditor`.
 
 The package declares `react` and `react-dom` (`^19.2.8`) as **peer** dependencies and pins
-`monaco-editor` (`0.56.0`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
+`monaco-editor` (`0.57.0`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
 a browser-only module that imports CSS, so the editor surface must be loaded behind a client-only
 boundary (for example `next/dynamic(..., { ssr: false })` or an equivalent lazy import) — never during
 a server render. There is no CDN fallback by design (ADR-0042 D3).
@@ -254,7 +254,7 @@ npm --workspace @oscharko-dev/keiko-editor run build
 npm --workspace @oscharko-dev/keiko-editor run typecheck
 npm --workspace @oscharko-dev/keiko-editor test
 
-# Editor bundle-size budget: own-code gzip ceiling, the Monaco 0.56.0 pin, and first-load isolation
+# Editor bundle-size budget: own-code gzip ceiling, the Monaco 0.57.0 pin, and first-load isolation
 # (Monaco/editor value-imported only behind a client-only dynamic boundary). Add --require-static-export
 # after `npm run build:ui` to also scan the static export's first-load JavaScript.
 npm run check:editor-bundle-size
@@ -387,7 +387,7 @@ All dependencies are pinned and permissively licensed. The package manifest decl
 
 | Dependency                      | Version        | License    | Role                                                                                                                                      |
 | ------------------------------- | -------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `monaco-editor`                 | `0.56.0`       | MIT        | Editor + diff editor + bundled language workers. Runtime wiring lands in #1193 (served same-origin, no CDN).                              |
+| `monaco-editor`                 | `0.57.0`       | MIT        | Editor + diff editor + bundled language workers. Runtime wiring lands in #1193 (served same-origin, no CDN).                              |
 | `@monaco-editor/react`          | `4.7.0`        | MIT        | React lifecycle wrapper for Monaco. Its default loader fetches Monaco from a CDN unless configured.                                       |
 | `@monaco-editor/loader`         | `1.7.0`        | MIT        | Transitive loader used by `@monaco-editor/react`; pinned via a root `overrides` entry.                                                    |
 | `@oscharko-dev/keiko-contracts` | workspace      | Apache-2.0 | Shared contracts. Imported **type-only** (`WorkspaceLanguage`, `FileContent`); no value import.                                           |
@@ -400,24 +400,16 @@ Notes:
   local package before first mount so `@monaco-editor/react`'s default CDN loader is never used.
 - **Loader pin.** `@monaco-editor/loader` is pinned through a root `overrides` entry; `npm ci`
   enforces SHA-512 lockfile integrity for every Monaco artifact, and the resolved `monaco-editor`
-  version is `0.56.0`.
+  version is `0.57.0`.
 - **Maintenance / bus-factor.** `@monaco-editor/react` and `@monaco-editor/loader` are
   community-maintained packages with a small maintainer base. The pinned versions, the lockfile
   integrity hashes, the SBOM + license gate (`npm run check:workspace-supply-chain`), and the
   no-CDN policy are the controls that bound this supply-chain exposure (blueprint §12, risk R1).
-- **Known advisory — resolved for the host mount via a patched override (#1196); runtime sink stays
-  closed.** `monaco-editor@0.56.0` declares `dompurify@3.4.8` as an npm dependency, which carries a set
-  of **moderate** DOMPurify advisories (`npm audit` reports several distinct XSS / mutation-XSS /
-  prototype-pollution items affecting `<= 3.4.10`), all rated moderate (0 high/critical). #1193 deferred
-  any change before the host runtime path existed because the only `npm audit fix` was a semver-major
-  downgrade. #1196 mounts the editor in `keiko-ui`, so the chain
-  `keiko-ui → keiko-editor → monaco-editor → dompurify` now enters keiko-ui's audit closure and the
-  `ui` CI job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` gate fails. The
-  resolution is a root `overrides: { dompurify: "3.4.13" }` entry:
-  - **Patched version, not a silencing pin.** `3.4.13` is the fixed DOMPurify line (the advisories
-    affect `<= 3.4.10`), so the override removes the vulnerable package from the installed npm tree
-    rather than masking the warning. `monaco-editor` stays pinned at the ADR-0042-mandated `0.56.0`;
-    `npm audit`'s own `fixAvailable` (a `0.53.0` downgrade) is still **not** taken.
+- **DOMPurify dependency and vendored runtime.** Monaco 0.57.0 declares and vendors DOMPurify
+  3.4.15. The root `overrides: { dompurify: "3.4.17" }` controls the installed npm dependency;
+  it does not replace Monaco's vendored source. The 2026-10-23 Dependabot update replaces the
+  previous vendored 3.4.8 copy. The existing plain-text rendering boundary remains independent
+  of this version change.
   - **Runtime rendering independently constrained.** Monaco still bundles a **vendored** DOMPurify copy
     (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is
     reached only through Markdown-rendering surfaces (hover tooltips, suggest-widget docs, parameter
@@ -433,7 +425,7 @@ Notes:
     reached. **Hover** (`hover.enabled`) is enabled only when a governed hover provider is wired
     (#1201); the hover bridge (`hover-bridge.ts`) renders the server's plain-text quick info inside an
     inert Markdown code fence sized longer than any backtick run in the content (`toInertCodeFence`),
-    so the Markdown renderer HTML-escapes the content and the vendored DOMPurify 3.4.8 copy only ever processes
+    so the Markdown renderer HTML-escapes the content and the vendored DOMPurify 3.4.15 copy only ever processes
     inert, escaped text — never active markup a buffer's own type signatures could smuggle in. The
     #1196 host bootstrap also disables Monaco's built-in TypeScript/JavaScript `modeConfiguration`
     providers for completion, hover, diagnostics, formatting, symbols, code actions, rename,
@@ -442,10 +434,8 @@ Notes:
     language service, not Monaco's local worker. The original all-sinks-disabled posture is therefore
     superseded by a narrower executable invariant: active markup never crosses a bridge, hover input
     is inert-fenced, and every other enabled governed surface receives primitive plain text only.
-  - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
-    that vendors DOMPurify `> 3.4.10`; as of 0.3.8, Monaco 0.56.0 still declares and vendors `3.4.8`,
-    so the patched override plus inert hover rendering are the interim controls. Revisit when a
-    suggest-documentation or other `IMarkdownString` surface is wired, or when a newer Monaco ships.
+  - **Review on future changes.** Recheck both declared and vendored versions when upgrading
+    Monaco. Any newly enabled Markdown-rendering surface still requires its own security review.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers and mounted by
   `keiko-ui` through the #1196 client-only Workspace editor surface.
 

@@ -3552,6 +3552,159 @@
         "warningText": "Restart after installation. Back up local application state before changing versions; older binaries cannot read the newer schema. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
         "verifiedCarryForward": false
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-21-keiko-1.2.6-portable-updater-repair",
+      "packageVersion": "1.2.6",
+      "releaseTag": "v1.2.6",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Repair portable updates and restarts without an Apple Developer account while preserving the selected workspace and existing application state.",
+      "affectedStateStores": ["updater-state", "portable-install-state", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "updater-state",
+          "description": "Native cleanup completes before startup reports ready; completed sessions release their exact ownership so another update can start. No customer database schema migration is added.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "portable-install-state",
+          "description": "Retain the selected working directory and managed installation state across native restart. Existing state and keys stay outside the replaceable application bundle.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Authenticated release-impact admission records only catalog counts. Existing registered lifecycle and recovery observations retain body-free diagnostics.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "macOS updates use the native application lifecycle independently of Apple Developer membership and Endpoint Security activation. Update integrity remains authenticated by Keiko release trust.",
+        "Updates retain the selected workspace, finish native cleanup before reporting success and release completed session ownership so consecutive updates can proceed.",
+        "Release archives carry measured expanded sizes, and authenticated manifests provide future release-impact metadata. Malformed, oversized or altered update inputs remain refused.",
+        "Existing published 1.2.5 installations require a verified updater bootstrap before automatic updates. A local repair build is identified separately from a published release; back up local state before applying the bootstrap.",
+        "Linux compiler and protocol controls and Windows manifest and signing regressions were checked. This release does not claim an installed Windows or Linux cross-version canary.",
+        "Background folder refreshes keep visible rows in place so pointer clicks still open the selected folder.",
+        "The bundled web framework and its matching lint configuration update to Next.js 16.4.1 for the newly reviewed security advisories."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-21",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4056#6323955124",
+        "rationale": "The owner explicitly requested release 1.2.6 after updater repair and verification, followed by a live SSD update from the current Latest installation after successful deployment. This entry covers PR #4056 and issue #4055. Publication remains conditional on applicable local gates, exact-head required checks, accepted review findings and the protected release workflow. Full-package fixture updates and the existing SSD bootstrap are recorded separately; the requested production-release SSD update remains post-deployment acceptance. The same release preparation patches development-only Vitest tooling to 4.1.12 after the required OSV scan reported two newly indexed mocker advisories; no security waiver or quality threshold is changed."
+      },
+      "breakingException": {
+        "rationale": "The already-published 1.2.5 updater cannot acquire future impact entries or use the repaired macOS app owner; immutable release assets are retained. The verified local managed-install bootstrap repairs those existing-reader defects without changing customer database schemas.",
+        "warningText": "Published 1.2.5 installations need the verified updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install updater bootstrap retaining the existing state and keys, followed by authenticated native promotion with the workspace kept outside the replaceable application root."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-23-keiko-1.2.7-canonical-updater-state",
+      "packageVersion": "1.2.7",
+      "releaseTag": "v1.2.7",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Repair portable update handoff and recovery when UI data uses a nested or separate directory, preserving the existing workspace and keys.",
+      "affectedStateStores": ["updater-state", "portable-install-state"],
+      "stateImpact": [
+        {
+          "store": "updater-state",
+          "description": "The coordinator, session lock, handoff plan and recovery share the canonical runtime-state directory. UI database location no longer changes the updater plan lookup. No customer database schema migration is introduced.",
+          "userActionRequired": true,
+          "remediation": "repair-required"
+        },
+        {
+          "store": "portable-install-state",
+          "description": "Retain the registered managed root and the existing workspace and keys outside the replaceable application bundle. Published source updaters require the verified one-time bootstrap described in the warning before using the corrected handoff.",
+          "userActionRequired": true,
+          "remediation": "repair-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "repair-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Portable update handoff and recovery use the same canonical state directory even when UI data is nested or configured separately.",
+        "The update retains the existing workspace and keys outside the replaceable application bundle and introduces no customer database schema migration.",
+        "macOS continues to use the native application lifecycle without Apple Developer membership or Endpoint Security activation; authenticated release trust and process-ownership checks remain enforced.",
+        "Published 1.2.6 and earlier source updaters need the verified one-time bootstrap before using the corrected automatic handoff. Back up local state and preserve private keys when replacing the application bundle.",
+        "Reviewed dependency and pinned CI Action updates are consolidated. TypeScript API/UI lanes, PDF.js 6.3.289 and axe-core 4.12.1 retain the owner-approved compatibility and license baselines.",
+        "Two consecutive isolated full-product macOS updates retain synthetic state and keys and stop normally. Published-release SSD acceptance and native installed Windows/Linux cycles are recorded separately and are not claimed by that fixture."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-23",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4066#6365544545",
+        "rationale": "The owner explicitly authorized preparation of 1.2.7 in PR #4066 after reviewing the canonical updater repair and the dependency exceptions. This records release-impact preparation under the repository signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings. Publication requires the protected release path. The real published-release SSD update, data/key continuity, restart and normal eject remain post-deployment acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published source updaters look for the handoff plan under the UI database parent instead of the canonical update-state root. Updating only a future target cannot repair that old source before handoff. The corrected production composition passes two isolated full-product native update cycles.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic handoff. Keep a backup of local state and preserve private keys; a local repair build is identified separately from a published release.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the corrected production composition. Isolated synthetic data/key retention is qualified; the real published-release SSD acceptance is still required after deployment."
+      }
     }
   ]
 }

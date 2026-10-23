@@ -392,6 +392,68 @@ function assertZip32Directory(count, directoryOffset) {
   }
 }
 
+/** Measures the finished archive's central directory without inflating its payload. */
+export function readZipArchiveUncompressedSize(archivePath) {
+  const fd = openSync(archivePath, "r");
+  try {
+    return uncompressedDirectorySize(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function expandedZipDirectory(fd) {
+  const size = fstatSync(fd).size;
+  const tailLength = Math.min(size, END_OF_CENTRAL_DIRECTORY_MIN_BYTES + 0xffff);
+  const tail = readAt(fd, size - tailLength, tailLength);
+  const end = endOfCentralDirectoryOffset(tail);
+  const count = tail.readUInt16LE(end + 10);
+  const directoryOffset = tail.readUInt32LE(end + 16);
+  const directorySize = tail.readUInt32LE(end + 12);
+  assertZip32Directory(count, directoryOffset);
+  if (
+    end + END_OF_CENTRAL_DIRECTORY_MIN_BYTES + tail.readUInt16LE(end + 20) !== tail.length ||
+    tail.readUInt16LE(end + 4) !== 0 ||
+    tail.readUInt16LE(end + 6) !== 0 ||
+    tail.readUInt16LE(end + 8) !== count
+  )
+    throw new Error("ZIP end record is incomplete or uses multiple disks");
+  if (
+    count > 60_000 ||
+    directorySize > 32 * 1024 * 1024 ||
+    directoryOffset + directorySize !== size - tailLength + end
+  ) {
+    throw new Error("ZIP central directory is malformed or exceeds the entry ceiling");
+  }
+  const directory = readAt(fd, directoryOffset, directorySize);
+  return { directory, count };
+}
+
+function uncompressedDirectorySize(fd) {
+  const { directory, count } = expandedZipDirectory(fd);
+  const directorySize = directory.length;
+  let offset = 0;
+  let expanded = 0;
+  for (let index = 0; index < count; index += 1) {
+    const entry = readCentralEntry(directory, offset);
+    if (
+      entry.next > directorySize ||
+      entry.size === 0xffffffff ||
+      entry.compressedSize === 0xffffffff ||
+      entry.localOffset === 0xffffffff
+    ) {
+      throw new Error("ZIP central directory entry is malformed or uses ZIP64");
+    }
+    expanded += entry.size;
+    if (expanded > 2 ** 31) throw new Error("ZIP expanded size exceeds the 2 GiB ceiling");
+    offset = entry.next;
+  }
+  if (offset !== directorySize || expanded === 0) {
+    throw new Error("ZIP central directory is incomplete or has no payload bytes");
+  }
+  return expanded;
+}
+
 /**
  * Every file entry of a ZIP32 archive — the writers above and GitHub's artifact endpoint both
  * produce this shape. Directory markers are skipped; every file name passes the same

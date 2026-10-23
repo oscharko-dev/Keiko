@@ -5,6 +5,10 @@ import {
   macosTeamIdentifierFromOutput,
 } from "./coding-runtime/macosPortableCodeIdentity.js";
 import { windowsPublisherIdentityMatchesAsync } from "./coding-runtime/windowsPortableAuthenticode.js";
+import {
+  digestPortableHandoffFile,
+  portableHandoffOperationFrom,
+} from "./update-portable-handoff-tree.js";
 
 const VERIFY_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT_BYTES = 16 * 1024;
@@ -13,6 +17,7 @@ export interface PortableHandoffNativeCopyVerificationInput {
   readonly kind: "coordinator" | "runtime-supervisor";
   readonly currentPath: string;
   readonly copiedPath: string;
+  readonly expectedSha256?: string | undefined;
 }
 
 interface CommandResult {
@@ -113,6 +118,23 @@ async function verifyMacosCopy(
   // Developer ID signature and release-team continuity.
 }
 
+async function verifyPlanBoundCopy(
+  input: PortableHandoffNativeCopyVerificationInput,
+): Promise<void> {
+  if (input.expectedSha256 === undefined || !/^[a-f0-9]{64}$/u.test(input.expectedSha256)) {
+    fail("portable handoff native plan identity is unavailable");
+  }
+  const operation = portableHandoffOperationFrom({ deadline: Date.now() + VERIFY_TIMEOUT_MS });
+  const digests = await Promise.all(
+    [input.currentPath, input.copiedPath].map((path) =>
+      digestPortableHandoffFile(path, operation, 64 * 1024 * 1024),
+    ),
+  );
+  if (digests.some((digest) => digest.toString("hex") !== input.expectedSha256)) {
+    fail("portable handoff native plan identity changed");
+  }
+}
+
 export function createPortableHandoffNativeCopyVerifier(
   options: PortableHandoffNativeCopyVerifierOptions = {},
 ): (input: PortableHandoffNativeCopyVerificationInput) => Promise<void> {
@@ -128,12 +150,15 @@ export function createPortableHandoffNativeCopyVerifier(
       }
       return;
     }
+    if (hostPlatform === "linux") {
+      await verifyPlanBoundCopy(input);
+      return;
+    }
     if (hostPlatform === "darwin") {
       const expectedTeamIdentifier =
         options.macosExpectedTeamIdentifier ?? macosReleaseTeamIdentifier();
-      if (expectedTeamIdentifier === undefined) {
-        fail("portable handoff release Developer ID identity is unavailable");
-      }
+      await verifyPlanBoundCopy(input);
+      if (expectedTeamIdentifier === undefined) return;
       await verifyMacosCopy(input, options.macosRun ?? runCommand, expectedTeamIdentifier);
       return;
     }

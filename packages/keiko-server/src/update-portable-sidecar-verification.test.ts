@@ -1,4 +1,10 @@
 import { readFileSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import {
+  createPortableReleaseTrust,
+  portableReleaseTrustKeyId,
+  type VerifyPortableReleaseTrustOptions,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -246,10 +252,64 @@ function attestedFailureCode(
   }
 }
 
+function releaseTrustedSidecar(): {
+  readonly manifest: Record<string, unknown>;
+  readonly options: VerifyPortableReleaseTrustOptions;
+} {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
+  const sidecar = sidecarRuntime(evaluationSigning());
+  return {
+    manifest: createPortableReleaseTrust(
+      {
+        release: { releaseId: 123 },
+        sidecarRuntimes: [sidecar],
+        releaseImpact: { reviewedBinding: { sidecarRuntimes: [sidecar] } },
+      },
+      {
+        privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+        metadataVersion: 123,
+        signedAt: "2026-10-20T00:00:00.000Z",
+        expiresAt: "2026-10-22T00:00:00.000Z",
+      },
+    ),
+    options: {
+      now: new Date("2026-10-21T00:00:00.000Z"),
+      trustedKeys: [{ keyId: portableReleaseTrustKeyId(publicKeyPem), publicKeyPem }],
+    },
+  };
+}
+
+describe("Keiko-authenticated macOS sidecar updates", () => {
+  it("accepts authenticated bytes while retaining negative platform qualification evidence", () => {
+    const { manifest, options } = releaseTrustedSidecar();
+    const verified = verifyPortableManifestSidecars(manifest, "macos-arm64", options);
+    expect(verified.sidecars).toHaveLength(1);
+    expect(verified.sidecars[0]?.availability).toMatchObject({
+      signatureVerified: false,
+      qualificationVerified: false,
+    });
+  });
+
+  it.each(["missing", "untrusted", "expired", "tampered"] as const)(
+    "refuses unsigned sidecar updates with %s release trust",
+    (fault) => {
+      const { manifest, options } = releaseTrustedSidecar();
+      if (fault === "missing") delete manifest.releaseTrust;
+      if (fault === "tampered") manifest.additional = "changed after signing";
+      const trustedKeys = fault === "untrusted" ? [] : options.trustedKeys;
+      const now = fault === "expired" ? new Date("2026-10-23T00:00:00.000Z") : options.now;
+      expect(() =>
+        verifyPortableManifestSidecars(manifest, "macos-arm64", { ...options, now, trustedKeys }),
+      ).toThrow(PortableSidecarVerificationError);
+    },
+  );
+});
+
 /**
- * THE STRUCTURAL PIN (ADR-0163 D9). The update/promotion entry point takes no lane parameter, and
- * the activation entry point's lane defaults closed. The product may activate an unsigned sidecar;
- * it may never self-update from one.
+ * THE STRUCTURAL PIN (ADR-0163 D9). Unauthenticated evaluation updates remain refused, and the
+ * activation entry point defaults closed. Only whole-manifest Keiko release authentication can
+ * admit macOS update bytes without Apple evidence; it grants no Coding qualification.
  */
 describe("the evaluation lane is reachable only from the activation entry point", () => {
   it("refuses an evaluation sidecar on the update path", () => {

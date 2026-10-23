@@ -105,7 +105,7 @@ const TOOL_INVOCATIONS = [
   {
     tool: "zizmor",
     fingerprints: [
-      "zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482",
+      "zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e",
       'version: "1.26.1"',
       "config: .github/zizmor.yml",
       "advanced-security: false",
@@ -115,7 +115,7 @@ const TOOL_INVOCATIONS = [
   {
     tool: "OSV Scanner",
     fingerprints: [
-      "google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc",
+      "google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36",
       "--config=osv-scanner.toml",
       "--recursive",
     ],

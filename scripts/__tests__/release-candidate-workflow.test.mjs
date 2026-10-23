@@ -76,7 +76,7 @@ describe("release candidate workflow", () => {
     );
     expect(token).toBeLessThan(apply);
     expect(tag.steps[token].uses).toBe(
-      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
     );
     expect(tag.steps[token].with).toStrictEqual({
       "client-id": "${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}",

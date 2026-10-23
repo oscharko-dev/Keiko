@@ -86,14 +86,22 @@ const WINDOWS_SUPPORT_LAUNCHER =
 function reportExtractionProgress(
   session: PortableUpdateStageInput,
   progress: ExtractionProgressState,
+  force = false,
 ): void {
+  const now = Date.now();
+  if (
+    !force &&
+    progress.completedBytes - progress.lastReportedBytes < 1024 * 1024 &&
+    now - progress.lastReportedAt < 1_000
+  )
+    return;
   reportPortableProgress(session, {
     phase: "staging",
     completedBytes: progress.completedBytes,
     totalBytes: session.candidate.portable?.uncompressedSizeBytes,
   });
   progress.lastReportedBytes = progress.completedBytes;
-  progress.lastReportedAt = Date.now();
+  progress.lastReportedAt = now;
 }
 
 export function managedRootFromPackageRoot(
@@ -481,7 +489,7 @@ async function extractArchive(
     if (rejectAbort !== undefined) session.signal?.removeEventListener("abort", rejectAbort);
     zip.close();
   }
-  reportExtractionProgress(session, progress);
+  reportExtractionProgress(session, progress, true);
   return hashTreeRecords(files);
 }
 

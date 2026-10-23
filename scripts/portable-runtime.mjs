@@ -171,7 +171,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 ]);
 
 const SECRET_PATTERNS = Object.freeze([
-  /sk-[\w-]{8,}/iu,
+  /(?<![\w-])sk-[\w-]{8,}/iu,
   /ghp_\w{8,}/iu,
   /github_pat_\w{82}/iu,
   /npm_[^\W_]{36}/iu,
@@ -539,6 +539,14 @@ function validateArtifact(manifest, failures, options) {
   validateAssetIdentity(assetId, failures, options);
   if (numberAt(artifact, "sizeBytes", "artifact", failures) === 0) {
     push(failures, "artifact.sizeBytes", "must be greater than 0");
+  }
+  const expanded = artifact?.uncompressedSizeBytes;
+  if (!Number.isSafeInteger(expanded) || expanded <= 0 || expanded > 2 ** 31) {
+    push(
+      failures,
+      "artifact.uncompressedSizeBytes",
+      "must be a positive safe integer at most 2 GiB",
+    );
   }
   digestAt(artifact, "sha256", "artifact", failures, options);
   if (stringAt(artifact, "archiveFormat", "artifact", failures) !== "zip") {
@@ -2242,8 +2250,26 @@ function scanForbiddenString(value, path, failures) {
     push(failures, path, "contains secret-like or private-path text");
   }
   for (const part of FORBIDDEN_PATH_PARTS) {
-    if (value.includes(part)) push(failures, path, `contains forbidden payload reference ${part}`);
+    if (forbiddenPayloadReference(value, path, part))
+      push(failures, path, `contains forbidden payload reference ${part}`);
   }
+}
+
+function forbiddenPayloadReference(value, path, part) {
+  // A signed catalog describes public store names and release notes. These fields
+  // do not select payload files. Credentials, private paths and relative state
+  // paths remain forbidden, as do unknown fields and every artifact/path field.
+  const publicCatalogText =
+    /^manifest\.releaseImpact\.catalog\.entries\[\d+\]\.(?:id|userVisibleSummary|releaseNoteBullets\[\d+\]|review\.rationale|affectedStateStores\[\d+\]|stateImpact\[\d+\]\.(?:store|description)|breakingException\.(?:rationale|warningText)|correctionRationale)$/u.test(
+      path,
+    );
+  if (!publicCatalogText) return value.includes(part);
+  return (
+    value.includes(`${part}/`) ||
+    value.includes(`${part}\\`) ||
+    value.includes(`/${part}`) ||
+    value.includes(`\\${part}`)
+  );
 }
 
 function normalizedValidationOptions(options) {

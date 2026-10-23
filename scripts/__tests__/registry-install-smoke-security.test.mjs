@@ -80,6 +80,7 @@ import {
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+const CANVAS_VERSION = ROOT_MANIFEST.overrides["@napi-rs/canvas"];
 
 const SMOKE_INVOCATION = /npm run smoke:install(?::optional)?/u;
 // This proof copies and archives the complete staged product. The synchronous npm child cannot
@@ -1507,7 +1508,12 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.9", { manifest: stubManifest(name, "1.0.9"), name, version: "1.0.9" }]]),
+          new Map([
+            [
+              CANVAS_VERSION,
+              { manifest: stubManifest(name, CANVAS_VERSION), name, version: CANVAS_VERSION },
+            ],
+          ]),
         ],
       ]);
     try {
@@ -1524,7 +1530,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       // A binding for a platform this host is not: still shareable, still published.
       const foreign = written(stubbed("@napi-rs/canvas-android-arm64"));
-      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.9"]).toBeDefined();
+      expect(foreign["@napi-rs/canvas-android-arm64"]?.[CANVAS_VERSION]).toBeDefined();
 
       // And this host's own binding, which the lockfile pins to this platform.
       const own = `@napi-rs/canvas${hostBindingSuffixes().at(-1)}`;
@@ -1670,7 +1676,12 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.9", { manifest: stubManifest(name, "1.0.9"), name, version: "1.0.9" }]]),
+          new Map([
+            [
+              CANVAS_VERSION,
+              { manifest: stubManifest(name, CANVAS_VERSION), name, version: CANVAS_VERSION },
+            ],
+          ]),
         ],
       ]);
 
