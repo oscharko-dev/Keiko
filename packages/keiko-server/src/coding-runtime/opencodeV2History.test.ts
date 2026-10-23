@@ -861,6 +861,25 @@ describe("OpenCode V2 live streamed text", () => {
       expect(Buffer.byteLength(shown, "utf8")).toBe(65_536);
       expect(live.pull([part("text", "a".repeat(65_536))])).toEqual([]);
     });
+
+    it("cuts a finished answer longer than the part bound where the stream stopped and never fails the read", () => {
+      const captureMessages = vi.fn((): boolean => true);
+      const live = streaming({ runId: "run-live", activityLog: undefined, captureMessages });
+      live.start("text", 0);
+      for (let sent = 0; sent < 7; sent += 1) live.delta("text", 0, "é".repeat(5_000));
+
+      const shown = growth(live.pull([empty("text")]), "text").join("");
+      const finished = "é".repeat(35_000);
+
+      expect(Buffer.byteLength(shown, "utf8")).toBe(65_536);
+      // The finished part is longer than the bound; the timeline shows the same prefix it showed
+      // and adds nothing, while Coding History records the part the runtime persisted, whole.
+      expect(live.pull([part("text", finished)])).toEqual([]);
+      expect(captureMessages).toHaveBeenLastCalledWith([
+        { messageId: "msg_user", role: "user", content: "Task" },
+        { messageId: ASSISTANT, role: "assistant", content: finished },
+      ]);
+    });
   });
 
   describe("a character split between two deltas", () => {
@@ -1310,4 +1329,568 @@ it("preserves only the original native execute parent in the captured inactive p
       undefined,
     ),
   ).toThrow("opencode-v2-tool-invalid");
+});
+
+// OpenCode 2.1.4 message shapes (#3897). Every message below is a synthetic message that is valid
+// against the pinned runtime's `Session.Message.*` schemas (upstream OpenAPI, raw digest in
+// opencodeRuntimeVersions.ts), carrying no customer content. 2.1.4 renamed the provider replay
+// state of an assistant message and of a compaction to `native`, dropped the compaction tail
+// (`recent`, `providerContext`), and widened `Session.StructuredError` with `response` and
+// `retryAfterMs`. The 2.0.10 npm runtime stays admitted, so both layouts are accepted, each strictly.
+function historySafeCode(run: () => unknown): string | undefined {
+  try {
+    run();
+    return undefined;
+  } catch (error) {
+    return error instanceof OpenCodeV2HistoryError
+      ? error.safeCode
+      : `unexpected:${error instanceof Error ? error.message : "non-error"}`;
+  }
+}
+
+const USAGE_2_1_4 = { input: 11, output: 7, reasoning: 3, cache: { read: 5, write: 2 } };
+const STRUCTURED_ERROR_2_1_4 = {
+  type: "ProviderError",
+  message: "PRIVATE_PROVIDER_MESSAGE",
+  status: 429,
+  response: { body: "PRIVATE_PROVIDER_BODY" },
+  retryAfterMs: 1_500,
+};
+
+function compaction214(
+  status: "running" | "completed" | "failed",
+  fields: Readonly<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  const base = {
+    id: "msg_PRIVATE_COMPACTION_ID",
+    type: "compaction",
+    time: { created: 2 },
+    status,
+    reason: "auto",
+  };
+  if (status === "running") return { ...base, summary: "", ...fields };
+  if (status === "failed") {
+    return { ...base, error: STRUCTURED_ERROR_2_1_4, cost: 0.001, tokens: USAGE_2_1_4, ...fields };
+  }
+  return {
+    ...base,
+    summary: "PRIVATE_COMPACTION_SUMMARY",
+    model: { id: "PRIVATE_MODEL", providerID: "PRIVATE_PROVIDER", variant: "PRIVATE_VARIANT" },
+    native: { PRIVATE_NATIVE: "PRIVATE_NATIVE_STATE" },
+    cost: 0.0123,
+    tokens: USAGE_2_1_4,
+    metadata: { recent: "PRIVATE_MIGRATED_RECENT" },
+    ...fields,
+  };
+}
+
+describe("OpenCode 2.1.4 compaction history (#3897)", () => {
+  it("projects a running and a completed compaction once each, without inventing a tail or exposing content", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    let checkpoint: number | undefined;
+    for (const message of [compaction214("running"), compaction214("completed")]) {
+      const events = projection.project("ses_compaction", [message], checkpoint);
+      for (let replay = 0; replay < 2; replay += 1) {
+        const applied = reconciler.ingest(events);
+        if (!applied.ok) throw new Error("expected admitted compaction observations");
+        recordCompactionActivity(
+          { activityLog: sink, correlationId: "run-v2-compaction" },
+          applied.projections,
+        );
+      }
+      checkpoint = reconciler.checkpoints().ses_compaction;
+      // The summary streams into the running message; it never re-emits the observation.
+      expect(
+        projection.project(
+          "ses_compaction",
+          [{ ...message, summary: "PRIVATE_UPDATED_SUMMARY" }],
+          checkpoint,
+        ),
+      ).toEqual([]);
+    }
+    const lines = sink.events.filter((line) => line.op === "coding-runtime.compaction");
+    expect(lines.map((line) => line.extra?.event)).toEqual(["started", "completed"]);
+    expect(new Set(lines.map((line) => line.extra?.compactionIdSha256)).size).toBe(1);
+    for (const line of lines) {
+      expectActivityLogProof(
+        "coding-runtime.compaction.emitted-line",
+        formatActivityLogProofLine(line),
+      );
+      expect(line.extra).not.toHaveProperty("overflow");
+      expect(line.extra).not.toHaveProperty("tailStartIdSha256");
+    }
+    expect(lines[0]?.extra).toMatchObject({ auto: true, retainedTail: false });
+    expect(JSON.stringify(lines)).not.toMatch(/PRIVATE_|summary|recent/u);
+  });
+
+  it("reads a manual compaction and a completed one that carries none of the optional payloads", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const bare = {
+      id: "msg_bare_compaction",
+      type: "compaction",
+      time: { created: 2 },
+      status: "completed",
+      reason: "manual",
+      summary: "",
+    };
+    const events = projection.project("ses_bare", [bare], undefined);
+    expect(events.flatMap((event) => event.compaction?.event ?? [])).toEqual(["completed"]);
+    const running = createOpenCodeV2HistoryProjection().project(
+      "ses_manual",
+      [compaction214("running", { reason: "manual" })],
+      undefined,
+    );
+    expect(running.flatMap((event) => event.compaction ?? [])).toEqual([
+      expect.objectContaining({ event: "started", auto: false, retainedTail: false }),
+    ]);
+  });
+
+  it("records a failed compaction that carries the producer's full structured error as body-free", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project("ses_compaction", [compaction214("failed")], undefined);
+    expect(events.find((event) => event.compaction !== undefined)).toMatchObject({
+      kind: "observation",
+      compaction: { event: "failed", finishReason: "error" },
+    });
+    const reconciler = createOpenCodeReconciler();
+    const applied = reconciler.ingest(events);
+    if (!applied.ok) throw new Error("expected admitted compaction failure observation");
+    recordCompactionActivity(
+      { activityLog: sink, correlationId: "run-v2-compaction" },
+      applied.projections,
+    );
+    expect(JSON.stringify([events, sink.events])).not.toMatch(/PRIVATE_|ProviderError/u);
+    expect(
+      events.some((event) => event.kind === "terminal" || event.kind === "terminal-failure"),
+    ).toBe(false);
+  });
+
+  it("keeps a later history pull alive after a compaction, whatever the layout", () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-after-compaction",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const user = { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" };
+    const answer = {
+      id: "msg_answer",
+      type: "assistant",
+      time: { created: 4 },
+      content: [{ type: "text", text: "Done" }],
+    };
+    const first = projection.project(
+      "ses_after",
+      [user, compaction214("running"), answer],
+      undefined,
+    );
+    const second = projection.project(
+      "ses_after",
+      [user, compaction214("completed"), answer],
+      first.at(-1)?.sequence,
+    );
+    expect(second.some((event) => event.compaction?.event === "completed")).toBe(true);
+  });
+
+  it.each([
+    [
+      "a running compaction carrying a completion payload",
+      compaction214("running", { native: {} }),
+    ],
+    ["a running compaction carrying usage", compaction214("running", { tokens: USAGE_2_1_4 })],
+    ["a running compaction without its summary", compaction214("running", { summary: undefined })],
+    [
+      "a completed compaction without its summary",
+      compaction214("completed", { summary: undefined }),
+    ],
+    ["a completed compaction with a non-text summary", compaction214("completed", { summary: 42 })],
+    [
+      "a completed 2.1.4 compaction that also carries the 2.0.10 tail",
+      compaction214("completed", { recent: "x" }),
+    ],
+    [
+      "a completed 2.1.4 compaction that also carries provider state",
+      compaction214("completed", { providerState: {} }),
+    ],
+    [
+      "a completed 2.1.4 compaction that also carries provider context",
+      compaction214("completed", { providerContext: {} }),
+    ],
+    ["a failed compaction carrying a summary", compaction214("failed", { summary: "x" })],
+    ["a failed compaction without its error", compaction214("failed", { error: undefined })],
+    ["a failed compaction with a bare error", compaction214("failed", { error: "PRIVATE" })],
+    [
+      "a failed compaction whose error is missing its message",
+      compaction214("failed", { error: { type: "x" } }),
+    ],
+    [
+      "a failed compaction with an unknown error field",
+      compaction214("failed", { error: { ...STRUCTURED_ERROR_2_1_4, extra: 1 } }),
+    ],
+    [
+      "a failed compaction with an out-of-range status",
+      compaction214("failed", { error: { ...STRUCTURED_ERROR_2_1_4, status: 42 } }),
+    ],
+    [
+      "a failed compaction with a negative retry delay",
+      compaction214("failed", { error: { ...STRUCTURED_ERROR_2_1_4, retryAfterMs: -1 } }),
+    ],
+    [
+      "a failed compaction whose response has an unknown field",
+      compaction214("failed", {
+        error: { ...STRUCTURED_ERROR_2_1_4, response: { body: "x", headers: {} } },
+      }),
+    ],
+    ["a compaction of an unknown status", compaction214("running", { status: "paused" })],
+    ["a compaction of an unknown reason", compaction214("running", { reason: "overflow" })],
+  ])("still refuses %s", (_name, message) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    expect(historySafeCode(() => projection.project("ses_compaction", [message], undefined))).toBe(
+      "reason=compaction-shape-invalid",
+    );
+  });
+
+  it.each(["running", "completed", "failed"] as const)(
+    "refuses an unknown field on a %s compaction with the closed unknown-field code",
+    (status) => {
+      const projection = createOpenCodeV2HistoryProjection();
+      const code = historySafeCode(() =>
+        projection.project(
+          "ses_compaction",
+          [compaction214(status, { injected: "PRIVATE" })],
+          undefined,
+        ),
+      );
+      expect(code).toMatch(
+        /^reason=event-unknown:eventSha256=[0-9a-f]{16}:role=compaction:extraCount=1:/u,
+      );
+      expect(code).not.toContain("PRIVATE");
+    },
+  );
+});
+
+function assistant214(fields: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    id: "msg_assistant",
+    type: "assistant",
+    time: { created: 2, streamed: 3, completed: 4 },
+    metadata: { PRIVATE_METADATA: true },
+    agent: "build",
+    model: { id: "PRIVATE_MODEL", providerID: "PRIVATE_PROVIDER", variant: "PRIVATE_VARIANT" },
+    content: [],
+    snapshot: { start: "snap_a", end: "snap_b", files: ["src/PRIVATE.ts"] },
+    finish: "stop",
+    rawFinish: "stop",
+    native: { PRIVATE_NATIVE: "PRIVATE_NATIVE_STATE" },
+    cost: 0.01,
+    tokens: USAGE_2_1_4,
+    ...fields,
+  };
+}
+
+describe("OpenCode 2.1.4 assistant message history (#3897)", () => {
+  const user = { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" };
+
+  it("accepts the 2.1.4 provider replay state `native` and the 2.0.10 `providerState`, each on its own", () => {
+    for (const state of [{ native: { opaque: true } }, { providerState: { opaque: true } }]) {
+      const { native: _native, ...withoutState } = assistant214();
+      const projection = createOpenCodeV2HistoryProjection();
+      const events = projection.project(
+        "ses_state",
+        [user, { ...withoutState, ...state }],
+        undefined,
+      );
+      expect(events.length).toBeGreaterThan(0);
+      expect(JSON.stringify(events)).not.toContain("opaque");
+    }
+  });
+
+  it("refuses a message that mixes the two layouts and an unknown field, by count and key digest only", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const pattern =
+      /^reason=event-unknown:eventSha256=[0-9a-f]{16}:role=assistant:extraCount=1:extraKeySha256=[0-9a-f]{16}$/u;
+    for (const fields of [{ providerState: { opaque: true } }, { PRIVATE_UNKNOWN: 1 }]) {
+      const code = historySafeCode(() =>
+        projection.project("ses_state", [user, assistant214(fields)], undefined),
+      );
+      expect(code).toMatch(pattern);
+      expect(code).not.toContain("PRIVATE");
+    }
+  });
+
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "refuses the inherited object name %s as a message type with the closed code",
+    (type) => {
+      const projection = createOpenCodeV2HistoryProjection();
+      expect(
+        historySafeCode(() =>
+          projection.project("ses_type", [{ id: "msg_x", type, time: { created: 1 } }], undefined),
+        ),
+      ).toBe("reason=event-unknown:type=unsupported");
+    },
+  );
+});
+
+describe("OpenCode 2.1.4 message type coverage (#3897)", () => {
+  const toolBase = { type: "tool", id: "call_1", name: "read", executed: true, native: {} };
+  const tools = [
+    {
+      ...toolBase,
+      id: "call_stream",
+      time: { created: 5 },
+      state: { status: "streaming", input: "{" },
+    },
+    {
+      ...toolBase,
+      id: "call_run",
+      time: { created: 5, ran: 6 },
+      state: { status: "running", input: { filePath: "a" }, metadata: { PRIVATE: 1 } },
+    },
+    {
+      ...toolBase,
+      id: "call_done",
+      time: { created: 5, ran: 6, completed: 7 },
+      state: {
+        status: "completed",
+        input: { filePath: "a" },
+        content: [
+          { type: "text", text: "PRIVATE_OUTPUT" },
+          { type: "file", uri: "file:///PRIVATE", mime: "text/plain", name: null },
+        ],
+        metadata: { PRIVATE: 1 },
+      },
+    },
+    {
+      ...toolBase,
+      id: "call_failed",
+      time: { created: 5, ran: 6, completed: 7 },
+      state: {
+        status: "error",
+        input: { filePath: "a" },
+        error: STRUCTURED_ERROR_2_1_4,
+        content: [{ type: "text", text: "PRIVATE_OUTPUT" }],
+        metadata: { PRIVATE: 1 },
+      },
+    },
+  ];
+
+  // One message of every `Session.Message.Info` variant, each with every optional field set.
+  const history: readonly Record<string, unknown>[] = [
+    {
+      id: "msg_agent",
+      type: "agent-switched",
+      time: { created: 0 },
+      metadata: {},
+      agent: "plan",
+      previous: "build",
+    },
+    {
+      id: "msg_model",
+      type: "model-switched",
+      time: { created: 0 },
+      metadata: {},
+      model: { id: "m2", providerID: "p", variant: "v" },
+      previous: { id: "m1", providerID: "p" },
+    },
+    {
+      id: "msg_location",
+      type: "location-switched",
+      time: { created: 0 },
+      metadata: {},
+      projectID: "prj_1",
+      subpath: "packages/a",
+      location: { directory: "/workspace" },
+      previous: { location: { directory: "/other" }, projectID: "prj_0", subpath: "b" },
+    },
+    {
+      id: "msg_user",
+      type: "user",
+      time: { created: 1 },
+      metadata: {},
+      text: "Task",
+      files: [
+        {
+          data: "AAAA",
+          mime: "text/plain",
+          source: { type: "inline" },
+          name: "a",
+          description: "d",
+          mention: { start: 0, end: 1, text: "a" },
+        },
+      ],
+      agents: [{ name: "build", mention: { start: 0, end: 1, text: "a" } }],
+      skills: [{ id: "s", name: "skill", text: "t", mention: { start: 0, end: 1, text: "a" } }],
+    },
+    {
+      id: "msg_synthetic",
+      type: "synthetic",
+      time: { created: 1 },
+      metadata: {},
+      text: "note",
+      description: "d",
+    },
+    {
+      id: "msg_system",
+      type: "system",
+      time: { created: 1 },
+      metadata: {},
+      text: "note",
+      description: "d",
+    },
+    {
+      id: "msg_skill",
+      type: "skill",
+      time: { created: 1 },
+      metadata: {},
+      skill: "s",
+      name: "skill",
+      text: "t",
+    },
+    {
+      id: "msg_shell",
+      type: "shell",
+      time: { created: 1, completed: 2 },
+      metadata: {},
+      shellID: "sh_1",
+      command: "ls",
+      status: "exited",
+      exit: "NaN",
+      output: { output: "PRIVATE_SHELL_OUTPUT", cursor: 0, size: 4, truncated: false },
+    },
+    compaction214("completed"),
+    assistant214({
+      content: [
+        {
+          type: "reasoning",
+          text: "Thinking",
+          native: {},
+          time: { created: 2, completed: 3 },
+        },
+        { type: "text", text: "Answer", native: {} },
+        ...tools,
+      ],
+      error: STRUCTURED_ERROR_2_1_4,
+      retry: { attempt: 2, at: 2_000, error: STRUCTURED_ERROR_2_1_4 },
+    }),
+    {
+      id: "msg_idle",
+      type: "idle",
+      time: { created: 9 },
+      metadata: {},
+      outcome: "failed",
+      error: STRUCTURED_ERROR_2_1_4,
+    },
+  ];
+
+  it("projects a history holding one message of every 2.1.4 type, body-free", () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-coverage",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const events = projection.project("ses_coverage", history, undefined);
+    const signals = events.map((event) => projection.takeSignal(event));
+    expect(
+      signals.flatMap((signal) => (signal?.kind === "tool" ? [[signal.callId, signal.state]] : [])),
+    ).toEqual([
+      ["call_stream", "pending"],
+      ["call_run", "running"],
+      ["call_done", "succeeded"],
+      ["call_failed", "failed"],
+    ]);
+    expect(signals).toContainEqual(expect.objectContaining({ kind: "text", text: "Answer" }));
+    expect(events.at(-1)?.kind).toBe("terminal-failure");
+    expect(JSON.stringify({ events, signals })).not.toContain("PRIVATE");
+  });
+
+  it.each(history.map((message) => [message.type as string, message] as const))(
+    "refuses an unknown field on a %s message with the closed unknown-field code",
+    (type, message) => {
+      const projection = createOpenCodeV2HistoryProjection({
+        runId: "run-coverage",
+        activityLog: undefined,
+        toolProfile: "native",
+      });
+      const code = historySafeCode(() =>
+        projection.project(
+          "ses_coverage",
+          [history[3] ?? message, { ...message, injected: 1 }],
+          undefined,
+        ),
+      );
+      expect(code).toMatch(new RegExp(`:role=${type}:extraCount=1:`, "u"));
+    },
+  );
+});
+
+describe("OpenCode V2 assistant text over the part bound (#3897)", () => {
+  const user = { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" };
+  const answer = (text: string): Record<string, unknown> => ({
+    id: "msg_assistant",
+    type: "assistant",
+    time: { created: 2 },
+    content: [{ type: "text", text }],
+  });
+
+  it.each([
+    ["two-byte", "é"],
+    ["three-byte", "€"],
+    ["four-byte", "𝒳"],
+  ])(
+    "projects a long answer of %s characters up to the bound and never fails the read",
+    (_name, character) => {
+      const captureMessages = vi.fn((): boolean => true);
+      const projection = createOpenCodeV2HistoryProjection({
+        runId: "run-long-answer",
+        activityLog: undefined,
+        captureMessages,
+      });
+      const long = character.repeat(70_000);
+
+      const events = projection.project("ses_long", [user, answer(long)], undefined);
+      const text = events
+        .map((event) => projection.takeSignal(event))
+        .find((signal) => signal?.kind === "text" && signal.messageId === "msg_assistant");
+
+      const bytes = text?.kind === "text" ? Buffer.byteLength(text.text, "utf8") : 0;
+      expect(bytes).toBeLessThanOrEqual(65_536);
+      expect(bytes).toBeGreaterThan(65_536 - Buffer.byteLength(character, "utf8"));
+      expect(text?.kind === "text" && text.text.length % character.length).toBe(0);
+      // The stored conversation is the part the runtime persisted, whole.
+      expect(captureMessages).toHaveBeenLastCalledWith([
+        { messageId: "msg_user", role: "user", content: "Task" },
+        { messageId: "msg_assistant", role: "assistant", content: long },
+      ]);
+      // A longer answer shows the same prefix: the cut is stable, nothing is emitted again.
+      expect(
+        projection.project("ses_long", [user, answer(`${long}more`)], events.at(-1)?.sequence),
+      ).toEqual([]);
+    },
+  );
+
+  it("grows a long answer to the bound and then holds it", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    let checkpoint: number | undefined;
+    const shown: string[] = [];
+    for (const length of [10_000, 65_000, 65_536, 90_000]) {
+      const events = projection.project("ses_grow", [user, answer("a".repeat(length))], checkpoint);
+      for (const event of events) {
+        const signal = projection.takeSignal(event);
+        if (signal?.kind === "text" && signal.messageId === "msg_assistant")
+          shown.push(signal.text);
+      }
+      checkpoint = events.at(-1)?.sequence ?? checkpoint;
+    }
+    expect(shown.map((text) => text.length)).toEqual([10_000, 55_000, 536]);
+  });
+
+  it("still refuses a user message over the part bound, which Keiko itself never sends", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const oversized = { ...user, text: "u".repeat(65_537) };
+    expect(() => projection.project("ses_user", [oversized], undefined)).toThrow(
+      "opencode-v2-text-oversized",
+    );
+  });
 });

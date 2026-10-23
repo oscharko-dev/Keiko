@@ -2,7 +2,6 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -21,6 +20,9 @@ import type {
 } from "./opencodeReconciler.js";
 import {
   createOpenCodeV2LiveText,
+  fittingUtf8Prefix,
+  MAX_LIVE_REASONING_UTF8_BYTES,
+  MAX_LIVE_TEXT_UTF8_BYTES,
   type LiveTextKind,
   type OpenCodeV2LiveText,
 } from "./opencodeV2LiveText.js";
@@ -154,61 +156,97 @@ export class OpenCodeV2HistoryError extends Error {
   }
 }
 
-const MESSAGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  user: ["id", "metadata", "time", "text", "files", "agents", "skills", "type"],
+// The exact top-level fields each message type may carry, from the upstream `Session.Message.*`
+// schemas (`additionalProperties: false`). A type lists one field set per admitted runtime layout:
+// a message is admitted when its fields fit one set completely, so the layouts never mix.
+type FieldLayouts = readonly (readonly string[])[];
+
+/** A table keyed by untrusted text answers for its own entries only, never `constructor`. */
+function ownEntry<Value>(table: Readonly<Record<string, Value>>, key: string): Value | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+const ASSISTANT_FIELDS = [
+  "id",
+  "metadata",
+  "time",
+  "type",
+  "agent",
+  "model",
+  "content",
+  "snapshot",
+  "finish",
+  "rawFinish",
+  "cost",
+  "tokens",
+  "error",
+  "retry",
+];
+
+const COMPACTION_ENVELOPE_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
+
+type CompactionLayout = "current" | "legacy";
+
+// `Session.Message.Compaction.{Running,Completed,Failed}`, per runtime layout and status. The
+// current layout is OpenCode 2.1.4: the provider replay state is `native` and no tail is reported.
+// The legacy layout is the 2.0.10 npm runtime's: it carried the retained tail text (`recent`) and
+// its provider state (`providerState`, `providerContext`). Summary, error and provider bodies are
+// checked for shape only and never projected.
+const COMPACTION_LAYOUT_FIELDS: Readonly<
+  Record<CompactionLayout, Readonly<Record<string, readonly string[]>>>
+> = {
+  current: {
+    running: [...COMPACTION_ENVELOPE_FIELDS, "summary"],
+    completed: [...COMPACTION_ENVELOPE_FIELDS, "summary", "model", "native", "cost", "tokens"],
+    failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
+  },
+  legacy: {
+    running: [...COMPACTION_ENVELOPE_FIELDS, "summary", "recent"],
+    completed: [
+      ...COMPACTION_ENVELOPE_FIELDS,
+      "summary",
+      "recent",
+      "model",
+      "providerState",
+      "providerContext",
+      "cost",
+      "tokens",
+    ],
+    failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
+  },
+};
+
+const MESSAGE_FIELDS: Readonly<Record<string, FieldLayouts>> = {
+  user: [["id", "metadata", "time", "text", "files", "agents", "skills", "type"]],
   assistant: [
-    "id",
-    "metadata",
-    "time",
-    "type",
-    "agent",
-    "model",
-    "content",
-    "snapshot",
-    "finish",
-    "rawFinish",
-    "providerState",
-    "cost",
-    "tokens",
-    "error",
-    "retry",
+    // OpenCode 2.1.4 renamed the provider replay state of a message to `native`.
+    [...ASSISTANT_FIELDS, "native"],
+    [...ASSISTANT_FIELDS, "providerState"],
   ],
-  idle: ["id", "metadata", "time", "type", "outcome", "error"],
-  system: ["id", "metadata", "time", "type", "text", "description"],
-  synthetic: ["id", "metadata", "time", "type", "text", "description"],
-  shell: ["id", "metadata", "time", "type", "shellID", "command", "status", "exit", "output"],
-  skill: ["id", "metadata", "time", "type", "skill", "name", "text"],
-  "agent-switched": ["id", "metadata", "time", "type", "agent", "previous"],
-  "model-switched": ["id", "metadata", "time", "type", "model", "previous"],
+  idle: [["id", "metadata", "time", "type", "outcome", "error"]],
+  system: [["id", "metadata", "time", "type", "text", "description"]],
+  synthetic: [["id", "metadata", "time", "type", "text", "description"]],
+  shell: [["id", "metadata", "time", "type", "shellID", "command", "status", "exit", "output"]],
+  skill: [["id", "metadata", "time", "type", "skill", "name", "text"]],
+  "agent-switched": [["id", "metadata", "time", "type", "agent", "previous"]],
+  "model-switched": [["id", "metadata", "time", "type", "model", "previous"]],
   "location-switched": [
-    "id",
-    "metadata",
-    "time",
-    "type",
-    "projectID",
-    "subpath",
-    "location",
-    "previous",
+    ["id", "metadata", "time", "type", "projectID", "subpath", "location", "previous"],
   ],
+  // The union of every layout and status: the per-status layouts are enforced where the message is
+  // decoded (`compactionLayout`), so an unknown field is named here before any layout is chosen.
   compaction: [
-    "id",
-    "metadata",
-    "time",
-    "type",
-    "status",
-    "reason",
-    "model",
-    "providerState",
-    "summary",
-    "recent",
-    "providerContext",
-    "cost",
-    "tokens",
-    "error",
+    [
+      ...new Set(
+        Object.values(COMPACTION_LAYOUT_FIELDS).flatMap((statuses) =>
+          Object.values(statuses).flat(),
+        ),
+      ),
+    ],
   ],
 };
 
-const IDLE_ERROR_FIELDS: ReadonlySet<string> = new Set([
+const STRUCTURED_ERROR_FIELDS: ReadonlySet<string> = new Set([
   "type",
   "message",
   "status",
@@ -223,15 +261,27 @@ const IDLE_ERROR_FIELDS: ReadonlySet<string> = new Set([
  * body-free (#3897 review).
  */
 function assertIdleErrorShape(value: unknown): void {
-  if (value === undefined) return;
-  const error = record(value);
-  if (error === undefined || !isIdleErrorIdentity(error) || !isIdleErrorResponse(error.response))
+  if (value !== undefined && !isStructuredError(value))
     throw new OpenCodeV2HistoryError("reason=event-unknown:role=idle:error-shape=unsupported");
 }
 
-function isIdleErrorIdentity(error: Readonly<Record<string, unknown>>): boolean {
+/**
+ * `Session.StructuredError`, the one error shape every 2.1.4 message uses (a failed compaction
+ * carries it as well as an idle message). 2.0.10's error was the `type`, `message` and `status`
+ * subset of it, so one check serves both layouts.
+ */
+function isStructuredError(value: unknown): boolean {
+  const error = record(value);
   return (
-    Object.keys(error).every((key) => IDLE_ERROR_FIELDS.has(key)) &&
+    error !== undefined &&
+    hasStructuredErrorIdentity(error) &&
+    hasStructuredErrorResponse(error.response)
+  );
+}
+
+function hasStructuredErrorIdentity(error: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Object.keys(error).every((key) => STRUCTURED_ERROR_FIELDS.has(key)) &&
     typeof error.type === "string" &&
     typeof error.message === "string" &&
     (error.status === undefined || isHttpStatus(error.status)) &&
@@ -239,7 +289,7 @@ function isIdleErrorIdentity(error: Readonly<Record<string, unknown>>): boolean 
   );
 }
 
-function isIdleErrorResponse(value: unknown): boolean {
+function hasStructuredErrorResponse(value: unknown): boolean {
   if (value === undefined) return true;
   const response = record(value);
   return (
@@ -288,14 +338,29 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
     : undefined;
 }
 
+// The fields no admitted layout allows: none when the message fits one layout completely, otherwise
+// those of the closest layout (the first on a tie), which is what the safe code counts and digests.
+function unknownFields(
+  message: Readonly<Record<string, unknown>>,
+  layouts: FieldLayouts,
+): readonly string[] {
+  let closest: readonly string[] | undefined;
+  for (const allowed of layouts) {
+    const extra = Object.keys(message).filter((key) => !allowed.includes(key));
+    if (closest === undefined || extra.length < closest.length) closest = extra;
+    if (extra.length === 0) break;
+  }
+  return closest ?? [];
+}
+
 function assertMessageShape(message: Readonly<Record<string, unknown>>): void {
   const role = message.type;
   if (typeof role !== "string")
     throw new OpenCodeV2HistoryError("reason=event-unknown:type=unsupported");
-  const allowed = MESSAGE_FIELDS[role];
-  if (allowed === undefined)
+  const layouts = ownEntry(MESSAGE_FIELDS, role);
+  if (layouts === undefined)
     throw new OpenCodeV2HistoryError("reason=event-unknown:type=unsupported");
-  const extra = Object.keys(message).filter((key) => !allowed.includes(key));
+  const extra = unknownFields(message, layouts);
   if (extra.length === 0) {
     if (role === "idle") assertIdleErrorShape(message.error);
     return;
@@ -358,7 +423,8 @@ function textCandidate(
   occurredAt: string,
   capturedText: string = text,
 ): Candidate {
-  if (Buffer.byteLength(text, "utf8") > 65_536) throw new Error("opencode-v2-text-oversized");
+  if (Buffer.byteLength(text, "utf8") > MAX_LIVE_TEXT_UTF8_BYTES)
+    throw new Error("opencode-v2-text-oversized");
   const key = `${id}:text:${String(index)}`;
   // V2 starts streaming with an empty part. Reconcile its identity, but publish no empty text.
   if (text.length === 0) {
@@ -375,22 +441,15 @@ function textCandidate(
   };
 }
 
-// #3878: the live timeline shows at most CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES of a
-// message's reasoning, so a reasoning part is read up to twice that and no further: a long reasoner
-// neither fails the history read like an oversized answer nor costs a digest of its whole text on
-// every pull. The prefix grows with the part until the bound and then stays fixed.
-const MAX_PROJECTED_REASONING_UTF8_BYTES = 2 * CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES;
-
-function projectedReasoning(text: string): string {
-  if (Buffer.byteLength(text, "utf8") <= MAX_PROJECTED_REASONING_UTF8_BYTES) return text;
-  let used = 0;
-  let end = 0;
-  for (const character of text) {
-    used += Buffer.byteLength(character, "utf8");
-    if (used > MAX_PROJECTED_REASONING_UTF8_BYTES) break;
-    end += character.length;
-  }
-  return text.slice(0, end);
+// A part is read up to a bound and no further, cut at a whole character, so a long part neither
+// fails the history read nor costs a digest of its whole text on every pull. The prefix grows with the
+// part until the bound and then stays fixed, and it is the very prefix the live overlay keeps
+// (`opencodeV2LiveText.ts`). #3878: the live timeline shows at most
+// CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES of a message's reasoning, so a reasoning part is
+// read up to twice that (`MAX_LIVE_REASONING_UTF8_BYTES`). An answer part is read up to the part
+// bound (`MAX_LIVE_TEXT_UTF8_BYTES`), which the history of the answer used to refuse outright.
+function boundedPartText(text: string, maxBytes: number): string {
+  return Buffer.byteLength(text, "utf8") <= maxBytes ? text : fittingUtf8Prefix(text, maxBytes);
 }
 
 // OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content part. It
@@ -403,7 +462,7 @@ function reasoningCandidate(
   occurredAt: string,
 ): Candidate {
   const key = `${id}:reasoning:${String(index)}`;
-  const shown = projectedReasoning(text);
+  const shown = boundedPartText(text, MAX_LIVE_REASONING_UTF8_BYTES);
   if (shown.length === 0) return candidate(key, "observation", shown);
   return candidate(key, "observation", shown, {
     kind: "reasoning",
@@ -594,7 +653,11 @@ function assistantPartCandidates(
 ): readonly Candidate[] {
   const part = record(value);
   if (part?.type === "text" && typeof part.text === "string") {
-    const shown = shownPartText(context, messageId, "text", part.text);
+    // The timeline shows an answer up to the part bound; Coding History keeps the part whole.
+    const shown = boundedPartText(
+      shownPartText(context, messageId, "text", part.text),
+      MAX_LIVE_TEXT_UTF8_BYTES,
+    );
     return [textCandidate(messageId, index, shown, occurredAt, part.text)];
   }
   if (part?.type === "reasoning" && typeof part.text === "string") {
@@ -606,72 +669,43 @@ function assistantPartCandidates(
   return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
 }
 
-const NATIVE_COMPACTION_COMMON_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
-// Admitted pinned V2 lifecycle variants. Optional provider/usage payloads are not decoded.
-// Summary/error bodies are checked only for shape, never projected.
-const NATIVE_COMPACTION_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  running: [...NATIVE_COMPACTION_COMMON_FIELDS, "summary", "recent"],
-  completed: [
-    ...NATIVE_COMPACTION_COMMON_FIELDS,
-    "summary",
-    "recent",
-    "model",
-    "providerState",
-    "providerContext",
-    "cost",
-    "tokens",
-  ],
-  failed: [...NATIVE_COMPACTION_COMMON_FIELDS, "error", "cost", "tokens"],
-};
-
-function assertNativeCompactionShape(message: Readonly<Record<string, unknown>>): void {
-  const allowed =
-    typeof message.status === "string" ? NATIVE_COMPACTION_FIELDS[message.status] : undefined;
-  if (
-    allowed === undefined ||
-    (message.reason !== "auto" && message.reason !== "manual") ||
-    Object.keys(message).some((key) => !allowed.includes(key))
-  ) {
-    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
-  }
+/**
+ * The layout a compaction message fits, strictly: its fields all belong to its status in that layout
+ * and the fields the decoder reads are present with their schema types. `undefined` when no admitted
+ * layout fits, so a message mixing the two, or missing a required field, is refused.
+ */
+function compactionLayout(
+  message: Readonly<Record<string, unknown>>,
+): CompactionLayout | undefined {
+  const { status, reason } = message;
+  if (typeof status !== "string" || (reason !== "auto" && reason !== "manual")) return undefined;
+  const layouts: readonly CompactionLayout[] = ["current", "legacy"];
+  return layouts.find((layout) => compactionFitsLayout(message, status, layout));
 }
 
-function nativeCompactionRecent(message: Readonly<Record<string, unknown>>): string {
-  const recent = message.recent;
-  if (typeof message.summary !== "string" || typeof recent !== "string") {
-    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
-  }
-  return recent;
-}
-
-function validNativeCompactionErrorStatus(status: unknown): boolean {
+function compactionFitsLayout(
+  message: Readonly<Record<string, unknown>>,
+  status: string,
+  layout: CompactionLayout,
+): boolean {
+  const allowed = ownEntry(COMPACTION_LAYOUT_FIELDS[layout], status);
+  if (allowed === undefined || Object.keys(message).some((key) => !allowed.includes(key)))
+    return false;
+  if (status === "failed") return isStructuredError(message.error);
   return (
-    status === undefined ||
-    (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599)
+    typeof message.summary === "string" &&
+    (layout === "current" || typeof message.recent === "string")
   );
-}
-
-function assertNativeCompactionError(message: Readonly<Record<string, unknown>>): void {
-  const error = record(message.error);
-  if (
-    error === undefined ||
-    typeof error.type !== "string" ||
-    typeof error.message !== "string" ||
-    !validNativeCompactionErrorStatus(error.status) ||
-    Object.keys(error).some((key) => !["type", "message", "status"].includes(key))
-  ) {
-    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
-  }
 }
 
 function nativeCompactionActivity(
   message: Readonly<Record<string, unknown>>,
   id: string,
 ): OpenCodeCompactionActivity {
-  assertNativeCompactionShape(message);
+  const layout = compactionLayout(message);
+  if (layout === undefined) throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
   const compactionIdSha256 = createHash("sha256").update(id, "utf8").digest("hex");
   if (message.status === "failed") {
-    assertNativeCompactionError(message);
     return {
       event: "failed",
       compactionIdSha256,
@@ -679,16 +713,14 @@ function nativeCompactionActivity(
       finishReason: "error",
     };
   }
-  const recent = nativeCompactionRecent(message);
   if (message.status === "completed") return { event: "completed", compactionIdSha256 };
   const auto = message.reason === "auto";
-  if (recent === "") return { event: "started", compactionIdSha256, auto, retainedTail: false };
-  return {
-    event: "tail-retained",
-    compactionIdSha256,
-    auto,
-    retainedTail: true,
-  };
+  // Only the 2.0.10 runtime reports the tail it retained (`recent`, empty until it chose one);
+  // 2.1.4 reports none, and a tail it did not report is not invented.
+  if (layout === "legacy" && message.recent !== "") {
+    return { event: "tail-retained", compactionIdSha256, auto, retainedTail: true };
+  }
+  return { event: "started", compactionIdSha256, auto, retainedTail: false };
 }
 
 function nativeCompactionCandidate(
