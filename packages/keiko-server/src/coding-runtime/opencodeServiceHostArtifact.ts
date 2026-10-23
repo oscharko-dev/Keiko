@@ -190,14 +190,22 @@ export function createOpenCodeServiceHostNativePolicyAssets(): readonly Readonly
   readonly source: URL;
 }>[] {
   const owner = import.meta.resolve("@oscharko-dev/keiko-workspace");
-  return Object.freeze(
-    ["ignore.js", "boundedMemo.js"].map((filename) =>
+  // `ignore.js` imports the shared sensitive-path list from its sibling `sensitivePathPatterns.js`;
+  // the bundle stages the compiled contracts module itself under that name, so the self-contained
+  // policy reads the one list without package resolution (#3897).
+  const patterns = import.meta.resolve("@oscharko-dev/keiko-contracts/sensitive-path-patterns");
+  return Object.freeze([
+    ...["ignore.js", "boundedMemo.js"].map((filename) =>
       Object.freeze({
         filename: `keiko-workspace-path-policy/${filename}`,
         source: new URL(`./${filename}`, owner),
       }),
     ),
-  );
+    Object.freeze({
+      filename: "keiko-workspace-path-policy/sensitivePathPatterns.js",
+      source: new URL(patterns),
+    }),
+  ]);
 }
 
 /** Fixed sibling asset descriptor; bytes are the entire canonical compiled protocol producer. */

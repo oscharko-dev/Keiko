@@ -698,6 +698,7 @@ describe("inactive artifact-owned fixed host packet", () => {
     expect(policy.map((asset) => asset.filename)).toEqual([
       "keiko-workspace-path-policy/ignore.js",
       "keiko-workspace-path-policy/boundedMemo.js",
+      "keiko-workspace-path-policy/sensitivePathPatterns.js",
     ]);
   });
 });
