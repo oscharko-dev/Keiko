@@ -31,7 +31,8 @@
     },
     "@opencode/core@2.0.10": {
       "@parcel/watcher": "2.6.0"
-    }
+    },
+    "zod": "4.6.6"
   },
   "version": "0.0.0-private",
   "license": "Apache-2.0"
