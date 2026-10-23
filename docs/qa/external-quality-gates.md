@@ -35,8 +35,12 @@ workflow, validator, package command, or protected context.
 
 ## Repository-owned enforcement
 
-- Fallow rejects every semantic clone group introduced by the diff at the governed token and line
-  floors.
+- Fallow 3.34.0 rejects every semantic clone group introduced by the diff at the governed token
+  and line floors. This security pin fixes out-of-root analysis reads; optional type-aware
+  analysis remains outside this command. The repository command reads native audit attribution
+  against the immutable comparison commit and fails on any introduced group, even when Fallow
+  returns a warning with exit zero. Inherited findings are context, not a stored exemption; a new
+  copy added to an existing group must fail. Analyzer failures and invalid reports fail closed.
 - The checksum-pinned Gitleaks binary rejects secrets anywhere in the pull-request commit range and
   emits fully redacted diagnostics.
 - Strict TypeScript, ESLint, formatting, architecture, contract, coverage, package, security,
@@ -50,7 +54,8 @@ workflow, validator, package command, or protected context.
   `npm run test:e2e:editor-run-verification-2215`, `npm run test:e2e:editor-debugging-2348`, and
   `npm run test:e2e:editor-m11-closeout-2533`.
 - `check:external-quality-config` semantically validates CodeRabbit's no-write, every-update,
-  no-excluded-author policy and verifies that required `ci` still runs the repository-owned gates.
+  no-excluded-author policy, the closed Fallow duplicate settings and exact command, and verifies
+  that required `ci` still runs the repository-owned gates.
 - `check:review-bot-suppression` rejects pull-request metadata that asks CodeRabbit to ignore,
   pause, or resolve review.
 

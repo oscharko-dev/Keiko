@@ -42,7 +42,8 @@ The existing `fast-uri` override now resolves 3.1.9. Root development tooling re
 existing scoped override mechanism to resolve their Zod dependencies to 4.6.7. This deliberately
 changes GitLab's declared Zod 3 range and requires its real JavaScript compatibility proofs;
 it does not establish compatibility of that dependency's published TypeScript declarations.
-The same pinned recursive OSV command reports zero unwaived findings with these lockfiles.
+An initial run of the same pinned recursive OSV command reported zero unwaived findings;
+a subsequent fresh scan found the Fallow advisories recorded below.
 
 GitHub withdrew the previously waived [braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
 on 2026-10-23. Its now-unused ignore has been removed; that withdrawal is not a patched braces
@@ -228,7 +229,7 @@ or peer graph).
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `fast-uri`                    | root                  | 3.1.9   | current        | Patch for the four advisories reviewed on 2026-10-23 and earlier findings; exact OSV 2.6.0 scan passes. PR #4013.                                                                                                                                                                                            |
-| `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                        |
+| `undici`                      | root                  | 8.12.2  | current        | Same-major security update for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The other existing override moves to 7.30.1; native host resolutions move to 6.29.1 and 8.12.2. PR #4013.                                                                                                   |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                       |
@@ -276,7 +277,7 @@ or peer graph).
 | `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                                                                                                                                                                                                                                               |
 | `knip`                        | root                  | 6.35.1  | patch-deferred | Adds analysis fixes and makes plugin-config load failures fail distinctly. The later 6.36 line was not part of the reviewed Dependabot queue and remains a separate update.                                                                                                                                  |
 | `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                       |
-| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.                                                                                                                                                                                                                       |
+| `fallow`                      | root                  | 3.34.0  | current        | Security update for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5, both fixed in 3.34.0. Existing semantic duplicate command and token/line floors remain unchanged. PR #4013.                                                                                                                                 |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.9   | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.28  | current        | Root override; audit reports no known vulnerability.                                                                                                                                                                                                                                                         |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                         |
@@ -295,6 +296,28 @@ was missing from the table entirely while eleven minor releases behind. `check:d
 cannot catch this class either, by design: it compares the document against the lockfile and never
 contacts a registry, so it proves the record describes this checkout, never that the checkout is
 current. Cross-check individual root devDependencies before claiming a clean sweep.
+
+On 2026-10-23, a fresh local recursive OSV scan found two newly reviewed advisories in
+Fallow 3.9.1: [GHSA-h4fr-cmh5-qr62](https://github.com/advisories/GHSA-h4fr-cmh5-qr62)
+and [GHSA-jfwm-3p3c-6hx5](https://github.com/advisories/GHSA-jfwm-3p3c-6hx5).
+Both identify 3.34.0 as patched. The exact development-tool pin and its configuration
+validator now require 3.34.0. The semantic duplication policy retains its existing
+100-token and 10-line floors, semantic mode, two-occurrence minimum and import exclusion.
+Actual comparison of the old and patched tools exposed a pre-existing enforcement defect:
+3.9.1 reported clone groups but ignored the standalone failure flag. The repository command
+now uses native audit attribution and explicitly rejects nonzero introduced-group counts;
+audit's warning exit alone is insufficient. This implements the existing introduced-group
+policy without a persistent exemption baseline or an obligation to remove every inherited
+clone. It does not authorize optional type-aware analysis or waive either advisory.
+
+A subsequent fresh OSV scan identified newly reviewed Undici advisories
+[GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685),
+[GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472) and
+[GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c).
+Root jsdom tooling now resolves 8.12.2; its separate existing 7.x override is 7.30.1.
+The private native host uses version-specific overrides for its existing 6.29.0 and
+8.11.2 resolutions, selecting patched 6.29.1 and 8.12.2 without a major-version
+migration. No advisory waiver, network authority or resource limit changes.
 
 ## GitHub Actions baseline
 

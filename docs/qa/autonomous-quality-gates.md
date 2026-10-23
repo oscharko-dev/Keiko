@@ -42,7 +42,8 @@ successful:
   base-revision classifier positively identifies every changed pull-request path as
   non-Windows-relevant; pushes, merge groups, and manual runs always use the full matrix;
 - the UI lint, typecheck, build, browser smoke, and release-evidence lane;
-- Fallow semantic duplicate analysis over changed files only; and
+- Fallow native audit attribution against the immutable comparison commit, with every introduced
+  semantic clone group rejected regardless of the analyzer's warning exit status; and
 - Gitleaks over every addition in the pull-request commit range, including intermediate commits.
 
 The aggregate permits only the documented editor fast-path and documentation-only skips. For a pull

@@ -69,10 +69,17 @@ be reconsidered only after a later live probe proves durable zero-cost, fail-clo
 
 ### D3 — Add zero-tolerance OSS gates for semantic clones and secrets
 
-Fallow 3.9.1 is exact-version locked and runs semantic duplicate analysis only over the changed
-surface. Any introduced semantic clone group of at least 100 tokens and 10 lines fails. Ignoring
-imports avoids punishing required module boilerplate while still detecting renamed-variable and
-restructured copy/paste that text-only duplication misses.
+Fallow 3.34.0 is exact-version locked. The repository command uses its native audit attribution
+against the immutable comparison commit and rejects every introduced semantic clone group of at
+least 100 tokens and 10 lines. A closed configuration preserves semantic mode, those floors,
+a minimum of two occurrences and import exclusion. Ignoring imports avoids punishing required
+module boilerplate while still detecting renamed-variable and restructured copy/paste that
+text-only duplication misses. The native report retains inherited classification, and adding another copy still fails.
+
+The command explicitly evaluates the native introduced-group count. Neither the old 3.9.1
+standalone command's successful exit nor audit's default warning exit proves zero introduced
+groups. A failed analyzer, invalid report or unresolved comparison fails the repository command;
+there is no percentage workaround, stored exemption baseline or acknowledgement path.
 
 Gitleaks 8.30.1 runs from an official checksum-pinned release binary, never from the non-OSS hosted
 action. It redacts all finding output and scans the complete pull-request commit range. That range

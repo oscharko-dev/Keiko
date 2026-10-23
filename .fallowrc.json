@@ -1,0 +1,9 @@
+{
+  "duplicates": {
+    "mode": "semantic",
+    "minTokens": 100,
+    "minLines": 10,
+    "minOccurrences": 2,
+    "ignoreImports": true
+  }
+}

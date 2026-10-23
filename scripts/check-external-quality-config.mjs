@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml } from "yaml";
 
+import { validateSemanticDuplicationConfig } from "./check-semantic-duplication.mjs";
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODERABBIT_POLICY_DIGEST = "13e8d44d1e01ad429bbb6961e28df6511f6737b6fdbfdfc6291e57bb0bf08688";
 const CODERABBIT_TEXT_CHECKS = [
@@ -59,6 +61,7 @@ function read(repoRoot, path) {
 export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
   return {
     ciWorkflow: read(repoRoot, ".github/workflows/ci.yml"),
+    fallowConfig: read(repoRoot, ".fallowrc.json"),
     codeRabbitConfig: read(repoRoot, ".coderabbit.yaml"),
     packageJson: read(repoRoot, "package.json"),
   };
@@ -137,10 +140,9 @@ function validateCodeRabbitConfig(source) {
 function validatePackage(packageJson) {
   const parsed = parseJsonObject(packageJson, "packageJson");
   if (parsed.value === undefined) return parsed.problems;
-  const duplicationCommand =
-    "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues";
+  const duplicationCommand = "node scripts/check-semantic-duplication.mjs";
   const checks = [
-    [parsed.value.devDependencies?.fallow, "3.9.1", "fallow must be pinned to 3.9.1"],
+    [parsed.value.devDependencies?.fallow, "3.34.0", "fallow must be pinned to 3.34.0"],
     [
       parsed.value.devDependencies?.yaml,
       "2.9.1",
@@ -219,9 +221,18 @@ function validateCiWorkflow(source) {
   return problems;
 }
 
+function validateFallowConfig(source) {
+  const parsed = parseJsonObject(source, "fallowConfig");
+  if (parsed.value === undefined) return parsed.problems;
+  return validateSemanticDuplicationConfig(parsed.value)
+    ? []
+    : ["semantic duplication configuration must retain the complete reviewed policy"];
+}
+
 export function validateExternalQualitySources(sources) {
   return [
     ...validatePackage(sources.packageJson),
+    ...validateFallowConfig(sources.fallowConfig),
     ...validateCodeRabbitConfig(sources.codeRabbitConfig),
     ...validateCiWorkflow(sources.ciWorkflow),
   ];

@@ -27,6 +27,8 @@ describe("external quality integration configuration", () => {
   it.each([
     ["codeRabbitConfig", ""],
     ["codeRabbitConfig", "reviews: ["],
+    ["fallowConfig", ""],
+    ["fallowConfig", "[]"],
     ["packageJson", ""],
     ["packageJson", '{"devDependencies":'],
   ])("returns a redacted finding for malformed %s input", (key, value) => {
@@ -62,6 +64,40 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects the vulnerable Fallow pin even when the duplication command stays intact", () => {
+    const parsed = JSON.parse(sources.packageJson);
+    parsed.devDependencies.fallow = "3.9.1";
+    expect(findings({ packageJson: JSON.stringify(parsed) })).toContain(
+      "fallow must be pinned to 3.34.0",
+    );
+  });
+
+  it("rejects exclusions, baselines, or weakened semantic duplication configuration", () => {
+    for (const change of [
+      { ignore: ["**/*"] },
+      { ignoredClones: ["dup:12345678:2"] },
+      { minOccurrences: 3 },
+      { minTokens: 101 },
+      { minLines: 11 },
+      { mode: "mild" },
+      { ignoreImports: false },
+    ]) {
+      const config = JSON.parse(sources.fallowConfig);
+      Object.assign(config.duplicates, change);
+      expect(findings({ fallowConfig: JSON.stringify(config) })).toContain(
+        "semantic duplication configuration must retain the complete reviewed policy",
+      );
+    }
+    expect(
+      findings({
+        fallowConfig: JSON.stringify({
+          ...JSON.parse(sources.fallowConfig),
+          audit: { dupesBaseline: "baseline.json" },
+        }),
+      }),
+    ).toContain("semantic duplication configuration must retain the complete reviewed policy");
+  });
+
   it("fails closed when package gate commands or dependencies drift", () => {
     const parsed = JSON.parse(sources.packageJson);
     delete parsed.devDependencies.fallow;
@@ -71,7 +107,7 @@ describe("external quality integration configuration", () => {
     parsed.scripts["check:semantic-duplication"] = "true";
     expect(findings({ packageJson: JSON.stringify(parsed) })).toEqual(
       expect.arrayContaining([
-        "fallow must be pinned to 3.9.1",
+        "fallow must be pinned to 3.34.0",
         "yaml must be pinned to 2.9.1 for semantic reviewer-policy validation",
         "check:external-quality-config script is missing or redirected",
         "check:review-bot-suppression script is missing or redirected",
