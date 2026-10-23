@@ -210,7 +210,13 @@ interface OpenCodeRuntimeComposition {
     }>;
   };
   readonly runPort: {
-    readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
+    readonly submitTask: (
+      runId: string,
+      text: string,
+      initialContext?: string,
+      agent?: "build" | "plan",
+    ) => Promise<boolean>;
+    readonly selectableAgents?: readonly ("build" | "plan")[] | undefined;
     readonly abortTask: (runId: string) => Promise<boolean>;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
@@ -252,7 +258,7 @@ interface OpenCodeRuntimeCompositionModule {
   createOpenCodeRuntimeComposition(input: {
     readonly activityLog?: ServerLogSink;
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
-    readonly toolProfile?: "direct" | "code-mode" | undefined;
+    readonly toolProfile?: "direct" | "code-mode" | "native" | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
@@ -290,7 +296,7 @@ interface OpenCodeRuntimeCompositionModule {
       ) => Promise<OpenCodeGovernedSinkReceipt>;
     };
     readonly safeActivity?: {
-      readonly arm: (sessionId?: string, profile?: "direct" | "code-mode") => void;
+      readonly arm: (sessionId?: string, profile?: "direct" | "code-mode" | "native") => void;
       readonly beginTool?: (input: {
         readonly actionId: string;
         readonly tool: string;
@@ -496,7 +502,7 @@ interface StartBridgeControl {
     readonly afterCreated?: () => void;
   };
   readonly toolFacadeCapability?: string;
-  readonly readToolProfile?: () => "direct" | "code-mode";
+  readonly readToolProfile?: () => "direct" | "code-mode" | "native";
   readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
   readonly onSpawn?: (() => void) | undefined;
   readonly stdinLifetime?: {
@@ -528,6 +534,13 @@ interface StartBridgeControl {
   readonly gatewayRefused?: boolean;
   readonly runControl?: {
     readonly promptBodies: string[];
+    /** Each `POST /api/session/{id}/agent`, with how many prompts had been posted before it. */
+    readonly agentRequests?: {
+      readonly path: string;
+      readonly body: string;
+      readonly promptsBefore: number;
+    }[];
+    readonly agentResponse?: () => Response;
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
     readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
@@ -830,6 +843,16 @@ async function startBridgeFixture(
       }
       return Promise.resolve(v2Envelope({}));
     }
+    if (path.endsWith("/agent")) {
+      control?.runControl?.agentRequests?.push({
+        path,
+        body: typeof init?.body === "string" ? init.body : "",
+        promptsBefore: control.runControl.promptBodies.length,
+      });
+      return Promise.resolve(
+        control?.runControl?.agentResponse?.() ?? new Response(null, { status: 204 }),
+      );
+    }
     if (path.endsWith("/interrupt")) {
       if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
       else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
@@ -886,7 +909,7 @@ async function startBridgeFixture(
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
-    get toolProfile(): "direct" | "code-mode" | undefined {
+    get toolProfile(): "direct" | "code-mode" | "native" | undefined {
       return control?.readToolProfile?.();
     },
     // #3897: the host environment is offered to every profile; only the native profile's
@@ -1140,7 +1163,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "a4d3734390c885a07a8b9e137ffadce69489f566094755ff1904f59824672375",
+      "9432dd292cbfdb7c20b2f6ca52e00b135bd75f2fdd0ea6d017bad2b471ac9b0f",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -5384,6 +5407,242 @@ it.each(["synchronous", "asynchronous"] as const)(
     }
   },
 );
+
+describe("primary agent selection on the run port (#3897)", () => {
+  const agentFacade: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+
+  // A submitted turn stays armed until it settles; an already-aborted wait settles it as not
+  // productive, which frees the run for the next submission without scripting a runtime history.
+  async function settleTurn(port: OpenCodeRuntimeComposition["runPort"]): Promise<void> {
+    await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+  }
+
+  function agentControl(extra: Partial<StartBridgeControl> = {}): {
+    readonly control: StartBridgeControl;
+    readonly agentRequests: NonNullable<
+      NonNullable<StartBridgeControl["runControl"]>["agentRequests"]
+    >;
+    readonly promptBodies: string[];
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+    readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+  } {
+    const agentRequests: NonNullable<
+      NonNullable<StartBridgeControl["runControl"]>["agentRequests"]
+    > = [];
+    const promptBodies: string[] = [];
+    const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const activityLog = createBufferedServerLogSink();
+    return {
+      agentRequests,
+      promptBodies,
+      activityLog,
+      diagnostics,
+      control: {
+        activityLog,
+        diagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+        runControl: { promptBodies, abortSessions: [], statusResponses: [{}], agentRequests },
+        ...extra,
+      },
+    };
+  }
+
+  it("lists plan only where the native service runs its own agent policy", async () => {
+    for (const [profile, expected] of [
+      ["native", ["build", "plan"]],
+      ["direct", ["build"]],
+      ["code-mode", ["build"]],
+    ] as const) {
+      const { control } = agentControl({ readToolProfile: () => profile });
+      const fixture = await startBridgeFixture(agentFacade, undefined, control);
+      try {
+        expect(fixture.runtime.runPort.selectableAgents).toEqual(expected);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  it("switches the session agent once, before the prompt, and not again for the same agent", async () => {
+    const { control, agentRequests, promptBodies, activityLog } = agentControl({
+      readToolProfile: () => "native",
+    });
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "outline it", undefined, "plan")).resolves.toBe(
+        true,
+      );
+      expect(agentRequests).toEqual([
+        { path: "/api/session/ses_tool/agent", body: '{"agent":"plan"}', promptsBefore: 0 },
+      ]);
+      expect(promptBodies).toEqual([JSON.stringify({ text: "outline it" })]);
+      await settleTurn(port);
+
+      // Same agent again, and an absent agent: the session already runs plan, so nothing is re-sent.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "refine it", undefined, "plan")).resolves.toBe(
+        true,
+      );
+      await settleTurn(port);
+      await expect(port.submitTask(FIXTURE_RUN_ID, "and again")).resolves.toBe(true);
+      await settleTurn(port);
+      expect(agentRequests).toHaveLength(1);
+      expect(promptBodies).toHaveLength(3);
+
+      // Back to the default agent is a switch of its own, again before its prompt.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "now build", undefined, "build")).resolves.toBe(
+        true,
+      );
+      expect(agentRequests.map(({ body, promptsBefore }) => ({ body, promptsBefore }))).toEqual([
+        { body: '{"agent":"plan"}', promptsBefore: 0 },
+        { body: '{"agent":"build"}', promptsBefore: 3 },
+      ]);
+
+      const lines = activityLog.events
+        .filter((event) => event.op === "coding-runtime.agent.selected")
+        .map((event) =>
+          expectActivityLogProof(
+            "coding-runtime.agent.selected.emitted-line",
+            formatActivityLogProofLine(event),
+          ),
+        );
+      expect(lines).toMatchObject([
+        {
+          correlationId: FIXTURE_RUN_ID,
+          runId: FIXTURE_RUN_ID,
+          agent: "plan",
+          previousAgent: "build",
+        },
+        {
+          correlationId: FIXTURE_RUN_ID,
+          runId: FIXTURE_RUN_ID,
+          agent: "build",
+          previousAgent: "plan",
+        },
+      ]);
+      expect(JSON.stringify(lines)).not.toMatch(/outline it|refine it|now build/u);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("issues no switch and leaves the prompt flow untouched when no agent is requested", async () => {
+    const { control, agentRequests, promptBodies, activityLog } = agentControl({
+      readToolProfile: () => "native",
+    });
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "plain task")).resolves.toBe(true);
+      await settleTurn(port);
+      // The default agent is what a fresh run already runs: naming it is not a switch either.
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "explicit build", undefined, "build"),
+      ).resolves.toBe(true);
+      expect(agentRequests).toEqual([]);
+      expect(promptBodies).toEqual([
+        JSON.stringify({ text: "plain task" }),
+        JSON.stringify({ text: "explicit build" }),
+      ]);
+      expect(activityLog.events.some((event) => event.op === "coding-runtime.agent.selected")).toBe(
+        false,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("fails the submission truthfully when the switch is refused: no prompt, no assumed agent", async () => {
+    let refuse = true;
+    const { control, agentRequests, promptBodies, diagnostics, activityLog } = agentControl({
+      readToolProfile: () => "native",
+    });
+    const runControl = {
+      ...control.runControl,
+      promptBodies,
+      abortSessions: [],
+      statusResponses: [{}],
+      agentRequests,
+      agentResponse: (): Response =>
+        refuse
+          ? new Response(JSON.stringify({ _tag: "AgentNotFoundError", agentID: "plan" }), {
+              status: 404,
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(null, { status: 204 }),
+    };
+    const fixture = await startBridgeFixture(agentFacade, undefined, { ...control, runControl });
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "PRIVATE_PLAN_TASK", undefined, "plan"),
+      ).resolves.toBe(false);
+      expect(promptBodies).toEqual([]);
+      expect(activityLog.events.some((event) => event.op === "coding-runtime.agent.selected")).toBe(
+        false,
+      );
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          message: "runtime-turn-failed",
+          code: expect.stringMatching(/^stage=agent:/u) as unknown,
+        }),
+      ]);
+      expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_PLAN_TASK");
+
+      // The refused switch was not remembered: the retry sends it again and then the prompt.
+      refuse = false;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "retry", undefined, "plan")).resolves.toBe(true);
+      expect(agentRequests.map(({ body }) => body)).toEqual([
+        '{"agent":"plan"}',
+        '{"agent":"plan"}',
+      ]);
+      expect(promptBodies).toEqual([JSON.stringify({ text: "retry" })]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it.each(["direct", "code-mode"] as const)(
+    "refuses a plan request on the governed %s profile before any request leaves, and still runs build",
+    async (profile) => {
+      const { control, agentRequests, promptBodies, diagnostics } = agentControl({
+        readToolProfile: () => profile,
+      });
+      const fixture = await startBridgeFixture(agentFacade, undefined, control);
+      try {
+        const port = fixture.runtime.runPort;
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "read-only please", undefined, "plan"),
+        ).resolves.toBe(false);
+        expect(agentRequests).toEqual([]);
+        expect(promptBodies).toEqual([]);
+        expect(diagnostics).toEqual([
+          expect.objectContaining({
+            correlationId: FIXTURE_RUN_ID,
+            code: expect.stringMatching(/^stage=agent-unsupported:/u) as unknown,
+          }),
+        ]);
+        expect(JSON.stringify(diagnostics)).not.toContain("read-only please");
+
+        await expect(port.submitTask(FIXTURE_RUN_ID, "build it", undefined, "build")).resolves.toBe(
+          true,
+        );
+        expect(agentRequests).toEqual([]);
+        expect(promptBodies).toEqual([JSON.stringify({ text: "build it" })]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+});
 
 it.each(["direct", "code-mode"] as const)(
   "materializes the selected %s profile into the real native config and plugin sources",

@@ -82,6 +82,180 @@ describe("production coding runtime turn ports", () => {
     ).resolves.toEqual({ ok: false });
   });
 
+  describe("primary agent (#3897)", () => {
+    function openCodeRunPort(
+      submitTask: OpenCodeRunPort["submitTask"],
+      selectableAgents?: OpenCodeRunPort["selectableAgents"],
+    ): OpenCodeRunPort {
+      return {
+        submitTask,
+        ...(selectableAgents === undefined ? {} : { selectableAgents }),
+        abortTask: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve(true),
+        listQuestions: () => Promise.resolve([]),
+        answerQuestion: () => Promise.resolve(false),
+        rejectQuestion: () => Promise.resolve(false),
+        replyPermission: () => Promise.resolve(false),
+      };
+    }
+
+    it("hands the requested agent to the run-bound turn and none for a plain turn", async () => {
+      const submitTask = vi.fn<OpenCodeRunPort["submitTask"]>(() => Promise.resolve(true));
+      const runs = new Map<string, ProductionRuntimeRunRecord>([
+        [
+          "run-agent",
+          record(
+            "run-agent",
+            createOpenCodeRuntimeTurnPort(openCodeRunPort(submitTask, ["build", "plan"])),
+          ),
+        ],
+      ]);
+      const dispatcher = createProductionRuntimeTaskDispatcher(runs);
+
+      await expect(
+        dispatcher.dispatch({
+          ...operation("run-agent", "initial-1", 1, "plan it"),
+          agent: "plan",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      await expect(
+        dispatcher.dispatch(operation("run-agent", "follow-up-1", 2, "build it")),
+      ).resolves.toMatchObject({ ok: true });
+
+      expect(submitTask.mock.calls).toEqual([
+        ["run-agent", "plan it", undefined, "plan"],
+        ["run-agent", "build it", undefined, undefined],
+      ]);
+    });
+
+    it("refuses an agent the run's port does not offer before the adapter is reached", async () => {
+      const records: ServerDiagnosticRecord[] = [];
+      const submitTask = vi.fn<OpenCodeRunPort["submitTask"]>(() => Promise.resolve(true));
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([
+          [
+            "run-mapped",
+            record("run-mapped", createOpenCodeRuntimeTurnPort(openCodeRunPort(submitTask))),
+          ],
+        ]),
+        { record: (diagnostic): void => void records.push(diagnostic) },
+      );
+
+      await expect(
+        dispatcher.dispatch({
+          ...operation("run-mapped", "follow-up-plan", 1, "private plan task"),
+          agent: "plan",
+        }),
+      ).resolves.toEqual({ ok: false, reason: "agent-unsupported" });
+      expect(submitTask).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: "run-mapped",
+          operation: "coding-runtime.task-dispatch",
+          code: "stage=dispatch:reason=agent-unsupported",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("private plan task");
+      // The refusal released its reservation: the same revision still admits a plain turn.
+      await expect(
+        dispatcher.dispatch(operation("run-mapped", "follow-up-build", 1, "build it")),
+      ).resolves.toMatchObject({ ok: true });
+      // The default agent is every run's baseline, so naming it needs no capability.
+      await expect(
+        dispatcher.dispatch({
+          ...operation("run-mapped", "follow-up-build-2", 2, "build again"),
+          agent: "build",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it("refuses an unsupported agent on a replacement without interrupting the predecessor", async () => {
+      const abortTurn = vi.fn(() => Promise.resolve(true));
+      const submitTurn = vi.fn(() => Promise.resolve(true));
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([
+          [
+            "run-replace-agent",
+            record("run-replace-agent", {
+              submitTurn,
+              abortTurn,
+              waitForTerminal: () => Promise.resolve("succeeded" as const),
+            }),
+          ],
+        ]),
+      );
+      if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+
+      await expect(
+        dispatcher.replace({
+          ...operation("run-replace-agent", "follow-up-1", 2, "plan instead"),
+          agent: "plan",
+        }),
+      ).resolves.toEqual({ ok: false, reason: "agent-unsupported" });
+      expect(abortTurn).not.toHaveBeenCalled();
+      expect(submitTurn).not.toHaveBeenCalled();
+    });
+
+    it("hands a replacement's agent to the turn once the predecessor settled", async () => {
+      const submitTurn = vi.fn<ProductionRuntimeRunRecord["turnPort"]["submitTurn"]>(() =>
+        Promise.resolve(true),
+      );
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([
+          [
+            "run-replace-agent",
+            record("run-replace-agent", {
+              submitTurn,
+              selectableAgents: ["build", "plan"],
+              abortTurn: () => Promise.resolve(true),
+              waitForTerminal: () => Promise.resolve("succeeded" as const),
+            }),
+          ],
+        ]),
+      );
+      if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+
+      await expect(
+        dispatcher.replace({
+          ...operation("run-replace-agent", "follow-up-1", 2, "plan instead"),
+          agent: "plan",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(submitTurn).toHaveBeenCalledWith(
+        "run-replace-agent",
+        "plan instead",
+        undefined,
+        "plan",
+      );
+    });
+
+    it("keeps a Codex run on its single agent: refuses plan and ignores the default", async () => {
+      const startThread = vi.fn(() => Promise.resolve({ ok: true as const, threadId: "thread-1" }));
+      const startTurn = vi
+        .fn<CodexRuntimeControl["startTurn"]>()
+        .mockResolvedValue({ ok: true, turnId: "turn-1" });
+      const control = codexControl({
+        startThread,
+        startTurn,
+        statuses: new Map([["turn-1", "completed" as const]]),
+      });
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([["run-codex", record("run-codex", createCodexRuntimeTurnPort(control))]]),
+      );
+
+      await expect(
+        dispatcher.dispatch({ ...operation("run-codex", "plan-1", 1, "plan"), agent: "plan" }),
+      ).resolves.toEqual({ ok: false, reason: "agent-unsupported" });
+      expect(startThread).not.toHaveBeenCalled();
+      await expect(
+        dispatcher.dispatch({ ...operation("run-codex", "build-1", 1, "build"), agent: "build" }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(startTurn.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+        ["run-codex", "thread-1", "build"],
+      ]);
+    });
+  });
+
   it("interrupts an active turn before replacing it and releases a rejected attempt", async () => {
     const controller = new AbortController();
     const abortTurn = vi

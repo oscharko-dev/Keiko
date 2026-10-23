@@ -17,10 +17,14 @@ import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contrac
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
+  bindExplicitSkillTurns,
   createProductionAcceptedInitializationAuthority,
   operatorDecisionRequester,
   runManifestAdmission,
 } from "./productionCodingRuntimeResolver.js";
+import { CodingRuntimeAgentUnsupportedError } from "./launchFailure.js";
+import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
+import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
@@ -808,6 +812,105 @@ describe("production coding runtime resolver", () => {
       expiredHost.launchResolver.resolve(requestFor(expiredFixture.workspace)),
     ).toThrow();
     expect(expiredCreateRun).not.toHaveBeenCalled();
+  });
+
+  describe("primary agent admission at launch (#3897)", () => {
+    function agentHost(toolProfile: OpenCodeToolProfile) {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+          backend: { createRun, toolProfile },
+        }),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      return { host, createRun, request };
+    }
+
+    it("launches a plan request on the native profile and hands the run a turn port that offers it", () => {
+      const { host, createRun, request } = agentHost("native");
+
+      host.launchResolver.resolve({ ...request, agent: "plan" });
+
+      expect(createRun).toHaveBeenCalledOnce();
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "refuses a plan request on the governed %s profile before the confirmation is consumed or a run exists",
+      (profile) => {
+        const { host, createRun, request } = agentHost(profile);
+
+        expect(() => host.launchResolver.resolve({ ...request, agent: "plan" })).toThrow(
+          CodingRuntimeAgentUnsupportedError,
+        );
+        expect(createRun).not.toHaveBeenCalled();
+        // The one-use confirmation survived the refusal: the same start without the agent proceeds.
+        host.launchResolver.resolve(request);
+        expect(createRun).toHaveBeenCalledOnce();
+      },
+    );
+
+    it.each(["native", "direct", "code-mode"] as const)(
+      "launches an explicit default-agent request on the %s profile",
+      (profile) => {
+        const { host, createRun, request } = agentHost(profile);
+
+        host.launchResolver.resolve({ ...request, agent: "build" });
+
+        expect(createRun).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("refuses a plan request for a Codex subscription run, which has no agent concept", () => {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+          backend: { createRun, toolProfile: "native" },
+        }),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = {
+        ...launchRequest(fixture.workspace),
+        runtimePreference: "codex-subscription" as const,
+      };
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+
+      expect(() => host.launchResolver.resolve({ ...request, agent: "plan" })).toThrow(
+        CodingRuntimeAgentUnsupportedError,
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("keeps the backend's selectable agents on the run's turn port through the explicit-skill binding", async () => {
+      const selectableAgents = ["build", "plan"] as const;
+      const submitTurn = vi.fn(() => Promise.resolve(true));
+      const bound = bindExplicitSkillTurns(
+        {
+          submitTurn,
+          selectableAgents,
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.resolve("succeeded" as const),
+        },
+        createExplicitSkillInvocationTracker(createServerApprovedSkillCatalog()),
+      );
+
+      expect(bound.selectableAgents).toEqual(["build", "plan"]);
+      await bound.submitTurn("run-1", "plan it", undefined, "plan");
+      expect(submitTurn).toHaveBeenCalledWith("run-1", "plan it", undefined, "plan");
+    });
   });
 
   // KfQ 3954841973: a backend process (plus its HTTP/SSE client and tool bridge) was already

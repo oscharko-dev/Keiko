@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
 import {
+  CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchAgent,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -114,6 +117,44 @@ describe("Coding Workbench runtime API contracts", () => {
         parseCodingWorkbenchRuntimeStartRequest({ ...start, [field]: "forged" }),
       ).toMatchObject({
         ok: false,
+      });
+    }
+  });
+
+  it("keeps the selectable primary agents a closed vocabulary", () => {
+    expect(CODING_WORKBENCH_AGENTS).toEqual(["build", "plan"]);
+    expect(DEFAULT_CODING_WORKBENCH_AGENT).toBe("build");
+    expect(CODING_WORKBENCH_AGENTS).toContain(DEFAULT_CODING_WORKBENCH_AGENT);
+    expect(Object.isFrozen(CODING_WORKBENCH_AGENTS)).toBe(true);
+    expect(CODING_WORKBENCH_AGENTS.every(isCodingWorkbenchAgent)).toBe(true);
+    for (const forged of ["", "Build", "PLAN", "general", "explore", "build ", 1, null, {}, []]) {
+      expect(isCodingWorkbenchAgent(forged), JSON.stringify(forged)).toBe(false);
+    }
+  });
+
+  it("accepts an optional primary agent on start and retry and refuses any other value", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Plan the migration before touching a file",
+      requestedMode: "supervised-coding",
+    };
+    for (const agent of CODING_WORKBENCH_AGENTS) {
+      expect(parseCodingWorkbenchRuntimeStartRequest({ ...start, agent })).toEqual({
+        ok: true,
+        value: { ...start, agent },
+      });
+      expect(parseCodingWorkbenchRuntimeRetryRequest({ ...start, agent })).toMatchObject({
+        ok: true,
+      });
+    }
+    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toEqual({ ok: true, value: start });
+    for (const agent of ["", "Plan", "general", "build,plan", 1, null, false, {}]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...start, agent }),
+        JSON.stringify(agent),
+      ).toEqual({
+        ok: false,
+        errors: ["agent is invalid"],
       });
     }
   });

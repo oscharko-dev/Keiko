@@ -1072,6 +1072,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   at a separate loopback listener, produces no canary and no request to that listener, the Model
   Gateway receives every model request with its own credential and model, and a control with the
   project layer switched on shows the same plugins executing yet the route still bound.
+- **The operator selects the primary agent through the session, never the launch.**
+  `default_agent` stays `build`. An optional `agent` (`build` or `plan`, the closed
+  `CODING_WORKBENCH_AGENTS` vocabulary) travels on a start or a follow-up; the composition issues
+  `session.switchAgent` (`POST /api/session/{sessionID}/agent`, admitted in the pinned protocol
+  surface) once, before the prompt, only when the agent differs from the run's current one, and a
+  refused switch fails the submission instead of running the prompt under another agent. `plan` is
+  OpenCode's own read-only agent (edits denied except its plan file), so it is offered on the
+  native profile only: the mapped profiles route every tool through Keiko's facade, which does not
+  apply that policy, and a Codex run has no agent concept. Both refuse `plan` as `invalid-intent`,
+  a start before any run exists and a follow-up before the adapter is reached. The switch only
+  narrows what a turn may do; the Authority Envelope, the mode and the policy hook below decide
+  every action as before. Each effective switch is recorded body-free as
+  `coding-runtime.agent.selected` (run, new and previous agent).
 - **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
   plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
   (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`

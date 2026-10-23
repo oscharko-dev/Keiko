@@ -24,7 +24,8 @@ import type {
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { CodingRuntimeIssueAttachment } from "./codingRuntimeIssueIntake.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchAgent, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { isAgentAdmitted } from "./opencodeAgents.js";
 import type {
   PrDescriptionArtifact,
   PrDescriptionOutcome,
@@ -153,7 +154,22 @@ const CODEX_CONTROL_TIMEOUT_MS = 30_000;
 const CODEX_TERMINAL_POLL_MS = 25;
 
 export interface ProductionRuntimeTurnPort {
-  readonly submitTurn: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
+  /**
+   * `agent` selects the primary agent for this and the following turns; absent keeps the run's
+   * current agent. A port that does not list the agent in `selectableAgents` is never handed it.
+   */
+  readonly submitTurn: (
+    runId: string,
+    text: string,
+    initialContext?: string,
+    agent?: CodingWorkbenchAgent,
+  ) => Promise<boolean>;
+  /**
+   * The primary agents, beside the default, an operator may select for this run's turns. Absent
+   * means the default agent only: a request for any other is refused before the adapter is reached
+   * (a read-only `plan` request must never run as an editing agent).
+   */
+  readonly selectableAgents?: readonly CodingWorkbenchAgent[] | undefined;
   readonly abortTurn: (runId: string) => Promise<boolean>;
   readonly waitForTerminal: (
     runId: string,
@@ -475,7 +491,9 @@ function stoppedRun(): ReturnType<CodingRuntimeManager["stop"]> {
 
 export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): ProductionRuntimeTurnPort {
   return {
-    submitTurn: (runId, text, initialContext) => runPort.submitTask(runId, text, initialContext),
+    submitTurn: (runId, text, initialContext, agent) =>
+      runPort.submitTask(runId, text, initialContext, agent),
+    selectableAgents: runPort.selectableAgents,
     abortTurn: (runId) => runPort.abortTask(runId),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       if (await runPort.waitForTerminal(runId, signal)) return "succeeded";
@@ -598,6 +616,8 @@ async function dispatchRuntimeTask(
     return rejectedDispatch(diagnostics, request.runId, "no-record", request.correlationId);
   if (record.controller.signal.aborted)
     return rejectedDispatch(diagnostics, request.runId, "aborted", request.correlationId);
+  if (!isAgentAdmitted(record.turnPort.selectableAgents, request.agent))
+    return rejectedAgent(diagnostics, request.runId, request.correlationId);
   const reservation = record.operationGuard.reserve(request);
   if (reservation === undefined)
     return rejectedDispatch(diagnostics, request.runId, "no-reservation", request.correlationId);
@@ -609,8 +629,12 @@ async function replaceRuntimeTask(
   request: CodingRuntimeTaskDispatchRequest,
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskDispatchResult> {
-  recordRuntimeReplacementActivity(request, "started");
   const record = runs.get(request.runId);
+  // Ahead of the replacement lifecycle: a request the run cannot honour never begins one, so there
+  // is no `started` line to leave without its terminal one, and the predecessor is not interrupted.
+  if (record !== undefined && !isAgentAdmitted(record.turnPort.selectableAgents, request.agent))
+    return rejectedAgent(diagnostics, request.runId, request.correlationId);
+  recordRuntimeReplacementActivity(request, "started");
   if (record === undefined) return rejectedReplacement(diagnostics, request, "no-record");
   if (record.controller.signal.aborted) return rejectedReplacement(diagnostics, request, "aborted");
   const reservation = record.operationGuard.reserve(request);
@@ -643,10 +667,7 @@ async function replaceRuntimeTask(
   return result;
 }
 
-type RuntimeDispatchFailureObserver = (
-  reason: RuntimeDispatchFailureReason,
-  error?: unknown,
-) => void;
+type RuntimeDispatchFailureObserver = (reason: ReplacementFailureReason, error?: unknown) => void;
 
 async function submitReservedRuntimeTask(
   record: ProductionRuntimeRunRecord,
@@ -657,7 +678,12 @@ async function submitReservedRuntimeTask(
 ): Promise<CodingRuntimeTaskDispatchResult> {
   try {
     if (
-      !(await record.turnPort.submitTurn(request.runId, request.taskIntent, request.initialContext))
+      !(await record.turnPort.submitTurn(
+        request.runId,
+        request.taskIntent,
+        request.initialContext,
+        request.agent,
+      ))
     ) {
       reservation.release();
       return rejectedDispatch(
@@ -695,7 +721,7 @@ async function submitReservedRuntimeTask(
 function rejectedDispatch(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
-  reason: RuntimeDispatchFailureReason,
+  reason: ReplacementFailureReason,
   correlationId?: string,
   observeFailure?: RuntimeDispatchFailureObserver,
 ): CodingRuntimeTaskDispatchResult {
@@ -704,10 +730,24 @@ function rejectedDispatch(
   return { ok: false };
 }
 
+/**
+ * The refusal of a turn whose requested primary agent the run's port does not offer. It is the
+ * request's own fault, so it carries the closed reason and the coordinator answers it as an
+ * invalid intent instead of a failed authority.
+ */
+function rejectedAgent(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  correlationId?: string,
+): CodingRuntimeTaskDispatchResult {
+  recordRuntimeDispatchFailure(diagnostics, runId, "agent-unsupported", undefined, correlationId);
+  return { ok: false, reason: "agent-unsupported" };
+}
+
 function rejectedReplacement(
   diagnostics: ServerDiagnosticSink | undefined,
   request: CodingRuntimeTaskDispatchRequest,
-  reason: RuntimeDispatchFailureReason,
+  reason: ReplacementFailureReason,
   error?: unknown,
 ): CodingRuntimeTaskDispatchResult {
   recordRuntimeDispatchFailure(diagnostics, request.runId, reason, error, request.correlationId);
@@ -746,7 +786,11 @@ async function terminalCompletion(
   }
 }
 
-type RuntimeDispatchFailureReason =
+/**
+ * The reasons a dispatch can fail after it began. The replacement lifecycle records exactly these
+ * on the Activity Log (`CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD`).
+ */
+type ReplacementFailureReason =
   | "aborted"
   | "adapter-rejected"
   | "commit-rejected"
@@ -759,6 +803,9 @@ type RuntimeDispatchFailureReason =
   | "pending-mutations-unsettled"
   | "terminal-exception"
   | "terminal-failed";
+
+/** Beside those, the refusal made before anything began: the request's own agent is unsupported. */
+type RuntimeDispatchFailureReason = ReplacementFailureReason | "agent-unsupported";
 
 function recordRuntimeDispatchFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -781,7 +828,7 @@ function recordRuntimeDispatchFailure(
 function recordRuntimeReplacementActivity(
   request: CodingRuntimeTaskDispatchRequest,
   state: "accepted" | "rejected" | "started",
-  reason?: RuntimeDispatchFailureReason,
+  reason?: ReplacementFailureReason,
   error?: unknown,
 ): void {
   const event = activityLogEvent(

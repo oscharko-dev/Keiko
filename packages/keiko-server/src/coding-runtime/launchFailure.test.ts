@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CodingRuntimeAgentUnsupportedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
   classifyLaunchRejection,
@@ -47,6 +48,15 @@ describe("launchModelRefusalReason", () => {
 });
 
 describe("classifyLaunchRejection", () => {
+  it("answers a primary agent the runtime cannot honour as an invalid intent with a closed reason", () => {
+    const rejection = new CodingRuntimeAgentUnsupportedError("plan");
+    expect(rejection.agent).toBe("plan");
+    expect(rejection.message).toBe("agent-unsupported");
+    expect(classifyLaunchRejection(rejection)).toBe("invalid-intent");
+    expect(launchRejectionDiagnosticReason(rejection)).toBe("agent-unsupported");
+    expect(launchModelRefusalReason(rejection)).toBeUndefined();
+  });
+
   it("maps an adapter profile mismatch to the source-drift code the contract already defines", () => {
     const rejection = new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
     expect(classifyLaunchRejection(rejection)).toBe("source-drift");

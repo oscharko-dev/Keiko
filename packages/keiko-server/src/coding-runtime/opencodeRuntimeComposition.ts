@@ -92,6 +92,11 @@ import {
 } from "./opencodeV2HttpClient.js";
 import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
+import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  type CodingWorkbenchAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2ApprovalDecision,
@@ -114,6 +119,8 @@ import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencod
 import {
   buildOpenCodeLaunchProfile,
   OPENCODE_RUNTIME_READINESS_PROMPT,
+  openCodeConfigDirectory,
+  openCodePlanDirectory,
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import {
@@ -169,6 +176,38 @@ const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-session-continuity"],
   proofIds: ["coding-runtime.sidecar-session.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_WORKBENCH_AGENT_VALUES = ["build", "plan"] as const;
+
+const AGENT_SELECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.agent.selected",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordAgentSelected",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    agent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CODING_WORKBENCH_AGENT_VALUES,
+    },
+    previousAgent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CODING_WORKBENCH_AGENT_VALUES,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-agent-selection"],
+  proofIds: ["coding-runtime.agent.selected.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -361,7 +400,23 @@ export interface OpenCodeRuntimeComposition {
 }
 
 export interface OpenCodeRunPort {
-  readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
+  /**
+   * `agent` selects the primary agent for this and the following turns (`build` or `plan`);
+   * absent keeps the run's current agent, `build` until a switch succeeded. A switch is issued
+   * once, before the prompt, and only when the agent differs from the run's current one. A refused
+   * or failed switch fails the submission: the prompt is never sent under another agent.
+   */
+  readonly submitTask: (
+    runId: string,
+    text: string,
+    initialContext?: string,
+    agent?: CodingWorkbenchAgent,
+  ) => Promise<boolean>;
+  /**
+   * The primary agents this composition's tool profile can honour (`openCodeSelectableAgents`):
+   * `plan` exists only on the native profile. A request for another agent is refused here.
+   */
+  readonly selectableAgents?: readonly CodingWorkbenchAgent[] | undefined;
   readonly abortTask: (runId: string) => Promise<boolean>;
   readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
@@ -399,6 +454,11 @@ interface PreparedRun {
   sessionId?: string | undefined;
   /** Native child sessions (subagents) proven to descend from the run's session (#3897). */
   childSessionIds?: Set<string> | undefined;
+  /**
+   * The primary agent the session runs its next turn under, as of the last successful
+   * `session.switchAgent`; absent is the launch profile's default agent, `build` (#3897).
+   */
+  agent?: CodingWorkbenchAgent | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
 }
@@ -448,7 +508,13 @@ export function createOpenCodeRuntimeComposition(
     prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
     manager,
     toolBridge: bridge.publicPort,
-    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
+    runPort: createRunPort(
+      runs,
+      input.diagnostics,
+      input.activityLog,
+      approvals,
+      openCodeSelectableAgents(toolProfile),
+    ),
   };
 }
 
@@ -500,13 +566,15 @@ function createRunPort(
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  selectableAgents: readonly CodingWorkbenchAgent[],
 ): OpenCodeRunPort {
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
   return {
-    submitTask: createSubmitTask(readyRun, diagnostics, activityLog),
+    submitTask: createSubmitTask(readyRun, diagnostics, activityLog, selectableAgents),
+    selectableAgents,
     abortTask: createAbortTask(readyRun),
     waitForTerminal: async (runId, signal): Promise<boolean> => {
       const run = readyRun(runId);
@@ -524,32 +592,94 @@ function createSubmitTask(
   readyRun: ReadyRunLookup,
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
+  selectableAgents: readonly CodingWorkbenchAgent[],
 ): OpenCodeRunPort["submitTask"] {
-  return async (runId, text, initialContext): Promise<boolean> => {
+  return async (runId, text, initialContext, agent): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
-    if (!(await synchronizeTurnBaseline(run))) return false;
-    if (!run.runtimeAdapter.armTurn()) return false;
-    try {
-      await run.client.prompt(
-        run.sessionId,
-        initialContext === undefined ? text : `${initialContext}\n\n${text}`,
-        undefined,
-        initialContext === undefined
-          ? undefined
-          : {
-              displayText: text,
-              hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
-            },
-      );
-      if (initialContext !== undefined) recordContextPresentation(activityLog, runId);
-      return run.ready;
-    } catch (error) {
-      recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
-      run.runtimeAdapter.cancelTurn();
+    // Before the baseline is read and the turn armed: a refused agent leaves nothing to undo, and
+    // the switch message the runtime records is part of the baseline the turn is measured from.
+    if (!(await selectPrimaryAgent(run, agent, selectableAgents, diagnostics, activityLog))) {
       return false;
     }
+    if (!(await synchronizeTurnBaseline(run))) return false;
+    if (!run.runtimeAdapter.armTurn()) return false;
+    return postTurnPrompt(run, text, initialContext, diagnostics, activityLog);
   };
+}
+
+async function postTurnPrompt(
+  run: ReadyRun,
+  text: string,
+  initialContext: string | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): Promise<boolean> {
+  try {
+    await run.client.prompt(
+      run.sessionId,
+      initialContext === undefined ? text : `${initialContext}\n\n${text}`,
+      undefined,
+      initialContext === undefined
+        ? undefined
+        : {
+            displayText: text,
+            hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
+          },
+    );
+    if (initialContext !== undefined) recordContextPresentation(activityLog, run.runId);
+    return run.ready;
+  } catch (error) {
+    recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+    run.runtimeAdapter.cancelTurn();
+    return false;
+  }
+}
+
+/**
+ * Makes the session run the requested primary agent (#3897). `true` means the next prompt runs under
+ * it, or that none was asked for. An agent this composition cannot honour (`plan` on a mapped
+ * profile) or a switch the runtime refuses returns `false` with a body-free diagnostic, never a
+ * silent fallback to the default: a read-only request must not run as an editing agent. The agent
+ * is remembered only after the runtime confirmed the switch, so a failed one is simply re-sent.
+ */
+async function selectPrimaryAgent(
+  run: ReadyRun,
+  requested: CodingWorkbenchAgent | undefined,
+  selectableAgents: readonly CodingWorkbenchAgent[],
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): Promise<boolean> {
+  if (!isAgentAdmitted(selectableAgents, requested)) {
+    recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
+    return false;
+  }
+  const current = run.agent ?? DEFAULT_CODING_WORKBENCH_AGENT;
+  if (requested === undefined || requested === current) return true;
+  try {
+    await run.client.switchAgent(run.sessionId, requested);
+  } catch (error) {
+    recordOpenCodeTurnFailure(diagnostics, run, "agent", error);
+    return false;
+  }
+  run.agent = requested;
+  recordAgentSelected(activityLog, run.runId, requested, current);
+  return true;
+}
+
+function recordAgentSelected(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  agent: CodingWorkbenchAgent,
+  previousAgent: CodingWorkbenchAgent,
+): void {
+  activityLog?.write(
+    activityLogEvent(
+      AGENT_SELECTED_OPERATION,
+      { correlationId: runId },
+      { runId, agent, previousAgent },
+    ),
+  );
 }
 
 function createReplyPermission(
@@ -585,7 +715,8 @@ function createReplyPermission(
   };
 }
 
-type OpenCodeTurnFailureStage = "permission" | "question" | "submit" | "terminal";
+type OpenCodeTurnFailureStage =
+  "agent" | "agent-unsupported" | "permission" | "question" | "submit" | "terminal";
 
 function recordOpenCodeTurnFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -1726,8 +1857,8 @@ function createPrivateState(runRoot: string): void {
     chmodSync(path, 0o700);
   }
   for (const path of [
-    join(runRoot, "config", "opencode"),
-    join(runRoot, "config", "opencode", "plugins"),
+    openCodeConfigDirectory(runRoot),
+    join(openCodeConfigDirectory(runRoot), "plugins"),
   ]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
@@ -1739,7 +1870,7 @@ function materialize(
   config: string,
   pluginSources: Readonly<Record<string, string>>,
 ): void {
-  const discoveryRoot = join(runRoot, "config", "opencode");
+  const discoveryRoot = openCodeConfigDirectory(runRoot);
   writePrivateFile(join(discoveryRoot, "opencode.json"), config);
   for (const [name, source] of Object.entries(pluginSources)) {
     writePrivateFile(join(discoveryRoot, "plugins", `${name}.ts`), source);
@@ -1754,8 +1885,8 @@ function writePrivateFile(path: string, value: string): void {
 function configMaterialized(runRoot: string): boolean {
   try {
     return (
-      statSync(join(runRoot, "config", "opencode", "opencode.json")).isFile() &&
-      readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8").length > 0
+      statSync(join(openCodeConfigDirectory(runRoot), "opencode.json")).isFile() &&
+      readFileSync(join(openCodeConfigDirectory(runRoot), "opencode.json"), "utf8").length > 0
     );
   } catch {
     return false;
@@ -2282,6 +2413,7 @@ async function handleNativePolicyRequest(
   const decision = decideOpenCodeNativePolicy({
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
+    planRoot: openCodePlanDirectory(run.runRoot),
     request,
     nowMs: Date.now(),
   });

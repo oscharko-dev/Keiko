@@ -3,6 +3,7 @@ import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
@@ -1157,6 +1158,13 @@ function isExactRunRevision(
   revision: number,
 ): snapshot is CodingRuntimeSnapshot {
   return snapshot?.runId === runId && snapshot.revision === revision;
+}
+
+/** The requested primary agent as an optional key, so an absent one adds no key at all. */
+function agentField(agent: CodingWorkbenchAgent | undefined): {
+  readonly agent?: CodingWorkbenchAgent;
+} {
+  return agent === undefined ? {} : { agent };
 }
 
 function recordRuntimeStartFailure(
@@ -3770,6 +3778,7 @@ export class CodingRuntimeOrchestrator {
       expectedRevision: runningInternal.revision,
       taskIntent: request.taskIntent,
       ...(initialContext === undefined ? {} : { initialContext }),
+      ...agentField(request.agent),
     });
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
@@ -3890,6 +3899,7 @@ export class CodingRuntimeOrchestrator {
         ...(request.modelId ? { modelId: request.modelId } : {}),
         ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
         projectMemoryEnabled: request.projectMemory?.enabled ?? true,
+        ...agentField(request.agent),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,

@@ -65,6 +65,7 @@ import { DatabaseSync } from "node:sqlite";
 import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import {
+  CodingRuntimeAgentUnsupportedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
 } from "./launchFailure.js";
@@ -2684,6 +2685,167 @@ describe("CodingRuntimeOrchestrator", () => {
       ok: false,
       failureCode: "authority-resolution-failed",
       runId: "run-1",
+    });
+  });
+
+  describe("primary agent selection (#3897)", () => {
+    it.each(["build", "plan"] as const)(
+      "hands the requested %s agent to the first turn and leaves a start without one untouched",
+      async (agent) => {
+        const withAgent = fixture();
+        await withAgent.orchestrator.start({ ...start, agent });
+        expect(
+          firstTaskDispatchRequest(withAgent.taskDispatcher.dispatch.mock.calls),
+        ).toMatchObject({ agent, taskIntent: start.taskIntent });
+
+        const without = fixture();
+        await without.orchestrator.start(start);
+        expect(
+          firstTaskDispatchRequest(without.taskDispatcher.dispatch.mock.calls),
+        ).not.toHaveProperty("agent");
+      },
+    );
+
+    it("refuses a start that names a foreign agent before any run exists", async () => {
+      const f = fixture();
+
+      expect(await f.orchestrator.start({ ...start, agent: "general" })).toMatchObject({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("passes the requested agent to the launch resolver so an unsupported one is refused before launch", async () => {
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, agent: "plan" });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "plan" }),
+      );
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("agent");
+    });
+
+    it("answers a start whose runtime cannot honour the agent with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeAgentUnsupportedError("plan");
+      });
+
+      expect(await f.orchestrator.start({ ...start, agent: "plan" })).toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+        runId: "run-1",
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          message: "runtime-start-failed",
+          code: "stage=start:reason=launch-resolution:agent-unsupported",
+        }),
+      );
+    });
+
+    it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+
+      const planned = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plan",
+        expectedRevision: 4,
+        taskIntent: "outline the change first",
+        agent: "plan",
+      });
+      expect(successfulSnapshot(planned).revision).toBe(5);
+      expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+        runId: "run-1",
+        requestId: "follow-up-plan",
+        expectedRevision: 4,
+        taskIntent: "outline the change first",
+        agent: "plan",
+      });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: 5,
+        taskIntent: "now implement it",
+      });
+      expect(f.taskDispatcher.dispatch.mock.lastCall?.[0]).not.toHaveProperty("agent");
+    });
+
+    it.each(["general", "", "Plan", 1, null])(
+      "refuses a follow-up that names the foreign agent %j and dispatches nothing",
+      async (agent) => {
+        const f = fixture();
+        await f.orchestrator.start(start);
+        f.taskDispatcher.dispatch.mockClear();
+
+        await expect(
+          f.orchestrator.submitFollowUp("run-1", {
+            requestId: "follow-up-foreign",
+            expectedRevision: 4,
+            taskIntent: "continue",
+            agent,
+          }),
+        ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+        expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+        expect(f.orchestrator.status().revision).toBe(4);
+      },
+    );
+
+    it("reports a follow-up whose agent the run cannot honour as invalid-intent and lets the request retry", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      f.taskDispatcher.dispatch
+        .mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" })
+        .mockResolvedValueOnce({ ok: true, completion: Promise.resolve("succeeded") });
+
+      await expect(
+        f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-unsupported",
+          expectedRevision: 4,
+          taskIntent: "plan only",
+          agent: "plan",
+        }),
+      ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+      expect(f.orchestrator.status().revision).toBe(4);
+      await expect(
+        f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-unsupported",
+          expectedRevision: 4,
+          taskIntent: "build instead",
+        }),
+      ).resolves.toMatchObject({ ok: true, snapshot: { revision: 5 } });
+    });
+
+    it("hands a paused run's follow-up agent to the replacement dispatch", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-agent-pause-0",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        kind: "task-submitted",
+      });
+      const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-paused-plan",
+        expectedRevision: successfulSnapshot(paused).revision,
+        taskIntent: "switch to planning",
+        agent: "plan",
+      });
+
+      expect(f.taskDispatcher.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requestId: "follow-up-paused-plan", agent: "plan" }),
+      );
     });
   });
 

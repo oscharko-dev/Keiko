@@ -1450,6 +1450,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-runtime-agent-selection",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.agent.selected"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.agent.selected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.agent.selected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.agent.selected"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-runtime-approval-wait",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

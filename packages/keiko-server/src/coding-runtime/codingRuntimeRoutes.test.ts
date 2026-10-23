@@ -1180,6 +1180,39 @@ describe("coding runtime routes", () => {
     expect(JSON.stringify(result.body)).not.toContain("private");
   });
 
+  it("hands the browser's primary agent to the orchestrator untouched on start and follow-up (#3897)", async () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    const runPath = "/api/coding-workbench/runtime/runs";
+    const start = {
+      requestId: "r",
+      taskIntent: "outline first",
+      requestedMode: "governed-assist",
+      agent: "plan",
+    };
+    const followUp = {
+      requestId: "f",
+      expectedRevision: 2,
+      taskIntent: "now build it",
+      agent: "build",
+    };
+
+    await expect(
+      handleCreateCodingRuntimeRun(
+        context(JSON.stringify(start), {}, runPath, session.cookie),
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      handleCodingRuntimeFollowUp(
+        context(JSON.stringify(followUp), { runId: "run-1" }, runPath, session.cookie),
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+
+    expect((deps as unknown as { __calls: unknown[] }).__calls).toEqual([start, followUp]);
+  });
+
   it("fails closed when runtime dependencies are absent and returns 404 for a stale run", async () => {
     const session = pairedAppSession();
     const records: unknown[] = [];

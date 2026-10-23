@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "525c562fc9be7803a32272a9311e9b33c6b53a7b010264a20d38fb35ab709219" as const;
+  "7142e77ff99c38c1881e65b389d0741a39b013d3486f2696d5a67a6618055ed6" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 351,
-  completeClassCount: 351,
+  supportedClassCount: 352,
+  completeClassCount: 352,
   completeness: "complete",
   classes: [
     {
@@ -6581,6 +6581,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-repository-handler.started.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-agent-selection",
+      requirementContract: "coding-runtime-agent-selection",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.agent.selected"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.agent.selected",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.agent.selected"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.agent.selected",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "agent",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "previousAgent",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.agent.selected.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42609,6 +42671,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-context.pack": "tools-workflows",
     "coding-repository-handler.settled": "tools-workflows",
     "coding-repository-handler.started": "tools-workflows",
+    "coding-runtime.agent.selected": "tools-workflows",
     "coding-runtime.approval.decided": "tools-workflows",
     "coding-runtime.approval.retired": "tools-workflows",
     "coding-runtime.approval.waiting": "tools-workflows",

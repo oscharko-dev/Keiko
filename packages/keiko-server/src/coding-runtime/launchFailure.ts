@@ -13,6 +13,7 @@
 // wire-facing failure code instead of collapsing it. Failures stay observable; nothing is swallowed.
 
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeFailureCode,
 } from "@oscharko-dev/keiko-contracts";
@@ -65,6 +66,23 @@ export class CodingRuntimeLaunchResolutionError extends Error {
 }
 
 /**
+ * A start that names a primary agent the selected runtime cannot honour (#3897): `plan` is
+ * OpenCode's own read-only agent and exists only on the native service, never on the governed
+ * mapped profiles or the Codex adapter. Refusing is the only truthful answer: running the request
+ * as `build` would hand a read-only request an agent that can edit. Carries the closed agent id
+ * and nothing else.
+ */
+export class CodingRuntimeAgentUnsupportedError extends Error {
+  public readonly agent: CodingWorkbenchAgent;
+
+  public constructor(agent: CodingWorkbenchAgent) {
+    super("agent-unsupported");
+    this.name = "CodingRuntimeAgentUnsupportedError";
+    this.agent = agent;
+  }
+}
+
+/**
  * The closed diagnostic reason of a launch rejection: the structured code, suffixed with its closed
  * sub-reason when the rejection carries one, or the model-selection reason. Never free text.
  */
@@ -73,6 +91,7 @@ export function launchRejectionDiagnosticReason(error: unknown): string | undefi
     return error.reason === undefined ? error.failureCode : `${error.failureCode}:${error.reason}`;
   }
   if (error instanceof CodingRuntimeLaunchResolutionError) return error.reason;
+  if (error instanceof CodingRuntimeAgentUnsupportedError) return "agent-unsupported";
   return undefined;
 }
 
@@ -118,6 +137,8 @@ export function launchModelRefusalReason(
  * reported as a specific, wrong cause, and must never be reported as success.
  */
 export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeFailureCode {
+  // A request the runtime cannot honour is an invalid intent, not a missing authority.
+  if (error instanceof CodingRuntimeAgentUnsupportedError) return "invalid-intent";
   if (!(error instanceof CodingRuntimeLaunchRejectedError)) return "authority-resolution-failed";
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
 }

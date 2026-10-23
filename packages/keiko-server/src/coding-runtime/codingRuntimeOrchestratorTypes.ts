@@ -1,5 +1,6 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchModelRefusalReason,
@@ -51,6 +52,11 @@ export interface CodingRuntimeLaunchResolver {
     readonly modelId?: CodingWorkbenchRuntimeStartRequest["modelId"];
     readonly reasoningEffort?: CodingWorkbenchRuntimeStartRequest["reasoningEffort"];
     readonly projectMemoryEnabled?: boolean | undefined;
+    /**
+     * The primary agent the first turn asked for (#3897). A resolver whose runtime cannot honour
+     * it throws `CodingRuntimeAgentUnsupportedError` before any run is minted.
+     */
+    readonly agent?: CodingWorkbenchAgent | undefined;
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;

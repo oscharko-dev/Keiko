@@ -1,3 +1,8 @@
+import {
+  isCodingWorkbenchAgent,
+  type CodingWorkbenchAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
@@ -50,6 +55,13 @@ export interface OpenCodeV2HttpClient {
     display?: OpenCodeV2PromptDisplay,
   ): Promise<void>;
   interrupt(sessionId: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Switches the primary agent that runs the session's SUBSEQUENT provider turns
+   * (`POST /api/session/{sessionID}/agent`, operation `session.switchAgent`). Only the closed
+   * Workbench vocabulary is accepted; the runtime's own refusal (unknown session, unknown agent)
+   * rejects, so a caller never reports a switch that did not happen.
+   */
+  switchAgent(sessionId: string, agent: CodingWorkbenchAgent, signal?: AbortSignal): Promise<void>;
   active(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   forms(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
@@ -171,6 +183,11 @@ function arrayEnvelope(
 
 function safeSessionId(value: string): string {
   if (!SESSION_ID.test(value)) throw new Error("opencode-v2-session-invalid");
+  return value;
+}
+
+function safeAgent(value: string): CodingWorkbenchAgent {
+  if (!isCodingWorkbenchAgent(value)) throw new Error("opencode-v2-agent-invalid");
   return value;
 }
 
@@ -358,6 +375,14 @@ export function createOpenCodeV2HttpClient(
     },
     interrupt: async (sessionId, signal): Promise<void> => {
       await request("POST", `/api/session/${safeSessionId(sessionId)}/interrupt`, {}, signal);
+    },
+    switchAgent: async (sessionId, agent, signal): Promise<void> => {
+      await request(
+        "POST",
+        `/api/session/${safeSessionId(sessionId)}/agent`,
+        { agent: safeAgent(agent) },
+        signal,
+      );
     },
     active: async (signal) =>
       objectEnvelope(await request("GET", "/api/session/active", undefined, signal)),

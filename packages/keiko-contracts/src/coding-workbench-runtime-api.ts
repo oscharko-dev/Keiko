@@ -64,6 +64,27 @@ export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscr
 export const CODING_WORKBENCH_RUNTIME_PREFERENCES: readonly CodingWorkbenchRuntimePreference[] =
   Object.freeze(["managed-gateway", "codex-subscription"] as const);
 
+/**
+ * The primary agents an operator may select for a Coding Workbench turn, as in standalone OpenCode
+ * (Tab switches between them). `build` is the default agent every run starts under; `plan` is
+ * OpenCode's own read-only agent: its shipped policy denies edits except its own plan file, so it
+ * narrows what the turn may do and never widens authority. A closed vocabulary: the browser cannot
+ * name an arbitrary OpenCode agent, only one of these.
+ */
+export type CodingWorkbenchAgent = "build" | "plan";
+
+export const CODING_WORKBENCH_AGENTS: readonly CodingWorkbenchAgent[] = Object.freeze([
+  "build",
+  "plan",
+] as const);
+
+/** The agent every run starts under and the one an absent `agent` field means. */
+export const DEFAULT_CODING_WORKBENCH_AGENT: CodingWorkbenchAgent = "build";
+
+export function isCodingWorkbenchAgent(value: unknown): value is CodingWorkbenchAgent {
+  return isOneOf(value, CODING_WORKBENCH_AGENTS);
+}
+
 export const CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS = 128;
 export const CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS = 200;
 export const CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS = 128;
@@ -162,6 +183,24 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * active workspace binding and defaults an omitted field to enabled for older clients.
    */
   readonly projectMemory?: CodingWorkbenchRuntimeProjectMemoryRequest | undefined;
+  /**
+   * The primary agent the run's first turn runs under. Absent means the default (`build`), exactly
+   * as before. Selecting `plan` needs a runtime that can honour it; the server refuses the start
+   * (`invalid-intent`) rather than run a read-only request as `build`.
+   */
+  readonly agent?: CodingWorkbenchAgent | undefined;
+}
+
+/**
+ * Body of `POST /runs/:runId/follow-up`. `agent` selects the primary agent for this and the
+ * following turns; absent keeps the run's current agent.
+ */
+export interface CodingWorkbenchRuntimeFollowUpRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
+  readonly taskIntent: string;
+  readonly agent?: CodingWorkbenchAgent | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -394,6 +433,10 @@ function validateTaskIntent(value: unknown, errors: string[]): void {
   }
 }
 
+function validateAgent(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isCodingWorkbenchAgent(value)) errors.push("agent is invalid");
+}
+
 function validateRuntimePreference(value: unknown, errors: string[]): void {
   if (value !== undefined && !isOneOf(value, CODING_WORKBENCH_RUNTIME_PREFERENCES)) {
     errors.push("runtimePreference is invalid");
@@ -475,6 +518,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
       "expectedIssueBindingDigest",
       "issuePurpose",
       "projectMemory",
+      "agent",
     ],
     "startRequest",
   );
@@ -491,6 +535,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateIssueRef(value.issueRef, errors);
   validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
   validateProjectMemoryRequest(value.projectMemory, errors);
+  validateAgent(value.agent, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
     (value.issueRef === undefined ||

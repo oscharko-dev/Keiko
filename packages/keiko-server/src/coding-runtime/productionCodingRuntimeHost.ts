@@ -1,10 +1,20 @@
+import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
+
 import type { CodingRuntimeHost } from "./codingRuntimeControlPlane.js";
 
 export type CodingRuntimeTaskOutcome = "cancelled" | "failed" | "succeeded";
 
 export type CodingRuntimeTaskDispatchResult =
   | { readonly ok: true; readonly completion: Promise<CodingRuntimeTaskOutcome> }
-  | { readonly ok: false };
+  | {
+      readonly ok: false;
+      /**
+       * The closed cause when the refusal is the request's own and not a transport or authority
+       * failure: the run's runtime cannot honour the requested primary agent (#3897). Absent for
+       * every other refusal, which keeps its existing answer.
+       */
+      readonly reason?: "agent-unsupported" | undefined;
+    };
 
 export interface CodingRuntimeRunOperation {
   readonly runId: string;
@@ -18,6 +28,11 @@ export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperat
   readonly correlationId?: string | undefined;
   /** Transient server-owned context; never user intent, persistence or skill authorization. */
   readonly initialContext?: string | undefined;
+  /**
+   * The primary agent the turn runs under. Absent keeps the run's current agent (the default
+   * `build` for a run that never named one), exactly as before.
+   */
+  readonly agent?: CodingWorkbenchAgent | undefined;
 }
 
 export interface CodingRuntimeTaskDispatcher {

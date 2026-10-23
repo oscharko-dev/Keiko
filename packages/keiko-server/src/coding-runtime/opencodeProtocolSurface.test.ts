@@ -1,4 +1,12 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
+
+import {
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeV2ProtocolSurface,
+} from "./opencodeProtocolSurface.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
 
 const PINNED_DIGEST = "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6";
 
@@ -121,5 +129,33 @@ describe("OpenCode v1.18.30 protocol-surface projection", () => {
     expect(surface.projectOpenCodeProtocolSurface(structuralDrift).digest).not.toBe(
       baseline.digest,
     );
+  });
+});
+
+describe("OpenCode 2.1.4 admitted V2 protocol surface", () => {
+  const fixture: unknown = JSON.parse(
+    readFileSync(
+      new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+  it("admits the session agent switch with its closed request body", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const operation = (
+      projection as {
+        readonly paths: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+      }
+    ).paths["/api/session/{sessionID}/agent"]?.post as
+      { readonly requestBody?: { readonly required?: boolean } } | undefined;
+    expect(operation).toBeDefined();
+    expect(operation?.requestBody?.required).toBe(true);
+    expect(JSON.stringify(operation)).toContain('"additionalProperties":false');
+  });
+
+  it("pins the current digest to the projection of the captured document", () => {
+    const { digest } = projectOpenCodeV2ProtocolSurface(fixture);
+    expect(digest).toBe(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256);
+    expect(OPENCODE_RUNTIME_VERSION_PINS[0]?.protocolSurfaceSha256).toBe(digest);
   });
 });

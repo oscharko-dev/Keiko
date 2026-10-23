@@ -1,4 +1,8 @@
-import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import {
+  CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeLaunchRejectedError,
+} from "./launchFailure.js";
+import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
@@ -30,6 +34,7 @@ import { createRuntimeGitPreparation } from "./productionRuntimeGitPreparation.j
 import { isAbsolute } from "node:path";
 
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeEvent,
@@ -652,6 +657,9 @@ function launchResolver(
     ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
     resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
       const context = launchContext(input, preparation, request);
+      // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
+      // nothing to undo, and the operator's confirmation stays valid for the corrected request.
+      refuseUnsupportedAgent(request.agent, context.runtimeSource, shared.toolProfile);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -682,6 +690,21 @@ function launchResolver(
       }
     },
   };
+}
+
+/**
+ * `plan` is OpenCode's own read-only agent and exists only on the native service. Another profile,
+ * or a Codex subscription run that has no agent concept, cannot honour it, and running the request
+ * as the default editing agent would break the read-only expectation it carries (#3897).
+ */
+function refuseUnsupportedAgent(
+  agent: CodingWorkbenchAgent | undefined,
+  runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
+  toolProfile: OpenCodeToolProfile,
+): void {
+  if (agent === undefined) return;
+  const selectable = runtimeSource === "keiko-sidecar" ? openCodeSelectableAgents(toolProfile) : [];
+  if (!isAgentAdmitted(selectable, agent)) throw new CodingRuntimeAgentUnsupportedError(agent);
 }
 
 function consumeStartConfirmation(
@@ -1096,12 +1119,13 @@ export function bindExplicitSkillTurns(
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text, initialContext): Promise<boolean> => {
+    submitTurn: async (runId, text, initialContext, agent): Promise<boolean> => {
       explicitSkills.observeTurn(text);
-      const accepted = await turnPort.submitTurn(runId, text, initialContext);
+      const accepted = await turnPort.submitTurn(runId, text, initialContext, agent);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },
+    selectableAgents: turnPort.selectableAgents,
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);

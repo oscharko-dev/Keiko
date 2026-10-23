@@ -3,6 +3,7 @@ import type {
   CodingWorkbenchRuntimeQuestionsResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isCodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
@@ -286,12 +287,9 @@ export class CodingRuntimeOperationCoordinator {
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
-      const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "taskIntent"]);
-      if (
-        !operation.ok ||
-        !FOLLOW_UP_STATES.has(operation.current.state) ||
-        !validTaskIntent(operation.value.taskIntent)
-      ) {
+      const operation = this.prepare(runId, input, followUpKeys(input));
+      const taskIntent = admittedFollowUpIntent(operation);
+      if (!operation.ok || taskIntent === undefined) {
         if (operation.ok) operation.reservation.release();
         // KEIKO-0722: distinguish the cap-exhausted case from an ordinary invalid-intent.
         return failure(
@@ -307,13 +305,13 @@ export class CodingRuntimeOperationCoordinator {
         runId,
         operation,
         live,
-        operation.value.taskIntent,
+        taskIntent,
         correlationId,
       );
       if (!dispatched.result.ok) {
         settleGenerationReservation(dispatched.generation, false);
         operation.reservation.release();
-        return failure("authority-resolution-failed");
+        return failure(followUpDispatchRefusal(dispatched.result));
       }
       settleGenerationReservation(dispatched.generation, true);
       // Committed at the revision the replacement was dispatched against, not the one it was
@@ -357,12 +355,14 @@ export class CodingRuntimeOperationCoordinator {
       : this.deps.taskDispatcher.dispatch;
     if (dispatch === undefined) return { result: { ok: false }, generation };
     try {
+      const agent = operation.value.agent;
       const result = await dispatch({
         runId,
         requestId: operation.value.requestId,
         expectedRevision: live.revision,
         taskIntent,
         ...(correlationId === undefined ? {} : { correlationId }),
+        ...(isCodingWorkbenchAgent(agent) ? { agent } : {}),
       });
       return { result, generation };
     } catch (error) {
@@ -979,6 +979,35 @@ function isExactRecord(value: unknown, keys: readonly string[]): value is Record
 
 function validRequestId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
+}
+
+/** The follow-up's task intent when the whole operation is admissible, otherwise `undefined`. */
+function admittedFollowUpIntent(operation: PreparedRuntimeOperation): string | undefined {
+  if (!operation.ok || !FOLLOW_UP_STATES.has(operation.current.state)) return undefined;
+  const intent = operation.value.taskIntent;
+  return validTaskIntent(intent) && validFollowUpAgent(operation.value.agent) ? intent : undefined;
+}
+
+// A request the run's runtime cannot honour is the request's fault (invalid-intent), not a missing
+// authority; every other refusal keeps its existing answer.
+function followUpDispatchRefusal(
+  result: Extract<CodingRuntimeTaskDispatchResult, { readonly ok: false }>,
+): "invalid-intent" | "authority-resolution-failed" {
+  return result.reason === "agent-unsupported" ? "invalid-intent" : "authority-resolution-failed";
+}
+
+// The optional `agent` key makes the exact-key set depend on the body: an absent key keeps the
+// historical three-key shape, a present one is admitted only with its closed value (checked by
+// `validFollowUpAgent`), so no other key is ever tolerated.
+function followUpKeys(input: unknown): readonly string[] {
+  const keys = ["requestId", "expectedRevision", "taskIntent"];
+  return typeof input === "object" && input !== null && "agent" in input
+    ? [...keys, "agent"]
+    : keys;
+}
+
+function validFollowUpAgent(value: unknown): boolean {
+  return value === undefined || isCodingWorkbenchAgent(value);
 }
 
 function validTaskIntent(value: unknown): value is string {
