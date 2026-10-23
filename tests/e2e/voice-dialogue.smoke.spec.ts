@@ -1212,7 +1212,11 @@ async function groundingParityFlow(page: Page, request: APIRequestContext): Prom
   const typedCalls = await expectGroundingAccounting(request, typedIdentity, initialCalls);
 
   const voiceChat = await createGroundingParityChat(request, projectPath, "E2E Voice parity");
-  const voicePage = await page.context().newPage();
+  // The two turns are sequential. Close the Composer page before seeding the next layout: its
+  // pending workspace save can otherwise overwrite the Voice page's shared localStorage seed.
+  const context = page.context();
+  await page.close();
+  const voicePage = await context.newPage();
   await voicePage.addInitScript(
     fakeRealtimeInit({ emitTranscript: true, transcript: GROUNDING_PARITY_TRANSCRIPT }),
   );

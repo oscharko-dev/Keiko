@@ -263,3 +263,19 @@ verdict, never success: the existing same-app, identical-tree evidence is still 
 reject different apps, unknown expressions, inactive names and successful or failed expression
 names, and preserve a newer canonical failure. Both positive regressions fail before their fixes.
 Publication and the actual production-release SSD update/eject proof remain pending.
+
+### Browser fixture failures during PR #4061 qualification
+
+The metadata-triggered CI run 39864904899 retained a WebKit failure in the Workbench stop/retry
+journey. Its trace contains no retry POST: the fixture root is absent from the real repository
+catalog and its unmocked branch reads return 400. The ready-runtime fixture now serves the
+catalog entry and branches derived from its existing active-workspace fixture. Other roots and
+non-GET requests still reach the real server. Two focused controls fail before that correction;
+all 19 route-fixture controls pass afterward.
+
+A later Chromium attempt fails the Composer/Voice grounding-parity journey: the second page
+restores the first page's Composer window instead of its seeded Voice window. Both pages share
+localStorage while the first page can still persist its workspace layout. The journey now closes
+the completed Composer page before opening and seeding the sequential Voice page. Its grounding,
+accounting, citation, persistence and playback assertions remain unchanged. These changes repair
+test preparation; they do not establish the pending production-release SSD acceptance.
