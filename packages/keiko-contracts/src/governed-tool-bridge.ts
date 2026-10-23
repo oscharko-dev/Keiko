@@ -69,4 +69,134 @@ export interface CatalogToolPort {
   readonly offer: () => GatewayToolCatalogAdvertisement;
   readonly execute: (request: GovernedToolCallRequest) => Promise<CatalogToolDispatchOutcome>;
 }
+/** One tool definition as the provider sees it; mirrors `ToolDefinition` in `gateway.ts`. */
+export interface GatewayNativeToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The native OpenCode tool advertisement (#3897): the pinned runtime's own tool definitions,
+ * forwarded to the provider as data and bound back by name only. Nothing in it registers a
+ * handler, effect or authority in Keiko (ADR-0175 D2); OpenCode executes every call under the
+ * server-owned permission policy. Admission is bounded shape, pinned by `toolSetDigest`.
+ */
+export interface GatewayNativeToolAdvertisement {
+  readonly kind: "native";
+  readonly runtime: { readonly id: "opencode"; readonly version: string };
+  readonly tools: readonly GatewayNativeToolDefinition[];
+  readonly toolSetDigest: string;
+  readonly offered: { readonly offerId: string; readonly expiresAt: string };
+}
+
+export const GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS = Object.freeze({
+  maxTools: 128,
+  maxToolNameChars: 64,
+  maxDescriptionChars: 16_384,
+  maxSchemaBytes: 64 * 1024,
+  maxTotalBytes: 512 * 1024,
+});
+
+/** Native tools whose arguments are workspace file content, consumed byte for byte (#4009). */
+export const GATEWAY_NATIVE_EXACT_CONTENT_TOOLS: readonly string[] = Object.freeze([
+  "edit",
+  "write",
+  "patch",
+]);
+
+const NATIVE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+const DIGEST = /^[a-f0-9]{64}$/u;
+
+function nativeToolDefinitionBytes(value: unknown): number | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || Object.keys(record).length !== 3) return undefined;
+  const { name, description, parameters } = record;
+  if (typeof name !== "string" || !NATIVE_TOOL_NAME.test(name)) return undefined;
+  if (!boundedDescription(description) || plainRecord(parameters) === undefined) return undefined;
+  const bytes = JSON.stringify(parameters).length;
+  return bytes > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxSchemaBytes ? undefined : bytes;
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function boundedDescription(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxDescriptionChars
+  );
+}
+
+function validNativeRuntime(value: unknown): boolean {
+  const runtime = plainRecord(value);
+  return (
+    runtime?.id === "opencode" &&
+    typeof runtime.version === "string" &&
+    /^\d+\.\d+\.\d+$/u.test(runtime.version)
+  );
+}
+
+function validNativeOffer(value: unknown): boolean {
+  const offered = plainRecord(value);
+  return (
+    typeof offered?.offerId === "string" &&
+    offered.offerId.length > 0 &&
+    typeof offered.expiresAt === "string" &&
+    !Number.isNaN(Date.parse(offered.expiresAt))
+  );
+}
+
+function validNativeTools(value: unknown): boolean {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTools
+  )
+    return false;
+  const names = new Set<string>();
+  let total = 0;
+  for (const tool of value) {
+    const bytes = nativeToolDefinitionBytes(tool);
+    if (bytes === undefined) return false;
+    const name = (tool as { name: string }).name;
+    if (names.has(name)) return false;
+    names.add(name);
+    total += bytes;
+    if (total > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTotalBytes) return false;
+  }
+  return true;
+}
+
+/** Bounded-shape admission of a native advertisement; never inspects what a tool would do. */
+export function isGatewayNativeToolAdvertisement(
+  value: unknown,
+): value is GatewayNativeToolAdvertisement {
+  const record = plainRecord(value);
+  const keys = ["kind", "runtime", "tools", "toolSetDigest", "offered"];
+  if (record?.kind !== "native" || Object.keys(record).length !== keys.length) return false;
+  if (!keys.every((key) => Object.hasOwn(record, key))) return false;
+  return (
+    validNativeRuntime(record.runtime) &&
+    typeof record.toolSetDigest === "string" &&
+    DIGEST.test(record.toolSetDigest) &&
+    validNativeOffer(record.offered) &&
+    validNativeTools(record.tools)
+  );
+}
+
 export type GatewayToolCatalogAdvertisement = ToolInvocationBinding & { readonly kind: "bound" };
+
+/** What a gateway request may advertise: the Keiko catalog projection, or the native tool set. */
+export type GatewayToolAdvertisement =
+  GatewayToolCatalogAdvertisement | GatewayNativeToolAdvertisement;
+
+/** The catalog binding of an advertisement, or nothing for a native tool set (#3897). */
+export function boundGatewayToolCatalog(
+  advertisement: GatewayToolAdvertisement | undefined,
+): GatewayToolCatalogAdvertisement | undefined {
+  return advertisement?.kind === "bound" ? advertisement : undefined;
+}

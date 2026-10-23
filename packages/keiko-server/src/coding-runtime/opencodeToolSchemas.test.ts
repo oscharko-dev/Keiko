@@ -101,10 +101,14 @@ describe("OpenCode visible tool contract", () => {
       new URL("../update-portable-sidecar-verification.ts", import.meta.url),
     ];
 
+    // #3908: the version registry is the one owner of version identities; consumers resolve the
+    // discovered runtime's pin instead of restating a version or digest literal.
     for (const consumer of consumers) {
       const source = readFileSync(consumer, "utf8");
-      expect(source).toContain("OPENCODE_PINNED_VERSION");
+      expect(source).toContain("openCodeRuntimeVersionPin");
       expect(source).not.toContain('"1.18.30"');
+      expect(source).not.toContain('"2.0.10"');
+      expect(source).not.toMatch(/[a-f0-9]{64}/u);
     }
   });
 

@@ -3395,6 +3395,7 @@ function unavailableRuntimeActionEvent(
 function approvalReviewFacts(
   event: SidecarPermissionEvent,
 ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (event.nativeAction !== undefined) return nativeActionReviewFacts(event);
   if (event.actionKind !== "file-edit") return undefined;
   const declared = event.allowedRelativePaths ?? [];
   const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
@@ -3412,6 +3413,38 @@ function approvalReviewFacts(
   }).ok
     ? pending
     : undefined;
+}
+
+/**
+ * The native OpenCode action a policy ask waits on (#3897): the permission and the resources it
+ * named, so the human decides about the real command, URL or path. An edit's contained paths are
+ * carried in `paths` as well; other actions carry no path list. Like the governed file-edit
+ * facts, this is model-selected text on the authenticated review channel only.
+ */
+function nativeActionReviewFacts(
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  const action = event.nativeAction;
+  if (action === undefined) return undefined;
+  const paths =
+    event.kind === "workspace-write"
+      ? [...new Set(action.resources)].slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS)
+      : [];
+  const pending: CodingWorkbenchRuntimePendingApprovalReview = {
+    requestId: event.requestId,
+    nativeAction: { permission: action.permission, resources: action.resources },
+    paths,
+    pathsTruncated: false,
+    fileCount: paths.length,
+    addedLines: 0,
+    deletedLines: 0,
+  };
+  return validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+    session: "active",
+    pending,
+  }).ok
+    ? pending
+    : { ...pending, paths: [], fileCount: 0 };
 }
 
 /**

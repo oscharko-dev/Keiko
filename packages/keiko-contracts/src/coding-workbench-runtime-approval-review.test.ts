@@ -135,3 +135,68 @@ describe("coding workbench runtime approval review channel", () => {
     );
   });
 });
+
+describe("native action review (#3897)", () => {
+  it("accepts a native action with or without contained paths", () => {
+    expect(
+      errorsFor({
+        session: "active",
+        pending: {
+          requestId: "permission-1",
+          nativeAction: { permission: "shell", resources: ["npm test"] },
+          paths: [],
+          pathsTruncated: false,
+          fileCount: 0,
+          addedLines: 0,
+          deletedLines: 0,
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      errorsFor({
+        session: "active",
+        pending: {
+          requestId: "permission-2",
+          nativeAction: { permission: "edit", resources: ["src/a.ts"] },
+          paths: ["src/a.ts"],
+          pathsTruncated: false,
+          fileCount: 1,
+          addedLines: 0,
+          deletedLines: 0,
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects an unbounded, malformed or authority-bearing native action", () => {
+    const base = {
+      requestId: "permission-1",
+      paths: [],
+      pathsTruncated: false,
+      fileCount: 0,
+      addedLines: 0,
+      deletedLines: 0,
+    };
+    for (const nativeAction of [
+      "shell",
+      { permission: "shell" },
+      { permission: "shell", resources: ["x"], extra: 1 },
+      { permission: "not a permission", resources: [] },
+      { permission: "shell", resources: Array.from({ length: 65 }, () => "x") },
+      { permission: "shell", resources: ["x".repeat(2049)] },
+      { permission: "shell", resources: [1] },
+    ]) {
+      expect(errorsFor({ session: "active", pending: { ...base, nativeAction } })).not.toEqual([]);
+    }
+    expect(
+      errorsFor({
+        session: "active",
+        pending: {
+          ...base,
+          nativeAction: { permission: "shell", resources: ["npm test"] },
+          verifiedCommit: { result: {}, message: "x" },
+        },
+      }),
+    ).not.toEqual([]);
+  });
+});

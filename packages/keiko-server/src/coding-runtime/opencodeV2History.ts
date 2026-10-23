@@ -29,8 +29,15 @@ import {
   openCodeVisibleToolNames,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./opencodeToolSchemas.js";
+import { isAdmissibleOpenCodeToolName } from "./opencodeNativeTools.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+
+/** The native profile (#3897) reports OpenCode's own tool ids, bounded by shape, not by list. */
+function historyToolAdmitted(name: string, profile: OpenCodeToolProfile): boolean {
+  if (profile === "native") return isAdmissibleOpenCodeToolName(name);
+  return HISTORY_TOOLS.has(name) || (profile === "code-mode" && name === "execute");
+}
 const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);
 
 const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
@@ -397,8 +404,7 @@ function toolState(
   if (state === undefined) throw new Error("opencode-v2-tool-state-invalid");
   const { id, name } = toolIdentity(part);
   assertToolInput(part, state);
-  if (!HISTORY_TOOLS.has(name) && !(profile === "code-mode" && name === "execute"))
-    throw new Error("opencode-v2-tool-invalid");
+  if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
   const mapped = displayToolState(status);
   return {
     kind: "tool",

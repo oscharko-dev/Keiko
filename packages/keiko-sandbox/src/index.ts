@@ -84,4 +84,5 @@ export type {
   SandboxAttestation,
   SandboxBackend,
   RuntimeGatewayFilesystem,
+  RuntimeGatewayProfile,
 } from "./types.js";

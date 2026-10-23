@@ -21,12 +21,21 @@ export type { SandboxBackend } from "@oscharko-dev/keiko-contracts";
 // `SandboxPolicy` structurally, only this package's own plan/decision types.
 export type IsolatedRunNetworkPolicy = NetworkPolicy | NetworkGatewayPolicy;
 
-/** Transient, server-owned native service roots; model-visible access needs its own authority hook. */
+/** The long-lived runtime profiles the gateway planner can wrap (ADR-0043 D14, #3897). */
+export type RuntimeGatewayProfile = "keiko-gateway" | "keiko-native";
+
+/**
+ * Transient, server-owned native service roots; model-visible access needs its own authority hook.
+ * `read-write` is the native profile (#3897): the workspace is the agent's working tree, writes
+ * stay inside it and the private state, and `deniedReadRoots` keeps credential stores and Keiko's
+ * own state out of reach regardless of what the agent runs.
+ */
 export interface RuntimeGatewayFilesystem {
   readonly workspaceRoot: string;
-  readonly workspaceAccess: "read-only";
+  readonly workspaceAccess: "read-only" | "read-write";
   readonly privateStateRoot: string;
   readonly runtimeReadRoot: string;
+  readonly deniedReadRoots?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
@@ -51,6 +60,8 @@ export interface IsolatedRunPlan {
   /** Exact trusted child executable admitted by the long-lived gateway profile. */
   readonly gatewayChildExecutable?: string | undefined;
   readonly gatewayFilesystem?: RuntimeGatewayFilesystem | undefined;
+  /** Absent means the loopback-gateway-only profile; `keiko-native` opens toolchains and egress. */
+  readonly gatewayProfile?: RuntimeGatewayProfile | undefined;
 }
 
 // The decision for a single run:

@@ -994,3 +994,72 @@ repeated.
   attempt 2 and surfaced as the retry that follows provider attempt 1. Both lines carry the turn
   request's correlation id, so the difference is read, not guessed; the numbering is pinned in
   `gateway.coding-outage.test.ts` and, through the route, in `coding-sidecar-gateway.test.ts`.
+
+## Amendment — the Coding Workbench runs the native OpenCode service (2026-10-23, #3897)
+
+Owner decision, 2026-10-23: the Coding Workbench offers the original OpenCode service as it runs
+standalone. Keiko is the foundation around it, not a replacement for its parts. D4's sentence
+"production currently continues to deny native workspace effect tools" is superseded by D10 below.
+
+### D10 — The native tool profile binds the autonomy mode through supported hooks
+
+- **One profile selects it.** `PRODUCTION_OPENCODE_TOOL_PROFILE` in `deps.ts` is the server-owned
+  selection of the `native` profile (`OPENCODE_TOOL_PROFILES`); no request field can select a
+  profile. The mapped `direct` and `code-mode` profiles remain available to tests and to an
+  explicit server selection, and the governed `keiko_*` catalog, the tool facade and Chat
+  repository search stay in place for the surfaces that use them.
+- **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
+  native profile (`opencodeLaunchProfile.ts`) allows every native action by rule, denies only the
+  mode-independent `external_directory` escape, keeps `update` and `share` off, keeps the single
+  `keiko-runtime` provider behind the Model Gateway, enables native snapshots, and loads the
+  repository's own instructions and `opencode.json`/`.opencode` configuration like standalone.
+  Repository text decides nothing about authority: the policy hook runs after OpenCode's own rule
+  evaluation and can only narrow the result.
+- **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
+  plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
+  (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`
+  classifies the action (read, edit, vetted or unvetted shell command, internet, Code Mode) onto
+  the ADR-0138 D2 matrix for the run's mode, applies the mode-independent hard denials (workspace
+  escape, denied sensitive paths, Keiko-owned Git delivery through the shell, unclassified actions)
+  and, where the matrix says approval-required, puts the action to the human through the existing
+  approval lane; the human's decision becomes the hook's `allow` or `deny`, and a denied call ends
+  with the same guidance as a declined governed ask (ADR-0124 D6). A missing, failed or oversized
+  policy answer denies the action. Reads and planning are allowed in every mode (ADR-0124 D1).
+- **What the human sees.** A native ask carries a closed label (`native-shell`, `native-edit`,
+  `native-egress`, `native-execute`) on the permission request and the agent's own command line,
+  paths or address on the authenticated approval-review channel (`nativeAction`), never on the
+  runtime snapshot, the SSE projection or the Activity Log.
+- **The shell sees no Keiko secret.** The same plugin registers `shell.create.before` and removes
+  the server password and every `KEIKO_*` binding from the environment of every shell the agent
+  starts.
+- **The Model Gateway forwards the native tool contract as data.** A native request carries the
+  runtime's own advertised tools; the route admits a bounded advertisement (at most 128 admissible
+  names, 64 KiB per schema, 512 KiB in all; `opencodeNativeTools.ts`) and mints a `native`
+  advertisement (`GatewayNativeToolAdvertisement`) the bridge forwards verbatim and binds back by
+  name only. Nothing in it registers a handler, effect or authority in Keiko (ADR-0175 D2). The
+  edit, write and patch tools are exact-content tools: their arguments reach the runtime byte for
+  byte (#4009).
+- **Process confinement becomes the `keiko-native` profile.** The sandbox keeps what the agent's
+  own toolchains need and what standalone never guards against: the task workspace, the private
+  run state and the user's temporary directories are writable; everything else stays read-only;
+  credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.azure`, `~/.docker`, `~/.netrc`,
+  `~/.pgpass`, `~/.git-credentials`, `~/.config/gh`, `~/.config/gcloud`, keychains) and Keiko's own
+  state directory are unreadable even for a shell. Executable transitions and egress are inherited;
+  egress is governed per action by the policy (internet asks below Full access), not by the process
+  wrapper. On macOS this is the real Seatbelt profile proven by `runtime-gateway.test.ts`; on Linux
+  the namespace wrapper keeps the tree bound to the parent without a network namespace; Windows
+  keeps its Job Object supervision. The spawned-confinement line records `keiko-native`,
+  `native-workspace-rw-v1`, `read-write` and `toolchain-inherited`.
+- **Projections admit OpenCode's own tool ids.** History, safe-activity and protocol projections
+  accept any admissible tool id (native, MCP-namespaced or plugin-registered, shape-bounded); logs
+  carry a native id as itself and any extension tool as `extension`.
+- **Evidence.** `coding-runtime.native-policy.decided` records, per evaluated action, the mode, the
+  closed action name, the effect (`allow`, `deny`, `ask`), the closed outcome (allowed, a hard
+  denial reason, or the human's approved/denied/expired/cancelled/unavailable), the risk, the
+  resource count and a digest of the resources, never a path, command or URL.
+
+What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
+ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
+with signed commits and bounded refs (ADR-0135, ADR-0087), evidence redaction (D7) and the one
+attested loopback origin for gateway and facade (D4).
+

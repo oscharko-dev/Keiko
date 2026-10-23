@@ -1,4 +1,4 @@
-import type { GatewayToolCatalogAdvertisement } from "./governed-tool-bridge.js";
+import type { GatewayToolAdvertisement } from "./governed-tool-bridge.js";
 import type { BoundToolInvocation } from "./governed-tool-lifecycle.js";
 // Gateway-layer WIRE contract types: model identity, request/response shapes, streaming envelope,
 // and tool-call normalisation. Credential-bearing or runtime-port shapes (ModelProviderConfig,
@@ -778,7 +778,7 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 
 export interface GatewayRequest {
   /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
-  readonly toolCatalog?: GatewayToolCatalogAdvertisement | undefined;
+  readonly toolCatalog?: GatewayToolAdvertisement | undefined;
   readonly modelId: string;
   readonly messages: readonly ChatMessage[];
   readonly responseFormat?: ResponseFormat | undefined;

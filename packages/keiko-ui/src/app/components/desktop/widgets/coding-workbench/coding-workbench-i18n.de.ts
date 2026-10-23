@@ -915,6 +915,28 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.retry": "Geänderte Dateien erneut laden",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
+  "codingWorkbench.approval.native.title": "Was der Agent ausführen möchte",
+  "codingWorkbench.approval.native.help":
+    "Genehmigen führt genau diese Aktion einmal im Aufgaben-Workspace aus; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
+  "codingWorkbench.approval.native.noResources":
+    "Kein Befehl, Pfad oder keine Adresse wurde genannt.",
+  "codingWorkbench.approval.native.loading": "Angeforderte Aktion wird geladen…",
+  "codingWorkbench.approval.native.unavailable":
+    "Die angeforderte Aktion ist nicht verfügbar. Koppeln Sie dieses Fenster erneut, um sie vor der Entscheidung zu sehen.",
+  "codingWorkbench.approval.native.retry": "Angeforderte Aktion erneut laden",
+  "codingWorkbench.approval.native.permission.shell": "Shell-Befehl",
+  "codingWorkbench.approval.native.permission.edit": "Dateiänderung",
+  "codingWorkbench.approval.native.permission.write": "Dateiänderung",
+  "codingWorkbench.approval.native.permission.patch": "Dateiänderung",
+  "codingWorkbench.approval.native.permission.webfetch": "Webabruf",
+  "codingWorkbench.approval.native.permission.websearch": "Websuche",
+  "codingWorkbench.approval.native.permission.execute": "Code-Mode-Skript",
+  "codingWorkbench.approval.native.permission.other": "Native Aktion",
+  "codingWorkbench.approval.native.label.native-shell": "Nativer Shell-Befehl",
+  "codingWorkbench.approval.native.label.native-edit": "Native Dateiänderung",
+  "codingWorkbench.approval.native.label.native-egress": "Nativer Internetzugriff",
+  "codingWorkbench.approval.native.label.native-execute": "Natives Code-Mode-Skript",
+  "codingWorkbench.approval.native.label.native-read": "Natives Lesen",
   "codingWorkbench.approval.evidenceRequired":
     "Die Genehmigung bleibt gesperrt, bis geladen ist, was diese Anfrage berühren würde. Wiederholen Sie diesen Abruf oder lehnen Sie die Anfrage ab.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",

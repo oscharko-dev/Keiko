@@ -135,6 +135,58 @@ describe("OpenCode launch profile", () => {
     expect(finalPermissionAction(config.permissions, "keiko_submit_changeset")).toBe("deny");
   });
 
+  // #3897: the native profile is standalone OpenCode under Keiko's policy hook. Nothing is
+  // denied statically except the mode-independent external-directory escape; every other action
+  // is decided per call by the server-owned policy, and the repository's own configuration loads.
+  it("emits the standalone-equivalent native configuration and keeps the project layer on", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      toolProfile: "native",
+      ...CONTEXT_INPUT,
+      randomBytes: () => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected native launch profile");
+    const config = JSON.parse(profile.config) as {
+      readonly snapshots: boolean;
+      readonly update: string;
+      readonly share: string;
+      readonly model: string;
+      readonly default_agent: string;
+      readonly providers: Readonly<Record<string, unknown>>;
+      readonly permissions: readonly { readonly action: string; readonly effect: string }[];
+    };
+    expect(config).toMatchObject({
+      snapshots: true,
+      update: "disable",
+      share: "disabled",
+      model: "keiko-runtime/coding",
+      default_agent: "build",
+    });
+    expect(config).not.toHaveProperty("tools");
+    expect(Object.keys(record(config.providers))).toEqual(["keiko-runtime"]);
+    expect(config.permissions).toEqual([
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "external_directory", resource: "*", effect: "deny" },
+    ]);
+    for (const tool of ["read", "edit", "shell", "webfetch", "subagent", "todo", "execute"]) {
+      expect(finalPermissionAction(config.permissions, tool)).toBe("allow");
+    }
+    expect(finalPermissionAction(config.permissions, "external_directory")).toBe("deny");
+    expect(profile.env).not.toHaveProperty("OPENCODE_DISABLE_PROJECT_CONFIG");
+    expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+    expect(profile.env.npm_config_offline).toBe("true");
+    const mapped = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
+      randomBytes: () => Buffer.alloc(32, 7),
+    });
+    if (!mapped.ok) throw new Error("expected mapped launch profile");
+    expect(mapped.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+    expect(mapped.config).not.toBe(profile.config);
+  });
+
   it("preserves the V1 compatibility prompt's digest-bound edit and instruction guidance", () => {
     const config = createFixedOpenCodeConfig(CONTEXT_GEOMETRY);
     const prompt = record(record(config.agent).build).prompt;

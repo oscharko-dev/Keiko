@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ad94126b79a76bab469c6744c2ca6c0c1ad09d4bd7bbc271aae5e069b8892218"
+    "catalogDigest": "53154bb9415df346ea06bf428d91a36b4e1c3ceed919f7c26f4b3dafb3efe87e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 552,
-    "proofCount": 565,
-    "resolvedProofCount": 565,
-    "failureClassCount": 350,
+    "operationCount": 553,
+    "proofCount": 566,
+    "resolvedProofCount": 566,
+    "failureClassCount": 351,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -326,6 +326,7 @@
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
         "coding-runtime.initialization-transport",
+        "coding-runtime.native-policy.decided",
         "coding-runtime.native-question.observed",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
@@ -811,6 +812,7 @@
     "coding-runtime-skill-discovery": ["tools-workflows.dependency-failure"],
     "coding-runtime-task-replacement": ["tools-workflows.dependency-failure"],
     "coding-runtime-tool-availability": ["tools-workflows.dependency-failure"],
+    "coding-runtime-native-policy": ["tools-workflows.dependency-failure"],
     "coding-runtime-tool-result": ["tools-workflows.dependency-failure"],
     "coding-runtime-verification": ["tools-workflows.dependency-failure"],
     "coding-safe-activity-projection": ["tools-workflows.loss"],
@@ -1413,6 +1415,9 @@
     ],
     "coding-runtime.initialization-transport.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
+    "coding-runtime.native-policy.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.test.ts"
     ],
     "coding-runtime.native-question.observed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"

@@ -1,8 +1,13 @@
 import { UPDATE_PORTABLE_TARGETS, type UpdatePortableTarget } from "./update-session.js";
 import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
 
-/** Server-selected fixed tool contract only; this value is never a model or module selector. */
-export const OPENCODE_TOOL_PROFILES = Object.freeze(["direct", "code-mode"] as const);
+/**
+ * Server-selected fixed tool contract only; this value is never a model or module selector.
+ * `native` is the standalone-equivalent profile (#3897): the pinned OpenCode service runs its own
+ * tools, agents and commands, and Keiko binds the autonomy mode through the supported permission
+ * and tool hooks instead of substituting mapped tools.
+ */
+export const OPENCODE_TOOL_PROFILES = Object.freeze(["native", "direct", "code-mode"] as const);
 export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
 const TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 

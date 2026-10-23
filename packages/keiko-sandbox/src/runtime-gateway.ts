@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { buildGatewaySeatbeltCommand, type WrappedCommand } from "./backends.js";
-import type { NetworkGatewayPolicy, RuntimeGatewayFilesystem } from "./types.js";
+import type {
+  NetworkGatewayPolicy,
+  RuntimeGatewayFilesystem,
+  RuntimeGatewayProfile,
+} from "./types.js";
 import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
 
 /** Transient server-owned destination and identity; never persist the URL or wrapper profile. */
@@ -12,11 +16,13 @@ export interface RuntimeGatewayConfinementInput {
   readonly runtimeArtifactDigest: string;
   readonly modelProfileDigest: string;
   readonly filesystem?: RuntimeGatewayFilesystem | undefined;
+  /** Absent selects the loopback-gateway-only profile. */
+  readonly profile?: RuntimeGatewayProfile | undefined;
 }
 
 export interface RuntimeGatewayConfinement {
   readonly schemaVersion: 1;
-  readonly profile: "keiko-gateway";
+  readonly profile: RuntimeGatewayProfile;
   readonly addressFamily: "ipv4" | "ipv6";
   readonly port: number;
   readonly runId: string;
@@ -85,7 +91,9 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
         policy.envelopeDigest,
         policy.runtimeArtifactDigest,
         policy.modelProfileDigest,
-        "fork-allowed-exec-runtime-and-apple-git-only-no-mach-lookup-no-appleevents-no-lsopen",
+        policy.profile === "keiko-native"
+          ? "native-exec-inherited-egress-governed-per-action-no-appleevents-no-lsopen"
+          : "fork-allowed-exec-runtime-and-apple-git-only-no-mach-lookup-no-appleevents-no-lsopen",
         ...(policy.filesystem === undefined
           ? []
           : [
@@ -94,6 +102,7 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
               policy.filesystem.workspaceAccess,
               policy.filesystem.privateStateRoot,
               policy.filesystem.runtimeReadRoot,
+              ...(policy.filesystem.deniedReadRoots ?? []),
             ]),
       ]),
     )
@@ -104,9 +113,17 @@ export function createRuntimeGatewayConfinement(
   input: RuntimeGatewayConfinementInput,
 ): RuntimeGatewayConfinement {
   const filesystem = closedFilesystem(input.filesystem);
+  const profile = input.profile ?? "keiko-gateway";
+  // A filesystem block, where the platform has one, must agree with the profile: the native
+  // profile writes the workspace; the gateway profile never does.
+  if (
+    filesystem !== undefined &&
+    (profile === "keiko-native") !== (filesystem.workspaceAccess === "read-write")
+  )
+    invalidPolicy();
   const policy = {
     schemaVersion: 1,
-    profile: "keiko-gateway",
+    profile,
     ...gatewayAddress(input.gatewayUrl),
     runId: input.runId,
     treeBindingId: input.treeBindingId,
@@ -168,14 +185,20 @@ function ownPolicyData(value: unknown): Record<string, unknown> | undefined {
   return record;
 }
 
+const PROFILES: ReadonlySet<unknown> = new Set<RuntimeGatewayProfile>([
+  "keiko-gateway",
+  "keiko-native",
+]);
+const ADDRESS_FAMILIES: ReadonlySet<unknown> = new Set(["ipv4", "ipv6"]);
+
 function validPolicy(value: unknown): value is RuntimeGatewayConfinement {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (!hasPolicyKeys(record)) return false;
   if (
     record.schemaVersion !== 1 ||
-    record.profile !== "keiko-gateway" ||
-    (record.addressFamily !== "ipv4" && record.addressFamily !== "ipv6")
+    !PROFILES.has(record.profile) ||
+    !ADDRESS_FAMILIES.has(record.addressFamily)
   )
     return false;
   return (
@@ -232,5 +255,14 @@ export function buildRuntimeGatewaySeatbeltCommand(
     host: closed.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
     port: closed.port,
   };
-  return buildGatewaySeatbeltCommand(gateway, command, args, gitExecutable, closed.filesystem);
+  // The attested profile selects the formula: forgetting it here would confine a native run
+  // under the gateway allowlist, which the real-Seatbelt proof in the test suite pins.
+  return buildGatewaySeatbeltCommand(
+    gateway,
+    command,
+    args,
+    gitExecutable,
+    closed.filesystem,
+    closed.profile,
+  );
 }

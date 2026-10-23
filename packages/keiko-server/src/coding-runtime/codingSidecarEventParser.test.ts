@@ -242,3 +242,52 @@ describe("parseCodingSidecarEventLine approvalToken three-way distinction", () =
     }
   });
 });
+
+describe("parseCodingSidecarEventLine native action (#3897)", () => {
+  const NATIVE_ASK = {
+    type: "permission-request",
+    expiresAt: "2026-10-23T12:05:00.000Z",
+    requestId: "permission-1",
+    kind: "command-execution",
+    actionClass: "command-execution",
+    reasonCode: "approval-required",
+    scopeLabel: "workspace-scope",
+    risk: "high",
+    policyReason: "approval-required",
+    commandLabel: "native-shell",
+  };
+
+  it("preserves the bounded native action and omits it when absent", () => {
+    const parsed = parseCodingSidecarEventLine(
+      JSON.stringify({
+        ...NATIVE_ASK,
+        nativeAction: { permission: "shell", resources: ["rm -rf build"] },
+      }),
+    );
+    expect(parsed).toMatchObject({
+      status: "parsed",
+      event: { nativeAction: { permission: "shell", resources: ["rm -rf build"] } },
+    });
+    const absent = parseCodingSidecarEventLine(JSON.stringify(NATIVE_ASK));
+    expect(absent.status).toBe("parsed");
+    if (absent.status !== "parsed" || absent.event.type !== "permission-request") throw new Error();
+    expect(absent.event).not.toHaveProperty("nativeAction");
+  });
+
+  it("rejects a malformed native action instead of dropping it silently", () => {
+    for (const nativeAction of [
+      "shell",
+      { permission: "shell" },
+      { permission: "shell", resources: ["x"], extra: true },
+      { permission: "not a permission", resources: [] },
+      { permission: "shell", resources: [1] },
+      { permission: "shell", resources: ["a\u0000b"] },
+      { permission: "shell", resources: Array.from({ length: 65 }, () => "x") },
+      { permission: "shell", resources: ["x".repeat(2049)] },
+    ]) {
+      expect(parseCodingSidecarEventLine(JSON.stringify({ ...NATIVE_ASK, nativeAction }))).toEqual({
+        status: "invalid",
+      });
+    }
+  });
+});

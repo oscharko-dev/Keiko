@@ -156,7 +156,8 @@ function planGatewayRun(
     args: wrapped.args,
     attestation: {
       backend,
-      networkEnforced: true,
+      // The native profile (#3897) governs egress per action, not by the process wrapper.
+      networkEnforced: plan.gatewayProfile !== "keiko-native",
       filesystemEnforced: plan.gatewayFilesystem !== undefined,
       platform,
     },

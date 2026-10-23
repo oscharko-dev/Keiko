@@ -58,7 +58,8 @@ function approvalFor(): NpmLaneRuntimeApproval {
     adapterVersion: "2",
     executableTreeSha256: sha256(`bin/opencode\0${sha256(EXECUTABLE)}\0`),
     licenseSha256: sha256(LICENSE),
-    protocolSchemaSha256: "a".repeat(64),
+    // The approved version's own producer-derived schema digest (opencodeRuntimeVersions.ts).
+    protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
     sbomSha256: sha256(SBOM),
     helperSha256: sha256(HELPER),
     helperSizeBytes: HELPER.length,

@@ -379,3 +379,17 @@ mistake, and weaker at package boundaries than a small closed mode set.
 
 Rejected. Subscription-backed Codex/ChatGPT routing has different credential semantics and must not
 be represented as a generic OpenAI Platform API key.
+
+## Amendment — native OpenCode actions ask through the same lane (2026-10-23, #3897)
+
+With the native tool profile (ADR-0137 D10) the sidecar runtime no longer asks through a mapped
+`keiko_governed_action` permission. OpenCode evaluates its own permission for every tool call and
+the server-owned policy decides the final effect per mode: D1's reads and planning stay allowed in
+every mode; workspace edits follow the owner decision of 2026-09-26 (an ask in Ask for approval,
+applied in Supervised workspace and Full access); vetted verification commands are routine in
+Supervised workspace while other commands and internet use ask below Full access; the
+mode-independent hard denials refuse the action outright. An ask that reaches the human is the
+same typed, content-free permission request of D6, carrying a closed `native-*` label; the action's
+own command, paths or address ride the authenticated approval-review channel only. A denied or
+expired ask answers the native call with the D6 guidance so the native loop continues without it.
+

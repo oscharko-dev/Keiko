@@ -168,13 +168,13 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "2.0.10";
+const OPENCODE_VERSION = "2.1.4";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
-// Captured structural projection from OpenCode 2.0.10's actual OpenAPI document.
+const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
+// Captured structural projection from OpenCode 2.1.4's actual OpenAPI document.
 const OPENAPI: unknown = JSON.parse(
   readFileSync(
-    new URL("./opencodeProtocolSurface.opencode-2.0.10.fixture.json", import.meta.url),
+    new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
     "utf8",
   ),
 );
@@ -1125,7 +1125,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b",
+      "a4d3734390c885a07a8b9e137ffadce69489f566094755ff1904f59824672375",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");

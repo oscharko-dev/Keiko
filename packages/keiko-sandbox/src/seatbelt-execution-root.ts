@@ -67,6 +67,7 @@ const GATEWAY_FILESYSTEM_KEYS = new Set([
   "privateStateRoot",
   "runtimeReadRoot",
 ]);
+const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set(["deniedReadRoots"]);
 
 function validRoot(value: unknown): value is string {
   return (
@@ -87,10 +88,13 @@ export function copyRuntimeGatewayFilesystem(value: unknown): RuntimeGatewayFile
     const prototype: unknown = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (Reflect.ownKeys(descriptors).length !== GATEWAY_FILESYSTEM_KEYS.size) return undefined;
+    const keys = new Set(Reflect.ownKeys(descriptors));
+    if (![...GATEWAY_FILESYSTEM_KEYS].every((key) => keys.has(key))) return undefined;
     if (
       !Object.entries(descriptors).every(
-        ([key, entry]) => GATEWAY_FILESYSTEM_KEYS.has(key) && Object.hasOwn(entry, "value"),
+        ([key, entry]) =>
+          (GATEWAY_FILESYSTEM_KEYS.has(key) || OPTIONAL_GATEWAY_FILESYSTEM_KEYS.has(key)) &&
+          Object.hasOwn(entry, "value"),
       )
     )
       return undefined;
@@ -107,10 +111,11 @@ function validGatewayFilesystem(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & RuntimeGatewayFilesystem {
   if (
-    value.workspaceAccess !== "read-only" ||
+    (value.workspaceAccess !== "read-only" && value.workspaceAccess !== "read-write") ||
     !validRoot(value.workspaceRoot) ||
     !validRoot(value.privateStateRoot) ||
-    !validRoot(value.runtimeReadRoot)
+    !validRoot(value.runtimeReadRoot) ||
+    !validDeniedReadRoots(value.deniedReadRoots)
   )
     return false;
   // The normal <workspace>/.keiko private metadata subtree remains writable. It must never
@@ -119,6 +124,15 @@ function validGatewayFilesystem(
     outsideRoot(value.privateStateRoot, value.workspaceRoot) &&
     outsideRoot(value.privateStateRoot, value.runtimeReadRoot) &&
     outsideRoot(value.runtimeReadRoot, value.privateStateRoot)
+  );
+}
+
+function validDeniedReadRoots(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    Array.isArray(value) &&
+    value.length <= 64 &&
+    value.every((root) => typeof root === "string" && validRoot(root))
   );
 }
 
@@ -145,6 +159,32 @@ export function gatewayFilesystemSeatbeltRules(
     `(allow file-read* ${pathFilters("subpath", reads)} ${pathFilters("literal", READ_LITERALS)})` +
     `(allow file-read-metadata ${pathFilters("literal", roots.flatMap(ancestors))})` +
     `(allow file-write* (subpath ${JSON.stringify(closed.privateStateRoot)}) (literal "/dev/null"))`
+  );
+}
+
+/**
+ * The native profile's filesystem rules (#3897): the workspace and the private run state are
+ * writable, the user's temporary directories stay usable for toolchains, everything else is
+ * read-only, and the denied roots (credential stores, Keiko's own state) are unreadable even
+ * inside an otherwise allowed tree. Rule order matters: the last matching Seatbelt rule wins, so
+ * the private state root is re-allowed after the denied roots that may contain it.
+ */
+export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesystem): string {
+  const closed = copyRuntimeGatewayFilesystem(filesystem);
+  if (closed?.workspaceAccess !== "read-write")
+    throw new TypeError("native-seatbelt-filesystem-invalid");
+  const writable = [
+    closed.workspaceRoot,
+    closed.privateStateRoot,
+    "/private/tmp",
+    "/private/var/folders",
+  ];
+  const denied = closed.deniedReadRoots ?? [];
+  return (
+    "(deny file-write*)" +
+    `(allow file-write* ${pathFilters("subpath", writable)} (literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr"))` +
+    (denied.length === 0 ? "" : `(deny file-read* file-write* ${pathFilters("subpath", denied)})`) +
+    `(allow file-read* file-write* (subpath ${JSON.stringify(closed.privateStateRoot)}))`
   );
 }
 

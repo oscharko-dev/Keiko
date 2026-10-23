@@ -407,7 +407,7 @@ Historical drift and current corrections:
 Repository files read for this matrix (paths relative to the repository root):
 
 - Pinned protocol and tools:
-  `packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.0.10.fixture.json`,
+  `packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.1.4.fixture.json`,
   `packages/keiko-server/src/coding-runtime/opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json`,
   `packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts`,
   `packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.ts`,
@@ -489,7 +489,7 @@ facts.
 [profile]: ../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts
 [project-memory]: ../../packages/keiko-server/src/coding-runtime/codingRuntimeProjectMemory.ts
 [repository-instructions]: ../../packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts
-[protocol-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.0.10.fixture.json
+[protocol-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.1.4.fixture.json
 [protocol-surface]: ../../packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.ts
 [questions]: ../../packages/keiko-server/src/coding-runtime/opencodeV2Questions.ts
 [read-edit]: ../../packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts

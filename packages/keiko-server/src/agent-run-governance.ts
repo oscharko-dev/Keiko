@@ -316,7 +316,15 @@ function promptTokenEstimate(request: GatewayRequest): number {
     }),
   );
   const tools =
-    request.toolCatalog === undefined ? [] : [JSON.stringify(request.toolCatalog.projection.tools)];
+    request.toolCatalog === undefined
+      ? []
+      : [
+          JSON.stringify(
+            request.toolCatalog.kind === "native"
+              ? request.toolCatalog.tools
+              : request.toolCatalog.projection.tools,
+          ),
+        ];
   const responseFormat =
     request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
   return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));

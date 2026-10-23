@@ -22,6 +22,8 @@ import {
   createGeneratedOpenCodeNativeContextPlugin,
   OPENCODE_NATIVE_CONTEXT_FACTS,
 } from "./opencodeNativeContext.js";
+import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
+import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
   runtimeMaxDurationMs,
@@ -43,7 +45,6 @@ import {
 import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
-  OPENCODE_PINNED_VERSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
   openCodeVisibleToolNames,
   type OpenCodeToolProfile,
@@ -283,7 +284,12 @@ export interface OpenCodeRuntimeAdapterPorts {
   readonly maxTurnWaitMs?: number | undefined;
   readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
-    readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
+    readonly verifiedTarget: {
+      readonly executable: string;
+      readonly attestationDigest: string;
+      /** The discovered runtime's approved upstream version; readiness must meet exactly it. */
+      readonly version: string;
+    };
     readonly configDigest: string;
     readonly nativeContextConfigured?: true | undefined;
     readonly verifyTargetAttestation: () => Promise<boolean>;
@@ -724,7 +730,7 @@ async function startAdapter(
     phase = recordReadinessPhase(ports, "authenticated-health");
     const authenticated = await readiness.health("basic");
     if (authenticated.status !== 200) return fail("authenticated-health");
-    if (authenticated.version !== OPENCODE_PINNED_VERSION)
+    if (authenticated.version !== readiness.verifiedTarget.version)
       return fail("authenticated-health-version");
     phase = recordReadinessPhase(ports, "unauthenticated-health");
     const unauthenticated = await readiness.health("none");
@@ -807,6 +813,7 @@ function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boole
   return (
     isAbsolute(readiness.verifiedTarget.executable) &&
     DIGEST.test(readiness.verifiedTarget.attestationDigest) &&
+    isApprovedOpenCodeRuntimeVersion(readiness.verifiedTarget.version) &&
     DIGEST.test(readiness.configDigest)
   );
 }
@@ -1220,10 +1227,17 @@ export function createGeneratedOpenCodeV2Plugins(
   openCodeVisibleToolNames(profile);
   const cached = cachedV2PluginSources.get(profile);
   if (cached !== undefined) return cached;
-  const sources = Object.freeze({
-    keiko_governed_tools: sharedV2ToolPluginSource(false, profile),
-    keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
-  });
+  const plugins: Record<string, string> =
+    profile === "native"
+      ? {
+          keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin(),
+          keiko_native_context: createGeneratedOpenCodeNativeContextPlugin("native"),
+        }
+      : {
+          keiko_governed_tools: sharedV2ToolPluginSource(false, profile),
+          keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
+        };
+  const sources = Object.freeze(plugins);
   cachedV2PluginSources.set(profile, sources);
   return sources;
 }

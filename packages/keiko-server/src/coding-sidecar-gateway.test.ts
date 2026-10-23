@@ -1,3 +1,4 @@
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -9105,13 +9106,14 @@ describe("inactive Code Mode readiness selection", () => {
     expect(result).toMatchObject({ status: 200 });
     const request = chat.mock.calls[0]?.[0];
     expect(request).not.toHaveProperty("tools");
-    expect(request?.toolCatalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
+    const catalog = boundGatewayToolCatalog(request?.toolCatalog);
+    expect(catalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
       "execute",
       "question",
     ]);
-    expect(request?.toolCatalog?.projection.tools).toHaveLength(17);
-    expect(request?.toolCatalog?.offered.toolRefs).toHaveLength(17);
-    expect(request?.toolCatalog?.projection.profile).toEqual({
+    expect(catalog?.projection.tools).toHaveLength(17);
+    expect(catalog?.offered.toolRefs).toHaveLength(17);
+    expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,
     });

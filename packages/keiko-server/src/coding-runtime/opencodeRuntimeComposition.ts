@@ -96,6 +96,16 @@ import {
   type OpenCodeV2ApprovalOutcome,
   type ToolBridgeApprovalRejection,
 } from "./opencodeV2ApprovalRequests.js";
+import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
+import {
+  decideOpenCodeNativePolicy,
+  parseOpenCodeNativePolicyRequest,
+  recordOpenCodeNativePolicyDecision,
+  type OpenCodeNativePolicyDecision,
+  type OpenCodeNativePolicyOutcome,
+  type OpenCodeNativePolicyRequest,
+} from "./opencodeNativePolicy.js";
+import { OPENCODE_NATIVE_POLICY_ACTION } from "./opencodeNativePolicyPlugin.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
 import {
@@ -120,11 +130,7 @@ import {
 } from "./opencodeProtocolSurface.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
-import {
-  type OpenCodeToolProfile,
-  openCodeVisibleToolNames,
-  OPENCODE_PINNED_VERSION,
-} from "./opencodeToolSchemas.js";
+import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
@@ -169,8 +175,6 @@ function v2Record(value: unknown): Readonly<Record<string, unknown>> | undefined
     : undefined;
 }
 
-const PINNED_RAW_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
-const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;
 const HISTORY_SYNC_MIN_INTERVAL_MS = 100;
@@ -370,6 +374,8 @@ interface PreparedRun {
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
+  /** The run's effective autonomy mode, as the launch environment declares it (#3897). */
+  readonly mode: string | undefined;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
@@ -936,6 +942,7 @@ function persistPreparedRun(
     password,
     configDigest,
     request.verification,
+    request.env.KEIKO_CODING_MODE,
   );
   if (program !== undefined) run.serviceHostPrepared = true;
   runs.set(request.runId, run);
@@ -1007,6 +1014,7 @@ function preparedRun(
   password: string,
   configDigest: string,
   verification: PortableSidecarRuntimeVerification,
+  mode?: string,
 ): PreparedRun {
   return {
     runId,
@@ -1015,6 +1023,7 @@ function preparedRun(
     password,
     configDigest,
     verification,
+    mode,
     observedPermissionIds: new Set(),
     initialTurnBaselineStable: false,
     ready: false,
@@ -1124,6 +1133,7 @@ function readinessV2Ports(
     verifiedTarget: {
       executable: join(input.portable.resourceRoot, run.verification.executablePath),
       attestationDigest: run.verification.protocolHandshakeDigest,
+      version: run.verification.summary.upstreamVersion,
     },
     configDigest: run.configDigest,
     nativeContextConfigured: true,
@@ -1635,15 +1645,17 @@ function verifiedProtocol(
   candidate: PortableSidecarRuntimeVerification,
   trusted: PortableSidecarRuntimeVerification,
 ): boolean {
+  // The discovered runtime's approved version selects its own producer-derived digests (#3908).
+  const pin = openCodeRuntimeVersionPin(candidate.summary.upstreamVersion);
   return (
     candidate === trusted &&
     candidate.summary.status === "verified" &&
-    candidate.summary.upstreamVersion === OPENCODE_PINNED_VERSION &&
+    pin !== undefined &&
     candidate.availability.protocolSchemaVerified &&
-    candidate.protocolSchemaRawSha256 === PINNED_RAW_SCHEMA_SHA256 &&
+    candidate.protocolSchemaRawSha256 === pin.rawSchemaSha256 &&
     runtimeField(candidate, "protocolHandshakeAlgorithm") ===
       OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM &&
-    DIGEST.test(candidate.protocolHandshakeDigest)
+    candidate.protocolHandshakeDigest === pin.protocolSurfaceSha256
   );
 }
 
@@ -2182,6 +2194,10 @@ function handleDirectToolRequest(
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
   }
+  const nativePolicy = parseNativePolicyBody(input.body);
+  if (nativePolicy !== undefined) {
+    return handleNativePolicyRequest(nativePolicy, input.signal, deps, approvals, runs);
+  }
   const admission = gate.admit(
     toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
   );
@@ -2190,6 +2206,88 @@ function handleDirectToolRequest(
   return executeToolRequest(deps, input.headers, input.body, admission).finally(
     detachExternalAbort,
   );
+}
+
+function parseNativePolicyBody(body: string): OpenCodeNativePolicyRequest | undefined {
+  if (!validJson(body)) return undefined;
+  const parsed: unknown = JSON.parse(body);
+  return v2Record(parsed)?.action === OPENCODE_NATIVE_POLICY_ACTION
+    ? parseOpenCodeNativePolicyRequest(parsed)
+    : undefined;
+}
+
+/**
+ * The native permission hook's question (#3897): what is the final effect of this evaluated
+ * OpenCode action for this run? The server-owned policy answers allow or deny at once, or puts the
+ * action to the human through the run's approval lane and answers with the decision. Every answer
+ * leaves a body-free line; an unready run, a foreign session or a malformed ask is refused.
+ */
+async function handleNativePolicyRequest(
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  runs: ReadonlyMap<string, PreparedRun>,
+): Promise<OpenCodeToolBridgeResponse> {
+  const run = runs.get(request.runId);
+  if (run?.ready !== true || run.sessionId !== request.sessionID) {
+    return { status: 403, body: "", rejection: "approval-unavailable" };
+  }
+  const decision = decideOpenCodeNativePolicy({
+    mode: run.mode,
+    workspaceRoot: run.workspaceRoot,
+    request,
+    nowMs: Date.now(),
+  });
+  let outcome: OpenCodeNativePolicyOutcome;
+  if (decision.effect === "ask") {
+    outcome = await nativePolicyHumanDecision(run, decision, signal, deps, approvals);
+  } else {
+    outcome = decision.effect === "allow" ? "allowed" : decision.reason;
+  }
+  recordOpenCodeNativePolicyDecision(deps.activityLog, run.runId, {
+    mode: run.mode,
+    request,
+    decision,
+    outcome,
+  });
+  if (outcome === "allowed" || outcome === "approved") return nativePolicyResponse("allow");
+  if (decision.effect === "deny") return nativePolicyResponse("deny", decision.message);
+  return nativePolicyResponse(
+    "deny",
+    humanDecisionFeedback(outcome === "denied" ? "denied" : "expired"),
+  );
+}
+
+// The ask goes to the human through the run's existing approval lane; the tool call it ends is
+// settled with the human's verdict like a governed ask (#3612).
+async function nativePolicyHumanDecision(
+  run: Pick<PreparedRun, "runId" | "onPermission">,
+  decision: Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }>,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+): Promise<OpenCodeNativePolicyOutcome> {
+  if (run.onPermission === undefined || signal?.aborted === true) return "unavailable";
+  const human = await approvals.requestNative({
+    runId: run.runId,
+    event: decision.event,
+    actionId: decision.actionId,
+    onPermission: run.onPermission,
+    signal: signal ?? new AbortController().signal,
+  });
+  settleDecidedTool(deps.settleTool, human);
+  return human.outcome;
+}
+
+function nativePolicyResponse(
+  effect: "allow" | "deny",
+  message?: string,
+): OpenCodeToolBridgeResponse {
+  return {
+    status: 200,
+    body: JSON.stringify(message === undefined ? { effect } : { effect, message }),
+  };
 }
 
 function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {

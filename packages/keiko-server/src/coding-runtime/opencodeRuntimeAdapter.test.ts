@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Script } from "node:vm";
 
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
@@ -118,7 +119,11 @@ interface OpenCodeRuntimeAdapterPorts {
     readonly maxOutputTokens: number;
   };
   readonly readiness: {
-    readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
+    readonly verifiedTarget: {
+      readonly executable: string;
+      readonly attestationDigest: string;
+      readonly version: string;
+    };
     readonly configDigest: string;
     readonly nativeContextConfigured?: true;
     readonly verifyTargetAttestation: () => Promise<boolean>;
@@ -392,7 +397,11 @@ function readinessPorts(failAt?: ReadinessPhase): {
         maxOutputTokens: 4_096,
       },
       readiness: {
-        verifiedTarget: { executable: "/verified/opencode", attestationDigest: DIGEST },
+        verifiedTarget: {
+          executable: "/verified/opencode",
+          attestationDigest: DIGEST,
+          version: OPENCODE_PINNED_VERSION,
+        },
         configDigest: DIGEST,
         verifyTargetAttestation: (): Promise<boolean> =>
           Promise.resolve(failed("target-attestation")),
@@ -409,7 +418,7 @@ function readinessPorts(failAt?: ReadinessPhase): {
             if (!failed("authenticated-health")) return Promise.resolve({ status: 500 });
             return Promise.resolve(
               failed("authenticated-health-version")
-                ? { status: 200, version: "2.0.10" }
+                ? { status: 200, version: OPENCODE_PINNED_VERSION }
                 : { status: 200, version: "wrong-version" },
             );
           }

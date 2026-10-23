@@ -25,6 +25,7 @@ import {
   type DevLaneOpenCodeTarget,
 } from "./devLanePortableCodingRuntime.js";
 import { OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import { attestPortableSidecarTree } from "@oscharko-dev/keiko-security/portable-tree-attestation";
@@ -275,7 +276,7 @@ describe("dev-lane OpenCode discovery", () => {
     expect(runtime.installRoot).toBe(join(staged.paths.stagedTargetRoot, "opencode-compatible"));
     expect(runtime.sidecar.summary).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.0.10",
+      upstreamVersion: OPENCODE_PINNED_VERSION,
       platformTarget: "macos-arm64",
       status: "verified",
     });

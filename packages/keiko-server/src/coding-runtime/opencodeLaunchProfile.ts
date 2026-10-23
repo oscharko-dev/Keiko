@@ -124,7 +124,10 @@ export function buildOpenCodeLaunchProfile(
       TEMP: join(input.stateRoot, "tmp"),
       TMP: join(input.stateRoot, "tmp"),
       OPENCODE_CONFIG_DIR: join(input.stateRoot, "config", "opencode"),
-      OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+      // The native profile loads the repository's own OpenCode configuration (AGENTS.md,
+      // opencode.json, .opencode/) exactly like standalone; the mode policy hook keeps repository
+      // text from widening authority. The mapped profiles keep the project layer switched off.
+      ...(input.toolProfile === "native" ? {} : { OPENCODE_DISABLE_PROJECT_CONFIG: "true" }),
       // The pinned runtime checks plugin dependencies before loading even dependency-free custom
       // tools. Registry retries cannot succeed inside the gateway-only network boundary. Keep its
       // package manager offline so absent optional packages fail promptly, without registry egress.
@@ -299,6 +302,7 @@ export function createFixedOpenCodeV2Config(
   profile: OpenCodeToolProfile = "direct",
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
+  if (profile === "native") return createNativeOpenCodeV2Config(contextGeometry);
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -326,6 +330,41 @@ export function createFixedOpenCodeV2Config(
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions,
+  };
+}
+
+/**
+ * Standalone-equivalent configuration (#3897): every native tool, agent and command stays enabled
+ * and the repository's own instructions and configuration load as they do standalone. The only
+ * fixed rules are the ones Keiko owns regardless of mode: no self-update, no sharing, one
+ * provider reached through the Model Gateway, and the mode-independent hard denial of external
+ * directories. Every other permission is decided per call by the Keiko policy hook
+ * (`keiko.native-policy`), which can only narrow what this ruleset allows.
+ */
+function createNativeOpenCodeV2Config(
+  contextGeometry: OpenCodeContextGeometry,
+): Readonly<Record<string, unknown>> {
+  const reserved = Math.min(
+    OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
+    contextGeometry.maxOutputTokens,
+  );
+  const recent = Math.min(
+    OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
+    Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, contextGeometry.maxInputTokens - reserved),
+  );
+  return {
+    update: "disable",
+    share: "disabled",
+    snapshots: true,
+    model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    default_agent: "build",
+    providers: fixedOpenCodeV2Provider(contextGeometry),
+    compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
+    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    permissions: [
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "external_directory", resource: "*", effect: "deny" },
+    ],
   };
 }
 

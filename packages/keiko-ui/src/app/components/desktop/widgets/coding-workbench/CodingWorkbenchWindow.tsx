@@ -72,8 +72,13 @@ import {
   CodingWorkbenchCommitReview,
   reviewForPermission,
   approvalReviewRequestId,
+  isNativeActionPermission,
   StageReviewDiagnostic,
 } from "./CodingWorkbenchCommitReview";
+import {
+  CodingWorkbenchNativeActionReview,
+  nativeActionLabel,
+} from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -2181,7 +2186,12 @@ function PermissionPrompt({
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
-      <ApprovalReviewContent kind={request.actionKind} review={approvalReview} t={t} />
+      <ApprovalReviewContent
+        kind={request.actionKind}
+        native={isNativeActionPermission(request)}
+        review={approvalReview}
+        t={t}
+      />
       {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
       <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>
       <ApprovalDecisionControls
@@ -2194,15 +2204,37 @@ function PermissionPrompt({
   );
 }
 
+const APPROVAL_NATIVE_MESSAGE_KEYS = {
+  loading: "codingWorkbench.approval.native.loading",
+  unavailable: "codingWorkbench.approval.native.unavailable",
+  retry: "codingWorkbench.approval.native.retry",
+} as const;
+
 function ApprovalReviewContent({
   kind,
+  native,
   review,
   t,
 }: {
   readonly kind: CodingWorkbenchRuntimePendingPermission["actionKind"];
+  readonly native: boolean;
   readonly review: UseCodingWorkbenchApprovalReviewResult;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  // A native OpenCode action (#3897): the human sees the agent's own command, paths or address.
+  if (native) {
+    const action = review.review?.nativeAction;
+    return action === undefined ? (
+      <fieldset
+        className={styles.approvalResearch}
+        aria-label={t("codingWorkbench.approval.native.title")}
+      >
+        <RetryMessage {...detailMessageProps(review, t, APPROVAL_NATIVE_MESSAGE_KEYS)} />
+      </fieldset>
+    ) : (
+      <CodingWorkbenchNativeActionReview action={action} t={t} />
+    );
+  }
   return (
     <>
       <StageReviewDiagnostic
@@ -2632,7 +2664,10 @@ function approvalFacts(
     { label: t("codingWorkbench.approval.scope"), value: request.scopeLabel ?? notSpecified },
     {
       label: t("codingWorkbench.approval.commandClass"),
-      value: request.commandLabel ?? t("codingWorkbench.approval.notApplicable"),
+      value:
+        request.commandLabel === undefined
+          ? t("codingWorkbench.approval.notApplicable")
+          : nativeActionLabel(request.commandLabel, t),
     },
     {
       label: t("codingWorkbench.approval.connectorScopes"),

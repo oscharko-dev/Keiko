@@ -15,11 +15,8 @@ import {
   recordAt,
   signatureKind,
 } from "./update-portable-staging-shared.js";
-import {
-  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
-} from "./coding-runtime/opencodeProtocolSurface.js";
-import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeToolSchemas.js";
+import { OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM } from "./coding-runtime/opencodeProtocolSurface.js";
+import { openCodeRuntimeVersionPin } from "./coding-runtime/opencodeRuntimeVersions.js";
 import {
   evaluationAttestationDeclaredNegative,
   platformCheckKeys,
@@ -125,8 +122,6 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const OPENCODE_COMMIT = "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824";
-const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
 const SIGNING_KEYS = [
   "notarizationRequired",
   "notarizationVerified",
@@ -362,20 +357,23 @@ function portableProvenanceVerified(
   const schema = recordAt(runtime, "protocolSchema");
   const approval = recordAt(recordAt(runtime, "releaseApproval"), "redistribution");
   const archive = recordAt(runtime, "archive");
+  // Producer-derived identity: the declared version selects its own pinned tag, commit and
+  // schema digest (#3908); an unpinned version has no identity to verify against.
+  const pin = openCodeRuntimeVersionPin(upstream?.version);
+  if (pin === undefined) return false;
   return [
     runtime.approvalSchemaVersion === 2,
     runtime.kind === "coding-runtime",
     fieldEquals(upstream, "owner", "anomalyco"),
     fieldEquals(upstream, "repository", "opencode"),
     fieldEquals(upstream, "name", "opencode"),
-    fieldEquals(upstream, "version", OPENCODE_PINNED_VERSION),
-    fieldEquals(upstream, "tag", `v${OPENCODE_PINNED_VERSION}`),
-    fieldEquals(upstream, "commit", OPENCODE_COMMIT),
+    fieldEquals(upstream, "tag", pin.tag),
+    fieldEquals(upstream, "commit", pin.commit),
     fieldEquals(adapter, "adapterName", "keiko-coding-sidecar"),
     fieldEquals(adapter, "adapterVersion", "2"),
     fieldEquals(adapter, "transport", "http-sse"),
     fieldEquals(schema, "path", "packages/protocol/openapi.json"),
-    fieldEquals(schema, "sha256", OPENCODE_SCHEMA_SHA256),
+    fieldEquals(schema, "sha256", pin.rawSchemaSha256),
     fieldEquals(schema, "hashAlgorithm", "sha256"),
     fieldEquals(schema, "hashEncoding", "lowercase-hex"),
     fieldEquals(schema, "digestInput", "upstream-raw-bytes"),
@@ -536,6 +534,8 @@ function parseNamedRuntime(
   const shipped = requiredShippedExecutableDigests(runtime, target, lane);
   const summary = baseSummary(runtime, target, payload.payloadSha256, payload.sizeBytes);
   if (summary === undefined) fail("sidecar-metadata-malformed", "sidecar metadata is incomplete");
+  const pin = openCodeRuntimeVersionPin(summary.upstreamVersion);
+  if (pin === undefined) fail("sidecar-metadata-malformed", "sidecar runtime version is unpinned");
   return {
     summary,
     payloadRootPath: payload.payloadRootPath,
@@ -547,8 +547,8 @@ function parseNamedRuntime(
     licenseEvidenceSha256: evidence.license.sha256,
     sbomEvidencePath: evidence.sbom.path,
     sbomEvidenceSha256: evidence.sbom.sha256,
-    protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolSchemaRawSha256: pin.rawSchemaSha256,
+    protocolHandshakeDigest: pin.protocolSurfaceSha256,
     protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
     availability: laneAvailability(lane),
   };

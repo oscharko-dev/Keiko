@@ -791,8 +791,10 @@ interface ObservedGatewayCatalogBinding {
 function observedGatewayCatalogBinding(
   request: GatewayRequest,
 ): ObservedGatewayCatalogBinding | undefined {
-  const binding = request.toolCatalog?.offered.binding;
-  if (binding === undefined) return undefined;
+  const catalog = request.toolCatalog;
+  // The native advertisement (#3897) carries no catalog binding: nothing to observe.
+  if (catalog?.kind !== "bound") return undefined;
+  const { binding } = catalog.offered;
   return {
     catalogRevision: binding.catalogRevision,
     profile: { id: binding.profile.id, version: binding.profile.version },

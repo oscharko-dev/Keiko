@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand as buildRuntimeGatewaySeatbeltCommandCore,
@@ -385,6 +385,99 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
       }
     },
   );
+
+  // #3897: the native profile keeps the workspace writable and credential roots unreadable while
+  // the agent's own toolchains run; proven against the real Seatbelt, not the profile text.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: writes the workspace, denies credential roots and lets toolchains run",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-rw-proof-")));
+      const workspaceRoot = join(root, "workspace");
+      const privateStateRoot = join(root, "keiko-state", "coding-runtime", "run-1");
+      const deniedRoot = join(root, "secrets");
+      mkdirSync(workspaceRoot);
+      mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+      mkdirSync(deniedRoot);
+      writeFileSync(join(deniedRoot, "id_rsa"), "synthetic");
+      writeFileSync(join(root, "keiko-state", "vault.db"), "synthetic");
+      // The per-user temp tree is writable on purpose (toolchains write TMPDIR), so the external
+      // probe targets the home directory, which no native rule opens; it is removed in `finally`.
+      const externalPath = join(homedir(), `.keiko-native-proof-${basename(root)}`);
+      const script = [
+        "require 'json'",
+        "r = {}",
+        `begin; File.write(${JSON.stringify(join(workspaceRoot, "edited.txt"))}, 'x'); r['workspaceWrite'] = true; rescue; r['workspaceWrite'] = false; end`,
+        `begin; File.read(${JSON.stringify(join(deniedRoot, "id_rsa"))}); r['secretRead'] = true; rescue; r['secretRead'] = false; end`,
+        `begin; File.read(${JSON.stringify(join(root, "keiko-state", "vault.db"))}); r['stateRead'] = true; rescue; r['stateRead'] = false; end`,
+        `begin; File.write(${JSON.stringify(join(privateStateRoot, "state.txt"))}, 'x'); r['privateStateWrite'] = true; rescue; r['privateStateWrite'] = false; end`,
+        `begin; File.write(${JSON.stringify(externalPath)}, 'x'); r['externalWrite'] = true; rescue; r['externalWrite'] = false; end`,
+        `begin; File.write(${JSON.stringify(join(root, "keiko-state", "other.db"))}, 'x'); r['stateWrite'] = true; rescue; r['stateWrite'] = false; end`,
+        "r['childExec'] = system('/bin/echo', 'child', out: File::NULL) == true",
+        "print JSON.generate(r)",
+      ].join("\n");
+      try {
+        const policy = createRuntimeGatewayConfinement({
+          ...input,
+          profile: "keiko-native",
+          filesystem: {
+            workspaceRoot,
+            workspaceAccess: "read-write",
+            privateStateRoot,
+            runtimeReadRoot: "/usr/bin",
+            deniedReadRoots: [deniedRoot, join(root, "keiko-state")],
+          },
+        });
+        expect(policy.profile).toBe("keiko-native");
+        const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/usr/bin/ruby", [
+          "--disable-gems",
+          "-e",
+          script,
+        ]);
+        expect(run(wrapped.command, wrapped.args)).toEqual({
+          status: 0,
+          stdout: JSON.stringify({
+            workspaceWrite: true,
+            secretRead: false,
+            stateRead: false,
+            privateStateWrite: true,
+            externalWrite: false,
+            stateWrite: false,
+            childExec: true,
+          }),
+        });
+      } finally {
+        rmSync(externalPath, { force: true });
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("refuses a native profile whose filesystem is not writable, and the reverse", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    expect(() =>
+      createRuntimeGatewayConfinement({
+        ...input,
+        profile: "keiko-native",
+        filesystem: { ...filesystem, workspaceAccess: "read-only" },
+      }),
+    ).toThrow("runtime-gateway-policy-invalid");
+    expect(() => createRuntimeGatewayConfinement({ ...input, filesystem })).toThrow(
+      "runtime-gateway-policy-invalid",
+    );
+    const native = createRuntimeGatewayConfinement({
+      ...input,
+      profile: "keiko-native",
+      filesystem,
+    });
+    const gateway = createRuntimeGatewayConfinement(input);
+    expect(native.policyDigest).not.toBe(gateway.policyDigest);
+    expect(native.profile).toBe("keiko-native");
+  });
 
   it.skipIf(!canProveOnThisHost)(
     "denies an unapproved child executable while permitting the real Apple git chain",

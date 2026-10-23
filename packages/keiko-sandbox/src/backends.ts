@@ -8,11 +8,13 @@ import { linuxGatewayLauncherPath } from "./runtime.js";
 import {
   executionRootSeatbeltProfile,
   gatewayFilesystemSeatbeltRules,
+  nativeWorkspaceSeatbeltRules,
 } from "./seatbelt-execution-root.js";
 import type {
   IsolatedRunPlan,
   NetworkGatewayPolicy,
   RuntimeGatewayFilesystem,
+  RuntimeGatewayProfile,
   SandboxBackend,
 } from "./types.js";
 
@@ -153,8 +155,30 @@ function buildLinuxGatewayCommand(
   };
 }
 
+/**
+ * Linux native profile (#3897): the agent's toolchains and egress stay available (no network
+ * namespace); the sandbox keeps the process tree bound to the parent and the working directory.
+ */
+function nativeBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
+  if (!isAbsolute(plan.command) || !isAbsolute(plan.cwd))
+    throw new TypeError("linux-gateway-launch-input-invalid");
+  return [
+    "--die-with-parent",
+    "--dev-bind",
+    "/",
+    "/",
+    "--chdir",
+    plan.cwd,
+    "--",
+    plan.command,
+    ...plan.args,
+  ];
+}
+
 function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
   const gateway = copyNetworkGatewayPolicy(plan.network);
+  if (gateway !== undefined && plan.gatewayProfile === "keiko-native")
+    return { command: "bwrap", args: nativeBubblewrapArgs(plan) };
   if (gateway !== undefined) return buildLinuxGatewayCommand("bubblewrap", plan, gateway);
   if (
     plan.network !== "none" &&
@@ -167,6 +191,13 @@ function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
 
 function buildUnshareCommand(plan: IsolatedRunPlan): WrappedCommand {
   const gateway = copyNetworkGatewayPolicy(plan.network);
+  if (gateway !== undefined && plan.gatewayProfile === "keiko-native") {
+    if (!isAbsolute(plan.command)) throw new TypeError("linux-gateway-launch-input-invalid");
+    return {
+      command: "unshare",
+      args: ["--map-root-user", "--fork", "--pid", "--mount-proc", plan.command, ...plan.args],
+    };
+  }
   if (gateway !== undefined) return buildLinuxGatewayCommand("unshare", plan, gateway);
   if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
   return { command: "unshare", args: unshareArgs(plan) };
@@ -216,9 +247,13 @@ export function buildGatewaySeatbeltCommand(
   args: readonly string[],
   childExecutable: string,
   filesystem?: RuntimeGatewayFilesystem,
+  gatewayProfile: RuntimeGatewayProfile = "keiko-gateway",
 ): WrappedCommand {
   const closedGateway = copyNetworkGatewayPolicy(gateway);
   if (closedGateway === undefined) throw new TypeError("gateway-network-policy-invalid");
+  if (gatewayProfile === "keiko-native") {
+    return buildNativeSeatbeltCommand(command, args, filesystem);
+  }
   const family = closedGateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
   const profile =
     "(version 1)(allow default)(deny network*)" +
@@ -227,6 +262,27 @@ export function buildGatewaySeatbeltCommand(
     (filesystem === undefined ? "" : gatewayFilesystemSeatbeltRules(filesystem, childExecutable)) +
     `(allow network-outbound (remote ${family} "localhost:${String(closedGateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;
+  return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
+}
+
+/**
+ * The native profile (#3897): the agent runs its own shell, toolchains and network like
+ * standalone OpenCode. What stays enforced is the filesystem boundary (writes only inside the
+ * workspace, the private run state and the temporary directories; credential stores and Keiko's
+ * state unreadable) and the service escape surfaces. Egress is governed per action by the
+ * server-owned permission policy, not by the process profile.
+ */
+function buildNativeSeatbeltCommand(
+  command: string,
+  args: readonly string[],
+  filesystem: RuntimeGatewayFilesystem | undefined,
+): WrappedCommand {
+  if (!isAbsolute(command) || command.includes("\0"))
+    throw new TypeError("gateway-seatbelt-command-not-absolute");
+  if (filesystem === undefined) throw new TypeError("native-seatbelt-filesystem-invalid");
+  const profile =
+    "(version 1)(allow default)(deny appleevent-send)(deny lsopen)" +
+    nativeWorkspaceSeatbeltRules(filesystem);
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 
@@ -239,6 +295,7 @@ function buildSeatbeltCommand(plan: IsolatedRunPlan): WrappedCommand {
       plan.args,
       plan.gatewayChildExecutable ?? "",
       plan.gatewayFilesystem,
+      plan.gatewayProfile,
     );
   }
   if (

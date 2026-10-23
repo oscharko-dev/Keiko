@@ -93,8 +93,7 @@
                 {
                   "anyOf": [
                     {
-                      "type": "string",
-                      "pattern": "^ses"
+                      "$ref": "#/components/schemas/Session.ID"
                     },
                     {
                       "type": "string",
@@ -110,12 +109,28 @@
             "required": false
           },
           {
+            "name": "archived",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["true", "false"]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
             "name": "directory",
             "in": "query",
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/AbsolutePath"
                 },
                 {
                   "type": "null"
@@ -130,7 +145,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/Project.ID"
                 },
                 {
                   "type": "null"
@@ -145,7 +160,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/RelativePath"
                 },
                 {
                   "type": "null"
@@ -160,7 +175,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/SessionsCursor"
                 },
                 {
                   "type": "null"
@@ -188,9 +203,6 @@
                   "anyOf": [
                     {
                       "$ref": "#/components/schemas/InvalidCursorErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
@@ -248,6 +260,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -259,8 +280,17 @@
                   "id": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "pattern": "^ses"
+                        "$ref": "#/components/schemas/Session.ID"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "parentID": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Session.ID"
                       },
                       {
                         "type": "null"
@@ -280,7 +310,7 @@
                   "agent": {
                     "anyOf": [
                       {
-                        "type": "string"
+                        "$ref": "#/components/schemas/Agent.ID"
                       },
                       {
                         "type": "null"
@@ -353,7 +383,8 @@
                         "^ses": {
                           "$ref": "#/components/schemas/SessionActive"
                         }
-                      }
+                      },
+                      "additionalProperties": false
                     }
                   },
                   "required": ["data"],
@@ -390,8 +421,7 @@
             "name": "sessionID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^ses"
+              "$ref": "#/components/schemas/Session.ID"
             },
             "required": true
           },
@@ -458,7 +488,8 @@
                     "skill",
                     "shell",
                     "assistant",
-                    "compaction"
+                    "compaction",
+                    "idle"
                   ]
                 },
                 {
@@ -533,8 +564,7 @@
             "name": "sessionID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^ses"
+              "$ref": "#/components/schemas/Session.ID"
             },
             "required": true
           }
@@ -561,14 +591,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
                 }
               }
             }
@@ -591,7 +614,7 @@
                       "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
                     },
                     {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
                     }
                   ]
                 }
@@ -617,8 +640,7 @@
                   "id": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "pattern": "^msg_"
+                        "$ref": "#/components/schemas/Session.Message.ID"
                       },
                       {
                         "type": "null"
@@ -686,8 +708,7 @@
             "name": "sessionID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^ses"
+              "$ref": "#/components/schemas/Session.ID"
             },
             "required": true
           },
@@ -746,7 +767,7 @@
                       "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
                     },
                     {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
                     }
                   ]
                 }
@@ -831,6 +852,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
           }
         }
       }
@@ -842,8 +872,7 @@
             "name": "sessionID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^ses"
+              "$ref": "#/components/schemas/Session.ID"
             },
             "required": true
           },
@@ -851,8 +880,7 @@
             "name": "requestID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^per"
+              "$ref": "#/components/schemas/Permission.ID"
             },
             "required": true
           }
@@ -884,13 +912,13 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
                       "$ref": "#/components/schemas/PermissionNotFoundErrorEncoded"
                     },
                     {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
                     }
                   ]
                 }
@@ -1002,6 +1030,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
           }
         }
       }
@@ -1021,8 +1058,7 @@
             "name": "formID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^frm_"
+              "$ref": "#/components/schemas/Form.ID"
             },
             "required": true
           }
@@ -1061,13 +1097,13 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
                       "$ref": "#/components/schemas/FormNotFoundErrorEncoded"
                     },
                     {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
                     }
                   ]
                 }
@@ -1111,10 +1147,24 @@
             "name": "formID",
             "in": "path",
             "schema": {
-              "type": "string",
-              "pattern": "^frm_"
+              "$ref": "#/components/schemas/Form.ID"
             },
             "required": true
+          },
+          {
+            "name": "message",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false
           }
         ],
         "security": [],
@@ -1144,13 +1194,13 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
                       "$ref": "#/components/schemas/FormNotFoundErrorEncoded"
                     },
                     {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
                     }
                   ]
                 }
@@ -1197,7 +1247,7 @@
                       "$ref": "#/components/schemas/V2EventEncoded"
                     }
                   },
-                  "required": ["id", "event", "data"],
+                  "required": ["event", "data"],
                   "additionalProperties": false
                 }
               }
@@ -1252,6 +1302,29 @@
             },
             "required": ["tmp"],
             "additionalProperties": false
+          },
+          "capabilities": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "persistentPty": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": ["version", "pid", "urls", "paths"],
@@ -1305,6 +1378,22 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "Session.ID": {
+        "type": "string",
+        "pattern": "^ses"
+      },
+      "AbsolutePath": {
+        "type": "string"
+      },
+      "Project.ID": {
+        "type": "string"
+      },
+      "RelativePath": {
+        "type": "string"
+      },
+      "SessionsCursor": {
+        "type": "string"
+      },
       "SessionsResponse": {
         "type": "object",
         "properties": {
@@ -1320,7 +1409,7 @@
               "previous": {
                 "anyOf": [
                   {
-                    "type": "string"
+                    "$ref": "#/components/schemas/SessionsCursor"
                   },
                   {
                     "type": "null"
@@ -1330,7 +1419,7 @@
               "next": {
                 "anyOf": [
                   {
-                    "type": "string"
+                    "$ref": "#/components/schemas/SessionsCursor"
                   },
                   {
                     "type": "null"
@@ -1362,19 +1451,16 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^ses"
+            "$ref": "#/components/schemas/Session.ID"
           },
           "parentID": {
-            "type": "string",
-            "pattern": "^ses"
+            "$ref": "#/components/schemas/Session.ID"
           },
           "fork": {
             "type": "object",
             "properties": {
               "sessionID": {
-                "type": "string",
-                "pattern": "^ses"
+                "$ref": "#/components/schemas/Session.ID"
               },
               "boundary": {
                 "$ref": "#/components/schemas/Session.ForkBoundary"
@@ -1384,10 +1470,10 @@
             "additionalProperties": false
           },
           "projectID": {
-            "type": "string"
+            "$ref": "#/components/schemas/Project.ID"
           },
           "agent": {
-            "type": "string"
+            "$ref": "#/components/schemas/Agent.ID"
           },
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
@@ -1428,7 +1514,7 @@
             "type": "string"
           },
           "subpath": {
-            "type": "string"
+            "$ref": "#/components/schemas/RelativePath"
           },
           "metadata": {
             "$ref": "#/components/schemas/Session.Metadata"
@@ -1446,6 +1532,26 @@
         "required": ["id", "projectID", "cost", "tokens", "time", "location"],
         "additionalProperties": false
       },
+      "SessionNotFoundErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["SessionNotFoundError"]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "sessionID", "message"],
+        "additionalProperties": false
+      },
+      "Agent.ID": {
+        "type": "string"
+      },
       "Model.Ref": {
         "type": "object",
         "properties": {
@@ -1453,7 +1559,7 @@
             "type": "string"
           },
           "providerID": {
-            "type": "string"
+            "$ref": "#/components/schemas/Provider.ID"
           },
           "variant": {
             "type": "string"
@@ -1466,7 +1572,7 @@
         "type": "object",
         "properties": {
           "directory": {
-            "type": "string"
+            "$ref": "#/components/schemas/AbsolutePath"
           }
         },
         "required": ["directory"],
@@ -1531,23 +1637,6 @@
         "required": ["data", "cursor"],
         "additionalProperties": false
       },
-      "SessionNotFoundErrorEncoded": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["SessionNotFoundError"]
-          },
-          "sessionID": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": ["_tag", "sessionID", "message"],
-        "additionalProperties": false
-      },
       "UnknownErrorEncoded": {
         "type": "object",
         "properties": {
@@ -1576,12 +1665,10 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "sessionID": {
-            "type": "string",
-            "pattern": "^ses"
+            "$ref": "#/components/schemas/Session.ID"
           },
           "time": {
             "type": "object",
@@ -1607,6 +1694,23 @@
         "required": ["id", "sessionID", "time", "type", "payload", "delivery"],
         "additionalProperties": false
       },
+      "LocationNotFoundErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["LocationNotFoundError"]
+          },
+          "location": {
+            "$ref": "#/components/schemas/Location.PublicRef"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "location", "message"],
+        "additionalProperties": false
+      },
       "ConflictErrorEncoded": {
         "type": "object",
         "properties": {
@@ -1630,6 +1734,10 @@
         },
         "required": ["_tag", "message"],
         "additionalProperties": false
+      },
+      "Session.Message.ID": {
+        "type": "string",
+        "pattern": "^msg_"
       },
       "PromptInput.FileAttachment": {
         "type": "object",
@@ -1664,7 +1772,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/Skill.ID"
           },
           "mention": {
             "$ref": "#/components/schemas/Prompt.Mention"
@@ -1691,12 +1799,10 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^per"
+            "$ref": "#/components/schemas/Permission.ID"
           },
           "sessionID": {
-            "type": "string",
-            "pattern": "^ses"
+            "$ref": "#/components/schemas/Session.ID"
           },
           "action": {
             "type": "string"
@@ -1726,6 +1832,10 @@
         "required": ["id", "sessionID", "action", "resources"],
         "additionalProperties": false
       },
+      "Permission.ID": {
+        "type": "string",
+        "pattern": "^per"
+      },
       "PermissionNotFoundErrorEncoded": {
         "type": "object",
         "properties": {
@@ -1751,8 +1861,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^frm_"
+            "$ref": "#/components/schemas/Form.ID"
           },
           "sessionID": {
             "type": "string"
@@ -1769,6 +1878,10 @@
         },
         "required": ["id", "sessionID", "title", "fields"],
         "additionalProperties": false
+      },
+      "Form.ID": {
+        "type": "string",
+        "pattern": "^frm_"
       },
       "FormInvalidAnswerErrorEncoded": {
         "type": "object",
@@ -1845,8 +1958,7 @@
                 "enum": ["before"]
               },
               "messageID": {
-                "type": "string",
-                "pattern": "^msg_"
+                "$ref": "#/components/schemas/Session.Message.ID"
               }
             },
             "required": ["type", "messageID"],
@@ -1860,8 +1972,7 @@
                 "enum": ["through"]
               },
               "messageID": {
-                "type": "string",
-                "pattern": "^msg_"
+                "$ref": "#/components/schemas/Session.Message.ID"
               }
             },
             "required": ["type", "messageID"],
@@ -1905,14 +2016,13 @@
         "type": "object",
         "properties": {
           "messageID": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "partID": {
             "type": "string"
           },
           "snapshot": {
-            "type": "string"
+            "$ref": "#/components/schemas/Snapshot.ID"
           },
           "files": {
             "type": "array",
@@ -1923,6 +2033,9 @@
         },
         "required": ["messageID"],
         "additionalProperties": false
+      },
+      "Provider.ID": {
+        "type": "string"
       },
       "Permission.Rule": {
         "type": "object",
@@ -2024,6 +2137,9 @@
         "required": ["start", "end", "text"],
         "additionalProperties": false
       },
+      "Skill.ID": {
+        "type": "string"
+      },
       "Permission.Source": {
         "anyOf": [
           {
@@ -2066,6 +2182,9 @@
           "$ref": "#/components/schemas/Form.Value"
         }
       },
+      "Snapshot.ID": {
+        "type": "string"
+      },
       "FileDiff.Info": {
         "type": "object",
         "properties": {
@@ -2099,8 +2218,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2120,10 +2238,10 @@
             "enum": ["agent-switched"]
           },
           "agent": {
-            "type": "string"
+            "$ref": "#/components/schemas/Agent.ID"
           },
           "previous": {
-            "type": "string"
+            "$ref": "#/components/schemas/Agent.ID"
           }
         },
         "required": ["id", "time", "type", "agent"],
@@ -2133,8 +2251,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2167,8 +2284,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2188,10 +2304,10 @@
             "enum": ["location-switched"]
           },
           "projectID": {
-            "type": "string"
+            "$ref": "#/components/schemas/Project.ID"
           },
           "subpath": {
-            "type": "string"
+            "$ref": "#/components/schemas/RelativePath"
           },
           "location": {
             "$ref": "#/components/schemas/Location.PublicRef"
@@ -2205,10 +2321,10 @@
                     "$ref": "#/components/schemas/Location.PublicRef"
                   },
                   "projectID": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/Project.ID"
                   },
                   "subpath": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/RelativePath"
                   }
                 },
                 "required": ["location"],
@@ -2227,8 +2343,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2276,8 +2391,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2307,8 +2421,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2338,8 +2451,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2359,10 +2471,10 @@
             "enum": ["skill"]
           },
           "skill": {
-            "type": "string"
+            "$ref": "#/components/schemas/Skill.ID"
           },
           "name": {
-            "type": "string"
+            "$ref": "#/components/schemas/Skill.Name"
           },
           "text": {
             "type": "string"
@@ -2375,8 +2487,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2399,8 +2510,7 @@
             "enum": ["shell"]
           },
           "shellID": {
-            "type": "string",
-            "pattern": "^sh_"
+            "$ref": "#/components/schemas/Shell.ID"
           },
           "command": {
             "type": "string"
@@ -2449,8 +2559,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2476,7 +2585,7 @@
             "enum": ["assistant"]
           },
           "agent": {
-            "type": "string"
+            "$ref": "#/components/schemas/Agent.ID"
           },
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
@@ -2501,15 +2610,15 @@
             "type": "object",
             "properties": {
               "start": {
-                "type": "string"
+                "$ref": "#/components/schemas/Snapshot.ID"
               },
               "end": {
-                "type": "string"
+                "$ref": "#/components/schemas/Snapshot.ID"
               },
               "files": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/RelativePath"
                 }
               }
             },
@@ -2522,8 +2631,8 @@
           "rawFinish": {
             "type": "string"
           },
-          "providerState": {
-            "$ref": "#/components/schemas/Session.Message.ProviderState_4"
+          "native": {
+            "$ref": "#/components/schemas/Session.Message.Native_3"
           },
           "cost": {
             "$ref": "#/components/schemas/Money.USD"
@@ -2558,8 +2667,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2581,6 +2689,9 @@
           "outcome": {
             "type": "string",
             "enum": ["succeeded", "failed", "interrupted"]
+          },
+          "error": {
+            "$ref": "#/components/schemas/Session.StructuredError"
           }
         },
         "required": ["id", "time", "type", "outcome"],
@@ -2612,10 +2723,10 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/Skill.ID"
           },
           "name": {
-            "type": "string"
+            "$ref": "#/components/schemas/Skill.Name"
           },
           "text": {
             "type": "string"
@@ -2676,6 +2787,13 @@
           }
         ]
       },
+      "Skill.Name": {
+        "type": "string"
+      },
+      "Shell.ID": {
+        "type": "string",
+        "pattern": "^sh_"
+      },
       "Session.Message.Assistant.Text": {
         "type": "object",
         "properties": {
@@ -2686,8 +2804,8 @@
           "text": {
             "type": "string"
           },
-          "state": {
-            "$ref": "#/components/schemas/Session.Message.ProviderState"
+          "native": {
+            "$ref": "#/components/schemas/Session.Message.Native"
           }
         },
         "required": ["type", "text"],
@@ -2703,8 +2821,8 @@
           "text": {
             "type": "string"
           },
-          "state": {
-            "$ref": "#/components/schemas/Session.Message.ProviderState_1"
+          "native": {
+            "$ref": "#/components/schemas/Session.Message.Native_1"
           },
           "time": {
             "type": "object",
@@ -2739,11 +2857,8 @@
           "executed": {
             "type": "boolean"
           },
-          "providerState": {
-            "$ref": "#/components/schemas/Session.Message.ProviderState_2"
-          },
-          "providerResultState": {
-            "$ref": "#/components/schemas/Session.Message.ProviderState_3"
+          "native": {
+            "$ref": "#/components/schemas/Session.Message.Native_2"
           },
           "state": {
             "anyOf": [
@@ -2781,7 +2896,7 @@
         "required": ["type", "id", "name", "state", "time"],
         "additionalProperties": false
       },
-      "Session.Message.ProviderState_4": {
+      "Session.Message.Native_3": {
         "type": "object"
       },
       "Session.StructuredError": {
@@ -2797,6 +2912,20 @@
             "type": "integer",
             "minimum": 100,
             "maximum": 599
+          },
+          "response": {
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string"
+              }
+            },
+            "required": ["body"],
+            "additionalProperties": false
+          },
+          "retryAfterMs": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": ["type", "message"],
@@ -2827,8 +2956,7 @@
             "enum": ["compaction"]
           },
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2850,12 +2978,9 @@
           "reason": {
             "type": "string",
             "enum": ["auto", "manual"]
-          },
-          "recent": {
-            "type": "string"
           }
         },
-        "required": ["type", "id", "time", "status", "reason", "summary", "recent"],
+        "required": ["type", "id", "time", "status", "reason", "summary"],
         "additionalProperties": false
       },
       "Session.Message.Compaction.Completed": {
@@ -2866,8 +2991,7 @@
             "enum": ["compaction"]
           },
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -2893,14 +3017,8 @@
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
           },
-          "providerState": {
-            "$ref": "#/components/schemas/Session.Message.ProviderState_5"
-          },
-          "recent": {
-            "type": "string"
-          },
-          "providerContext": {
-            "$ref": "#/components/schemas/Session.ProviderContext"
+          "native": {
+            "$ref": "#/components/schemas/Session.Message.Native_4"
           },
           "cost": {
             "$ref": "#/components/schemas/Money.USD"
@@ -2909,7 +3027,7 @@
             "$ref": "#/components/schemas/TokenUsage.Info"
           }
         },
-        "required": ["type", "id", "time", "status", "reason", "summary", "recent"],
+        "required": ["type", "id", "time", "status", "reason", "summary"],
         "additionalProperties": false
       },
       "Session.Message.Compaction.Failed": {
@@ -2920,8 +3038,7 @@
             "enum": ["compaction"]
           },
           "id": {
-            "type": "string",
-            "pattern": "^msg_"
+            "$ref": "#/components/schemas/Session.Message.ID"
           },
           "metadata": {
             "type": "object"
@@ -3277,16 +3394,13 @@
         "required": ["key", "type", "url"],
         "additionalProperties": false
       },
-      "Session.Message.ProviderState": {
+      "Session.Message.Native": {
         "type": "object"
       },
-      "Session.Message.ProviderState_1": {
+      "Session.Message.Native_1": {
         "type": "object"
       },
-      "Session.Message.ProviderState_2": {
-        "type": "object"
-      },
-      "Session.Message.ProviderState_3": {
+      "Session.Message.Native_2": {
         "type": "object"
       },
       "Session.Message.ToolState.Streaming": {
@@ -3381,23 +3495,8 @@
         "required": ["status", "input", "error"],
         "additionalProperties": false
       },
-      "Session.Message.ProviderState_5": {
+      "Session.Message.Native_4": {
         "type": "object"
-      },
-      "Session.ProviderContext": {
-        "type": "object",
-        "properties": {
-          "version": {
-            "type": "number",
-            "enum": [1]
-          },
-          "provenance": {
-            "$ref": "#/components/schemas/Session.ProviderContext.Provenance"
-          },
-          "messages": {}
-        },
-        "required": ["version", "provenance", "messages"],
-        "additionalProperties": false
       },
       "Form.When": {
         "type": "object",
@@ -3456,31 +3555,6 @@
             "$ref": "#/components/schemas/Tool.FileContent"
           }
         ]
-      },
-      "Session.ProviderContext.Provenance": {
-        "type": "object",
-        "properties": {
-          "providerID": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "modelID": {
-            "type": "string"
-          },
-          "route": {
-            "type": "string"
-          },
-          "protocol": {
-            "type": "string"
-          },
-          "endpoint": {
-            "type": "string"
-          }
-        },
-        "required": ["providerID", "provider", "modelID", "route", "protocol", "endpoint"],
-        "additionalProperties": false
       },
       "Tool.TextContent": {
         "type": "object",

@@ -31,9 +31,17 @@ export function StageReviewDiagnostic({
   return null;
 }
 
+/** A native OpenCode policy ask (#3897) carries the action it waits on in the review channel. */
+export function isNativeActionPermission(
+  request: CodingWorkbenchRuntimePendingPermission | undefined,
+): boolean {
+  return request?.actionKind === undefined && request?.commandLabel?.startsWith("native-") === true;
+}
+
 export function approvalReviewRequestId(
   request: CodingWorkbenchRuntimePendingPermission | undefined,
 ): string | undefined {
+  if (isNativeActionPermission(request)) return request?.requestId;
   switch (request?.actionKind) {
     case "file-edit":
     case "git-stage":

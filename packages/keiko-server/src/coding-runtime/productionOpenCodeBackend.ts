@@ -1,6 +1,7 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type {
@@ -196,7 +197,7 @@ function createOpenCodeRun(
   );
   try {
     const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry, toolProfile);
-    const launch = openCodeLaunchMaterial(input, run);
+    const launch = openCodeLaunchMaterial(input, run, toolProfile);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
     const permissionPort = createOpenCodeRuntimePermissionPort(composition.runPort);
@@ -259,7 +260,7 @@ function composeOpenCodeRun(
     safeActivity,
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
-    supervisor: runtimeSupervisor(input, run),
+    supervisor: runtimeSupervisor(input, run, toolProfile),
     diagnostics: input.diagnostics,
     activityLog: input.activityLog,
     toolResultCorrelationId: run.minted.authorityRef.runId,
@@ -692,9 +693,25 @@ function callIdFromAction(actionId: string): string | undefined {
   return SAFE_ACTIVITY_CALL_ID.test(callId) ? callId : undefined;
 }
 
+/**
+ * The environment names the native profile (#3897) inherits from the launcher: the toolchain
+ * search path and locale facts a standalone shell would see. Never a credential name
+ * (`buildRuntimeEnv` refuses those), and the mapped profiles inherit nothing.
+ */
+const NATIVE_INHERITED_ENV_ALLOWLIST: readonly string[] = Object.freeze([
+  "PATH",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "TERM",
+  "SHELL",
+]);
+
 function openCodeLaunchMaterial(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun["launch"] {
   return {
     recoveryHandle: randomBytes(16).toString("hex"),
@@ -706,7 +723,7 @@ function openCodeLaunchMaterial(
     gatewayUrl: input.gatewayUrl,
     modelProfileId: run.context.modelProfile.profileId,
     args: [],
-    inheritedEnvAllowlist: [],
+    inheritedEnvAllowlist: toolProfile === "native" ? NATIVE_INHERITED_ENV_ALLOWLIST : [],
     shutdownTimeoutMs: 5_000,
     startTimeoutMs: OPEN_CODE_START_TIMEOUT_MS,
     confinement: input.portable.qualification,
@@ -729,19 +746,20 @@ function assertOpenCodeRun(run: ProductionRuntimeBackendInput): void {
 function runtimeSupervisor(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
   const workspaceRoot = run.context.workspaceRoot;
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
   if (isDevLaneRuntime(input.portable)) {
-    return devLaneSupervisor(input.portable, input, run);
+    return devLaneSupervisor(input.portable, input, run, toolProfile);
   }
   if (input.portable.target === "linux-x64") {
-    return linuxNamespaceGatewaySupervisor(input.portable, input, run);
+    return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
-    return appSandboxSupervisor(input.portable, input, run);
+    return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
@@ -749,7 +767,7 @@ function runtimeSupervisor(
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
-      gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run, toolProfile),
     }),
     qualifications: [input.portable.qualification],
   });
@@ -759,6 +777,7 @@ function linuxNamespaceGatewaySupervisor(
   portable: ResolvedPortableOpenCodeRuntime,
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
@@ -768,7 +787,7 @@ function linuxNamespaceGatewaySupervisor(
         backend: "linux-namespace-gateway",
       },
       runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run, toolProfile),
     }),
     qualifications: [portable.qualification],
   });
@@ -778,8 +797,10 @@ function devLaneSupervisor(
   portable: DevLanePortableOpenCodeRuntime,
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
-  if (portable.target !== "windows-x64") return appSandboxSupervisor(portable, input, run);
+  if (portable.target !== "windows-x64")
+    return appSandboxSupervisor(portable, input, run, toolProfile);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
@@ -788,7 +809,7 @@ function devLaneSupervisor(
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,
       identity: portable.qualification,
-      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run, toolProfile),
     }),
     qualifications: [portable.qualification],
   });
@@ -813,6 +834,7 @@ function appSandboxSupervisor(
   portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
@@ -822,17 +844,45 @@ function appSandboxSupervisor(
         backend: "macos-app-sandbox",
       },
       runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run, toolProfile),
     }),
     qualifications: [portable.qualification],
   });
+}
+
+/**
+ * Credential stores the native agent must never read, whatever it runs (ADR-0129 D3 hard denial):
+ * the well-known secret locations under the user's home, mirrored from the shared sensitive-path
+ * policy, plus Keiko's own state directory (gateway credentials, vault, the Activity Log).
+ */
+function nativeDeniedReadRoots(runtimeStateRoot: string): readonly string[] {
+  const home = homedir();
+  return [
+    ...[
+      ".ssh",
+      ".aws",
+      ".gnupg",
+      ".kube",
+      ".azure",
+      ".docker",
+      ".netrc",
+      ".pgpass",
+      ".git-credentials",
+      ".config/gh",
+      ".config/gcloud",
+      "Library/Keychains",
+    ].map((entry) => join(home, entry)),
+    realpathSync(runtimeStateRoot),
+  ];
 }
 
 function runtimeGatewayConfinement(
   portable: ResolvedPortableOpenCodeRuntime,
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): ReturnType<typeof createRuntimeGatewayConfinement> {
+  const native = toolProfile === "native";
   return createRuntimeGatewayConfinement({
     gatewayUrl: input.gatewayUrl,
     runId: run.minted.authorityRef.runId,
@@ -840,11 +890,12 @@ function runtimeGatewayConfinement(
     envelopeDigest: run.minted.authorityRef.envelopeDigest,
     runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
     modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
+    profile: native ? "keiko-native" : "keiko-gateway",
     ...(portable.target === "macos-arm64" || portable.target === "macos-x64"
       ? {
           filesystem: {
             workspaceRoot: run.context.workspaceRoot,
-            workspaceAccess: "read-only" as const,
+            workspaceAccess: native ? ("read-write" as const) : ("read-only" as const),
             privateStateRoot: join(
               realpathSync(input.runtimeStateRoot),
               "coding-runtime",
@@ -854,6 +905,7 @@ function runtimeGatewayConfinement(
             runtimeReadRoot: realpathSync(
               join(portable.installRoot, portable.sidecar.payloadRootPath),
             ),
+            ...(native ? { deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot) } : {}),
           },
         }
       : {}),

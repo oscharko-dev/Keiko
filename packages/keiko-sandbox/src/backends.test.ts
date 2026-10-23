@@ -361,4 +361,59 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
       buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"], "/qualified/apple/git"),
     ).toThrow("gateway-seatbelt-command-not-absolute");
   });
+
+  // #3897: the native profile runs the agent's own toolchains and egress like standalone
+  // OpenCode; what the wrapper still enforces is the filesystem boundary and the service escapes.
+  it("compiles the native profile with inherited exec and egress but a bounded filesystem", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+      deniedReadRoots: ["/Users/owner/.ssh", "/Users/owner/Library/Application Support/Keiko"],
+    };
+    const wrapped = buildGatewaySeatbeltCommand(
+      gateway,
+      "/trusted/opencode",
+      ["serve"],
+      "/qualified/apple/git",
+      filesystem,
+      "keiko-native",
+    );
+    const profile = wrapped.args[1] ?? "";
+    expect(wrapped.command).toBe("/usr/bin/sandbox-exec");
+    expect(profile).not.toContain("(deny network*)");
+    expect(profile).not.toContain("(deny process-exec)");
+    expect(profile).not.toContain("(deny mach-lookup)");
+    for (const denied of ["appleevent-send", "lsopen"])
+      expect(profile).toContain(`(deny ${denied})`);
+    expect(profile).toContain("(deny file-write*)");
+    expect(profile).toContain('(subpath "/accepted/workspace")');
+    expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/owner/.ssh")');
+    // The private state root is re-allowed after the denied roots, so Keiko's own state directory
+    // may contain it while every other file of that directory stays unreadable.
+    expect(
+      profile.lastIndexOf('(allow file-read* file-write* (subpath "/private/state"))'),
+    ).toBeGreaterThan(profile.lastIndexOf("(deny file-read* file-write*"));
+    expect(() =>
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/git",
+        undefined,
+        "keiko-native",
+      ),
+    ).toThrow("native-seatbelt-filesystem-invalid");
+    expect(() =>
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/git",
+        { ...filesystem, workspaceAccess: "read-only" },
+        "keiko-native",
+      ),
+    ).toThrow("native-seatbelt-filesystem-invalid");
+  });
 });

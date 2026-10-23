@@ -463,6 +463,10 @@ import {
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
+import type { OpenCodeToolProfile } from "./coding-runtime/opencodeToolSchemas.js";
+
+/** The one production selection of the OpenCode tool profile (#3897): the native service. */
+const PRODUCTION_OPENCODE_TOOL_PROFILE: OpenCodeToolProfile = "native";
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -6058,7 +6062,9 @@ function productionRuntimeResolver(
     return unqualifiedComposition("runtime-unqualified");
   }
   const envelopeBounds = configuredRuntimeEnvelopeBounds(args.options.env);
-  const readiness = createOpenCodeGatewayReadinessRegistry();
+  // The Coding Workbench runs the original OpenCode service with its native tools (#3897); the
+  // mapped `direct`/`code-mode` profiles remain selectable only through this server-owned value.
+  const readiness = createOpenCodeGatewayReadinessRegistry(PRODUCTION_OPENCODE_TOOL_PROFILE);
   const resolution = resolveProductionRuntimePorts(
     args,
     runtimeEvidence,

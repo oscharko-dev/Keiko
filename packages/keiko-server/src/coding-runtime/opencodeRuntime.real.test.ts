@@ -1,3 +1,4 @@
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
@@ -1659,9 +1660,10 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(sessionStatuses.slice(statusSampleOffset)).toEqual([]);
         expect(gateway.responseCloses()).toBeLessThan(gateway.calls());
         expect(gateway.requests).toHaveLength(5);
-        expect(gateway.requests.at(-1)?.toolCatalog?.projection.projectionDigest).toBe(
-          expectedProjection.projectionDigest,
-        );
+        expect(
+          boundGatewayToolCatalog(gateway.requests.at(-1)?.toolCatalog)?.projection
+            .projectionDigest,
+        ).toBe(expectedProjection.projectionDigest);
         const aborted = await runtime.runPort.abortTask(RUN_ID);
         expect(
           aborted,

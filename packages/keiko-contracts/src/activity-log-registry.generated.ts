@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ad94126b79a76bab469c6744c2ca6c0c1ad09d4bd7bbc271aae5e069b8892218" as const;
+  "53154bb9415df346ea06bf428d91a36b4e1c3ceed919f7c26f4b3dafb3efe87e" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 350,
-  completeClassCount: 350,
+  supportedClassCount: 351,
+  completeClassCount: 351,
   completeness: "complete",
   classes: [
     {
@@ -8420,6 +8420,105 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.run.issue-context-attached.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-native-policy",
+      requirementContract: "coding-runtime-native-policy",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.native-policy.decided"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.native-policy.decided",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.native-policy.decided"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.native-policy.decided",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "effect",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "mode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "permission",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "requestId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "resourceCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "resourceDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "risk",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.native-policy.decided.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42521,6 +42620,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.initialization-transport": "tools-workflows",
+    "coding-runtime.native-policy.decided": "tools-workflows",
     "coding-runtime.native-question.observed": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",
     "coding-runtime.operator-decision": "tools-workflows",

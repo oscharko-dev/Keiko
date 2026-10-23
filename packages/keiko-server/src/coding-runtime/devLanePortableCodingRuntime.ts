@@ -21,16 +21,14 @@ import { productionUpdateFacts } from "../update-install-mode.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
+import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   NPM_LANE_RUNTIME_APPROVALS,
   NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
-import {
-  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
-} from "./opencodeProtocolSurface.js";
+import { OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM } from "./opencodeProtocolSurface.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 
 export const KEIKO_CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE";
@@ -241,14 +239,9 @@ function discoverNpmLanePackage(
   approval: NpmLaneRuntimeApproval,
   previous: NpmLaneRuntimeApproval | undefined,
 ): DevLaneOpenCodeDiscovery {
-  const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval);
-  if (!payload.ok) return refused(payload.refusal);
-  const helperPath = join(runtimeRoot, helperRelativePath(target));
-  if (!isRegularFile(helperPath)) return refused("secure-read-helper-missing");
-  const helper = matchingNpmHelperApproval(helperPath, approval, previous);
-  if (helper === undefined) {
-    return refused("secure-read-helper-stale");
-  }
+  const selected = selectNpmLanePackage(runtimeRoot, target, approval, previous);
+  if (!selected.ok) return refused(selected.refusal);
+  const { helper, helperPath, payload } = selected;
   if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
     return refused("native-helper-directory-untrusted");
   }
@@ -275,6 +268,47 @@ function discoverNpmLanePackage(
     secureRead,
     undefined,
   );
+}
+
+type SelectedNpmLanePackage =
+  | {
+      readonly ok: true;
+      readonly payload: Extract<VerifiedDevLanePayload, { readonly ok: true }>;
+      readonly helper: NpmLaneRuntimeApproval;
+      readonly helperPath: string;
+    }
+  | { readonly ok: false; readonly refusal: DevLaneOpenCodeRefusalReason };
+
+/**
+ * An installed package is accepted only as one coherent approved identity: the current pin, or
+ * the previously published one, each with its own payload AND helper digests. Mixing a current
+ * payload with a previous helper, or the reverse, is not an approved package.
+ */
+function selectNpmLanePackage(
+  runtimeRoot: string,
+  target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
+  approval: NpmLaneRuntimeApproval,
+  previous: NpmLaneRuntimeApproval | undefined,
+): SelectedNpmLanePackage {
+  const candidates = previous === undefined ? [approval] : [approval, previous];
+  const helperPath = join(runtimeRoot, helperRelativePath(target));
+  const payloads = candidates.map((candidate) => ({
+    candidate,
+    payload: verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, candidate),
+  }));
+  const verified = payloads.flatMap((entry) =>
+    entry.payload.ok ? [{ candidate: entry.candidate, payload: entry.payload }] : [],
+  );
+  if (verified.length === 0) {
+    const first = payloads[0]?.payload;
+    return { ok: false, refusal: first?.ok === false ? first.refusal : "payload-tampered" };
+  }
+  if (!isRegularFile(helperPath)) return { ok: false, refusal: "secure-read-helper-missing" };
+  for (const entry of verified) {
+    const helper = matchingNpmHelperApproval(helperPath, entry.candidate, undefined);
+    if (helper !== undefined) return { ok: true, payload: entry.payload, helper, helperPath };
+  }
+  return { ok: false, refusal: "secure-read-helper-stale" };
 }
 
 function matchingNpmHelperApproval(
@@ -471,6 +505,10 @@ function verifiedPayload(
   ) {
     return { ok: false, refusal: "payload-tampered" };
   }
+  // The approved version selects its own producer-derived handshake identity (#3908); the raw
+  // schema digest stays the catalog's, which the approvals validator pins to the same version.
+  const pin = openCodeRuntimeVersionPin(approved.upstreamVersion);
+  if (pin === undefined) return { ok: false, refusal: "payload-unapproved" };
   return {
     ok: true,
     sidecar: {
@@ -482,9 +520,7 @@ function verifiedPayload(
       licenseEvidenceSha256,
       sbomEvidencePath: sbomPath,
       sbomEvidenceSha256,
-      protocolSchemaRawSha256: approved.protocolSchemaSha256,
-      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
+      ...verifiedProtocolIdentity(approved, pin.protocolSurfaceSha256),
       availability: devLaneAvailability(),
       summary: devLaneSummary(
         target,
@@ -493,6 +529,20 @@ function verifiedPayload(
         join(installRoot, executablePath),
       ),
     },
+  };
+}
+
+function verifiedProtocolIdentity(
+  approved: ApprovedDevLaneSidecar,
+  protocolHandshakeDigest: string,
+): Pick<
+  PortableSidecarRuntimeVerification,
+  "protocolSchemaRawSha256" | "protocolHandshakeDigest" | "protocolHandshakeAlgorithm"
+> {
+  return {
+    protocolSchemaRawSha256: approved.protocolSchemaSha256,
+    protocolHandshakeDigest,
+    protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
   };
 }
 

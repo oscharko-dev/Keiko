@@ -74,6 +74,7 @@ import {
 } from "./coding-runtime/opencodeLaunchProfile.js";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
+  createOpenCodeNativeToolAdvertisement,
   opencodeGatewayOfferLifetimeMs,
   hasExactOpenCodeVisibleToolContract,
   openCodeVisibleToolNames,
@@ -1452,14 +1453,18 @@ function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
   offer: GatewayToolCatalogOffer,
 ): GatewayCallRequest["toolCatalog"] {
-  return isExactManagedToolSet(tools, offer.toolProfile)
-    ? createOpenCodeGatewayToolCatalogAdvertisement(
-        Date.now(),
-        offer.coverage,
-        offer.offerLifetimeMs,
-        offer.toolProfile,
-      )
-    : undefined;
+  if (!isExactManagedToolSet(tools, offer.toolProfile)) return undefined;
+  // The native profile (#3897) forwards OpenCode's own admitted definitions as data; the mapped
+  // profiles advertise the Keiko catalog projection.
+  if (offer.toolProfile === "native" && tools !== undefined) {
+    return createOpenCodeNativeToolAdvertisement(tools, Date.now(), offer.offerLifetimeMs);
+  }
+  return createOpenCodeGatewayToolCatalogAdvertisement(
+    Date.now(),
+    offer.coverage,
+    offer.offerLifetimeMs,
+    offer.toolProfile,
+  );
 }
 
 function toolRequestFields(
@@ -2728,6 +2733,8 @@ function noteToolAdoptionGap(
   runId: string,
   messages: readonly CodingSidecarGatewayChatMessage[],
 ): void {
+  // The fingerprint names the mapped `keiko_*` tools; a native run calls OpenCode's own.
+  if (gatewayReadinessRegistry(deps)?.toolProfile === "native") return;
   if (!hasToolAdoptionGapFingerprint(messages)) return;
   if (gatewayReadinessRegistry(deps)?.noteAdoptionGapDiagnosed(runId) === false) return;
   emitServerDiagnostic(deps.diagnostics, {

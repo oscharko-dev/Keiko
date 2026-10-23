@@ -64,10 +64,20 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
   }),
 });
 
-// The immutable 1.1.3 runtime packages remain usable during an application/runtime upgrade.
-// Only these previously approved bytes are accepted, with their narrower protocol capability;
-// unknown or modified helpers still fail closed. The OpenCode payload uses the current catalog.
-const PREVIOUS_HELPER_SOURCE = {
+/**
+ * The immutable, already published 1.1.3 runtime packages remain usable during this runtime
+ * upgrade: they carry OpenCode 2.0.10 and the legacy 64-KiB secure-read helper, and ONLY those
+ * exact bytes are accepted for them, with their own producer-derived protocol identity
+ * (`opencodeRuntimeVersions.ts`). Unknown or modified payloads and helpers still fail closed. The
+ * table above describes the packages built from the current 2.1.4 pin; this one is retired once
+ * those are published and selected (#3898, #3908).
+ */
+const PREVIOUS_SHARED = {
+  upstreamVersion: "2.0.10",
+  adapterName: "keiko-coding-sidecar",
+  adapterVersion: "2",
+  licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+  protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
   helperSourceCommit: "98b77857ecb39e936269f875f8ade3688870629f",
   helperSourceTreeSha256: "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa",
   helperMaxBytes: SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES,
@@ -77,14 +87,18 @@ export const NPM_LANE_PREVIOUS_RUNTIME_APPROVALS: Readonly<
   Record<NpmLaneOpenCodeTarget, NpmLaneRuntimeApproval>
 > = Object.freeze({
   "macos-arm64": Object.freeze({
-    ...NPM_LANE_RUNTIME_APPROVALS["macos-arm64"],
-    ...PREVIOUS_HELPER_SOURCE,
+    ...PREVIOUS_SHARED,
+    packageName: "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+    executableTreeSha256: "3b54ba4d809b06ddcbdd87862593c160ad5d96fffcea944000227a9e0785c8fe",
+    sbomSha256: "99a6c65ad998b01362c9f2d1e2412643bf19df8e912a9fac8b31e05e38e0ece5",
     helperSha256: "d5640f16bfa39433905c9da81614c4256c972f6b0515f0c647dc7ae0946b8e39",
     helperSizeBytes: 34_504,
   }),
   "macos-x64": Object.freeze({
-    ...NPM_LANE_RUNTIME_APPROVALS["macos-x64"],
-    ...PREVIOUS_HELPER_SOURCE,
+    ...PREVIOUS_SHARED,
+    packageName: "@oscharko-dev/keiko-coding-runtime-darwin-x64",
+    executableTreeSha256: "df5ade313d45afb848c6ce2f5634c62f47ad0fa8f7c889e9cbd58f6903632710",
+    sbomSha256: "e6aec95fa10da6afc27f8116960c80f37ae6fb49be8d908f8fb12139c2795bbf",
     helperSha256: "65bbbd0af34e44969d17ec70cf0caedbef87de87fb676b4a8c8ef753556444fd",
     helperSizeBytes: 13_664,
   }),
