@@ -35,6 +35,25 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
+On 2026-10-23, PR #4013's required OSV scan reported four newly reviewed `fast-uri`
+advisories and the revised Zod advisory [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+The existing `fast-uri` override now resolves 3.1.9. Root development tooling resolves Zod
+4.6.7. The private native host retains OpenCode 2.0.10 and GitLab provider 6.12.1, and uses the
+existing scoped override mechanism to resolve their Zod dependencies to 4.6.7. This deliberately
+changes GitLab's declared Zod 3 range and requires its real JavaScript compatibility proofs;
+it does not establish compatibility of that dependency's published TypeScript declarations.
+The same pinned recursive OSV command reports zero unwaived findings with these lockfiles.
+
+GitHub withdrew the previously waived [braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
+on 2026-10-23. Its now-unused ignore has been removed; that withdrawal is not a patched braces
+release. The separate `http-cache-semantics` waiver retains its original scope, reason, expiry
+and revisit conditions. The historical two-waiver observations below describe their recorded dates.
+Zod 4.6.7 still distributes its legacy `/v3` API; this update does not claim that legacy code was
+patched or that an unbounded schema acquires a resource limit. The added bounded-array regression
+exercises the actual provider-resolved bare Zod API with a small input, separately from the real
+GitLab token/header/OAuth and OpenAI schema-conversion compatibility controls. No provider was
+removed, no native payload approval was granted, and no security gate or limit was relaxed.
+
 On 2026-10-13, the required OSV scan reported two newly published Microsoft cryptography
 advisories against the Windows RFC 3161 native-quality project's
 `System.Security.Cryptography.Pkcs` 10.0.9:
@@ -51,7 +70,7 @@ project/lock and Windows native-quality gate, separately from the npm currency r
 | Source                     | Result                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |
-| OSV Scanner 2.6.0          | 0 unwaived findings; 2 time-boxed build-time waivers, recorded below                                  |
+| OSV Scanner 2.6.0          | 0 unwaived findings; 1 time-boxed build-time waiver, recorded below                                   |
 | Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                                           |
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout                               |
 
@@ -208,7 +227,7 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `fast-uri`                    | root                  | 3.1.8   | current        | Patch for GHSA-hrr3-gc8f-f4qj and earlier advisories; exact OSV 2.6.0 lockfile scan passes. PR #3676.                                                                                                                                                                                                        |
+| `fast-uri`                    | root                  | 3.1.9   | current        | Patch for the four advisories reviewed on 2026-10-23 and earlier findings; exact OSV 2.6.0 scan passes. PR #4013.                                                                                                                                                                                            |
 | `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                        |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                            |

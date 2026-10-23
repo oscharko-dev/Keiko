@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -124,4 +125,93 @@ test("the original frontmatter consumer retains YAML library parse and stringify
   assert.deepEqual(restored.data, parsed.data);
   assert.equal(restored.content, parsed.content);
   assert.throws(() => matter("---\nname: [unfinished\n---\nBody\n"));
+});
+
+const gitlabProvider = await import(
+  pathToFileURL(join(moduleRoot, "gitlab-ai-provider/dist/index.mjs"))
+);
+
+test("the original GitLab client validates and retains nonempty direct-access header records", async () => {
+  const token = { token: "fixture-token", headers: { "X-Fixture": "fixture-value" } };
+  let calls = 0;
+  const client = new gitlabProvider.GitLabDirectAccessClient({
+    instanceUrl: "https://gitlab.example.test",
+    getHeaders: () => ({ Authorization: "Bearer fixture-access" }),
+    fetch: async (url, init) => {
+      calls++;
+      assert.equal(
+        String(url),
+        "https://gitlab.example.test/api/v4/ai/third_party_agents/direct_access",
+      );
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers.Authorization, "Bearer fixture-access");
+      return Response.json(token);
+    },
+  });
+  assert.deepEqual(await client.getDirectAccessToken(), token);
+  assert.deepEqual(await client.getDirectAccessToken(), token);
+  assert.equal(calls, 1);
+});
+
+test("the original GitLab client refuses malformed direct-access token and header fields", async () => {
+  for (const token of [
+    { token: 1, headers: { "X-Fixture": "fixture-value" } },
+    { token: "fixture-token", headers: { "X-Fixture": 1 } },
+    { token: "fixture-token" },
+  ]) {
+    const client = new gitlabProvider.GitLabDirectAccessClient({
+      instanceUrl: "https://gitlab.example.test",
+      getHeaders: () => ({}),
+      fetch: async () => Response.json(token),
+    });
+    await assert.rejects(client.getDirectAccessToken(), { name: "GitLabError" });
+  }
+});
+
+test("the original GitLab OAuth schema preserves required scalars and optional refresh tokens", () => {
+  const schema = gitlabProvider.gitlabOAuthTokenResponseSchema;
+  const token = { access_token: "fixture-access", expires_in: 3600, created_at: 1 };
+  assert.deepEqual(schema.parse(token), token);
+  const refresh = { ...token, refresh_token: "fixture-refresh" };
+  assert.deepEqual(schema.parse(refresh), refresh);
+  for (const value of [
+    { ...token, access_token: 1 },
+    { ...token, expires_in: "3600" },
+    { ...token, refresh_token: 1 },
+    { access_token: "fixture-access", expires_in: 3600 },
+  ])
+    assert.equal(schema.safeParse(value).success, false);
+});
+
+test("the native provider's Zod refuses an oversized bounded array before validating its elements", async () => {
+  const providerEntry = join(moduleRoot, "gitlab-ai-provider/dist/index.mjs");
+  const { z } = await import(pathToFileURL(createRequire(providerEntry).resolve("zod")));
+  const schema = z.array(z.string()).max(2);
+  assert.deepEqual(schema.parse(["first", "second"]), ["first", "second"]);
+  const result = schema.safeParse([1, 2, 3]);
+  assert.equal(result.success, false);
+  assert.deepEqual(
+    result.error.issues.map((issue) => issue.code),
+    ["too_big"],
+  );
+});
+
+test("the original OpenAI schema converter retains its supported Zod v3 and v4 inputs", async () => {
+  const requireOpenAI = createRequire(join(moduleRoot, "openai/package.json"));
+  const { zodResponseFormat } = await import(
+    pathToFileURL(join(moduleRoot, "openai/helpers/zod.mjs"))
+  );
+  for (const specifier of ["zod/v3", "zod"]) {
+    const { z } = await import(pathToFileURL(requireOpenAI.resolve(specifier)));
+    const response = zodResponseFormat(
+      z.object({ name: z.string(), count: z.number() }),
+      "fixture",
+    );
+    assert.equal(response.type, "json_schema");
+    assert.equal(response.json_schema.name, "fixture");
+    assert.deepEqual(response.json_schema.schema.required, ["name", "count"]);
+    assert.equal(response.json_schema.schema.properties.name.type, "string");
+    assert.equal(response.json_schema.schema.properties.count.type, "number");
+    assert.equal(response.json_schema.schema.additionalProperties, false);
+  }
 });

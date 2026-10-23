@@ -27,11 +27,13 @@
       "argparse": "2.0.1"
     },
     "gitlab-ai-provider@6.12.1": {
-      "@ai-sdk/provider-utils": "4.0.33"
+      "@ai-sdk/provider-utils": "4.0.33",
+      "zod": "4.6.7"
     },
     "@opencode/core@2.0.10": {
       "@parcel/watcher": "2.6.0"
-    }
+    },
+    "zod@4.1.8": "4.6.7"
   },
   "version": "0.0.0-private",
   "license": "Apache-2.0"

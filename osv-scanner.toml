@@ -16,32 +16,6 @@
 # have hidden a reintroduced vulnerable release from the one gate positioned to catch it.
 
 [[IgnoredVulns]]
-id = "GHSA-vfj7-8cjw-p6xm"
-ignoreUntil = 2026-11-30
-reason = """
-braces stack exhaustion through deeply nested brace patterns (CVE-2026-93687, high; CVSS 3.1 7.5,
-CVSS 4.0 8.7). Build-time only and unfixable upstream at the time of writing: the advisory covers
-every release through 3.0.3, which is the latest published braces, and names no patched version.
-
-Reach: the lockfile holds exactly one instance, braces@3.0.3, flagged dev, on the single path
-keiko-ui devDependency eslint-config-next@16.3.6 -> @next/eslint-plugin-next@16.3.6 ->
-fast-glob@3.3.1 -> micromatch@4.0.8. `npm ls --omit=dev --all braces` is empty. The plugin calls
-fast-glob only in dist/utils/get-root-dirs.js, expanding the `settings.next.rootDir` value of the
-ESLint configuration this repository authors, and only while the keiko-ui lint runs. Neither the
-distributed package nor the UI's static export contains it, so no user and no untrusted input
-reaches the recursive walkers; the worst case is a lint process crashed by a pattern a committer
-wrote.
-
-No upgrade path exists: micromatch 4.0.8 is the latest release and requires braces ^3.0.3, and the
-latest @next/eslint-plugin-next (16.3.8) still pins fast-glob 3.3.1.
-
-Revisit condition: drop this entry as soon as braces publishes a patched release, or once
-@next/eslint-plugin-next stops depending on micromatch. Recorded during #3534 (PR #3679): GitHub
-reviewed the advisory on 2026-10-02 at 22:36 UTC, after the last green scan on dev, and OSV began
-matching it minutes later.
-"""
-
-[[IgnoredVulns]]
 id = "GHSA-ch52-4w7c-c8xp"
 ignoreUntil = 2026-11-30
 reason = """
