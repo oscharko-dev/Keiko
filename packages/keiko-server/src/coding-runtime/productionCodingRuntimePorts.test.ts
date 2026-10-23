@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
+import type { PromptInputsRequest } from "./opencodePromptInputs.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -253,6 +254,306 @@ describe("production coding runtime turn ports", () => {
       expect(startTurn.mock.calls.map((call) => call.slice(0, 3))).toEqual([
         ["run-codex", "thread-1", "build"],
       ]);
+    });
+  });
+
+  // ADR-0137 D10: a prompt's inputs beyond its text (a message that joins the running turn, files it
+  // references) are admitted by the run's own port before anything is reserved, interrupted or sent.
+  describe("prompt inputs (ADR-0137 D10)", () => {
+    const FILE = { uri: "file:///work/space/src/app.ts", name: "app.ts" };
+    const ADMITTED = { files: [FILE], fileBytes: 10, referenceCount: 1 };
+
+    function inputsPort(
+      overrides: Partial<ProductionRuntimeRunRecord["turnPort"]> = {},
+    ): ProductionRuntimeRunRecord["turnPort"] {
+      return {
+        submitTurn: vi.fn(() => Promise.resolve(true)),
+        abortTurn: vi.fn(() => Promise.resolve(true)),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        admitPromptInputs: vi.fn((_runId: string, request: PromptInputsRequest) => ({
+          ok: true as const,
+          inputs: { ...ADMITTED, delivery: request.delivery },
+        })),
+        deliverPrompt: vi.fn(() => Promise.resolve(true)),
+        ...overrides,
+      };
+    }
+
+    function deliverer(
+      turnPort: ProductionRuntimeRunRecord["turnPort"],
+      options: {
+        readonly live?: () => boolean;
+        readonly diagnostics?: ServerDiagnosticRecord[];
+      } = {},
+    ) {
+      const controller = new AbortController();
+      const run: ProductionRuntimeRunRecord = {
+        turnPort,
+        controller,
+        operationGuard: createProductionRuntimeOperationGuard(
+          "run-1",
+          options.live ?? (() => true),
+        ),
+      };
+      const diagnostics = options.diagnostics;
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([["run-1", run]]),
+        diagnostics === undefined
+          ? undefined
+          : { record: (diagnostic): void => void diagnostics.push(diagnostic) },
+      );
+      const deliver = dispatcher.deliver;
+      if (deliver === undefined) throw new Error("deliver dispatcher is unavailable");
+      return { dispatcher, deliver, controller };
+    }
+
+    const steer = (requestId = "steer-1", expectedRevision = 4) => ({
+      ...operation("run-1", requestId, expectedRevision, "also cover the empty case"),
+      delivery: "steer" as const,
+      references: [{ path: "src/app.ts" }],
+      correlationId: "corr-0123456789",
+    });
+
+    it("admits a delivery through the run's port, sends the admitted inputs and starts no turn", async () => {
+      const turnPort = inputsPort();
+      const { deliver } = deliverer(turnPort);
+
+      await expect(deliver(steer())).resolves.toEqual({ ok: true });
+
+      expect(turnPort.admitPromptInputs).toHaveBeenCalledExactlyOnceWith("run-1", {
+        delivery: "steer",
+        references: [{ path: "src/app.ts" }],
+        correlationId: "corr-0123456789",
+      });
+      expect(turnPort.deliverPrompt).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "also cover the empty case",
+        { ...ADMITTED, delivery: "steer" },
+      );
+      expect(turnPort.submitTurn).not.toHaveBeenCalled();
+      expect(turnPort.abortTurn).not.toHaveBeenCalled();
+    });
+
+    it("consumes the revision once: a second delivery at the same revision is not admitted", async () => {
+      const turnPort = inputsPort();
+      const { deliver } = deliverer(turnPort);
+      await expect(deliver(steer("steer-1", 4))).resolves.toEqual({ ok: true });
+      await expect(deliver(steer("steer-2", 4))).resolves.toEqual({ ok: false });
+      await expect(deliver(steer("steer-1", 5))).resolves.toEqual({ ok: false });
+      await expect(deliver(steer("steer-3", 5))).resolves.toEqual({ ok: true });
+      expect(turnPort.deliverPrompt).toHaveBeenCalledTimes(2);
+    });
+
+    it("revalidates the live authority before every delivery: an expired envelope delivers nothing", async () => {
+      let live = true;
+      const turnPort = inputsPort();
+      const { deliver } = deliverer(turnPort, { live: () => live });
+      live = false;
+      await expect(deliver(steer())).resolves.toEqual({ ok: false });
+      expect(turnPort.deliverPrompt).not.toHaveBeenCalled();
+      live = true;
+      await expect(deliver(steer())).resolves.toEqual({ ok: true });
+    });
+
+    it("refuses a delivery to a stopped run and to an unknown run", async () => {
+      const turnPort = inputsPort();
+      const { dispatcher, deliver, controller } = deliverer(turnPort);
+      controller.abort();
+      await expect(deliver(steer())).resolves.toEqual({ ok: false });
+      await expect(dispatcher.deliver?.({ ...steer(), runId: "run-other" })).resolves.toEqual({
+        ok: false,
+      });
+      expect(turnPort.admitPromptInputs).not.toHaveBeenCalled();
+      expect(turnPort.deliverPrompt).not.toHaveBeenCalled();
+    });
+
+    it("refuses a delivery the run's port cannot take as the request's own fault, reserving nothing", async () => {
+      const records: ServerDiagnosticRecord[] = [];
+      const { deliver } = deliverer(
+        inputsPort({ admitPromptInputs: undefined, deliverPrompt: undefined }),
+        { diagnostics: records },
+      );
+      await expect(deliver(steer())).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: "corr-0123456789",
+          operation: "coding-runtime.task-dispatch",
+          code: "stage=dispatch:reason=inputs-refused",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("also cover the empty case");
+    });
+
+    it("refuses a delivery whose admission fails, before the guard or the adapter is reached", async () => {
+      const deliverPrompt = vi.fn(() => Promise.resolve(true));
+      let admit: ProductionRuntimeRunRecord["turnPort"]["admitPromptInputs"] = () => ({
+        ok: false as const,
+        reason: "turn-not-running" as const,
+      });
+      const turnPort = inputsPort({
+        admitPromptInputs: (runId, request) =>
+          admit?.(runId, request) ?? { ok: false, reason: "run-unavailable" },
+        deliverPrompt,
+      });
+      const { deliver } = deliverer(turnPort);
+      await expect(deliver(steer())).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+      expect(deliverPrompt).not.toHaveBeenCalled();
+      // Nothing was reserved: the same revision still admits a delivery once the port accepts it.
+      admit = inputsPort().admitPromptInputs;
+      await expect(deliver(steer())).resolves.toEqual({ ok: true });
+    });
+
+    it("never accepts a plain turn as a delivery or a delivery as a turn", async () => {
+      const turnPort = inputsPort();
+      const { dispatcher, deliver } = deliverer(turnPort);
+      await expect(
+        deliver({ ...operation("run-1", "plain-1", 4, "no delivery named") }),
+      ).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+      await expect(dispatcher.dispatch(steer("steer-as-turn", 4))).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      await expect(dispatcher.replace?.(steer("steer-as-replace", 4))).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      expect(turnPort.deliverPrompt).not.toHaveBeenCalled();
+      expect(turnPort.submitTurn).not.toHaveBeenCalled();
+      expect(turnPort.abortTurn).not.toHaveBeenCalled();
+    });
+
+    it("releases the reservation when the adapter does not take the message", async () => {
+      const records: ServerDiagnosticRecord[] = [];
+      let accept = false;
+      const turnPort = inputsPort({ deliverPrompt: vi.fn(() => Promise.resolve(accept)) });
+      const { deliver } = deliverer(turnPort, { diagnostics: records });
+      await expect(deliver(steer())).resolves.toEqual({ ok: false });
+      expect(records).toEqual([
+        expect.objectContaining({ code: "stage=dispatch:reason=adapter-rejected" }),
+      ]);
+      accept = true;
+      await expect(deliver(steer("steer-1", 4))).resolves.toEqual({ ok: true });
+    });
+
+    it("answers a thrown delivery with a body-free diagnostic and frees the reservation", async () => {
+      const records: ServerDiagnosticRecord[] = [];
+      let fail = true;
+      const turnPort = inputsPort({
+        deliverPrompt: vi.fn(() =>
+          fail ? Promise.reject(new Error("PRIVATE-DELIVERY-FAILURE")) : Promise.resolve(true),
+        ),
+      });
+      const { deliver } = deliverer(turnPort, { diagnostics: records });
+      await expect(deliver(steer())).resolves.toEqual({ ok: false });
+      expect(records).toEqual([
+        expect.objectContaining({ code: "stage=dispatch:reason=exception" }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("PRIVATE-DELIVERY-FAILURE");
+      fail = false;
+      await expect(deliver(steer())).resolves.toEqual({ ok: true });
+    });
+
+    it("hands the admitted references to the turn a follow-up starts, as one more argument", async () => {
+      const turnPort = inputsPort({ selectableAgents: ["build", "plan"] });
+      const { dispatcher } = deliverer(turnPort);
+      await expect(
+        dispatcher.dispatch({
+          ...operation("run-1", "follow-up-1", 4, "look at the file"),
+          references: [{ path: "src/app.ts" }],
+          correlationId: "corr-0123456789",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(turnPort.admitPromptInputs).toHaveBeenCalledExactlyOnceWith("run-1", {
+        delivery: undefined,
+        references: [{ path: "src/app.ts" }],
+        correlationId: "corr-0123456789",
+      });
+      expect(turnPort.submitTurn).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "look at the file",
+        undefined,
+        undefined,
+        { ...ADMITTED, delivery: undefined },
+      );
+    });
+
+    it("asks the port nothing for a prompt that carries no inputs", async () => {
+      const turnPort = inputsPort();
+      const { dispatcher } = deliverer(turnPort);
+      await dispatcher.dispatch(operation("run-1", "plain-1", 4, "plain"));
+      expect(turnPort.admitPromptInputs).not.toHaveBeenCalled();
+      expect(turnPort.submitTurn).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "plain",
+        undefined,
+        undefined,
+      );
+    });
+
+    it("refuses referenced files on a port that takes none, before interrupting a paused turn", async () => {
+      const turnPort = inputsPort({ admitPromptInputs: undefined, deliverPrompt: undefined });
+      const { dispatcher } = deliverer(turnPort);
+      const references = [{ path: "src/app.ts" }];
+      await expect(
+        dispatcher.dispatch({ ...operation("run-1", "f-1", 4, "t"), references }),
+      ).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+      await expect(
+        dispatcher.replace?.({ ...operation("run-1", "f-2", 4, "t"), references }),
+      ).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+      expect(turnPort.abortTurn).not.toHaveBeenCalled();
+      expect(turnPort.submitTurn).not.toHaveBeenCalled();
+    });
+
+    it("admits the references of a replacement before it interrupts the predecessor", async () => {
+      const order: string[] = [];
+      const turnPort = inputsPort({
+        admitPromptInputs: vi.fn(() => {
+          order.push("admit");
+          return { ok: true as const, inputs: ADMITTED };
+        }),
+        abortTurn: vi.fn(() => {
+          order.push("abort");
+          return Promise.resolve(true);
+        }),
+        submitTurn: vi.fn(() => {
+          order.push("submit");
+          return Promise.resolve(true);
+        }),
+      });
+      const { dispatcher } = deliverer(turnPort);
+      await expect(
+        dispatcher.replace?.({
+          ...operation("run-1", "replace-1", 4, "again"),
+          references: [{ path: "src/app.ts" }],
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(order).toEqual(["admit", "abort", "submit"]);
+      expect(turnPort.submitTurn).toHaveBeenCalledWith(
+        "run-1",
+        "again",
+        undefined,
+        undefined,
+        ADMITTED,
+      );
+    });
+
+    it("forwards a profile's prompt inputs from the OpenCode run port, and none from one without them", () => {
+      const deliverPrompt = vi.fn(() => Promise.resolve(true));
+      const admitPromptInputs = vi.fn(() => ({ ok: true as const, inputs: ADMITTED }));
+      const base: OpenCodeRunPort = {
+        submitTask: () => Promise.resolve(true),
+        abortTask: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve(true),
+        listQuestions: () => Promise.resolve([]),
+        answerQuestion: () => Promise.resolve(false),
+        rejectQuestion: () => Promise.resolve(false),
+        replyPermission: () => Promise.resolve(false),
+      };
+      expect(createOpenCodeRuntimeTurnPort(base).admitPromptInputs).toBeUndefined();
+      expect(createOpenCodeRuntimeTurnPort(base).deliverPrompt).toBeUndefined();
+      const port = createOpenCodeRuntimeTurnPort({ ...base, admitPromptInputs, deliverPrompt });
+      expect(port.admitPromptInputs).toBe(admitPromptInputs);
+      expect(port.deliverPrompt).toBe(deliverPrompt);
     });
   });
 
@@ -866,6 +1167,24 @@ describe("turn port terminal semantics", () => {
     terminal = true;
     await expect(port.waitForTerminal("run-open", new AbortController().signal)).resolves.toBe(
       "succeeded",
+    );
+  });
+
+  // PR #4064: a turn the runtime ended at a human's refusal of a question was cancelled by that
+  // person; it is not a failure of the run's work, and it is not the run succeeding either.
+  it("reports a turn the runtime interrupted as cancelled, with no terminal-failure diagnostic", async () => {
+    const runPort: OpenCodeRunPort = {
+      submitTask: () => Promise.resolve(true),
+      abortTask: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("interrupted"),
+      listQuestions: () => Promise.resolve([]),
+      answerQuestion: () => Promise.resolve(false),
+      rejectQuestion: () => Promise.resolve(false),
+      replyPermission: () => Promise.resolve(false),
+    };
+    const port = createOpenCodeRuntimeTurnPort(runPort);
+    await expect(port.waitForTerminal("run-open", new AbortController().signal)).resolves.toBe(
+      "cancelled",
     );
   });
 
@@ -1733,5 +2052,195 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     await expect(dispatcher.generate(PR_SCOPE, new AbortController().signal)).resolves.toEqual({
       reason: "generation-unavailable",
     });
+  });
+});
+
+describe("turn revert admission (B3, S04)", () => {
+  type RevertTurn = NonNullable<ProductionRuntimeRunRecord["turnPort"]["revertTurn"]>;
+  type RevertState = NonNullable<ProductionRuntimeRunRecord["turnPort"]["revertState"]>;
+
+  const APPLIED = { ok: true, fileCount: 2, additions: 3, deletions: 1 } as const;
+
+  function revertRecord(
+    runId: string,
+    port: { readonly revertTurn?: RevertTurn; readonly revertState?: RevertState },
+    live: () => boolean = () => true,
+  ): ProductionRuntimeRunRecord {
+    return {
+      controller: new AbortController(),
+      operationGuard: createProductionRuntimeOperationGuard(runId, live),
+      turnPort: {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        ...port,
+      },
+    };
+  }
+
+  function revertRequest(
+    runId: string,
+    requestId: string,
+    expectedRevision: number,
+    action: "restore" | "undo" = "undo",
+  ) {
+    return { runId, requestId, expectedRevision, action, correlationId: "corr-revert-0001" };
+  }
+
+  it("hands the action and the request's correlation id to the run's turn port", async () => {
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-r", revertRecord("run-r", { revertTurn })]]),
+    );
+
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual(APPLIED);
+
+    expect(revertTurn).toHaveBeenCalledExactlyOnceWith("run-r", "undo", "corr-revert-0001");
+  });
+
+  it("revalidates the live authority first: an expired envelope reverts nothing", async () => {
+    let live = false;
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-r", revertRecord("run-r", { revertTurn }, () => live)]]),
+    );
+
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "not-admitted",
+    });
+    expect(revertTurn).not.toHaveBeenCalled();
+
+    // Refused before the reservation committed: the same request id is admitted once authority is live.
+    live = true;
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual(APPLIED);
+  });
+
+  it("consumes the revision and the request id once", async () => {
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-r", revertRecord("run-r", { revertTurn })]]),
+    );
+
+    await dispatcher.revert?.(revertRequest("run-r", "req-1", 4));
+
+    for (const replay of [
+      revertRequest("run-r", "req-1", 5),
+      revertRequest("run-r", "req-2", 4),
+      revertRequest("run-r", "req-3", 3),
+    ]) {
+      await expect(dispatcher.revert?.(replay)).resolves.toEqual({
+        ok: false,
+        reason: "not-admitted",
+      });
+    }
+    await expect(
+      dispatcher.revert?.(revertRequest("run-r", "req-4", 5, "restore")),
+    ).resolves.toEqual(APPLIED);
+    expect(revertTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an unknown run, a stopped run and a runtime that cannot revert", async () => {
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
+    const stopped = revertRecord("run-stopped", { revertTurn });
+    stopped.controller.abort();
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        ["run-stopped", stopped],
+        ["run-codex", revertRecord("run-codex", {})],
+      ]),
+    );
+
+    await expect(dispatcher.revert?.(revertRequest("run-missing", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "run-unavailable",
+    });
+    await expect(dispatcher.revert?.(revertRequest("run-stopped", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "run-unavailable",
+    });
+    await expect(dispatcher.revert?.(revertRequest("run-codex", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+    expect(revertTurn).not.toHaveBeenCalled();
+  });
+
+  it("releases the reservation when the port refuses, so the same revision can be retried", async () => {
+    let answer: Awaited<ReturnType<RevertTurn>> = { ok: false, reason: "interrupt-failed" };
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(answer));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-r", revertRecord("run-r", { revertTurn })]]),
+    );
+
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "interrupt-failed",
+    });
+
+    answer = APPLIED;
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual(APPLIED);
+  });
+
+  it("answers a throwing port with a body-free diagnostic and frees the reservation", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.reject(new Error("private failure text")));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-r", revertRecord("run-r", { revertTurn })]]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "revert-failed",
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.task-dispatch",
+        code: "stage=dispatch:reason=exception",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("private failure text");
+    revertTurn.mockImplementation(() => Promise.resolve(APPLIED));
+    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual(APPLIED);
+  });
+
+  it("reads the counts through the run's port and reports none for an unknown run or a port without them", async () => {
+    const state = { staged: false, fileCount: 1, additions: 2, deletions: 0 };
+    const revertState = vi.fn<RevertState>(() => Promise.resolve(state));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        ["run-r", revertRecord("run-r", { revertState })],
+        ["run-codex", revertRecord("run-codex", {})],
+      ]),
+    );
+
+    await expect(dispatcher.revertState?.("run-r")).resolves.toEqual(state);
+    await expect(dispatcher.revertState?.("run-codex")).resolves.toBeUndefined();
+    await expect(dispatcher.revertState?.("run-missing")).resolves.toBeUndefined();
+    expect(revertState).toHaveBeenCalledExactlyOnceWith("run-r");
+  });
+
+  it("exposes revert on the OpenCode turn port only when the run port offers it", () => {
+    const base: OpenCodeRunPort = {
+      submitTask: () => Promise.resolve(true),
+      abortTask: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve(true),
+      listQuestions: () => Promise.resolve([]),
+      answerQuestion: () => Promise.resolve(false),
+      rejectQuestion: () => Promise.resolve(false),
+      replyPermission: () => Promise.resolve(false),
+    };
+    const revertTurn: NonNullable<OpenCodeRunPort["revertTurn"]> = () => Promise.resolve(APPLIED);
+    const revertState: NonNullable<OpenCodeRunPort["revertState"]> = () =>
+      Promise.resolve(undefined);
+
+    expect(createOpenCodeRuntimeTurnPort(base).revertTurn).toBeUndefined();
+    expect(createOpenCodeRuntimeTurnPort(base).revertState).toBeUndefined();
+    expect(createOpenCodeRuntimeTurnPort({ ...base, revertTurn }).revertTurn).toBeUndefined();
+    const offered = createOpenCodeRuntimeTurnPort({ ...base, revertTurn, revertState });
+    expect(offered.revertTurn).toBe(revertTurn);
+    expect(offered.revertState).toBe(revertState);
   });
 });

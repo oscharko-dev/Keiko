@@ -1,4 +1,11 @@
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
+import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  AdmittedPromptInputs,
+  PromptInputsAdmission,
+  PromptInputsRequest,
+} from "./opencodePromptInputs.js";
+import type { CodingRuntimeRevertResult, CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager, CodingRuntimeStartResult } from "./codingRuntimeManager.js";
 import type { CodingRuntimeMutationIdleOutcome } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
@@ -15,6 +22,8 @@ import {
 import { getServerLogger } from "../observability/index.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type {
+  CodingRuntimeRevertRequest,
+  CodingRuntimeTaskDeliveryResult,
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskDispatchRequest,
   CodingRuntimeTaskDispatcher,
@@ -163,7 +172,19 @@ export interface ProductionRuntimeTurnPort {
     text: string,
     initialContext?: string,
     agent?: CodingWorkbenchAgent,
+    inputs?: AdmittedPromptInputs,
   ) => Promise<boolean>;
+  /**
+   * Admits the inputs a prompt carries beside its text (ADR-0137 D10): a message that joins the
+   * running turn and workspace files it references. Absent means the port takes neither, and a
+   * prompt that carries one is refused before the adapter is reached, exactly like an agent the
+   * port does not offer.
+   */
+  readonly admitPromptInputs?:
+    ((runId: string, request: PromptInputsRequest) => PromptInputsAdmission) | undefined;
+  /** Sends an admitted `steer` / `queue` message to the turn in flight; it starts no turn. */
+  readonly deliverPrompt?:
+    ((runId: string, text: string, inputs: AdmittedPromptInputs) => Promise<boolean>) | undefined;
   /**
    * The primary agents, beside the default, an operator may select for this run's turns. Absent
    * means the default agent only: a request for any other is refused before the adapter is reached
@@ -175,6 +196,19 @@ export interface ProductionRuntimeTurnPort {
     runId: string,
     signal: AbortSignal,
   ) => Promise<CodingRuntimeTaskOutcome>;
+  /**
+   * Undo or restore of the run's newest turn (B3, S04). Absent for a runtime that records no
+   * snapshots; the dispatcher then refuses the operation instead of pretending to honour it.
+   */
+  readonly revertTurn?:
+    | ((
+        runId: string,
+        action: CodingWorkbenchRuntimeRevertAction,
+        correlationId?: string,
+      ) => Promise<CodingRuntimeRevertResult>)
+    | undefined;
+  readonly revertState?:
+    ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
 }
 
 export interface ProductionRuntimeRunRecord {
@@ -491,14 +525,25 @@ function stoppedRun(): ReturnType<CodingRuntimeManager["stop"]> {
 
 export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): ProductionRuntimeTurnPort {
   return {
-    submitTurn: (runId, text, initialContext, agent) =>
-      runPort.submitTask(runId, text, initialContext, agent),
+    submitTurn: (runId, text, initialContext, agent, inputs) =>
+      inputs === undefined
+        ? runPort.submitTask(runId, text, initialContext, agent)
+        : runPort.submitTask(runId, text, initialContext, agent, inputs),
     selectableAgents: runPort.selectableAgents,
+    ...(runPort.admitPromptInputs === undefined || runPort.deliverPrompt === undefined
+      ? {}
+      : { admitPromptInputs: runPort.admitPromptInputs, deliverPrompt: runPort.deliverPrompt }),
     abortTurn: (runId) => runPort.abortTask(runId),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
-      if (await runPort.waitForTerminal(runId, signal)) return "succeeded";
-      return signal.aborted ? "cancelled" : "failed";
+      const outcome = await runPort.waitForTerminal(runId, signal);
+      if (outcome === true) return "succeeded";
+      // A turn the runtime ended at a human's refusal of a question was cancelled by that person,
+      // not failed: the run's work did not break.
+      return signal.aborted || outcome === "interrupted" ? "cancelled" : "failed";
     },
+    ...(runPort.revertTurn === undefined || runPort.revertState === undefined
+      ? {}
+      : { revertTurn: runPort.revertTurn, revertState: runPort.revertState }),
   };
 }
 
@@ -603,6 +648,10 @@ export function createProductionRuntimeTaskDispatcher(
     dispatch: (request) => dispatchRuntimeTask(runs, request, diagnostics),
     replace: (request) => replaceRuntimeTask(runs, request, diagnostics),
     abort: (request) => abortRuntimeTask(runs, request),
+    deliver: (request) => deliverRuntimePrompt(runs, request, diagnostics),
+    revert: (request) => revertRuntimeTask(runs, request, diagnostics),
+    revertState: (runId) =>
+      runs.get(runId)?.turnPort.revertState?.(runId) ?? Promise.resolve(undefined),
   };
 }
 
@@ -618,10 +667,118 @@ async function dispatchRuntimeTask(
     return rejectedDispatch(diagnostics, request.runId, "aborted", request.correlationId);
   if (!isAgentAdmitted(record.turnPort.selectableAgents, request.agent))
     return rejectedAgent(diagnostics, request.runId, request.correlationId);
+  const admitted = admitTurnInputs(record, request, "turn");
+  if (!admitted.ok) return rejectedInputs(diagnostics, request.runId, request.correlationId);
   const reservation = record.operationGuard.reserve(request);
   if (reservation === undefined)
     return rejectedDispatch(diagnostics, request.runId, "no-reservation", request.correlationId);
-  return submitReservedRuntimeTask(record, request, reservation, diagnostics);
+  return submitReservedRuntimeTask(record, request, reservation, diagnostics, admitted.inputs);
+}
+
+type TurnInputsAdmission =
+  | { readonly ok: true; readonly inputs?: AdmittedPromptInputs | undefined }
+  | { readonly ok: false };
+
+/**
+ * Admits what a dispatch carries beside its text through the run's own port, ahead of every
+ * reservation and of any interruption: a prompt the run cannot take begins nothing, and nothing is
+ * left to undo. A turn never carries a delivery, and a delivery always does; a port that takes
+ * neither refuses a prompt that carries one.
+ */
+function admitTurnInputs(
+  record: ProductionRuntimeRunRecord,
+  request: CodingRuntimeTaskDispatchRequest,
+  mode: "turn" | "delivery",
+): TurnInputsAdmission {
+  const references = request.references ?? [];
+  if ((request.delivery !== undefined) !== (mode === "delivery")) return { ok: false };
+  if (request.delivery === undefined && references.length === 0) return { ok: true };
+  const admit = record.turnPort.admitPromptInputs;
+  if (admit === undefined) return { ok: false };
+  const admission = admit(request.runId, {
+    delivery: request.delivery,
+    references: request.references,
+    correlationId: request.correlationId,
+  });
+  return admission.ok ? { ok: true, inputs: admission.inputs } : { ok: false };
+}
+
+/**
+ * Delivers a `steer` / `queue` message into the turn in flight. It is admitted like any delegation
+ * (the live authority is revalidated, the revision is consumed once, the request id is single-use)
+ * but it starts, replaces and settles no turn: the running turn keeps its own completion.
+ */
+async function deliverRuntimePrompt(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeTaskDispatchRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeTaskDeliveryResult> {
+  const record = runs.get(request.runId);
+  if (record === undefined) return refusedDelivery(diagnostics, request, "no-record");
+  if (record.controller.signal.aborted) return refusedDelivery(diagnostics, request, "aborted");
+  const deliver = record.turnPort.deliverPrompt;
+  const admitted = admitTurnInputs(record, request, "delivery");
+  if (deliver === undefined || !admitted.ok || admitted.inputs === undefined)
+    return rejectedInputs(diagnostics, request.runId, request.correlationId);
+  const reservation = record.operationGuard.reserve(request);
+  if (reservation === undefined) return refusedDelivery(diagnostics, request, "no-reservation");
+  try {
+    if (!(await deliver(request.runId, request.taskIntent, admitted.inputs))) {
+      reservation.release();
+      return refusedDelivery(diagnostics, request, "adapter-rejected");
+    }
+    if (!reservation.commit()) return refusedDelivery(diagnostics, request, "commit-rejected");
+  } catch (error) {
+    reservation.release();
+    recordRuntimeDispatchFailure(
+      diagnostics,
+      request.runId,
+      "exception",
+      error,
+      request.correlationId,
+    );
+    return { ok: false };
+  }
+  return { ok: true };
+}
+
+function refusedDelivery(
+  diagnostics: ServerDiagnosticSink | undefined,
+  request: CodingRuntimeTaskDispatchRequest,
+  reason: ReplacementFailureReason,
+): CodingRuntimeTaskDeliveryResult {
+  recordRuntimeDispatchFailure(
+    diagnostics,
+    request.runId,
+    reason,
+    undefined,
+    request.correlationId,
+  );
+  return { ok: false };
+}
+
+interface ReplacementAdmission {
+  readonly refusal?: CodingRuntimeTaskDispatchResult;
+  readonly inputs?: AdmittedPromptInputs | undefined;
+}
+
+// Ahead of the replacement lifecycle: a request the run cannot honour (an agent it does not offer,
+// inputs it cannot take) never begins one, so there is no `started` line to leave without its
+// terminal one, and the predecessor is not interrupted.
+function admitReplacement(
+  record: ProductionRuntimeRunRecord | undefined,
+  request: CodingRuntimeTaskDispatchRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
+): ReplacementAdmission {
+  if (record === undefined) return {};
+  if (!isAgentAdmitted(record.turnPort.selectableAgents, request.agent)) {
+    return { refusal: rejectedAgent(diagnostics, request.runId, request.correlationId) };
+  }
+  const admitted = admitTurnInputs(record, request, "turn");
+  if (!admitted.ok) {
+    return { refusal: rejectedInputs(diagnostics, request.runId, request.correlationId) };
+  }
+  return { inputs: admitted.inputs };
 }
 
 async function replaceRuntimeTask(
@@ -630,10 +787,8 @@ async function replaceRuntimeTask(
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskDispatchResult> {
   const record = runs.get(request.runId);
-  // Ahead of the replacement lifecycle: a request the run cannot honour never begins one, so there
-  // is no `started` line to leave without its terminal one, and the predecessor is not interrupted.
-  if (record !== undefined && !isAgentAdmitted(record.turnPort.selectableAgents, request.agent))
-    return rejectedAgent(diagnostics, request.runId, request.correlationId);
+  const admission = admitReplacement(record, request, diagnostics);
+  if (admission.refusal !== undefined) return admission.refusal;
   recordRuntimeReplacementActivity(request, "started");
   if (record === undefined) return rejectedReplacement(diagnostics, request, "no-record");
   if (record.controller.signal.aborted) return rejectedReplacement(diagnostics, request, "aborted");
@@ -659,6 +814,7 @@ async function replaceRuntimeTask(
     request,
     reservation,
     diagnostics,
+    admission.inputs,
     (reason, error): void => {
       recordRuntimeReplacementActivity(request, "rejected", reason, error);
     },
@@ -674,17 +830,11 @@ async function submitReservedRuntimeTask(
   request: CodingRuntimeTaskDispatchRequest,
   reservation: ProductionRuntimeOperationReservation,
   diagnostics: ServerDiagnosticSink | undefined,
+  inputs: AdmittedPromptInputs | undefined,
   observeFailure?: RuntimeDispatchFailureObserver,
 ): Promise<CodingRuntimeTaskDispatchResult> {
   try {
-    if (
-      !(await record.turnPort.submitTurn(
-        request.runId,
-        request.taskIntent,
-        request.initialContext,
-        request.agent,
-      ))
-    ) {
+    if (!(await submitTurn(record, request, inputs))) {
       reservation.release();
       return rejectedDispatch(
         diagnostics,
@@ -718,6 +868,19 @@ async function submitReservedRuntimeTask(
   return { ok: true, completion: terminalCompletion(record, request.runId, diagnostics) };
 }
 
+// A plain turn is handed to the port with the arguments it always had; the admitted inputs ride as
+// one more argument only when there are some.
+function submitTurn(
+  record: ProductionRuntimeRunRecord,
+  request: CodingRuntimeTaskDispatchRequest,
+  inputs: AdmittedPromptInputs | undefined,
+): Promise<boolean> {
+  const { runId, taskIntent, initialContext, agent } = request;
+  return inputs === undefined
+    ? record.turnPort.submitTurn(runId, taskIntent, initialContext, agent)
+    : record.turnPort.submitTurn(runId, taskIntent, initialContext, agent, inputs);
+}
+
 function rejectedDispatch(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -742,6 +905,20 @@ function rejectedAgent(
 ): CodingRuntimeTaskDispatchResult {
   recordRuntimeDispatchFailure(diagnostics, runId, "agent-unsupported", undefined, correlationId);
   return { ok: false, reason: "agent-unsupported" };
+}
+
+/**
+ * The refusal of a prompt whose inputs the run cannot take. Like an unsupported agent it is the
+ * request's own fault, so it carries the closed reason and the coordinator answers it as an invalid
+ * intent; the closed refusal reason itself is recorded by the run's port on the Activity Log.
+ */
+function rejectedInputs(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  correlationId?: string,
+): { readonly ok: false; readonly reason: "inputs-refused" } {
+  recordRuntimeDispatchFailure(diagnostics, runId, "inputs-refused", undefined, correlationId);
+  return { ok: false, reason: "inputs-refused" };
 }
 
 function rejectedReplacement(
@@ -804,8 +981,12 @@ type ReplacementFailureReason =
   | "terminal-exception"
   | "terminal-failed";
 
-/** Beside those, the refusal made before anything began: the request's own agent is unsupported. */
-type RuntimeDispatchFailureReason = ReplacementFailureReason | "agent-unsupported";
+/**
+ * Beside those, the refusals made before anything began: the request's own agent is unsupported, or
+ * the inputs its prompt carries (a delivery, referenced files) are refused.
+ */
+type RuntimeDispatchFailureReason =
+  ReplacementFailureReason | "agent-unsupported" | "inputs-refused";
 
 function recordRuntimeDispatchFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -858,6 +1039,42 @@ function replacementErrorKind(error: unknown): ActivityLogErrorKind {
   if (/abort|cancel/u.test(errorClass)) return "cancelled";
   if (/unavailable|network|connection|econn|enotfound/u.test(errorClass)) return "unavailable";
   return "internal";
+}
+
+/**
+ * Admits one undo or restore like any other operator operation: the live authority is revalidated
+ * (`runtimeAuthorityLive`, which a paused run passes — sticky pause holds the runtime, not the
+ * human), the revision is consumed once, and the request id is single-use. The turn port does the
+ * work and records its own body-free evidence.
+ */
+async function revertRuntimeTask(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeRevertRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeRevertResult> {
+  const record = runs.get(request.runId);
+  const revertTurn = record?.turnPort.revertTurn;
+  if (record === undefined) return { ok: false, reason: "run-unavailable" };
+  if (revertTurn === undefined) return { ok: false, reason: "unsupported" };
+  if (record.controller.signal.aborted) return { ok: false, reason: "run-unavailable" };
+  const reservation = record.operationGuard.reserve(request);
+  if (reservation === undefined) return { ok: false, reason: "not-admitted" };
+  try {
+    const result = await revertTurn(request.runId, request.action, request.correlationId);
+    if (result.ok && reservation.commit()) return result;
+    reservation.release();
+    return result.ok ? { ok: false, reason: "not-admitted" } : result;
+  } catch (error) {
+    reservation.release();
+    recordRuntimeDispatchFailure(
+      diagnostics,
+      request.runId,
+      "exception",
+      error,
+      request.correlationId,
+    );
+    return { ok: false, reason: "revert-failed" };
+  }
 }
 
 async function abortRuntimeTask(

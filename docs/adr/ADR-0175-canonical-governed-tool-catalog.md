@@ -112,7 +112,12 @@ not a Keiko tool or compatibility exception. The clean-cut V2 integration (#3561
 planning stays in the agent conversation rather than an invented replacement tool. Qualification
 still requires the complete governed read, edit, verification, and delivery inventory and its
 real-model evidence. Arbitrary sidecar tool definitions remain transport data and cannot register
-a descriptor, handler, effect or authority. Codex remains disabled.
+a descriptor, handler, effect or authority. The native OpenCode profile (ADR-0137 D10) registers
+exactly Keiko's delivery tools (the Git, CI and verification entries above) through a generated
+plugin built from the unchanged `managed-opencode@1` tool source: their definitions reach the
+gateway as the same transport data as OpenCode's own, no descriptor, alias or digest changes, and
+authority remains the facade request each call makes against the existing descriptors, handlers and
+approval channel, never the advertisement. Codex remains disabled.
 
 ### D3 — Digest inputs and compatibility
 
@@ -688,6 +693,7 @@ request, as its description states.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.8 | 2026-10-23 | The native OpenCode profile registers Keiko's Git, CI and verification tools through a generated plugin so a native run delivers through the existing facade, approval channel and verified-commit path (ADR-0137 D10, #3897); D2 holds unchanged, since the tools are the `managed-opencode@1` entries' own source, no descriptor, alias or digest moves, and an advertisement still binds no handler, effect or authority. |
 | 1.7 | 2026-10-23 | The native OpenCode profile (ADR-0137 D10, #3897) advertises the runtime's own tools to the provider as a bounded `native` advertisement forwarded verbatim and bound by name only; D2 holds unchanged, since no runtime-supplied definition registers a handler, effect or authority, and the governed catalog keeps serving the mapped profiles and every other product surface. |
 | 1.6 | 2026-09-12 | Semantic reranking of the governed repository search runs above the handler on the evidence lane's redacted excerpts, moves neither the catalog revision nor the projection digest, and discloses a body-free provenance whose non-lexical rankings must name their index and whose unplaced orders stay lexical; whole-request cancellation is terminal (#3416, PR #3452). |
 | 1.5 | 2026-09-11 | Approved-skill discovery: the catalog owns only the `keiko.skill.discover` descriptor over the server-approved skill catalog, with one readiness decision, atomic invalidation and a closed, body-free projection (#3417, PR #3452). |

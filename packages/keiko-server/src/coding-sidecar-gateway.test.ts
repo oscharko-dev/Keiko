@@ -90,6 +90,11 @@ import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
+import {
+  CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
+  CODING_SIDECAR_MAX_IMAGE_PARTS,
+} from "./coding-sidecar-image-parts.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
 import { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import {
@@ -9630,4 +9635,355 @@ describe("pending readiness original cause evidence", () => {
       }
     },
   );
+});
+
+// #3897 S14 (review P2): the native `read` of a workspace image reaches the model as an
+// OpenAI-compatible user message holding one `image_url` data-URL part. The route admits it only
+// for the native profile and a model whose configuration declares image input, hands it to the
+// existing gateway content-part path (token accounting, admission evidence, provider projection),
+// and refuses everything else under a closed, body-free reason.
+describe("coding-sidecar gateway native image input", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+  });
+
+  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const NATIVE_TOOLS = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+    type: "function" as const,
+    function: { name, description: "", parameters: { type: "object", properties: {} } },
+  }));
+
+  function pngDataUrl(extraBytes = 56): string {
+    const bytes = Buffer.concat([PNG_SIGNATURE, Buffer.alloc(extraBytes, 7)]);
+    return `data:image/png;base64,${bytes.toString("base64")}`;
+  }
+
+  // The shape the pinned OpenCode 2.1.4 sends after a native `read` of an image: the tool result
+  // text, then the image alone in a user message (captured by opencodeNativeImageInput.real.test).
+  function readImageMessages(url: string): readonly Record<string, unknown>[] {
+    return [
+      { role: "user", content: "Look at pixel.png" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_image_1",
+            type: "function",
+            function: { name: "read", arguments: '{"path":"pixel.png"}' },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call_image_1", content: "Image read successfully" },
+      { role: "user", content: [{ type: "image_url", image_url: { url } }] },
+    ];
+  }
+
+  function nativeDeps(
+    options: {
+      readonly imageInput?: boolean;
+      readonly toolProfile?: "direct" | "code-mode" | "native";
+      readonly contextWindow?: number;
+      readonly chatFactory?: UiHandlerDeps["codingSidecarGatewayChatFactory"];
+    } = {},
+  ): UiHandlerDeps {
+    return {
+      ...depsValue(
+        configValue(
+          provider(),
+          capability({
+            supportsImageInput: options.imageInput ?? true,
+            ...(options.contextWindow === undefined
+              ? {}
+              : { contextWindow: options.contextWindow }),
+          }),
+        ),
+        options.chatFactory,
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-native-image" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-native-image" }),
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(
+        options.toolProfile ?? "native",
+      ),
+    };
+  }
+
+  function send(
+    messages: readonly Record<string, unknown>[],
+    deps: UiHandlerDeps,
+  ): Promise<RouteResult | typeof STREAMING> {
+    return handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "coding", messages, tools: NATIVE_TOOLS }),
+      deps,
+    );
+  }
+
+  function stubProvider(): { readonly bodies: Record<string, unknown>[] } {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        bodies.push(
+          JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>,
+        );
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    return { bodies };
+  }
+
+  function rejectionLine(sink: BufferedServerLogSink): ServerLogEvent | undefined {
+    return sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+  }
+
+  it("forwards a read image to the provider as one image_url part through the gateway path", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const provider = stubProvider();
+    const url = pngDataUrl();
+
+    const result = await send(readImageMessages(url), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(provider.bodies).toHaveLength(1);
+    const sent = provider.bodies[0]?.messages as readonly { content: unknown }[];
+    expect(sent[0]?.content).toBe("Look at pixel.png");
+    expect(sent[3]?.content).toEqual([{ type: "image_url", image_url: { url } }]);
+    // The existing gateway admission path accounted for the image and logged it without bytes.
+    const admission = sink.events.find((event) => event.op === "gateway.prompt.admission");
+    expect(admission?.extra).toMatchObject({
+      imageCount: 1,
+      imageAccounting: "fallback-estimated",
+    });
+    expect(Number(admission?.extra?.imageReserveTokens)).toBeGreaterThan(0);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.extra).toMatchObject({ runId: "run-native-image", imageCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain(url.slice(30));
+  });
+
+  it("charges the gateway's image allowance and keeps the part list beside the joined text", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+    const url = pngDataUrl();
+    const deps = nativeDeps({
+      chatFactory:
+        (_config, modelId) =>
+        (request): Promise<NormalizedResponse> => {
+          seen.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        },
+    });
+
+    const result = await send(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "first" },
+            { type: "image_url", image_url: { url, detail: "low" } },
+            { type: "text", text: "second" },
+          ],
+        },
+      ],
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seen[0]?.messages).toEqual([
+      {
+        role: "user",
+        content: "first\n\nsecond",
+        contentParts: [
+          { type: "text", text: "first" },
+          { type: "image_url", image_url: { url } },
+          { type: "text", text: "second" },
+        ],
+      },
+    ]);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    const withoutImage = countGatewayPromptTokens({
+      messages: [{ role: "user", content: "first\n\nsecond" }],
+    });
+    const estimated = Number(validated?.extra?.estimatedPromptTokens);
+    // The estimate is the shared gateway counter over the complete projection, image included.
+    expect(estimated).toBe(
+      countGatewayPromptTokens({
+        messages: seen[0]?.messages ?? [],
+        tools: NATIVE_TOOLS.map(({ function: tool }) => tool),
+      }),
+    );
+    expect(estimated).toBeGreaterThan(withoutImage);
+  });
+
+  it.each([
+    { label: "a text-only model", options: { imageInput: false } },
+    { label: "the direct (mapped) profile", options: { toolProfile: "direct" as const } },
+    { label: "the Code Mode (mapped) profile", options: { toolProfile: "code-mode" as const } },
+  ])("refuses image input for $label before any provider call", async ({ options }) => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    const url = pngDataUrl();
+
+    const result = await send(readImageMessages(url), nativeDeps(options));
+
+    assertRouteResult(result);
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-input-unsupported"],
+        },
+      },
+    });
+    expect(provider.bodies).toHaveLength(0);
+    expect(rejectionLine(sink)).toMatchObject({
+      level: "warn",
+      status: 400,
+      errorKind: "invalid-request",
+      extra: { reason: "image-input-unsupported", runId: "run-native-image" },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(url.slice(30));
+  });
+
+  it.each([
+    { reason: "image-part-invalid", url: "data:image/png;base64,@@@@" },
+    { reason: "image-part-invalid", url: "data:image/png;base64,AAAAA" },
+    { reason: "image-part-invalid", url: "data:image/png;base64," },
+    { reason: "image-part-invalid", url: "data:image/png;base64,AA=A" },
+    { reason: "image-part-invalid", url: "data:image/png,AAAA" },
+    { reason: "image-part-invalid", url: "data:image/png;charset=utf-8;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:image/svg+xml;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:image/svg;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:application/pdf;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:text/plain;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:;base64,AAAA" },
+  ])("refuses the image part $url with $reason", async ({ reason, url }) => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+
+    const result = await send(readImageMessages(url), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({
+      error: {
+        code: "BAD_REQUEST",
+        message:
+          CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[
+            reason as keyof typeof CODING_SIDECAR_IMAGE_REJECTION_MESSAGES
+          ],
+      },
+    });
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason });
+    expect(provider.bodies).toHaveLength(0);
+  });
+
+  it.each(["assistant", "system", "tool"])(
+    "refuses an image part on a %s message, which providers never accept",
+    async (role) => {
+      resetGatewayInstanceCacheForTests();
+      const sink = captureServerLog("warn");
+      const message =
+        role === "tool"
+          ? {
+              role,
+              tool_call_id: "call_1",
+              content: [{ type: "image_url", image_url: { url: pngDataUrl() } }],
+            }
+          : { role, content: [{ type: "image_url", image_url: { url: pngDataUrl() } }] };
+
+      const result = await send([{ role: "user", content: "go" }, message], nativeDeps());
+
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+      expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "image-part-invalid" });
+    },
+  );
+
+  it("refuses more image parts than one request may carry, and admits exactly that many", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    stubProvider();
+    const images = (count: number): Record<string, unknown> => ({
+      role: "user",
+      content: Array.from({ length: count }, () => ({
+        type: "image_url",
+        image_url: { url: pngDataUrl(0) },
+      })),
+    });
+    // A large declared window keeps the prompt-token bound out of the way of the count bound.
+    const deps = nativeDeps({ contextWindow: 4_000_000 });
+
+    const admitted = await send([images(CODING_SIDECAR_MAX_IMAGE_PARTS)], deps);
+    assertRouteResult(admitted);
+    expect(admitted.status).toBe(200);
+
+    const refused = await send([images(CODING_SIDECAR_MAX_IMAGE_PARTS + 1)], deps);
+    assertRouteResult(refused);
+    expect(refused.status).toBe(400);
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "image-count-exceeded" });
+  });
+
+  it("refuses an image that exceeds the request-body ceiling under the existing size reason", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    const oversized = `data:image/png;base64,${"A".repeat(5 * 1_048_576)}`;
+
+    const result = await send(readImageMessages(oversized), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(413);
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "request-too-large" });
+    expect(provider.bodies).toHaveLength(0);
+  });
+
+  it("keeps a remote or file image reference an unsupported content part", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    for (const url of [
+      "https://example.invalid/x.png",
+      "file:///etc/passwd",
+      "http://127.0.0.1/x",
+    ]) {
+      const result = await send(readImageMessages(url), nativeDeps());
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+    }
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["content-part-unsupported", "content-part-unsupported", "content-part-unsupported"]);
+  });
+
+  it("classifies each image refusal message under its own closed reason", () => {
+    for (const [reason, message] of Object.entries(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES)) {
+      expect(
+        _classifyBadRequestReasonForTests({
+          status: 400,
+          body: { error: { code: "BAD_REQUEST", message } },
+        }),
+      ).toBe(reason);
+    }
+  });
 });

@@ -911,6 +911,63 @@ describe("production coding runtime resolver", () => {
       await bound.submitTurn("run-1", "plan it", undefined, "plan");
       expect(submitTurn).toHaveBeenCalledWith("run-1", "plan it", undefined, "plan");
     });
+
+    // ADR-0137 D10: a delivered message joins the running turn and starts none, so the binding
+    // forwards the prompt-input operations untouched and never lets one rewrite that turn's
+    // explicit-skill request; the admitted inputs of a turn ride as one more argument.
+    it("keeps the backend's prompt-input operations through the explicit-skill binding", async () => {
+      const admitPromptInputs = vi.fn(() => ({
+        ok: false as const,
+        reason: "turn-not-running" as const,
+      }));
+      const deliverPrompt = vi.fn(() => Promise.resolve(true));
+      const submitTurn = vi.fn(() => Promise.resolve(true));
+      const tracker = createExplicitSkillInvocationTracker(createServerApprovedSkillCatalog());
+      const observeTurn = vi.spyOn(tracker, "observeTurn");
+      const clear = vi.spyOn(tracker, "clear");
+      const bound = bindExplicitSkillTurns(
+        {
+          submitTurn,
+          admitPromptInputs,
+          deliverPrompt,
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.resolve("succeeded" as const),
+        },
+        tracker,
+      );
+
+      expect(bound.admitPromptInputs).toBe(admitPromptInputs);
+      expect(bound.deliverPrompt).toBe(deliverPrompt);
+      const inputs = { files: [], fileBytes: 0, referenceCount: 0, delivery: "steer" as const };
+      await bound.deliverPrompt?.("run-1", "steer it", inputs);
+      expect(deliverPrompt).toHaveBeenCalledExactlyOnceWith("run-1", "steer it", inputs);
+      expect(observeTurn).not.toHaveBeenCalled();
+      expect(clear).not.toHaveBeenCalled();
+
+      await bound.submitTurn("run-1", "plain", undefined, undefined);
+      expect(submitTurn).toHaveBeenLastCalledWith("run-1", "plain", undefined, undefined);
+      await bound.submitTurn("run-1", "with files", undefined, undefined, inputs);
+      expect(submitTurn).toHaveBeenLastCalledWith(
+        "run-1",
+        "with files",
+        undefined,
+        undefined,
+        inputs,
+      );
+    });
+
+    it("offers no prompt-input operation through the binding when the backend has none", () => {
+      const bound = bindExplicitSkillTurns(
+        {
+          submitTurn: () => Promise.resolve(true),
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.resolve("succeeded" as const),
+        },
+        createExplicitSkillInvocationTracker(createServerApprovedSkillCatalog()),
+      );
+      expect(bound.admitPromptInputs).toBeUndefined();
+      expect(bound.deliverPrompt).toBeUndefined();
+    });
   });
 
   // KfQ 3954841973: a backend process (plus its HTTP/SSE client and tool bridge) was already

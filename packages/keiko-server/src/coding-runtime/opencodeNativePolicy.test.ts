@@ -1,3 +1,14 @@
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -84,10 +95,33 @@ describe("native policy request parsing", () => {
       { ...body, resources: ["x".repeat(2049)] },
       { ...body, agent: "not an agent" },
       { ...body, source: { type: "other", messageID: "m", id: "c" } },
+      { ...body, patchBytes: -1 },
+      { ...body, patchBytes: 1.5 },
+      { ...body, patchBytes: "40" },
+      { ...body, patchBytes: Number.MAX_SAFE_INTEGER + 1 },
       "native-policy",
     ]) {
       expect(parseOpenCodeNativePolicyRequest(invalid)).toBeUndefined();
     }
+  });
+
+  it("carries the measured size of an edit's diff, and none when the producer attached no diff", () => {
+    const body = {
+      action: "native-policy",
+      runId: "run-1",
+      sessionID: "ses_abc",
+      permission: "edit",
+      resources: ["src/a.ts"],
+    };
+    expect(parseOpenCodeNativePolicyRequest({ ...body, patchBytes: 4_097 })).toMatchObject({
+      patchBytes: 4_097,
+    });
+    expect(parseOpenCodeNativePolicyRequest({ ...body, patchBytes: 0 })).toMatchObject({
+      patchBytes: 0,
+    });
+    expect(parseOpenCodeNativePolicyRequest({ ...body, patchBytes: null })).not.toHaveProperty(
+      "patchBytes",
+    );
   });
 });
 
@@ -454,5 +488,34 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
     expect(decideWithPlan("autonomous-delivery", "external_directory", [`${PLAN}/*`], null)).toBe(
       "deny:workspace-escape",
     );
+  });
+
+  // #3897 review: a note path that resolves outside the plan directory (a symbolic link, a hard
+  // link or a replaced ancestor naming a workspace file) is an ordinary edit, not a private note.
+  it("exempts only notes that are physically inside the plan directory", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plan-note-")));
+    try {
+      const plan = join(root, "run-1", "home", ".opencode", "plan");
+      mkdirSync(plan, { recursive: true });
+      const workspaceFile = join(root, "README.md");
+      writeFileSync(workspaceFile, "readme");
+      writeFileSync(join(plan, "note.md"), "note");
+      symlinkSync(workspaceFile, join(plan, "link.md"));
+      linkSync(workspaceFile, join(plan, "hard.md"));
+      const ask = (resource: string): string =>
+        decideWithPlan("governed-assist", "edit", [resource], plan);
+      expect(ask(join(plan, "note.md"))).toBe("allow");
+      expect(ask(join(plan, "new.md"))).toBe("allow");
+      expect(ask(join(plan, "link.md"))).toBe("ask");
+      expect(ask(join(plan, "hard.md"))).toBe("ask");
+      // A replaced ancestor: the plan path now runs through a link into another tree.
+      const elsewhere = join(root, "elsewhere", ".opencode");
+      mkdirSync(join(elsewhere, "plan"), { recursive: true });
+      rmSync(join(root, "run-1", "home", ".opencode"), { recursive: true });
+      symlinkSync(elsewhere, join(root, "run-1", "home", ".opencode"));
+      expect(ask(join(plan, "note.md"))).toBe("ask");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

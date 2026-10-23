@@ -38,6 +38,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
 import type {
+  ChatMessageContentPart,
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchSidecarGatewayResult,
@@ -104,6 +105,15 @@ import {
 } from "./sse-write.js";
 import { startSseHeartbeat } from "./sse.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
+import {
+  CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
+  CODING_SIDECAR_IMAGE_REJECTIONS,
+  CODING_SIDECAR_MAX_IMAGE_PARTS,
+  countImageContentParts,
+  isImageUrlContentPartCandidate,
+  parseImageUrlContentPart,
+  type CodingSidecarImageRejection,
+} from "./coding-sidecar-image-parts.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
@@ -295,6 +305,10 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
     // recorded. `required: false` only because a record written before this field existed lacks it.
     droppedReasoningMessageCount: { type: "integer", dataClass: "count", required: false },
+    // #3897 S14: how many validated image parts the request carries; present only when it carries
+    // any. The count is part of what `estimatedPromptTokens` is charged for (the gateway's image
+    // allowance per image); the images themselves are never recorded.
+    imageCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -404,6 +418,7 @@ type CodingSidecarGatewayRejectionReason =
   | "body-empty-messages"
   | "message-shape-invalid"
   | "content-part-unsupported"
+  | CodingSidecarImageRejection
   | "tools-not-openai-compatible"
   | "invalid-sampling"
   | "input-messages-exceeded"
@@ -442,6 +457,11 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "body-empty-messages",
         "message-shape-invalid",
         "content-part-unsupported",
+        "image-part-invalid",
+        "image-mime-unsupported",
+        "image-part-too-large",
+        "image-count-exceeded",
+        "image-input-unsupported",
         "tools-not-openai-compatible",
         "invalid-sampling",
         "input-messages-exceeded",
@@ -861,6 +881,16 @@ function logGatewayRejection(
   );
 }
 
+// One row per image refusal (#3897 S14); the messages are the fixed strings the image-part module
+// owns, so a message change and its reason cannot drift apart.
+const IMAGE_REJECTION_REASON_ROWS: readonly {
+  readonly test: (message: string) => boolean;
+  readonly reason: CodingSidecarImageRejection;
+}[] = CODING_SIDECAR_IMAGE_REJECTIONS.map((reason) => ({
+  test: (message: string): boolean => message === CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[reason],
+  reason,
+}));
+
 // One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
 // message change and this table must move together. A future unmatched shape receives the explicit
 // `unclassified-rejection` reason instead of borrowing one of these known meanings.
@@ -901,6 +931,7 @@ const BAD_REQUEST_MESSAGE_REASONS: readonly {
       message === "Request body message content included an unsupported content part.",
     reason: "content-part-unsupported",
   },
+  ...IMAGE_REJECTION_REASON_ROWS,
   {
     test: (message) =>
       message.startsWith("Request body temperature") || message.startsWith("Request body top_p"),
@@ -1050,7 +1081,10 @@ export interface CodingSidecarGatewayChatCompletionRequest {
 
 export interface CodingSidecarGatewayChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
+  /** The message text. With image parts it is the joined text parts; `contentParts` is complete. */
   readonly content: string;
+  /** Present only on a message that carries at least one validated image part (#3897 S14). */
+  readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
   readonly toolCalls?: readonly NormalizedToolCall[] | undefined;
   readonly toolCallId?: string | undefined;
 }
@@ -1166,15 +1200,16 @@ function unavailableError(): RouteResult {
 type ParsedMessagePiece<T> =
   | { readonly kind: "ok"; readonly value: T }
   | { readonly kind: "content-part-unsupported" }
+  | { readonly kind: "image-rejected"; readonly reason: CodingSidecarImageRejection }
   | { readonly kind: "invalid" };
 
 /**
- * OpenAI-compatible content part accepted from the model: `{type:"text", text}` only. A bare
- * single-part prompt still arrives as `content: string`, but when the server sends a multi-part
- * prompt (opencodeHttpClient.ts `promptParts`: the task text plus the issue context as a
- * synthetic part), OpenCode's AI-SDK provider re-shapes the outgoing user message as an OpenAI
- * content-part ARRAY instead (#3390). Every other content-part type (image_url, input_audio,
- * file, or anything unrecognized) is rejected closed, never silently dropped.
+ * OpenAI-compatible content part accepted from the model: `{type:"text", text}`, or a validated
+ * `image_url` data URL (below). A bare single-part prompt still arrives as `content: string`, but
+ * when the server sends a multi-part prompt (opencodeHttpClient.ts `promptParts`: the task text
+ * plus the issue context as a synthetic part), OpenCode's AI-SDK provider re-shapes the outgoing
+ * user message as an OpenAI content-part ARRAY instead (#3390). Every other content-part type
+ * (input_audio, file, or anything unrecognized) is rejected closed, never silently dropped.
  */
 function isTextContentPart(
   value: unknown,
@@ -1182,27 +1217,50 @@ function isTextContentPart(
   return isRecord(value) && value.type === "text" && typeof value.text === "string";
 }
 
+interface ParsedMessageContent {
+  readonly text: string;
+  /** Set only when the message carries an image part; then it holds every part, in order. */
+  readonly contentParts?: readonly ChatMessageContentPart[];
+}
+
+function parseContentPart(part: unknown): ParsedMessagePiece<ChatMessageContentPart> {
+  if (isTextContentPart(part)) return { kind: "ok", value: { type: "text", text: part.text } };
+  if (isImageUrlContentPartCandidate(part)) {
+    const image = parseImageUrlContentPart(part);
+    if (image.kind === "ok") return { kind: "ok", value: image.part };
+    if (image.kind === "unsupported") return { kind: "content-part-unsupported" };
+    return { kind: "image-rejected", reason: image.reason };
+  }
+  return isRecord(part) && typeof part.type === "string"
+    ? { kind: "content-part-unsupported" }
+    : { kind: "invalid" };
+}
+
 /**
  * Collapses an accepted OpenAI content-part array to the single string the Model Gateway core
- * consumes, joining parts with a blank line. The synthetic issue-context part is untrusted
+ * consumes, joining text parts with a blank line. The synthetic issue-context part is untrusted
  * repository data, so it is kept inside the same user turn it arrived in rather than becoming a
- * second, unaccounted-for message. Part count and total byte size ride on the existing
- * `readJsonObject` request-body budget already enforced before this runs — no new limit is added.
+ * second, unaccounted-for message. A message with an image part additionally keeps its complete,
+ * ordered part list: the gateway projects `contentParts` over `content` (#3897 S14). Part count and
+ * total byte size ride on the existing `readJsonObject` request-body budget enforced before this
+ * runs; images add the per-image and per-request bounds of the image-part module.
  */
-function parseMessageContent(value: unknown): ParsedMessagePiece<string> {
-  if (typeof value === "string") return { kind: "ok", value };
+function parseMessageContent(value: unknown): ParsedMessagePiece<ParsedMessageContent> {
+  if (typeof value === "string") return { kind: "ok", value: { text: value } };
   if (!Array.isArray(value) || value.length === 0) return { kind: "invalid" };
-  const texts: string[] = [];
+  const parts: ChatMessageContentPart[] = [];
   for (const part of value) {
-    if (isTextContentPart(part)) {
-      texts.push(part.text);
-      continue;
-    }
-    if (isRecord(part) && typeof part.type === "string")
-      return { kind: "content-part-unsupported" };
-    return { kind: "invalid" };
+    const parsed = parseContentPart(part);
+    if (parsed.kind !== "ok") return parsed;
+    parts.push(parsed.value);
   }
-  return { kind: "ok", value: texts.join("\n\n") };
+  const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
+  return {
+    kind: "ok",
+    value: parts.some((part) => part.type === "image_url")
+      ? { text, contentParts: parts }
+      : { text },
+  };
 }
 
 function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGatewayChatMessage> {
@@ -1213,9 +1271,30 @@ function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGate
   return { kind: "ok", value: { ...base.value, ...continuation } };
 }
 
+// A tool-calling assistant message may carry `content: null`; every other message parses its
+// content. OpenAI-compatible providers take images from a user message only; the runtime carries a
+// read image in a user turn, so an image on any other role is not a shape this route forwards.
+function parseRoleContent(
+  entry: Readonly<Record<string, unknown>>,
+  role: CodingSidecarGatewayChatMessage["role"],
+): ParsedMessagePiece<ParsedMessageContent> {
+  if (
+    entry.content === null &&
+    role === "assistant" &&
+    parseContinuationToolCalls(entry.tool_calls) !== undefined
+  ) {
+    return { kind: "ok", value: { text: "" } };
+  }
+  const content = parseMessageContent(entry.content);
+  if (content.kind === "ok" && content.value.contentParts !== undefined && role !== "user") {
+    return { kind: "image-rejected", reason: "image-part-invalid" };
+  }
+  return content;
+}
+
 function parseMessageBase(
   value: unknown,
-): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "role" | "content">> {
+): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "role" | "content" | "contentParts">> {
   if (
     !isRecord(value) ||
     typeof value.role !== "string" ||
@@ -1223,14 +1302,17 @@ function parseMessageBase(
   ) {
     return { kind: "invalid" };
   }
-  const content =
-    value.content === null &&
-    value.role === "assistant" &&
-    parseContinuationToolCalls(value.tool_calls) !== undefined
-      ? { kind: "ok" as const, value: "" }
-      : parseMessageContent(value.content);
+  const content = parseRoleContent(value, value.role);
   if (content.kind !== "ok") return content;
-  return { kind: "ok", value: { role: value.role, content: content.value } };
+  const { text, contentParts } = content.value;
+  return {
+    kind: "ok",
+    value: {
+      role: value.role,
+      content: text,
+      ...(contentParts === undefined ? {} : { contentParts }),
+    },
+  };
 }
 
 function parseMessageContinuation(
@@ -1369,17 +1451,28 @@ function parseMessages(value: unknown): ParsedMessages | RouteResult | undefined
       continue;
     }
     const parsed = parseMessageEntry(entry);
-    if (parsed.kind === "content-part-unsupported") {
-      return badRequest("Request body message content included an unsupported content part.");
-    }
-    if (parsed.kind === "invalid") {
-      return badRequest(
-        `Request body messages must be well-formed chat messages (entries: ${String(value.length)}).`,
-      );
-    }
+    if (parsed.kind !== "ok") return messageParseRefusal(parsed, value.length);
     messages.push(parsed.value);
   }
+  if (countImageContentParts(messages) > CODING_SIDECAR_MAX_IMAGE_PARTS) {
+    return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-count-exceeded"]);
+  }
   return messages.length === 0 ? undefined : { messages, droppedReasoningMessageCount };
+}
+
+function messageParseRefusal(
+  parsed: Exclude<ParsedMessagePiece<unknown>, { readonly kind: "ok" }>,
+  entryCount: number,
+): RouteResult {
+  if (parsed.kind === "content-part-unsupported") {
+    return badRequest("Request body message content included an unsupported content part.");
+  }
+  if (parsed.kind === "image-rejected") {
+    return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[parsed.reason]);
+  }
+  return badRequest(
+    `Request body messages must be well-formed chat messages (entries: ${String(entryCount)}).`,
+  );
 }
 
 function badRequest(message: string): RouteResult {
@@ -1942,12 +2035,26 @@ async function readChatCompletionRequest(
   return parsed;
 }
 
+// Image input is native-profile only and only for a model whose configuration declares it, the same
+// declaration the native provider binding carries (#3897 S14). The runtime of a text-only model or
+// of a mapped profile declares no image input, so a request carrying one is outside its contract.
+function imageInputRefusal(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
+  toolProfile: OpenCodeToolProfile,
+): RouteResult | undefined {
+  if (countImageContentParts(parsed.messages) === 0) return undefined;
+  if (runMetadata.supportsImageInput === true && toolProfile === "native") return undefined;
+  return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-input-unsupported"]);
+}
+
 function validationErrorForChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
   modelAlias: string,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
   runtimeAuthenticated: boolean,
   estimatedPromptTokens: number,
+  toolProfile: OpenCodeToolProfile,
 ): RouteResult | undefined {
   if (isRouteResult(parsed)) {
     return parsed;
@@ -1956,6 +2063,8 @@ function validationErrorForChatRequest(
   if (invalidSamplingMessage !== undefined) {
     return badRequest(invalidSamplingMessage);
   }
+  const imageRefusal = imageInputRefusal(parsed, runMetadata, toolProfile);
+  if (imageRefusal !== undefined) return imageRefusal;
   const invalidBudget = budgetValidationError(parsed, runMetadata, estimatedPromptTokens);
   if (invalidBudget !== undefined) return invalidBudget;
   if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated)) {
@@ -4531,6 +4640,7 @@ async function readValidatedChatRequest(
     resolved.result.runMetadata,
     authentication.runtimeAuthenticated,
     estimatedPromptTokens,
+    gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
   );
   if (validationError !== undefined) {
     logChatRequestRejection(
@@ -4666,11 +4776,19 @@ function logValidatedRequestBounds(
         inputMessageCount: request.messages.length,
         offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
+        ...imageCountEvidence(request),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
+}
+
+function imageCountEvidence(request: CodingSidecarGatewayChatCompletionRequest): {
+  readonly imageCount?: number;
+} {
+  const imageCount = countImageContentParts(request.messages);
+  return imageCount === 0 ? {} : { imageCount };
 }
 
 function executeBudgetedGatewayChat(

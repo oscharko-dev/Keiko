@@ -558,6 +558,12 @@ export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxOutputTokens: number;
   readonly maxInputMessages: number;
   readonly maxRequestBytes: number;
+  /**
+   * The admitted model's declared image input (`ModelCapability.supportsImageInput`), carried from
+   * the same projection to both the native runtime's provider binding and the sidecar gateway's
+   * content-part admission so they cannot disagree (#3897 S14). Absent means text only.
+   */
+  readonly supportsImageInput?: boolean | undefined;
 }
 
 export interface CodingWorkbenchSidecarGatewayProjection {

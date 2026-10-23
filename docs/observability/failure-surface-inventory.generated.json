@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "273492d6d07ff21f7c9691131146839e42cc2cbaff7df0fda36c49d90f71f228"
+    "catalogDigest": "30be5590d6f27406eb134a92ac4c7762c82a122d1dc99ffbdb216f7be7092066"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 556,
-    "proofCount": 569,
-    "resolvedProofCount": 569,
-    "failureClassCount": 353,
+    "operationCount": 563,
+    "proofCount": 576,
+    "resolvedProofCount": 576,
+    "failureClassCount": 356,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -334,9 +334,13 @@
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-question.observed",
+        "coding-runtime.native-question.routed",
+        "coding-runtime.native-session-tree.observed",
+        "coding-runtime.native-turn.interrupted",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
         "coding-runtime.project-memory.context",
+        "coding-runtime.prompt-inputs.settled",
         "coding-runtime.question.authority-resolution-failed",
         "coding-runtime.question.list-failed",
         "coding-runtime.question.list-revision-rebound",
@@ -346,6 +350,9 @@
         "coding-runtime.readiness.phase",
         "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-rerank",
+        "coding-runtime.revert.applied",
+        "coding-runtime.revert.dispatch-failed",
+        "coding-runtime.revert.refused",
         "coding-runtime.ripgrep.resolved",
         "coding-runtime.run.delivery-continuation-refused",
         "coding-runtime.run.delivery-continued",
@@ -806,6 +813,7 @@
     "coding-runtime-operation-refusal": ["tools-workflows.rejection"],
     "coding-runtime-operator-decision": ["tools-workflows.dependency-failure"],
     "coding-runtime-project-memory": ["tools-workflows.dependency-failure"],
+    "coding-runtime-prompt-inputs": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-instructions": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-list": ["tools-workflows.dependency-failure"],
@@ -813,6 +821,8 @@
     "coding-runtime-readiness": ["tools-workflows.dependency-failure"],
     "coding-runtime-recovery-acknowledgement": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
+    "coding-runtime-revert": ["tools-workflows.rejection"],
+    "coding-runtime-revert-dispatch": ["tools-workflows.dependency-failure"],
     "coding-runtime-ripgrep-unavailable": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-settlement": ["tools-workflows.rejection"],
     "coding-runtime-run-start": ["tools-workflows.dependency-failure"],
@@ -1437,6 +1447,15 @@
     "coding-runtime.native-question.observed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
+    "coding-runtime.native-question.routed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeNativeQuestions.test.ts"
+    ],
+    "coding-runtime.native-session-tree.observed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.test.ts"
+    ],
+    "coding-runtime.native-turn.interrupted.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
+    ],
     "coding-runtime.operation.refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts"
     ],
@@ -1445,6 +1464,9 @@
     ],
     "coding-runtime.project-memory.context.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.prompt-inputs.settled.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodePromptInputs.test.ts"
     ],
     "coding-runtime.question.authority-resolution-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
@@ -1472,6 +1494,15 @@
     ],
     "coding-runtime.repository-rerank.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
+    ],
+    "coding-runtime.revert.applied.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRevert.test.ts"
+    ],
+    "coding-runtime.revert.dispatch-failed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
+    ],
+    "coding-runtime.revert.refused.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRevert.test.ts"
     ],
     "coding-runtime.ripgrep.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.test.ts"

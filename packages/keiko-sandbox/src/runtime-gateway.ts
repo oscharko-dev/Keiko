@@ -123,6 +123,9 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
               ...(policy.filesystem.protectedWriteRoots === undefined
                 ? []
                 : ["native-protected-write-roots-v1", ...policy.filesystem.protectedWriteRoots]),
+              ...(policy.filesystem.linkFreeWriteRoots === undefined
+                ? []
+                : ["native-link-free-write-roots-v1", ...policy.filesystem.linkFreeWriteRoots]),
             ]),
       ]),
     )

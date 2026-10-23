@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
@@ -95,6 +95,22 @@ import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./ope
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import {
+  acceptPromptInputs,
+  createOpenCodePromptInputsRunPort,
+  openCodePromptInputs,
+  type AdmittedPromptInputs,
+  type OpenCodePromptInputsRunPort,
+} from "./opencodePromptInputs.js";
+import {
+  createOpenCodeRevertRunPort,
+  openCodeRevertBlocksTurn,
+  recordOpenCodeTurnImage,
+  recordRevertTurnBlocked,
+  type OpenCodeRevertRun,
+  type OpenCodeRevertRunPort,
+  type OpenCodeStagedRevert,
+} from "./opencodeRevert.js";
+import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -118,9 +134,16 @@ import {
 } from "./opencodeNativePolicy.js";
 import { OPENCODE_NATIVE_POLICY_ACTION } from "./opencodeNativePolicyPlugin.js";
 import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
+import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
+import {
+  classifyNativeSession,
+  createNativeTreeStatusPort,
+  interruptNativeTree,
+  nativeSessionDescendsFromRun,
+  type NativeSessionTreeRun,
+} from "./opencodeNativeSessionTree.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
-import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
 import {
   buildOpenCodeLaunchProfile,
   OPENCODE_RUNTIME_READINESS_PROMPT,
@@ -134,6 +157,7 @@ import {
   type OpenCodeGovernedSinkReceipt,
   type OpenCodeRuntimeAdapter,
   type OpenCodeSyncHint,
+  type OpenCodeTurnOutcome,
 } from "./opencodeRuntimeAdapter.js";
 import {
   OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
@@ -148,7 +172,6 @@ import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
@@ -452,14 +475,36 @@ export interface OpenCodeRunPort {
     text: string,
     initialContext?: string,
     agent?: CodingWorkbenchAgent,
+    inputs?: AdmittedPromptInputs,
   ) => Promise<boolean>;
+  /**
+   * What a prompt may carry besides its text on this composition's tool profile, and the two
+   * operations that honour it (`opencodePromptInputs.ts`): admission before anything is reserved,
+   * and the delivery of a `steer` / `queue` message to the turn in flight. Absent means the
+   * default: no delivery, no references.
+   */
+  readonly promptInputs?: OpenCodePromptInputsRunPort["promptInputs"] | undefined;
+  readonly admitPromptInputs?: OpenCodePromptInputsRunPort["admitPromptInputs"] | undefined;
+  readonly deliverPrompt?: OpenCodePromptInputsRunPort["deliverPrompt"] | undefined;
   /**
    * The primary agents this composition's tool profile can honour (`openCodeSelectableAgents`):
    * `plan` exists only on the native profile. A request for another agent is refused here.
    */
   readonly selectableAgents?: readonly CodingWorkbenchAgent[] | undefined;
   readonly abortTask: (runId: string) => Promise<boolean>;
-  readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Undo and restore of the run's newest turn (B3, S04, `opencodeRevert.ts`): an undo stops the
+   * turn in flight, restores the files it changed and keeps the runtime's revert staged; a restore
+   * re-applies them. While an undo is staged no new turn is accepted. Only the native profile
+   * records snapshots, so only it offers these; absent means the run cannot be undone.
+   */
+  readonly revertTurn?: OpenCodeRevertRunPort["revertTurn"] | undefined;
+  readonly revertState?: OpenCodeRevertRunPort["revertState"] | undefined;
+  /**
+   * How the armed turn ended (`OpenCodeTurnOutcome`): `true` succeeded, `false` failed or was
+   * abandoned, `"interrupted"` the runtime ended it at a human's refusal of a question.
+   */
+  readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<OpenCodeTurnOutcome>;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
   readonly answerQuestion: (
     runId: string,
@@ -497,11 +542,19 @@ interface PreparedRun {
   sessionId?: string | undefined;
   /** Native child sessions (subagents) proven to descend from the run's session (#3897). */
   childSessionIds?: Set<string> | undefined;
+  /** What the last question list line counted (`opencodeNativeQuestions.ts`; a line per change). */
+  questionList?: { signature?: string | undefined } | undefined;
   /**
    * The primary agent the session runs its next turn under, as of the last successful
    * `session.switchAgent`; absent is the launch profile's default agent, `build` (#3897).
    */
   agent?: CodingWorkbenchAgent | undefined;
+  /** What the references of this run's accepted prompts added up to (`opencodePromptInputs.ts`). */
+  promptFileBytes?: number | undefined;
+  /** The undo staged in the runtime, when there is one (`opencodeRevert.ts`). */
+  revert?: OpenCodeStagedRevert | undefined;
+  /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
+  turnImage?: OpenCodeRevertRun["turnImage"];
   initialTurnBaselineStable: boolean;
   ready: boolean;
 }
@@ -562,6 +615,8 @@ export function createOpenCodeRuntimeComposition(
       input.activityLog,
       approvals,
       openCodeSelectableAgents(toolProfile),
+      toolProfile === "native",
+      openCodePromptInputs(toolProfile),
     ),
   };
 }
@@ -654,24 +709,41 @@ function createRunPort(
   activityLog: ServerLogSink | undefined,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
   selectableAgents: readonly CodingWorkbenchAgent[],
+  snapshots: boolean,
+  promptInputs: OpenCodePromptInputsRunPort["promptInputs"],
 ): OpenCodeRunPort {
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
+  const abortTask = createAbortTask(readyRun, activityLog);
   return {
     submitTask: createSubmitTask(readyRun, diagnostics, activityLog, selectableAgents),
     selectableAgents,
-    abortTask: createAbortTask(readyRun),
-    waitForTerminal: async (runId, signal): Promise<boolean> => {
+    ...createOpenCodePromptInputsRunPort({
+      readyRun,
+      capabilities: promptInputs,
+      activityLog,
+      recordPostFailure: (runId, error): void => {
+        // The message was not accepted; the turn it was meant to join is untouched and keeps running.
+        const run = readyRun(runId);
+        if (run !== undefined) recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+      },
+    }),
+    abortTask,
+    ...(snapshots ? createOpenCodeRevertRunPort({ readyRun, abortTask, activityLog }) : {}),
+    waitForTerminal: async (runId, signal): Promise<OpenCodeTurnOutcome> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
       const outcome = await run.runtimeAdapter.waitForTerminal(signal);
-      if (!outcome && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      if (outcome === false && !signal.aborted)
+        recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      // What an undo of this turn must find unchanged, recorded as the turn settled.
+      if (snapshots) recordOpenCodeTurnImage(run, activityLog);
       return outcome;
     },
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
-    ...createQuestionRunPort(readyRun, diagnostics),
+    ...createQuestionRunPort(readyRun, diagnostics, activityLog),
   };
 }
 
@@ -681,9 +753,16 @@ function createSubmitTask(
   activityLog: ServerLogSink | undefined,
   selectableAgents: readonly CodingWorkbenchAgent[],
 ): OpenCodeRunPort["submitTask"] {
-  return async (runId, text, initialContext, agent): Promise<boolean> => {
+  return async (runId, text, initialContext, agent, inputs): Promise<boolean> => {
     const run = readyRun(runId);
-    if (run === undefined) return false;
+    // A delivery joins the turn in flight (`deliverPrompt`); it never starts or arms one.
+    if (run === undefined || inputs?.delivery !== undefined) return false;
+    // A staged undo is finalized by the runtime on the next prompt, which rewrites the history the
+    // reconciliation reads append-only; the human restores the undo or stops the run first.
+    if (openCodeRevertBlocksTurn(run)) {
+      recordRevertTurnBlocked(activityLog, runId);
+      return false;
+    }
     // Before the baseline is read and the turn armed: a refused agent leaves nothing to undo, and
     // the switch message the runtime records is part of the baseline the turn is measured from.
     if (!(await selectPrimaryAgent(run, agent, selectableAgents, diagnostics, activityLog))) {
@@ -691,7 +770,7 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     if (!run.runtimeAdapter.armTurn()) return false;
-    return postTurnPrompt(run, text, initialContext, diagnostics, activityLog);
+    return postTurnPrompt(run, text, initialContext, inputs, diagnostics, activityLog);
   };
 }
 
@@ -699,6 +778,7 @@ async function postTurnPrompt(
   run: ReadyRun,
   text: string,
   initialContext: string | undefined,
+  inputs: AdmittedPromptInputs | undefined,
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
@@ -713,8 +793,10 @@ async function postTurnPrompt(
             displayText: text,
             hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
           },
+      inputs === undefined || inputs.files.length === 0 ? undefined : { files: inputs.files },
     );
     if (initialContext !== undefined) recordContextPresentation(activityLog, run.runId);
+    if (inputs !== undefined) acceptPromptInputs(activityLog, run, inputs);
     return run.ready;
   } catch (error) {
     recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
@@ -913,23 +995,28 @@ async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
   return true;
 }
 
-function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"] {
+function createAbortTask(
+  readyRun: ReadyRunLookup,
+  activityLog: ServerLogSink | undefined,
+): OpenCodeRunPort["abortTask"] {
   return async (runId): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
     try {
-      await run.client.interrupt(run.sessionId);
-      const settled = await fixedV2SessionIsTerminal(
-        run.client,
-        run.sessionId,
-        AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
-      );
-      if (settled) {
+      // The whole native session tree: a background child keeps running when only the parent is
+      // interrupted, and its end would start another turn of the parent (`interruptNativeTree`).
+      const stopped = await interruptNativeTree(run.client, nativeSessionTree(run, run.sessionId), {
+        signal: AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
+        pause: readinessPollDelay,
+        runId: run.runId,
+        activityLog,
+      });
+      if (stopped.settled) {
         await run.runtimeAdapter.waitForTerminal(AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS));
       } else {
         run.runtimeAdapter.cancelTurn();
       }
-      return settled && run.ready;
+      return stopped.settled && run.ready;
     } catch {
       run.runtimeAdapter.cancelTurn();
       return false;
@@ -940,81 +1027,35 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
 function createQuestionRunPort(
   readyRun: ReadyRunLookup,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
 ): QuestionRunPort {
+  // The run's questions are its own session's and its owned children's (`opencodeNativeQuestions.ts`).
+  const portOf = (run: ReadyRun): NativeQuestionPort =>
+    createNativeQuestionPort({
+      runId: run.runId,
+      client: run.client,
+      tree: nativeSessionTree(run, run.sessionId),
+      open: () => run.ready,
+      activityLog,
+      onFailure: (error) => {
+        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
+      },
+      listed: (run.questionList ??= {}),
+    });
   return {
     listQuestions: async (runId): Promise<readonly OpenCodeQuestionRequest[]> => {
       const run = readyRun(runId);
-      if (run === undefined) return [];
-      try {
-        return (await run.client.forms())
-          .filter((form) => form.sessionID === run.sessionId)
-          .map(projectOpenCodeV2Form);
-      } catch (error) {
-        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-        throw error;
-      }
+      return run === undefined ? [] : portOf(run).list();
     },
     answerQuestion: async (runId, requestId, answers): Promise<boolean> => {
       const run = readyRun(runId);
-      if (run === undefined) return false;
-      try {
-        const formId = v2FormId(requestId);
-        const pending = (await run.client.forms()).find(
-          (form) => form.id === formId && form.sessionID === run.sessionId,
-        );
-        if (pending === undefined || !run.ready) return false;
-        const question = projectOpenCodeV2Form(pending);
-        if (!answersMatchQuestions(question, answers))
-          throw new CodingRuntimeQuestionAnswerRejectedError();
-        await run.client.replyForm(
-          run.sessionId,
-          String(pending.id),
-          answerOpenCodeV2Form(pending, answers),
-        );
-        return run.ready;
-      } catch (error) {
-        if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
-        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-        throw error;
-      }
+      return run === undefined ? false : portOf(run).answer(requestId, answers);
     },
-    rejectQuestion: createRejectQuestion(readyRun, diagnostics),
+    rejectQuestion: async (runId, requestId): Promise<boolean> => {
+      const run = readyRun(runId);
+      return run === undefined ? false : portOf(run).reject(requestId);
+    },
   };
-}
-
-function createRejectQuestion(
-  readyRun: ReadyRunLookup,
-  diagnostics: ServerDiagnosticSink | undefined,
-): QuestionRunPort["rejectQuestion"] {
-  return async (runId, requestId): Promise<boolean> => {
-    const run = readyRun(runId);
-    if (run === undefined) return false;
-    try {
-      const formId = v2FormId(requestId);
-      const owned = (await run.client.forms()).some(
-        (form) => form.id === formId && form.sessionID === run.sessionId,
-      );
-      if (!owned || formId === undefined) return false;
-      await run.client.cancelForm(run.sessionId, formId);
-      return run.ready;
-    } catch (error) {
-      recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-      throw error;
-    }
-  };
-}
-
-function answersMatchQuestions(
-  request: OpenCodeQuestionRequest,
-  answers: readonly (readonly string[])[],
-): boolean {
-  if (answers.length !== request.questions.length) return false;
-  return answers.every((answer, index) => {
-    const question = request.questions[index];
-    if (question === undefined || (question.multiple !== true && answer.length > 1)) return false;
-    const labels = new Set(question.options.map((option) => option.label));
-    return answer.every((selection) => question.custom === true || labels.has(selection));
-  });
 }
 
 function isReadyRun(run: PreparedRun | undefined): run is ReadyRun {
@@ -1368,9 +1409,12 @@ async function handshake(
       governedSink: input.governedEventSink,
       ...adapterSafeActivitySink(input),
       control: {
-        status: async (sessionId, signal) => {
-          return (await v2SessionIsTerminal(client, sessionId, signal)) ? "terminal" : "activity";
-        },
+        status: createNativeTreeStatusPort({
+          runId: run.runId,
+          client,
+          tree: (sessionId) => nativeSessionTree(run, sessionId),
+          activityLog: input.activityLog,
+        }),
       },
       safety: {
         revokeAudiences: (): void => undefined,
@@ -1541,8 +1585,10 @@ function readinessV2Ports(
   };
 }
 
-function v2ExecutionState(type: unknown): "activity" | "terminal" | undefined {
+function v2ExecutionState(type: unknown): "activity" | "interrupted" | "terminal" | undefined {
   if (type === "session.execution.started") return "activity";
+  // The runtime ends a turn this way when a human refuses a question: no idle message follows.
+  if (type === "session.execution.interrupted") return "interrupted";
   if (
     type === "session.execution.succeeded" ||
     type === "session.execution.failed" ||
@@ -1698,7 +1744,7 @@ function pullSyncHint(pump: SyncHintPump): void {
   void pump.source.next().then(onNext).then(undefined, settle);
 }
 
-function v2SyncHint(
+export function v2SyncHint(
   event: Readonly<Record<string, unknown>>,
   fixedSessionId: string,
   onQuestionObserved: ((identity: string) => void) | undefined,
@@ -1993,9 +2039,12 @@ function createPrivateState(runRoot: string): void {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
   }
+  // The plan directory exists before launch: its kernel rule keeps the directories above it
+  // from being created or replaced while the run is alive.
   for (const path of [
     openCodeConfigDirectory(runRoot),
     join(openCodeConfigDirectory(runRoot), "plugins"),
+    openCodePlanDirectory(runRoot),
   ]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
@@ -2597,8 +2646,6 @@ function nativePolicyResult(
 
 const NATIVE_AUTHORITY_REFUSED_MESSAGE =
   "Keiko refused this action: the run's authority is no longer valid or its budget is exhausted.";
-const NATIVE_CHILD_SESSION_MAX = 64;
-const NATIVE_SESSION_ANCESTRY_MAX_DEPTH = 8;
 
 /**
  * The policy's answer, revalidated against live authority before an effect is released (#3897
@@ -2646,11 +2693,12 @@ function nativeEffectAdmission(
   signal: AbortSignal | undefined,
 ): CodingToolNativeEffectAdmission {
   if (signal?.aborted === true) return { ok: false, reason: "unavailable" };
-  const { source } = request;
+  const { source, patchBytes } = request;
   return (
     deps.facade.nativeEffect?.admit({
       capability: deps.capability,
       actionClass,
+      ...(patchBytes === undefined ? {} : { patchBytes }),
       ...(source === undefined
         ? {}
         : {
@@ -2666,10 +2714,11 @@ function nativeEffectAdmission(
 
 /**
  * Which native session asked: the run's own session, or a child session the original runtime
- * created under it (a subagent, #3897 review). A child is admitted once its `parentID` chain
- * reaches the run's session within a bounded depth and every session on the chain is located in
- * the run's workspace; the proof is read from the runtime's own session list and cached. Any
- * other session, a failed read or a full cache refuses the ask.
+ * created under it (a subagent, #3897 review). The run's session tree decides
+ * (`opencodeNativeSessionTree.ts`): a child is admitted once its `parentID` chain reaches the run's
+ * session within a bounded depth and every session on the chain is located in the run's workspace;
+ * the proof is read from the runtime's own session list and cached. Any other session, a failed
+ * read or a full cache refuses the ask.
  */
 async function nativeSessionRelation(
   run: PreparedRun,
@@ -2678,28 +2727,16 @@ async function nativeSessionRelation(
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<OpenCodeNativeSessionRelation | undefined> {
   if (run.sessionId === undefined || run.client === undefined) return undefined;
-  if (sessionID === run.sessionId) return "primary";
-  const children = (run.childSessionIds ??= new Set());
-  if (children.has(sessionID)) return "child";
-  if (children.size >= NATIVE_CHILD_SESSION_MAX) return undefined;
-  const sessions = await nativeSessionList(run, signal, diagnostics);
-  if (!nativeSessionDescendsFromRun(sessions, sessionID, run.sessionId, run.workspaceRoot))
-    return undefined;
-  children.add(sessionID);
-  return "child";
-}
-
-// A failed read proves no ancestry, so the ask is refused; the failure itself is recorded body-free
-// under the run's correlation.
-async function nativeSessionList(
-  run: Pick<PreparedRun, "runId" | "client">,
-  signal: AbortSignal | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
-): Promise<readonly Readonly<Record<string, unknown>>[]> {
-  if (run.client === undefined) return [];
   try {
-    return await run.client.sessions(signal);
+    return await classifyNativeSession(
+      run.client,
+      nativeSessionTree(run, run.sessionId),
+      sessionID,
+      signal,
+    );
   } catch (error) {
+    // A failed read proves no ancestry, so the ask is refused; the failure itself is recorded
+    // body-free under the run's correlation.
     emitServerDiagnostic(diagnostics, {
       correlationId: run.runId,
       timestamp: new Date().toISOString(),
@@ -2708,37 +2745,23 @@ async function nativeSessionList(
       errorClass: contentFreeErrorClass(error),
       message: "native-session-ancestry-failed",
     });
-    return [];
+    return undefined;
   }
 }
 
-/** True when `sessionID`'s parent chain reaches `primaryId` inside the workspace (pure, bounded). */
-export function nativeSessionDescendsFromRun(
-  sessions: readonly Readonly<Record<string, unknown>>[],
-  sessionID: string,
-  primaryId: string,
-  workspaceRoot: string,
-): boolean {
-  const byId = new Map(sessions.map((session) => [session.id, session] as const));
-  let current = sessionID;
-  for (let depth = 0; depth < NATIVE_SESSION_ANCESTRY_MAX_DEPTH; depth += 1) {
-    const session = byId.get(current);
-    if (session === undefined || !nativeSessionInWorkspace(session, workspaceRoot)) return false;
-    const parent = session.parentID;
-    if (typeof parent !== "string" || parent.length === 0 || parent === current) return false;
-    if (parent === primaryId) return true;
-    current = parent;
-  }
-  return false;
+/** The run's session tree, sharing the run's admission cache of proven children. */
+function nativeSessionTree(
+  run: Pick<PreparedRun, "workspaceRoot" | "childSessionIds">,
+  sessionId: string,
+): NativeSessionTreeRun {
+  return {
+    sessionId,
+    workspaceRoot: run.workspaceRoot,
+    children: (run.childSessionIds ??= new Set()),
+  };
 }
 
-function nativeSessionInWorkspace(
-  session: Readonly<Record<string, unknown>>,
-  workspaceRoot: string,
-): boolean {
-  const directory = v2Record(session.location)?.directory;
-  return typeof directory === "string" && resolve(directory) === resolve(workspaceRoot);
-}
+export { nativeSessionDescendsFromRun };
 
 // The ask goes to the human through the run's existing approval lane; the tool call it ends is
 // settled with the human's verdict like a governed ask (#3612).

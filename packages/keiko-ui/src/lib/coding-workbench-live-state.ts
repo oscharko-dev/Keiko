@@ -11,6 +11,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSource,
@@ -112,6 +113,7 @@ export type CodingWorkbenchMutationKind =
   | "pause"
   | "resume"
   | "follow-up"
+  | "revert"
   | "research-revoke";
 
 export interface CodingWorkbenchMutationState {
@@ -134,6 +136,13 @@ export interface CodingWorkbenchRuntimeState {
    * disappear and reappear; never widened by the browser.
    */
   readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  /**
+   * What the server's last readiness read said the composed runtime can do with a prompt's inputs
+   * (ADR-0137 D10): send a message while a turn runs, and attach referenced workspace files. Kept
+   * across a mode change like `selectableAgents`, so the controls do not flicker while the next
+   * read loads; never widened by the browser.
+   */
+  readonly promptInputs: CodingWorkbenchRuntimePromptInputs;
   readonly runtimePreference: CodingWorkbenchRuntimePreference;
   readonly selectedModelId: string | null;
   readonly reasoningEffort: ModelReasoningEffort | null;
@@ -196,6 +205,12 @@ const emptyResource = <T>(
   status: CodingWorkbenchResourceStatus = "idle",
 ): CodingWorkbenchResourceState<T> => ({ status, value: null, error: null });
 
+/** What a runtime that reports nothing can do with a prompt's inputs: neither. */
+export const NO_CODING_WORKBENCH_PROMPT_INPUTS: CodingWorkbenchRuntimePromptInputs = Object.freeze({
+  delivery: false,
+  references: false,
+});
+
 const IDLE_MUTATION: CodingWorkbenchMutationState = {
   status: "idle",
   kind: null,
@@ -211,6 +226,7 @@ export function createInitialCodingWorkbenchRuntimeState(
     requestedMode,
     agent: DEFAULT_CODING_WORKBENCH_AGENT,
     selectableAgents: [DEFAULT_CODING_WORKBENCH_AGENT],
+    promptInputs: NO_CODING_WORKBENCH_PROMPT_INPUTS,
     runtimePreference,
     selectedModelId: null,
     reasoningEffort: null,
@@ -391,6 +407,19 @@ export function offeredCodingWorkbenchAgents(
     : [DEFAULT_CODING_WORKBENCH_AGENT];
 }
 
+/**
+ * The prompt inputs the browser may offer right now. Only the managed gateway runs OpenCode, whose
+ * native profile reads referenced files and takes a message while a turn runs; a Codex
+ * subscription run has neither, and the server refuses both for it.
+ */
+export function offeredCodingWorkbenchPromptInputs(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "promptInputs">,
+): CodingWorkbenchRuntimePromptInputs {
+  return state.runtimePreference === "managed-gateway"
+    ? state.promptInputs
+    : NO_CODING_WORKBENCH_PROMPT_INPUTS;
+}
+
 // The selection never outlives its offer: whatever narrows the offer returns it to the default.
 function withOfferedAgent(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
   return offeredCodingWorkbenchAgents(state).includes(state.agent)
@@ -555,6 +584,7 @@ const runtimeActionHandlers = {
         ...state,
         runtime: ready(action.readiness),
         selectableAgents: action.readiness.selectableAgents,
+        promptInputs: action.readiness.promptInputs ?? NO_CODING_WORKBENCH_PROMPT_INPUTS,
       }),
     ),
   "workspace-set": (state, action): CodingWorkbenchRuntimeState =>

@@ -76,6 +76,9 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     liveDeltaCount: { type: "integer", dataClass: "count", required: false },
     liveDroppedCount: { type: "integer", dataClass: "count", required: false },
     liveDivergedCount: { type: "integer", dataClass: "count", required: false },
+    // The idle messages of this pass that did not end the run's work because a subagent launched in
+    // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
+    heldIdleCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -135,6 +138,8 @@ interface Candidate {
   readonly signal?: CodingSafeActivitySignal | undefined;
   readonly emptyText?: true;
   readonly nativeRetryState?: true;
+  // An idle message that ended the session's execution but not the run's work (see `BackgroundChildren`).
+  readonly heldIdle?: true;
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
   // the live text the timeline shows while the part streams: partial answers are not captured.
   readonly capturedText?: string;
@@ -146,6 +151,7 @@ interface PendingProjection {
   readonly signals: ReadonlyMap<string, CodingSafeActivitySignal>;
   readonly emptyTextCount: number;
   readonly nativeRetrySignalCount: number;
+  readonly heldIdleCount: number;
 }
 
 interface KnownCandidate {
@@ -749,6 +755,7 @@ function messageCandidates(
   parentMessageId: string | undefined,
   live: OpenCodeV2LiveText,
   toolProfile: OpenCodeToolProfile,
+  children: BackgroundChildren,
 ): readonly Candidate[] {
   assertMessageShape(message);
   const id = messageId(message);
@@ -769,16 +776,67 @@ function messageCandidates(
     ];
   }
   if (message.type === "compaction") return [nativeCompactionCandidate(message, id)];
-  if (message.type === "idle") {
-    return [
-      candidate(
-        `${id}:idle`,
-        message.outcome === "succeeded" ? "terminal" : "terminal-failure",
-        message.outcome,
-      ),
-    ];
-  }
+  if (message.type === "idle") return [idleCandidate(id, message.outcome, children)];
   return [candidate(`${id}:other`, "observation", message.type)];
+}
+
+/**
+ * What the runtime tells a parent about a subagent it launched in the background
+ * (https://opencode.ai/v2/docs/tools/#subagent): the launching tool call returns at once, the parent
+ * goes idle while the child keeps working, and when the child ends the runtime appends a synthetic
+ * message naming it (completed, failed or cancelled) and runs the parent again to read it. A parent's
+ * idle message is therefore the end of the run's work only when every background child it launched
+ * has reported back; before that it ends the parent's execution and nothing more. The rule reads the
+ * parent's own history, so it holds across a reconnect and needs no timing: a child launched but not
+ * yet reported is "owed", and an owed child is a launch (a completed `subagent` call with
+ * `background: true` that names its child session) without a synthetic message carrying that child's
+ * id. A failed idle message is a verdict whatever is owed.
+ */
+interface BackgroundChildren {
+  readonly launched: Set<string>;
+  readonly reported: Set<string>;
+}
+
+const BACKGROUND_CHILD_SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
+
+function backgroundLaunch(part: unknown): string | undefined {
+  const tool = record(part);
+  if (tool?.type !== "tool" || tool.name !== "subagent") return undefined;
+  const state = record(tool.state);
+  if (state?.status !== "completed" || record(state.input)?.background !== true) return undefined;
+  return backgroundChildId(record(state.metadata)?.sessionID);
+}
+
+function backgroundChildId(value: unknown): string | undefined {
+  return typeof value === "string" && BACKGROUND_CHILD_SESSION_ID.test(value) ? value : undefined;
+}
+
+function backgroundReport(message: Readonly<Record<string, unknown>>): string | undefined {
+  const metadata = record(message.metadata);
+  if (message.type !== "synthetic" || metadata?.source !== "subagent") return undefined;
+  return backgroundChildId(metadata.childID);
+}
+
+function observeBackgroundChildren(
+  message: Readonly<Record<string, unknown>>,
+  children: BackgroundChildren,
+): void {
+  const reported = backgroundReport(message);
+  if (reported !== undefined) children.reported.add(reported);
+  if (message.type !== "assistant" || !Array.isArray(message.content)) return;
+  for (const part of message.content as readonly unknown[]) {
+    const launched = backgroundLaunch(part);
+    if (launched !== undefined) children.launched.add(launched);
+  }
+}
+
+function idleCandidate(id: string, outcome: unknown, children: BackgroundChildren): Candidate {
+  const key = `${id}:idle`;
+  if (outcome !== "succeeded") return candidate(key, "terminal-failure", outcome);
+  const owed = [...children.launched].some((child) => !children.reported.has(child));
+  return owed
+    ? { ...candidate(key, "observation", outcome), heldIdle: true }
+    : candidate(key, "terminal", outcome);
 }
 
 function allCandidates(
@@ -789,11 +847,13 @@ function allCandidates(
   toolProfile: OpenCodeToolProfile,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
+  const children: BackgroundChildren = { launched: new Set(), reported: new Set() };
   let parentMessageId: string | undefined;
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
+    observeBackgroundChildren(message, children);
     result.push(
-      ...messageCandidates(message, parentMessageId, live, toolProfile),
+      ...messageCandidates(message, parentMessageId, live, toolProfile, children),
       ...changedNativeRetryCandidates(message, parentMessageId, known),
     );
   }
@@ -845,6 +905,7 @@ function makePending(
   const signals = new Map<string, CodingSafeActivitySignal>();
   let emptyTextCount = 0;
   let nativeRetrySignalCount = 0;
+  let heldIdleCount = 0;
   for (const item of candidates) {
     const previous = known.get(item.key);
     if (previous?.digest === item.digest) continue;
@@ -867,11 +928,12 @@ function makePending(
     });
     if (item.emptyText) emptyTextCount += 1;
     nativeRetrySignalCount += Number(item.nativeRetryState === true);
+    heldIdleCount += Number(item.heldIdle === true);
     const signal = incrementalSignal(item, previous);
     if (signal !== undefined) signals.set(`${sessionId}\u0000${String(sequence)}`, signal);
     if (events.length === 256) break;
   }
-  return { nextKnown, events, signals, emptyTextCount, nativeRetrySignalCount };
+  return { nextKnown, events, signals, emptyTextCount, nativeRetrySignalCount, heldIdleCount };
 }
 
 function historyEventDigest(item: Candidate, sessionId: string, sequence: number): string {
@@ -955,6 +1017,7 @@ function recordHistoryProjection(
         liveDeltaCount: counts.applied,
         liveDroppedCount: counts.dropped,
         liveDivergedCount: counts.diverged,
+        ...(pending.heldIdleCount === 0 ? {} : { heldIdleCount: pending.heldIdleCount }),
       },
     ),
   );

@@ -278,6 +278,34 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.pause": "Pause run",
   "codingWorkbench.composer.resume": "Resume run",
   "codingWorkbench.composer.send": "Send follow-up",
+  "codingWorkbench.composer.sendNow": "Send now",
+  "codingWorkbench.composer.sendNow.help":
+    "Send now: the message joins the running task at its next step (Enter)",
+  "codingWorkbench.composer.queue": "Queue message",
+  "codingWorkbench.composer.queue.help":
+    "Queue: the message is delivered after the running task's current work (Ctrl or Cmd+Enter)",
+  "codingWorkbench.composer.blocked.emptyMessage": "Write a message first.",
+  "codingWorkbench.composer.delivery.steer":
+    "Message sent. It joins the running task at its next step.",
+  "codingWorkbench.composer.delivery.queue":
+    "Message queued. It is delivered after the running task's current work.",
+  "codingWorkbench.composer.delivery.failed":
+    "The message was not sent and your text is kept. The task may have just finished, a referenced file may no longer be available, or this runtime cannot take messages while it works.",
+  "codingWorkbench.composer.references.label": "Referenced files",
+  "codingWorkbench.composer.references.remove": "Remove reference to {path}",
+  "codingWorkbench.composer.references.picker.title": "Reference a task file",
+  "codingWorkbench.composer.references.picker.results": "Matching task files",
+  "codingWorkbench.composer.references.picker.option": "Reference {path}",
+  "codingWorkbench.composer.references.picker.active": "{name}, {position} of {total}",
+  "codingWorkbench.composer.references.picker.hint": "Type to search the task's files.",
+  "codingWorkbench.composer.references.picker.searching": "Searching files...",
+  "codingWorkbench.composer.references.picker.found":
+    "{count} files found. Use the arrow keys to choose and Enter to reference one.",
+  "codingWorkbench.composer.references.picker.empty": "No matching files.",
+  "codingWorkbench.composer.references.picker.error":
+    "The file search failed. Type again to retry.",
+  "codingWorkbench.composer.references.picker.limit":
+    "At most {count} files can be referenced in one message.",
   "codingWorkbench.composer.model.label": "Coding model",
   "codingWorkbench.composer.model.selected": "Coding model: {model}",
   "codingWorkbench.composer.model.menu": "Choose coding model",
@@ -1224,6 +1252,27 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The repository's approval does not cover this task workspace's package scripts, usually because this run changed package.json. Allowing them is your decision for exactly this manifest.",
   "codingWorkbench.trust.allow": "Allow package scripts for verification",
   "codingWorkbench.trust.allowing": "Allowing…",
+  "codingWorkbench.revert.region": "Last turn",
+  "codingWorkbench.revert.summary":
+    "The last turn changed {count} files (+{additions} / -{deletions}).",
+  "codingWorkbench.revert.summary.one":
+    "The last turn changed 1 file (+{additions} / -{deletions}).",
+  "codingWorkbench.revert.none":
+    "The last turn has not changed any file, so there is nothing to undo.",
+  "codingWorkbench.revert.undo": "Undo last turn",
+  "codingWorkbench.revert.undo.confirm":
+    "Undo the last turn? This stops the turn if it is still running and puts the files it changed back to their earlier content. While the run stays open you can restore the changes.",
+  "codingWorkbench.revert.undo.confirmAction": "Confirm undo",
+  "codingWorkbench.revert.staged":
+    "The last turn is undone: {count} files are back to their earlier content. Restore the changes, or stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.staged.one":
+    "The last turn is undone: 1 file is back to its earlier content. Restore the changes, or stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.restore": "Restore changes",
+  "codingWorkbench.revert.restore.confirm":
+    "Restore the undone changes? The files go back to the content the turn left. If you edited one of these files since the undo, nothing is overwritten and the restore is refused.",
+  "codingWorkbench.revert.restore.confirmAction": "Confirm restore",
+  "codingWorkbench.revert.cancel": "Cancel",
+  "codingWorkbench.revert.busy": "Applying…",
 } as const;
 
 export type CodingWorkbenchMessageKey = keyof typeof EN_CODING_WORKBENCH_MESSAGES;

@@ -9,6 +9,7 @@ import type {
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
+  CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeResearchChannelPayload,
   CodingWorkbenchRuntimeSkillsChannelPayload,
   CodingWorkbenchRuntimeSseEvent,
@@ -17,6 +18,10 @@ import type {
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  unpairedCodingWorkbenchRuntimeRevertChannelPayload,
+  type CodingWorkbenchRuntimeRevertChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
@@ -42,6 +47,7 @@ import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -60,6 +66,7 @@ const RUNTIME_MUTATION_OPERATIONS = [
   "resume",
   "research-revoke",
   "follow-up",
+  "revert",
   "answer",
   "reject",
 ] as const;
@@ -468,6 +475,22 @@ export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps
   return isRouteResult(required) ? required : { status: 200, body: required.orchestrator.status() };
 }
 
+/**
+ * What the composed OpenCode tool profile can honour, from the same registry the backend takes its
+ * profile from. An unthreaded registry fails closed to the baseline: `plan` is never advertised for
+ * a runtime nobody has shown can run it read-only (#3897), and no prompt input is offered for one
+ * nobody has shown can govern it (ADR-0137 D10: Send now, Queue and the `@` file picker).
+ */
+function composedProfileReadiness(
+  deps: UiHandlerDeps,
+): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs"> {
+  const profile = deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct";
+  return {
+    selectableAgents: openCodeSelectableAgents(profile),
+    promptInputs: openCodePromptInputs(profile),
+  };
+}
+
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const values = ctx.url.searchParams.getAll("requestedMode");
   const parsed = parseCodingWorkbenchRuntimeReadinessRequest({ requestedMode: values[0] });
@@ -501,12 +524,7 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
         : {
             runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
           }),
-      // The agents the composed OpenCode tool profile can honour (#3897), from the same registry
-      // the backend takes its profile from. An unthreaded registry fails closed to the default
-      // agent: `plan` is never advertised for a runtime nobody has shown can run it read-only.
-      selectableAgents: openCodeSelectableAgents(
-        deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct",
-      ),
+      ...composedProfileReadiness(deps),
     },
   };
 }
@@ -644,9 +662,11 @@ export function handleCodingRuntimeResearchRevoke(
       );
 }
 
-// Inline follow-up: a drafted message is admitted only while the run is running; the
+// Inline follow-up: a drafted message is admitted while the run is running or paused; the
 // orchestrator's operation coordinator enforces the revision and one-use request-id serial
-// admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
+// admission, so exactly one turn is admitted per revision. A message that carries `delivery`
+// (ADR-0137 D10) starts no turn: it joins the one in flight, and the only queue is the runtime's
+// own inbox for that turn, filled one admitted message per revision.
 export function handleCodingRuntimeFollowUp(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -657,6 +677,49 @@ export function handleCodingRuntimeFollowUp(
     : mutation(ctx, deps, runId, "follow-up", (runtime, body, correlationId) =>
         runtime.submitFollowUp(runId, body, correlationId),
       );
+}
+
+/**
+ * Undo or restore of the run's newest turn (B3, S04). The orchestrator's operation coordinator
+ * admits it exactly like a follow-up: revision and one-use request id, a live run, the live
+ * authority guard in the dispatcher. It is a workspace write the human asked for, so the click is
+ * the approval in every mode; it never reaches outside the run's task workspace.
+ */
+export function handleCodingRuntimeRevert(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "revert", (runtime, body, correlationId) =>
+        runtime.submitRevert(runId, body, correlationId),
+      );
+}
+
+/**
+ * The counts behind the undo control: what the newest turn changed, or what a staged undo
+ * restored. Counts only, never a path. An unpaired caller receives the one constant payload before
+ * any run resolution (ADR-0141 D6), so this read is never an existence oracle.
+ */
+export async function handleCodingRuntimeRevertState(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeRevertChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const revert = await required.orchestrator.revertState(runId);
+  const payload: CodingWorkbenchRuntimeRevertChannelPayload = {
+    session: "active",
+    ...(revert === undefined ? {} : { revert }),
+  };
+  return { status: 200, body: payload };
 }
 
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
@@ -1003,6 +1066,16 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/follow-up",
     handler: handleCodingRuntimeFollowUp,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/revert",
+    handler: handleCodingRuntimeRevert,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/revert",
+    handler: handleCodingRuntimeRevertState,
   },
   {
     method: "POST",

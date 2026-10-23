@@ -95,6 +95,7 @@ const NATIVE_DEVICE_READS = [
 const NATIVE_TOOLCHAIN_ROOTS_MAX = 64;
 const NATIVE_DENIED_READ_ROOTS_MAX = 64;
 const NATIVE_PROTECTED_WRITE_ROOTS_MAX = 64;
+const NATIVE_LINK_FREE_WRITE_ROOTS_MAX = 8;
 
 const GATEWAY_FILESYSTEM_KEYS = new Set([
   "workspaceRoot",
@@ -106,6 +107,7 @@ const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set([
   "deniedReadRoots",
   "toolchainReadRoots",
   "protectedWriteRoots",
+  "linkFreeWriteRoots",
 ]);
 
 function validRoot(value: unknown): value is string {
@@ -176,7 +178,21 @@ function validOptionalRoots(value: Record<string, unknown>): boolean {
       NATIVE_TOOLCHAIN_ROOTS_MAX,
       (root) => root.split("/").length > 2,
     ) &&
-    validProtectedWriteRoots(value)
+    validProtectedWriteRoots(value) &&
+    validLinkFreeWriteRoots(value)
+  );
+}
+
+/** A link-free root is a private-state directory of the writable native profile. */
+function validLinkFreeWriteRoots(value: Record<string, unknown>): boolean {
+  if (value.linkFreeWriteRoots === undefined) return true;
+  const state = value.privateStateRoot;
+  return (
+    value.workspaceAccess === "read-write" &&
+    typeof state === "string" &&
+    validRootList(value.linkFreeWriteRoots, NATIVE_LINK_FREE_WRITE_ROOTS_MAX, (root) =>
+      strictlyInside(state, root),
+    )
   );
 }
 
@@ -292,6 +308,7 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     // itself, and every denied subtree stays denied.
     `(allow file-read* ${pathFilters("literal", own.flatMap(ancestors))})` +
     protectedWriteSeatbeltRules(closed) +
+    linkFreeWriteSeatbeltRules(closed) +
     CREDENTIAL_PATH_SEATBELT_RULE
   );
 }
@@ -313,6 +330,30 @@ function protectedWriteSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
   const intermediates = roots.flatMap((root) => intermediateDirectories(root, writable));
   return (
     `(deny file-write* ${pathFilters("subpath", roots)})` +
+    (intermediates.length === 0
+      ? ""
+      : `(deny file-write-create file-write-unlink ${pathFilters("literal", intermediates)})`)
+  );
+}
+
+/**
+ * A link-free root (the plan agent's private notes) keeps ordinary files and directories writable,
+ * but a symbolic or hard link created inside it could make a note path name a workspace file the
+ * policy exempted as a private note (#3897 review). The kernel therefore refuses every link inside
+ * the root, the root's own removal or rename, and the creation or removal of the directories
+ * between the private state and the root, so a checked path cannot be swapped after the check.
+ */
+function linkFreeWriteSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
+  const roots = closed.linkFreeWriteRoots ?? [];
+  if (roots.length === 0) return "";
+  const intermediates = roots.flatMap((root) =>
+    intermediateDirectories(root, [closed.privateStateRoot]),
+  );
+  const inside = pathFilters("subpath", roots);
+  return (
+    `(deny file-write-create (require-all (vnode-type SYMLINK) (require-any ${inside})))` +
+    `(deny file-link ${inside})` +
+    `(deny file-write-unlink ${pathFilters("literal", roots)})` +
     (intermediates.length === 0
       ? ""
       : `(deny file-write-create file-write-unlink ${pathFilters("literal", intermediates)})`)

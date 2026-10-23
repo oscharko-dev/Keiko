@@ -16,6 +16,7 @@ import {
 import {
   createGeneratedOpenCodeBundle,
   openCodeToolClientTimeoutMs,
+  type OpenCodeTurnOutcome,
 } from "./opencodeRuntimeAdapter.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -32,6 +33,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 const DIGEST = "a".repeat(64);
 const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
@@ -92,7 +94,7 @@ type OpenCodeSyncHint =
       readonly requiresHistoryIdentity: false;
       readonly control?: {
         readonly sessionId: string;
-        readonly state: "activity" | "terminal";
+        readonly state: "activity" | "interrupted" | "terminal";
       };
     };
 
@@ -102,8 +104,9 @@ interface OpenCodeRuntimeAdapter {
   readonly monitor: (onFailure: () => void) => () => void;
   readonly close: () => Promise<void>;
   readonly armTurn: () => boolean;
+  readonly turnInFlight: () => boolean;
   readonly cancelTurn: () => void;
-  readonly waitForTerminal: (signal: AbortSignal) => Promise<boolean>;
+  readonly waitForTerminal: (signal: AbortSignal) => Promise<boolean | "interrupted">;
 }
 
 interface OpenCodeRuntimeAdapterModule {
@@ -121,6 +124,7 @@ interface OpenCodeRuntimeAdapterPorts {
     readonly contextWindowTokens: number;
     readonly maxInputTokens: number;
     readonly maxOutputTokens: number;
+    readonly imageInput?: boolean;
   };
   readonly readiness: {
     readonly verifiedTarget: {
@@ -160,7 +164,7 @@ interface OpenCodeRuntimeAdapterPorts {
     readonly recordDrops: (count: number) => void;
   };
   readonly control: {
-    status: () => Promise<"activity" | "terminal" | undefined>;
+    status: () => Promise<"activity" | "held" | "interrupted" | "terminal" | undefined>;
   };
   readonly safety: {
     readonly revokeAudiences: () => void;
@@ -585,6 +589,53 @@ describe("OpenCode runtime adapter readiness", () => {
     }
   });
 
+  // #3897 S14: the native run's configured model either declares image input or does not; the line
+  // records that declaration (never an image), and the mapped profiles record nothing about it.
+  it.each([
+    { profile: "native" as const, imageInput: true, recorded: true },
+    { profile: "native" as const, imageInput: false, recorded: false },
+    { profile: "native" as const, imageInput: undefined, recorded: false },
+    { profile: "mapped" as const, imageInput: true, recorded: undefined },
+  ])(
+    "records the image-input declaration only for the native composition ($profile, $imageInput)",
+    async ({ profile, imageInput, recorded }) => {
+      const harness = readinessPorts();
+      const events: ServerLogEvent[] = [];
+      const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+        ...harness.ports,
+        contextGeometry: {
+          ...(harness.ports.contextGeometry ?? {
+            contextWindowTokens: 32_768,
+            maxInputTokens: 28_672,
+            maxOutputTokens: 4_096,
+          }),
+          ...(imageInput === undefined ? {} : { imageInput }),
+        },
+        activityLog: {
+          write: (entry: ServerLogEvent): void => {
+            events.push(entry);
+          },
+        },
+        correlationId: "run-image-declaration",
+        readiness: { ...harness.ports.readiness, nativeContextProfile: profile },
+      });
+      try {
+        expect(await adapter.start()).toMatchObject({ ok: true });
+        const event = events.find(
+          (item) =>
+            item.op === "coding-runtime.readiness.phase" &&
+            item.extra?.phase === "config-materialization",
+        );
+        // The registered line's field set is pinned by the emitted-line proofs above; this case
+        // reads the declaration from the event the adapter produced.
+        if (recorded === undefined) expect(event?.extra).not.toHaveProperty("imageInputDeclared");
+        else expect(event?.extra?.imageInputDeclared).toBe(recorded);
+      } finally {
+        await adapter.close();
+      }
+    },
+  );
+
   it("records the entered phase while the real readiness operation is still pending", async () => {
     const harness = readinessPorts();
     const events: ServerLogEvent[] = [];
@@ -733,7 +784,7 @@ describe("OpenCode runtime adapter readiness", () => {
 
       await expect(adapter.start()).resolves.toMatchObject({ ok: true });
       expect(adapter.armTurn()).toBe(true);
-      let settled: boolean | undefined;
+      let settled: OpenCodeTurnOutcome | undefined;
       const waiting = adapter.waitForTerminal(new AbortController().signal).then((result) => {
         settled = result;
         return result;
@@ -1618,7 +1669,7 @@ describe("OpenCode runtime adapter readiness", () => {
       postArmHistory = true;
       expect(adapter.armTurn()).toBe(true);
       await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
-      let settled: boolean | undefined;
+      let settled: OpenCodeTurnOutcome | undefined;
       const waiting = adapter.waitForTerminal(new AbortController().signal).then((result) => {
         settled = result;
         return result;
@@ -1663,7 +1714,7 @@ describe("OpenCode runtime adapter readiness", () => {
       await expect(adapter.start()).resolves.toMatchObject({ ok: true });
       postArmHistory = true;
       expect(adapter.armTurn()).toBe(true);
-      let settled: boolean | undefined;
+      let settled: OpenCodeTurnOutcome | undefined;
       const waiting = adapter.waitForTerminal(new AbortController().signal).then((result) => {
         settled = result;
         return result;
@@ -1824,6 +1875,39 @@ describe("OpenCode runtime adapter readiness", () => {
     await expect(waiting).resolves.toBe(false);
     // Before the fix, this returned false because turnArmed was still true from the leaked turn.
     expect(adapter.armTurn()).toBe(true);
+    await adapter.close();
+  });
+
+  // ADR-0137 D10: a steering or queued message only has a turn to join while one is in flight. The
+  // adapter is the one place that knows: armed and not settled, failed, cancelled or closed.
+  it("reports a turn in flight exactly from arming until it settles, is cancelled or the adapter closes", async () => {
+    const harness = readinessPorts();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    expect(adapter.turnInFlight()).toBe(false);
+
+    expect(adapter.armTurn()).toBe(true);
+    expect(adapter.turnInFlight()).toBe(true);
+    adapter.cancelTurn();
+    expect(adapter.turnInFlight()).toBe(false);
+
+    expect(adapter.armTurn()).toBe(true);
+    const preAborted = new AbortController();
+    preAborted.abort();
+    await expect(adapter.waitForTerminal(preAborted.signal)).resolves.toBe(false);
+    expect(adapter.turnInFlight(), "a settled (failed) turn is no longer in flight").toBe(false);
+
+    expect(adapter.armTurn()).toBe(true);
+    expect(adapter.turnInFlight()).toBe(true);
+    await adapter.close();
+    expect(adapter.turnInFlight(), "a closed adapter has no turn").toBe(false);
+  });
+
+  it("reports no turn in flight when the turn could not be armed", async () => {
+    const harness = readinessPorts();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+    expect(adapter.armTurn()).toBe(false);
+    expect(adapter.turnInFlight()).toBe(false);
     await adapter.close();
   });
 });
@@ -2045,3 +2129,286 @@ describe("the generated client timeout of a tool that waits for an approval", ()
 function expectedClientTimeoutMs(name: string): number {
   return openCodeToolClientTimeoutMs(catalogBudgetMs(name));
 }
+
+// PR #4064: the run's session tree decides when a turn is over, and a turn the runtime ends at a
+// human's refusal of a question has no idle message.
+describe("OpenCode runtime adapter native session tree and interrupted turns", () => {
+  type ControlHint = NonNullable<
+    Extract<OpenCodeSyncHint, { readonly requiresHistoryIdentity: false }>["control"]
+  >["state"];
+  type TreeStatus = "activity" | "held" | "interrupted" | "terminal" | undefined;
+
+  const control = (state: ControlHint): OpenCodeSyncHint => ({
+    requiresHistoryIdentity: false,
+    control: { sessionId: "ses_1", state },
+  });
+
+  interface TurnHarness {
+    readonly ports: OpenCodeRuntimeAdapterPorts;
+    /** The history the runtime reports after the checkpoint it is keyed by, once the turn is armed. */
+    readonly later: Record<number, readonly GovernedEvent[]>;
+    status: () => TreeStatus;
+    readonly statusCalls: () => number;
+    /** Sends one live hint and returns once the adapter has reconciled and observed it. */
+    readonly deliver: (hint: OpenCodeSyncHint) => Promise<void>;
+    /** Marks the turn armed: from here the runtime reports `later`. */
+    live: boolean;
+  }
+
+  function turnHarness(
+    overrides: Partial<Pick<OpenCodeRuntimeAdapterPorts, "activityLog" | "maxTurnWaitMs">> = {},
+  ): TurnHarness {
+    const base = readinessPorts();
+    const later: Record<number, readonly GovernedEvent[]> = {};
+    const queue: OpenCodeSyncHint[] = [{ requiresHistoryIdentity: false }];
+    let wake: (() => void) | undefined;
+    let statusCalls = 0;
+    let historyCalls = 0;
+    async function* source(signal: AbortSignal): AsyncIterable<OpenCodeSyncHint> {
+      while (!signal.aborted) {
+        const next = queue.shift();
+        if (next !== undefined) yield next;
+        else
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            signal.addEventListener(
+              "abort",
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          });
+      }
+    }
+    const harness: TurnHarness = {
+      later,
+      live: false,
+      status: () => undefined,
+      statusCalls: () => statusCalls,
+      deliver: async (hint): Promise<void> => {
+        const before = historyCalls;
+        queue.push(hint);
+        wake?.();
+        await vi.waitFor(() => {
+          expect(historyCalls).toBeGreaterThan(before);
+        });
+        // The hint is observed in the turn after its history read resolved.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+      ports: {
+        ...base.ports,
+        ...overrides,
+        readiness: {
+          ...base.ports.readiness,
+          subscribe: source,
+          history: (checkpoints): Promise<readonly GovernedEvent[]> => {
+            historyCalls += 1;
+            const checkpoint = checkpoints.ses_1;
+            if (checkpoint === undefined) return Promise.resolve([event(0, "terminal")]);
+            return Promise.resolve(harness.live ? (later[checkpoint] ?? []) : []);
+          },
+        },
+        control: {
+          status: (): Promise<TreeStatus> => {
+            statusCalls += 1;
+            return Promise.resolve(harness.status());
+          },
+        },
+      },
+    };
+    return harness;
+  }
+
+  async function armed(harness: TurnHarness): Promise<{
+    readonly adapter: OpenCodeRuntimeAdapter;
+    readonly stop: () => Promise<void>;
+  }> {
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    expect(adapter.armTurn()).toBe(true);
+    harness.live = true;
+    const dispose = adapter.monitor(() => undefined);
+    return {
+      adapter,
+      stop: async (): Promise<void> => {
+        dispose();
+        await adapter.close();
+      },
+    };
+  }
+
+  /** Waits for the turn on `adapter`, and says whether it had settled by a later check. */
+  function waiting(adapter: OpenCodeRuntimeAdapter): {
+    readonly result: Promise<boolean | "interrupted">;
+    readonly settled: () => boolean;
+  } {
+    let done = false;
+    const result = adapter.waitForTerminal(AbortSignal.timeout(10_000)).then((value) => {
+      done = true;
+      return value;
+    });
+    return { result, settled: () => done };
+  }
+
+  it("keeps a success open while the status port reports an owned child active", async () => {
+    const harness = turnHarness();
+    harness.later[0] = [event(1, "observation"), event(2, "terminal")];
+    let childActive = true;
+    harness.status = (): TreeStatus => (childActive ? "held" : "terminal");
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      // The primary's idle hint and its terminal history are in; the child still works.
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("terminal"));
+      await vi.waitFor(() => {
+        expect(harness.statusCalls()).toBeGreaterThanOrEqual(2);
+      });
+      expect(turn.settled()).toBe(false);
+      childActive = false;
+      await expect(turn.result).resolves.toBe(true);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("settles a failure without waiting for the tree: the settlement reaps it", async () => {
+    const harness = turnHarness();
+    harness.later[0] = [event(1, "observation"), event(2, "terminal-failure")];
+    harness.status = (): TreeStatus => "held";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("terminal"));
+      await expect(turn.result).resolves.toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("settles a turn the runtime interrupted at a human's refusal, though no idle message follows", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const harness = turnHarness({ activityLog });
+    // The user message and the assistant message the runtime marks aborted; no idle message.
+    harness.later[0] = [event(1, "observation"), event(2, "observation")];
+    harness.status = (): TreeStatus => "terminal";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("interrupted"));
+      await expect(turn.result).resolves.toBe("interrupted");
+      const [line, ...rest] = activityLog.events.filter(
+        (entry) => entry.op === "coding-runtime.native-turn.interrupted",
+      );
+      expect(rest).toHaveLength(0);
+      expect(line?.extra).toMatchObject({ settledAfterMs: expect.any(Number) as unknown });
+      expect(adapter.turnInFlight()).toBe(false);
+      expectActivityLogProof(
+        "coding-runtime.native-turn.interrupted.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+    } finally {
+      await stop();
+    }
+  });
+
+  it("releases the next turn right after an interrupted one", async () => {
+    const harness = turnHarness();
+    harness.later[0] = [event(1, "observation"), event(2, "observation")];
+    harness.status = (): TreeStatus => "terminal";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("interrupted"));
+      await expect(turn.result).resolves.toBe("interrupted");
+      expect(adapter.armTurn()).toBe(true);
+      // The next turn ends with an idle message; the earlier interruption is no part of it.
+      harness.later[2] = [event(3, "observation"), event(4, "terminal")];
+      await expect(adapter.waitForTerminal(AbortSignal.timeout(10_000))).resolves.toBe(true);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("lets a verdict recorded after the interruption decide the turn", async () => {
+    const harness = turnHarness();
+    harness.later[0] = [event(1, "observation")];
+    // The tree is held, so the interruption alone does not settle the turn yet.
+    harness.status = (): TreeStatus => "held";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("interrupted"));
+      expect(turn.settled()).toBe(false);
+      harness.later[1] = [event(2, "observation"), event(3, "terminal-failure")];
+      await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+      await expect(turn.result).resolves.toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("ignores an interruption of an execution this turn was never seen running", async () => {
+    const harness = turnHarness({ maxTurnWaitMs: 600 });
+    harness.later[0] = [event(1, "observation")];
+    harness.status = (): TreeStatus => "terminal";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      // A late interruption of the turn this one replaced says nothing about it: nothing settles
+      // the turn but its deadline.
+      await harness.deliver(control("interrupted"));
+      await expect(turn.result).resolves.toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("does not take the interruption of an execution that then ran again for the turn's end", async () => {
+    const harness = turnHarness();
+    harness.later[0] = [event(1, "observation"), event(2, "terminal")];
+    // The execution is running again when the status is read after the interruption.
+    harness.status = (): TreeStatus => "activity";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("interrupted"));
+      await vi.waitFor(() => {
+        expect(harness.statusCalls()).toBeGreaterThanOrEqual(1);
+      });
+      expect(turn.settled()).toBe(false);
+      harness.status = (): TreeStatus => "terminal";
+      await harness.deliver(control("terminal"));
+      await expect(turn.result).resolves.toBe(true);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("keeps an interrupted turn open while the status port reports an owned child active", async () => {
+    const harness = turnHarness();
+    harness.later[0] = [event(1, "observation")];
+    let childActive = true;
+    harness.status = (): TreeStatus => (childActive ? "held" : "terminal");
+    const { adapter, stop } = await armed(harness);
+    try {
+      const turn = waiting(adapter);
+      await harness.deliver(control("activity"));
+      await harness.deliver(control("interrupted"));
+      await vi.waitFor(() => {
+        expect(harness.statusCalls()).toBeGreaterThanOrEqual(1);
+      });
+      expect(turn.settled()).toBe(false);
+      childActive = false;
+      await expect(turn.result).resolves.toBe("interrupted");
+    } finally {
+      await stop();
+    }
+  });
+});

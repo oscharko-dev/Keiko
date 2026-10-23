@@ -10,6 +10,7 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
@@ -28,9 +29,11 @@ import {
   createRecoveryAcknowledgementMutation,
   createResearchRevokeMutation,
   createRetryMutation,
+  createRevertMutation,
   createRunBoundMutation,
   createStartMutation,
   mutationResultMatchesCurrentTruth,
+  type CodingWorkbenchFollowUpInputs,
   type CodingWorkbenchMutationCommand,
 } from "./coding-workbench-runtime-mutations";
 import { requestGatewayModelCatalogRefresh } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
@@ -77,7 +80,11 @@ export interface RuntimeMutationActions {
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
-  readonly submitFollowUp: (taskIntent: string) => Promise<void>;
+  readonly submitFollowUp: (
+    taskIntent: string,
+    inputs?: CodingWorkbenchFollowUpInputs,
+  ) => Promise<void>;
+  readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
@@ -504,8 +511,15 @@ export function useCodingWorkbenchRuntimeMutations(
     [enqueueMutation],
   );
   const submitFollowUp = useCallback(
-    (taskIntent: string): Promise<void> =>
-      enqueueMutation("follow-up", (current) => createFollowUpMutation(taskIntent, current)),
+    (taskIntent: string, inputs?: CodingWorkbenchFollowUpInputs): Promise<void> =>
+      enqueueMutation("follow-up", (current) =>
+        createFollowUpMutation(taskIntent, current, inputs),
+      ),
+    [enqueueMutation],
+  );
+  const revert = useCallback(
+    (action: CodingWorkbenchRuntimeRevertAction): Promise<void> =>
+      enqueueMutation("revert", (current) => createRevertMutation(action, current)),
     [enqueueMutation],
   );
   const revokeResearchGrant = useCallback(
@@ -523,6 +537,7 @@ export function useCodingWorkbenchRuntimeMutations(
     pause,
     resume,
     submitFollowUp,
+    revert,
     revokeResearchGrant,
   };
 }

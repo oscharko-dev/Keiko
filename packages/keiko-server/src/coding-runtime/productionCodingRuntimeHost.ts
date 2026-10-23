@@ -1,6 +1,12 @@
 import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import type { CodingRuntimeHost } from "./codingRuntimeControlPlane.js";
+import type { CodingRuntimeRevertResult, CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 
 export type CodingRuntimeTaskOutcome = "cancelled" | "failed" | "succeeded";
 
@@ -10,11 +16,17 @@ export type CodingRuntimeTaskDispatchResult =
       readonly ok: false;
       /**
        * The closed cause when the refusal is the request's own and not a transport or authority
-       * failure: the run's runtime cannot honour the requested primary agent (#3897). Absent for
-       * every other refusal, which keeps its existing answer.
+       * failure: the run's runtime cannot honour the requested primary agent (#3897), or the prompt
+       * carries inputs it cannot take (a delivery its profile does not offer or no turn is running
+       * for, a reference that is not a contained text file). Absent for every other refusal, which
+       * keeps its existing answer.
        */
-      readonly reason?: "agent-unsupported" | undefined;
+      readonly reason?: "agent-unsupported" | "inputs-refused" | undefined;
     };
+
+/** The answer to a message delivered into the turn in flight: it starts no turn, so no completion. */
+export type CodingRuntimeTaskDeliveryResult =
+  { readonly ok: true } | { readonly ok: false; readonly reason?: "inputs-refused" | undefined };
 
 export interface CodingRuntimeRunOperation {
   readonly runId: string;
@@ -33,6 +45,20 @@ export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperat
    * `build` for a run that never named one), exactly as before.
    */
   readonly agent?: CodingWorkbenchAgent | undefined;
+  /**
+   * Set only on a delivery (`CodingRuntimeTaskDispatcher.deliver`): the message joins the turn in
+   * flight as `steer` or `queue` and starts none, so a dispatch or replacement never carries it.
+   */
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  /** Workspace files the prompt references, relative to the run's workspace root (ADR-0137 D10). */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+}
+
+/** One undo or restore of the run's newest turn, admitted like any other operator operation. */
+export interface CodingRuntimeRevertRequest extends CodingRuntimeRunOperation {
+  readonly action: CodingWorkbenchRuntimeRevertAction;
+  /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
+  readonly correlationId?: string | undefined;
 }
 
 export interface CodingRuntimeTaskDispatcher {
@@ -44,6 +70,24 @@ export interface CodingRuntimeTaskDispatcher {
     | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDispatchResult>)
     | undefined;
   readonly abort: (request: CodingRuntimeRunOperation) => Promise<boolean>;
+  /**
+   * Delivers a `steer` or `queue` message into the turn that is running. It is admitted like any
+   * other delegation (live authority, one revision, a single-use request id) but starts, replaces
+   * and settles no turn. Absent for a runtime that cannot take one, which then refuses it as the
+   * request's own fault. Never rejects.
+   */
+  readonly deliver?:
+    | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDeliveryResult>)
+    | undefined;
+  /**
+   * Undoes the run's newest turn or restores an undo (B3, S04). Absent for a runtime without
+   * snapshots, which then refuses the operation as the request's own fault. Never rejects.
+   */
+  readonly revert?:
+    ((request: CodingRuntimeRevertRequest) => Promise<CodingRuntimeRevertResult>) | undefined;
+  /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
+  readonly revertState?:
+    ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
 }
 
 export interface QualifiedProductionCodingRuntime extends Omit<

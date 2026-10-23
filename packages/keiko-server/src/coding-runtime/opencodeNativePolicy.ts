@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { isAbsolute, relative, sep } from "node:path";
+import { lstatSync, type Stats } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type {
   CodingWorkbenchActionClass,
@@ -21,6 +22,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
+import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
@@ -47,6 +49,13 @@ export interface OpenCodeNativePolicyRequest {
   readonly source?: { readonly messageID: string; readonly id: string } | undefined;
   /** The directory a `glob`/`grep` searches (its permission metadata); resources are patterns. */
   readonly searchPath?: string | undefined;
+  /**
+   * The UTF-8 size of the unified diff the producer computed for a proposed `edit` (its permission
+   * metadata), measured by the plugin so no content leaves the runtime. The run's patch budget is
+   * charged with it before the effect (#3897 review). Absent when the producer attached no diff,
+   * which it does exactly when the edit cannot apply (no match, or an ambiguous one).
+   */
+  readonly patchBytes?: number | undefined;
 }
 
 export type OpenCodeNativePolicyDenyReason =
@@ -353,16 +362,28 @@ export function parseOpenCodeNativePolicyRequest(
 /** The optional request fields; `undefined` when any present one is malformed. */
 function parseOptionalFields(
   record: Readonly<Record<string, unknown>>,
-): Pick<OpenCodeNativePolicyRequest, "agent" | "source" | "searchPath"> | undefined {
+): Pick<OpenCodeNativePolicyRequest, "agent" | "source" | "searchPath" | "patchBytes"> | undefined {
   const agent = parseAgent(record.agent);
   const source = parseSource(record.source);
   const searchPath = parseSearchPath(record.searchPath);
-  if (agent === null || source === null || searchPath === null) return undefined;
+  const patchBytes = parsePatchBytes(record.patchBytes);
+  if (agent === null || source === null || searchPath === null || patchBytes === null)
+    return undefined;
   return {
     ...(agent === undefined ? {} : { agent }),
     ...(source === undefined ? {} : { source }),
     ...(searchPath === undefined ? {} : { searchPath }),
+    ...(patchBytes === undefined ? {} : { patchBytes }),
   };
+}
+
+/**
+ * `undefined` when absent, `null` when malformed. The plugin reports an edit whose diff it could
+ * not measure as `-1`, so a producer that changes its diff metadata is refused, never uncharged.
+ */
+function parsePatchBytes(value: unknown): number | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /** `undefined` when absent, `null` when malformed (not a bounded string). */
@@ -598,11 +619,39 @@ function onlyInPlanRoot(resources: readonly string[], roots: AdmittedRoots): boo
   return (
     planRoot !== undefined &&
     resources.length > 0 &&
-    resources.every(
-      (resource) =>
-        isAbsolute(resource.trim()) && workspaceRelative(resource, planRoot) !== undefined,
-    )
+    resources.every((resource) => physicallyInPlanRoot(resource.trim(), planRoot))
   );
+}
+
+/**
+ * A plan note is exempt from workspace-edit approval only when its path names a file physically
+ * inside the plan directory (#3897 review): no existing component between the run's private state
+ * and the target is a symbolic link, and an existing target is a regular file with one link. The
+ * kernel's link-free rule on the plan directory keeps that true after this check.
+ */
+function physicallyInPlanRoot(target: string, planRoot: string): boolean {
+  if (!isAbsolute(target) || workspaceRelative(target, planRoot) === undefined) return false;
+  const trusted = dirname(dirname(dirname(planRoot)));
+  const resolved = resolve(target);
+  let current = trusted;
+  for (const part of relative(trusted, resolved).split(sep)) {
+    current = join(current, part);
+    const stat = lstatIfPresent(current);
+    if (stat === undefined) return true;
+    if (stat.isSymbolicLink()) return false;
+    const last = current === resolved;
+    if (last ? !stat.isFile() || stat.nlink > 1 : !stat.isDirectory()) return false;
+  }
+  return true;
+}
+
+function lstatIfPresent(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 /** Relative to the workspace, or to the plan root for an absolute path inside it. */
@@ -729,8 +778,7 @@ function classifyShell(resources: readonly string[]): Classified {
   if (commands.some((command) => isReservedCommand(command) || reservedInvocationInText(command)))
     return {
       reason: "delivery-reserved",
-      message:
-        "Keiko refused this command: Git delivery (commit, push, branches, merges) is performed by Keiko, not by the shell. Leave the verified changes in the working tree and report them.",
+      message: OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE,
     };
   return commands.every((command) => commandSegments(command).every(isVettedSegment))
     ? SHELL_VETTED
@@ -883,6 +931,8 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
       required: false,
       values: ["charged", "already-charged", "per-check"],
     },
+    // The UTF-8 size of the producer's diff for a proposed edit, charged to the patch budget.
+    patchBytes: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -979,6 +1029,7 @@ export function recordOpenCodeNativePolicyDecision(
           .update(JSON.stringify(request.resources), "utf8")
           .digest("hex"),
         ...(requestId === undefined ? {} : { requestId }),
+        ...(request.patchBytes === undefined ? {} : { patchBytes: request.patchBytes }),
         ...authorityEvidenceFields(input.authority),
       },
     ),

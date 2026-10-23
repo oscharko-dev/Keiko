@@ -1,0 +1,154 @@
+/* The `@` file picker, the referenced-file chips and the delivery notice of the Coding Workbench
+   composer (ADR-0137 D10). Component-scoped on purpose: globals.css is behind a visual-proof gate. */
+
+.picker {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: 8px;
+  border: 1px solid var(--popover-border, var(--border-subtle));
+  border-radius: var(--radius-surface);
+  background: var(--popover-surface, var(--card-surface));
+  color: var(--text-primary);
+}
+
+.pickerStatus {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.pickerStatus[data-state="error"] {
+  color: var(--feedback-danger);
+}
+
+.pickerList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.option:hover,
+.option:focus-visible,
+.option[data-highlighted="true"] {
+  border-color: var(--accent-line);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.optionIcon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+}
+
+.optionText {
+  display: grid;
+  min-width: 0;
+}
+
+.optionName,
+.optionDirectory {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optionName {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.optionDirectory {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 var(--space-2);
+  padding: 4px 2px;
+  list-style: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(340px, 100%);
+  min-height: 30px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--accent) 7%, var(--card-surface));
+  color: var(--text-primary);
+}
+
+.chipPath {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipRemove {
+  display: grid;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chipRemove:hover {
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
+}
+
+.chipRemove:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.notice {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.notice[data-state="failed"] {
+  color: var(--feedback-warning);
+}

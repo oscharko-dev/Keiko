@@ -81,6 +81,8 @@ const researchHookMock = vi.hoisted(() => vi.fn());
 // #3417: the approved-skills channel has a hook of its own; every suite here stays hermetic through it.
 const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
+// B3 (S04): the undo channel has a hook of its own; every suite stays hermetic through it.
+const revertHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const repositoryBranchHookMock = vi.hoisted(() =>
@@ -204,6 +206,10 @@ vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
   useCodingWorkbenchApprovalReview: approvalReviewHookMock,
 }));
 
+vi.mock("@/lib/useCodingWorkbenchRevert", () => ({
+  useCodingWorkbenchRevert: revertHookMock,
+}));
+
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
   useAutonomyModePolicy: autonomyHookMock,
 }));
@@ -276,6 +282,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     pause: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
+    revert: vi.fn(() => Promise.resolve()),
     revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
@@ -517,6 +524,7 @@ beforeEach(() => {
   questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
+  revertHookMock.mockReset().mockReturnValue({ revert: null });
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
@@ -4418,6 +4426,114 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 // Reconnect (or reloaded the page). `useCodingWorkbenchSafeActivity` is fully mocked in this file
 // (its own reconnect/resync behaviour is pinned at the hook level), so these tests prove the ONE
 // thing this window itself owns: calling `activity.retry()` exactly when a new run id appears.
+// ADR-0137 D10: while a turn runs the window offers Send now and Queue where the server says the
+// runtime takes messages, wires them to the follow-up mutation as a delivery, and says what came of it.
+describe("CodingWorkbenchWindow prompt inputs while a turn runs (ADR-0137 D10)", () => {
+  function running(
+    overrides: Partial<CodingWorkbenchRuntimeState> = {},
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: { status: "ready", value: snapshot({ state: "running", runId: "run-1" }), error: null },
+      promptInputs: { delivery: true, references: true },
+      ...overrides,
+    });
+  }
+
+  it("sends the draft into the running turn with Send now and queues it with Queue", async () => {
+    const user = userEvent.setup();
+    const live = renderWorkbench(running());
+    await user.type(
+      screen.getByRole("textbox", { name: "Task instructions" }),
+      "  also cover empty  ",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send now" }));
+    expect(live.submitFollowUp).toHaveBeenLastCalledWith("also cover empty", {
+      delivery: "steer",
+      references: [],
+    });
+    await user.click(screen.getByRole("button", { name: "Queue message" }));
+    expect(live.submitFollowUp).toHaveBeenLastCalledWith("also cover empty", {
+      delivery: "queue",
+      references: [],
+    });
+    expect(live.pause).not.toHaveBeenCalled();
+  });
+
+  it("offers neither where the runtime reported no delivery, and the Codex source never gets them", () => {
+    renderWorkbench(running({ promptInputs: { delivery: false, references: false } }));
+    expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Queue message" })).toBeNull();
+    cleanup();
+    renderWorkbench(running({ runtimePreference: "codex-subscription" }));
+    expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+  });
+
+  it("says a message was sent once its follow-up settled, and clears the notice with the next action", async () => {
+    const user = userEvent.setup();
+    const live = actions();
+    runtimeHookMock.mockReturnValue({ state: running(), actions: live });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await user.type(screen.getByRole("textbox", { name: "Task instructions" }), "queued note");
+    await user.click(screen.getByRole("button", { name: "Queue message" }));
+
+    runtimeHookMock.mockReturnValue({
+      state: running({
+        mutation: { status: "pending", kind: "follow-up", requestId: "req-1", error: null },
+      }),
+      actions: live,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(screen.queryByText(/Message queued/u)).toBeNull();
+
+    runtimeHookMock.mockReturnValue({ state: running(), actions: live });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(
+      screen.getByText("Message queued. It is delivered after the running task's current work."),
+    ).toBeInTheDocument();
+
+    runtimeHookMock.mockReturnValue({
+      state: running({
+        mutation: { status: "pending", kind: "pause", requestId: "req-2", error: null },
+      }),
+      actions: live,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(screen.queryByText(/Message queued/u)).toBeNull();
+  });
+
+  it("tells the person a refused message was not sent and keeps their text", async () => {
+    const user = userEvent.setup();
+    const live = actions();
+    runtimeHookMock.mockReturnValue({ state: running(), actions: live });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await user.type(screen.getByRole("textbox", { name: "Task instructions" }), "do not lose me");
+    await user.click(screen.getByRole("button", { name: "Send now" }));
+
+    const refused = {
+      status: "error" as const,
+      kind: "follow-up" as const,
+      requestId: "req-1",
+      error: { code: "INVALID_INTENT", message: "The request is not valid.", retryable: false },
+    };
+    runtimeHookMock.mockReturnValue({
+      state: running({
+        mutation: { status: "pending", kind: "follow-up", requestId: "req-1", error: null },
+      }),
+      actions: live,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    runtimeHookMock.mockReturnValue({ state: running({ mutation: refused }), actions: live });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(screen.getByText(/was not sent and your text is kept/u)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Task instructions" })).toHaveValue(
+      "do not lose me",
+    );
+    expect(screen.queryByText(/Message sent/u)).toBeNull();
+  });
+});
+
 describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#3384 cascade)", () => {
   function runningState(runId: string): CodingWorkbenchRuntimeState {
     return liveState({
@@ -5505,6 +5621,105 @@ describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
       expect(screen.getByRole("group", { name: "Agent" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Bauen" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Planen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+});
+
+describe("turn revert (B3, S04)", () => {
+  const NEWEST = { staged: false, fileCount: 3, additions: 12, deletions: 4 } as const;
+
+  function runningState(state: "running" | "paused" = "running"): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        value: snapshot({ state, runId: "run-1", revision: 4 }),
+        error: null,
+      },
+    });
+  }
+
+  it("reads the revert channel of the live run and shows nothing while it offers no undo", () => {
+    renderWorkbench(runningState());
+
+    expect(revertHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", live: true, revision: 4 }),
+    );
+    expect(screen.queryByRole("region", { name: "Last turn" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
+  });
+
+  it.each(["succeeded", "failed", "cancelled", "awaiting-approval"] as const)(
+    "tells the hook a %s run is not live, so no undo is offered for it",
+    (state) => {
+      renderWorkbench(
+        liveState({
+          run: { status: "ready", value: snapshot({ state, runId: "run-1" }), error: null },
+        }),
+      );
+
+      expect(revertHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", live: false }),
+      );
+    },
+  );
+
+  it.each(["running", "paused"] as const)(
+    "undoes the last turn of a %s run only after the confirmation",
+    async (state) => {
+      const user = userEvent.setup();
+      revertHookMock.mockReturnValue({ revert: NEWEST });
+      const liveActions = renderWorkbench(runningState(state));
+
+      await user.click(screen.getByRole("button", { name: "Undo last turn" }));
+      expect(liveActions.revert).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Confirm undo" }));
+
+      expect(liveActions.revert).toHaveBeenCalledExactlyOnceWith("undo");
+    },
+  );
+
+  it("offers Restore while an undo is staged and restores through the same action", async () => {
+    const user = userEvent.setup();
+    revertHookMock.mockReturnValue({ revert: { ...NEWEST, staged: true } });
+    const liveActions = renderWorkbench(runningState());
+
+    expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Restore changes" }));
+    await user.click(screen.getByRole("button", { name: "Confirm restore" }));
+
+    expect(liveActions.revert).toHaveBeenCalledExactlyOnceWith("restore");
+  });
+
+  it("holds the control while a runtime mutation is in flight", () => {
+    revertHookMock.mockReturnValue({ revert: NEWEST });
+    renderWorkbench(
+      liveState({
+        ...runningState(),
+        mutation: { status: "pending", kind: "revert", requestId: "request-1", error: null },
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeDisabled();
+  });
+
+  it("labels the control in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      revertHookMock.mockReturnValue({ revert: NEWEST });
+      runtimeHookMock.mockReturnValue({ state: runningState(), actions: actions() });
+      render(
+        <I18nProvider>
+          <CodingWorkbenchWindow selectedRoot="/repo" />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("region", { name: "Letzter Durchgang" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Letzten Durchgang rückgängig machen" }),
+      ).toBeInTheDocument();
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();

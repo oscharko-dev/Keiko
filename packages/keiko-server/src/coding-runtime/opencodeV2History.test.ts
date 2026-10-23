@@ -2112,3 +2112,186 @@ describe("OpenCode 2.1.4 Code Mode execute outcome (#3897)", () => {
     expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_");
   });
 });
+
+// OpenCode 2.1.4 runs a subagent launched with `background: true` after its parent went idle and
+// tells the parent when it ended with a synthetic message; the parent then runs a turn to read it
+// (https://opencode.ai/v2/docs/tools/#subagent, PR #4064). The idle message that ends the parent's
+// first execution is therefore not the end of the run's work while that report is owed.
+describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
+  const user = { id: "msg_user", type: "user", time: { created: 1 }, text: "Launch a child" };
+
+  function launch(
+    child: string,
+    fields: {
+      readonly id?: string;
+      readonly background?: boolean;
+      readonly status?: string;
+      readonly sessionID?: unknown;
+    } = {},
+  ): Record<string, unknown> {
+    const { id = "msg_launch", background = true, status = "completed" } = fields;
+    return assistant214({
+      id,
+      content: [
+        {
+          type: "tool",
+          id: `call_${id}`,
+          name: "subagent",
+          executed: false,
+          time: { created: 2, ran: 2, completed: 3 },
+          state: {
+            status,
+            input: { ...(background ? { background: true } : {}), agent: "explore", prompt: "p" },
+            content: [],
+            metadata: { sessionID: "sessionID" in fields ? fields.sessionID : child },
+          },
+        },
+      ],
+    });
+  }
+
+  const answer = (id: string): Record<string, unknown> =>
+    assistant214({ id, content: [{ type: "text", text: "Launched." }] });
+  const idle = (id: string, outcome = "succeeded"): Record<string, unknown> => ({
+    id,
+    type: "idle",
+    time: { created: 5 },
+    outcome,
+  });
+  const report = (child: string, id = `msg_report_${child}`): Record<string, unknown> => ({
+    id,
+    type: "synthetic",
+    time: { created: 6 },
+    metadata: { source: "subagent", childID: child, agent: "Explore", state: "completed" },
+    text: `<subagent sessionID="${child}" state="completed">done</subagent>`,
+    description: "Synthetic read",
+  });
+
+  function kinds(messages: readonly Record<string, unknown>[]): readonly string[] {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    return projection.project("ses_parent", messages, undefined).map((event) => event.kind);
+  }
+
+  it("does not end the run's work on the idle message of a parent that owes a background report", () => {
+    const owed = kinds([user, launch("ses_child"), answer("msg_a1"), idle("msg_idle1")]);
+    expect(owed).not.toContain("terminal");
+    expect(owed).not.toContain("terminal-failure");
+  });
+
+  it("ends the run's work on the idle message after the report, not on the one before it", () => {
+    const delivered = kinds([
+      user,
+      launch("ses_child"),
+      answer("msg_a1"),
+      idle("msg_idle1"),
+      report("ses_child"),
+      answer("msg_a2"),
+      idle("msg_idle2"),
+    ]);
+    expect(delivered.filter((kind) => kind === "terminal")).toHaveLength(1);
+    expect(delivered.at(-1)).toBe("terminal");
+  });
+
+  it("keeps waiting while any of several background children has not reported", () => {
+    const first = launch("ses_child_a", { id: "msg_launch_a" });
+    const second = launch("ses_child_b", { id: "msg_launch_b" });
+    const oneReported = kinds([
+      user,
+      first,
+      second,
+      idle("msg_idle1"),
+      report("ses_child_a"),
+      idle("msg_idle2"),
+    ]);
+    expect(oneReported).not.toContain("terminal");
+    const bothReported = kinds([
+      user,
+      first,
+      second,
+      idle("msg_idle1"),
+      report("ses_child_a"),
+      report("ses_child_b"),
+      idle("msg_idle2"),
+    ]);
+    expect(bothReported.at(-1)).toBe("terminal");
+  });
+
+  it("owes nothing for a foreground subagent, a launch that failed or a launch naming no child", () => {
+    for (const launched of [
+      launch("ses_child", { background: false }),
+      launch("ses_child", { status: "error" }),
+      launch("ses_child", { sessionID: undefined }),
+      launch("ses_child", { sessionID: "not-a-session" }),
+    ])
+      expect(kinds([user, launched, idle("msg_idle1")]).at(-1)).toBe("terminal");
+  });
+
+  it("ignores a report that does not come from a subagent or names no child", () => {
+    const forged = { ...report("ses_child"), metadata: { source: "other", childID: "ses_child" } };
+    const nameless = { ...report("ses_child"), metadata: { source: "subagent" } };
+    for (const message of [forged, nameless])
+      expect(
+        kinds([user, launch("ses_child"), idle("msg_idle1"), message, idle("msg_idle2")]),
+      ).not.toContain("terminal");
+  });
+
+  it("keeps a failed or interrupted idle message a terminal failure whatever is owed", () => {
+    for (const outcome of ["failed", "interrupted"])
+      expect(kinds([user, launch("ses_child"), idle("msg_idle1", outcome)]).at(-1)).toBe(
+        "terminal-failure",
+      );
+  });
+
+  it("is stable: the idle message held in one pass stays held when the report arrives", () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const parent = [user, launch("ses_child"), idle("msg_idle1")];
+    const held = projection.project("ses_parent", parent, undefined);
+    const next = projection.project(
+      "ses_parent",
+      [...parent, report("ses_child"), answer("msg_a2"), idle("msg_idle2")],
+      held.length - 1,
+    );
+    // Only what is new is returned: the report, the answer and the idle message that ends the work.
+    expect(held.map((event) => event.kind)).not.toContain("terminal");
+    expect(next.map((event) => event.kind).filter((kind) => kind === "terminal")).toHaveLength(1);
+    expect(next.at(-1)?.kind).toBe("terminal");
+    expect(next[0]?.sequence).toBe(held.length);
+  });
+
+  it("counts the idle messages it held on the projection line, never a session id", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    projection.project("ses_parent", [user, launch("ses_child"), idle("msg_idle1")], undefined);
+    const line = sink.events.find((event) => event.op === "coding-runtime.history-projection");
+    expect(line?.extra).toMatchObject({ heldIdleCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain("ses_child");
+    expectActivityLogProof(
+      "coding-runtime.history-projection.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+  });
+
+  it("leaves the held count out of a pass that held nothing", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    projection.project("ses_parent", [user, idle("msg_idle1")], undefined);
+    const line = sink.events.find((event) => event.op === "coding-runtime.history-projection");
+    expect(line?.extra).not.toHaveProperty("heldIdleCount");
+  });
+});

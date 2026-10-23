@@ -20,6 +20,7 @@ import {
   submitCodingWorkbenchRuntimeFollowUp,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
+import { ApiError } from "./api-shared-primitives";
 import {
   CODING_WORKBENCH_OBSERVATION_BATCH_MS,
   useCodingWorkbenchRuntimeEventStream,
@@ -554,6 +555,81 @@ describe("useCodingWorkbenchRuntime", () => {
     expect(view.result.current.state.canStart).toBe(false);
 
     view.unmount();
+  });
+
+  // ADR-0137 D10: a message sent while a turn runs reaches the server as a delivery bound to the
+  // running run's revision, and the answer installs the revision-bumped snapshot.
+  describe("prompt inputs (ADR-0137 D10)", () => {
+    it("sends a steering message with its references to a running turn and installs the answer", async () => {
+      installBootstrap(snapshot({ state: "running", pendingPermission: undefined }));
+      vi.mocked(getCodingWorkbenchRuntimeReadiness).mockResolvedValue({
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "autonomous-delivery",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: true,
+        selectableAgents: ["build", "plan"],
+        promptInputs: { delivery: true, references: true },
+      });
+      vi.mocked(submitCodingWorkbenchRuntimeFollowUp).mockResolvedValue(
+        snapshot({ state: "running", revision: 5, pendingPermission: undefined }),
+      );
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      await waitFor(() =>
+        expect(view.result.current.state.promptInputs).toEqual({
+          delivery: true,
+          references: true,
+        }),
+      );
+      act(() => view.result.current.actions.setAgent("plan"));
+      await act(async () => {
+        await view.result.current.actions.submitFollowUp("also look at @src/app.ts", {
+          delivery: "steer",
+          references: [{ path: "src/app.ts" }],
+        });
+      });
+      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+        requestId: expect.any(String) as unknown,
+        expectedRevision: expect.any(Number) as unknown,
+        taskIntent: "also look at @src/app.ts",
+        delivery: "steer",
+        references: [{ path: "src/app.ts" }],
+      });
+      await waitFor(() => expect(view.result.current.state.run.value?.revision).toBe(5));
+      expect(view.result.current.state.mutation.status).toBe("idle");
+      view.unmount();
+    });
+
+    it("surfaces a refused message as a mutation error and keeps the run as it was", async () => {
+      installBootstrap(snapshot({ state: "running", pendingPermission: undefined }));
+      vi.mocked(submitCodingWorkbenchRuntimeFollowUp).mockRejectedValue(
+        new ApiError("INVALID_INTENT", "The request is not valid.", 400),
+      );
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      await waitFor(() => expect(view.result.current.state.run.status).toBe("ready"));
+      await act(async () => {
+        await view.result.current.actions.submitFollowUp("queue it", { delivery: "queue" });
+      });
+      expect(view.result.current.state.mutation).toMatchObject({
+        status: "error",
+        kind: "follow-up",
+        error: { code: "INVALID_INTENT" },
+      });
+      expect(view.result.current.state.run.value).toMatchObject({ state: "running", revision: 4 });
+      view.unmount();
+    });
   });
 
   describe("primary agent (#3897)", () => {

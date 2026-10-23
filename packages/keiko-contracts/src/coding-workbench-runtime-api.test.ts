@@ -5,13 +5,20 @@ import {
   CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
+  CODING_WORKBENCH_PROMPT_DELIVERIES,
+  CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS,
+  CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
   DEFAULT_CODING_WORKBENCH_AGENT,
   isCodingWorkbenchAgent,
+  isCodingWorkbenchPromptDelivery,
+  isCodingWorkbenchPromptReferencePath,
+  parseCodingWorkbenchPromptReferences,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
+  parseCodingWorkbenchRuntimeFollowUpRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
@@ -1526,5 +1533,181 @@ describe("native OpenCode retry SSE facts", () => {
     expect(validateCodingWorkbenchRuntimeSseEvent({ ...event(null), kind: "status" }).ok).toBe(
       false,
     );
+  });
+});
+
+// ADR-0137 D10: a message sent while a turn runs and the workspace files a prompt references are
+// intent the browser authors. The contract fixes their transport shape; the server decides whether a
+// path names a contained, non-sensitive text file.
+describe("Coding Workbench prompt inputs", () => {
+  const followUp = {
+    requestId: "request-1",
+    expectedRevision: 4,
+    taskIntent: "Also cover the empty case",
+  };
+
+  it("keeps the delivery vocabulary closed to steer and queue", () => {
+    expect([...CODING_WORKBENCH_PROMPT_DELIVERIES]).toEqual(["steer", "queue"]);
+    expect(CODING_WORKBENCH_PROMPT_DELIVERIES.every(isCodingWorkbenchPromptDelivery)).toBe(true);
+    for (const forged of ["Steer", "interrupt", "", "queue ", null, undefined, 1, ["steer"]]) {
+      expect(isCodingWorkbenchPromptDelivery(forged), JSON.stringify(forged)).toBe(false);
+    }
+  });
+
+  it("admits the historical follow-up shape unchanged and with each new field", () => {
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest(followUp)).toEqual({
+      ok: true,
+      value: followUp,
+    });
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, agent: "plan" }).ok).toBe(
+      true,
+    );
+    for (const delivery of CODING_WORKBENCH_PROMPT_DELIVERIES) {
+      expect(parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, delivery }).ok).toBe(true);
+    }
+    const references = [{ path: "src/index.ts" }, { path: "docs/My Notes.md" }];
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, references })).toEqual({
+      ok: true,
+      value: { ...followUp, references },
+    });
+  });
+
+  it("refuses an unknown delivery, an unknown key and a delivery that names an agent", () => {
+    for (const delivery of ["interrupt", "", null, 1, ["queue"]]) {
+      expect(
+        parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, delivery }).ok,
+        JSON.stringify(delivery),
+      ).toBe(false);
+    }
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, files: [] }).ok).toBe(false);
+    // A delivered message joins the running turn; it never switches that turn's agent.
+    expect(
+      parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, delivery: "steer", agent: "plan" }),
+    ).toEqual({ ok: false, errors: ["delivery cannot select an agent"] });
+  });
+
+  it("keeps the earlier follow-up bounds: request id, revision, intent and agent", () => {
+    for (const patch of [
+      { requestId: "" },
+      { requestId: "bad id" },
+      { expectedRevision: -1 },
+      { expectedRevision: 1.5 },
+      { expectedRevision: "4" },
+      { taskIntent: "" },
+      { taskIntent: "x".repeat(65_537) },
+      { agent: "general" },
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, ...patch }).ok,
+        JSON.stringify(patch),
+      ).toBe(false);
+    }
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest(null).ok).toBe(false);
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest([followUp]).ok).toBe(false);
+  });
+
+  it("admits only bounded POSIX paths relative to the workspace", () => {
+    for (const path of [
+      "a.ts",
+      "src/app/index.tsx",
+      ".github/workflows/ci.yml",
+      "docs/My Notes.md",
+      "dir/ünïcode-名前.txt",
+      "Makefile",
+      "a".repeat(255),
+    ]) {
+      expect(isCodingWorkbenchPromptReferencePath(path), path).toBe(true);
+    }
+    for (const path of [
+      "",
+      "/etc/passwd",
+      "../secret",
+      "a/../../secret",
+      "a/./b",
+      "./a",
+      "a//b",
+      "a/",
+      "a\\b",
+      "C:\\Windows\\win.ini",
+      "C:/Windows/win.ini",
+      "c:foo",
+      "a/b\u0000c",
+      "a/b\nc",
+      "a\u007fb",
+      "a".repeat(256),
+      `${"a/".repeat(600)}x`,
+      null,
+      undefined,
+      42,
+      {},
+    ]) {
+      expect(isCodingWorkbenchPromptReferencePath(path), JSON.stringify(path)).toBe(false);
+    }
+    expect("a".repeat(CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS + 1)).toHaveLength(1025);
+  });
+
+  it("bounds the reference list, its entries and duplicates", () => {
+    const file = (index: number): { readonly path: string } => ({ path: `f${String(index)}.ts` });
+    const full = Array.from({ length: CODING_WORKBENCH_PROMPT_REFERENCES_MAX }, (_, i) => file(i));
+    expect(parseCodingWorkbenchPromptReferences(full).ok).toBe(true);
+    for (const value of [
+      [],
+      [...full, file(99)],
+      "src/index.ts",
+      null,
+      [{ path: "a.ts" }, { path: "a.ts" }],
+      [{ path: "a.ts", uri: "file:///etc/passwd" }],
+      [{ path: 7 }],
+      [{ path: "../a.ts" }],
+      ["a.ts"],
+      [null],
+    ]) {
+      expect(parseCodingWorkbenchPromptReferences(value).ok, JSON.stringify(value)).toBe(false);
+    }
+    expect(
+      parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, references: [] }).ok,
+      "an empty list is not the canonical wire",
+    ).toBe(false);
+  });
+
+  it("validates the prompt inputs a runtime reports as exactly two booleans", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build", "plan"],
+    };
+    expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok, "absent reads as none").toBe(
+      true,
+    );
+    for (const promptInputs of [
+      { delivery: true, references: true },
+      { delivery: false, references: false },
+      { delivery: true, references: false },
+    ]) {
+      expect(validateCodingWorkbenchRuntimeReadiness({ ...readiness, promptInputs })).toEqual({
+        ok: true,
+        value: { ...readiness, promptInputs },
+      });
+    }
+    for (const promptInputs of [
+      null,
+      true,
+      [],
+      {},
+      { delivery: true },
+      { references: true },
+      { delivery: "yes", references: true },
+      { delivery: true, references: 1 },
+      { delivery: true, references: true, steer: true },
+    ]) {
+      expect(
+        validateCodingWorkbenchRuntimeReadiness({ ...readiness, promptInputs }).ok,
+        JSON.stringify(promptInputs),
+      ).toBe(false);
+    }
   });
 });

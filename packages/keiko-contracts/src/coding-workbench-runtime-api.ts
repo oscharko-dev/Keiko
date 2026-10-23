@@ -85,6 +85,98 @@ export function isCodingWorkbenchAgent(value: unknown): value is CodingWorkbench
   return isOneOf(value, CODING_WORKBENCH_AGENTS);
 }
 
+/**
+ * How a message sent WHILE a turn runs reaches the run's session, as in standalone OpenCode
+ * (`POST /api/session/{sessionID}/prompt`, `delivery`). `steer` injects it into the running turn at
+ * its next step boundary; `queue` delivers it after the turn's current work. A closed vocabulary:
+ * the browser cannot name an arbitrary OpenCode delivery mode. Absent means an ordinary follow-up.
+ */
+export type CodingWorkbenchPromptDelivery = "steer" | "queue";
+
+export const CODING_WORKBENCH_PROMPT_DELIVERIES: readonly CodingWorkbenchPromptDelivery[] =
+  Object.freeze(["steer", "queue"] as const);
+
+export function isCodingWorkbenchPromptDelivery(
+  value: unknown,
+): value is CodingWorkbenchPromptDelivery {
+  return isOneOf(value, CODING_WORKBENCH_PROMPT_DELIVERIES);
+}
+
+/**
+ * A workspace file the human attached to a prompt with `@`. The browser names the file by its path
+ * RELATIVE to the run's workspace root and never sends an absolute path or a URI: the server
+ * resolves it against the run's own workspace, refuses anything that is not a plain, contained,
+ * non-sensitive text file, and only then maps it to the runtime's attachment (ADR-0137 D10).
+ */
+export interface CodingWorkbenchPromptReference {
+  readonly path: string;
+}
+
+/** At most this many files ride on one prompt. */
+export const CODING_WORKBENCH_PROMPT_REFERENCES_MAX = 16;
+export const CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS = 1024;
+const CODING_WORKBENCH_PROMPT_REFERENCE_SEGMENT_MAX_CHARS = 255;
+const DRIVE_LETTER_PREFIX = /^[A-Za-z]:/u;
+
+function referenceSegmentAdmitted(segment: string): boolean {
+  return (
+    segment.length > 0 &&
+    segment.length <= CODING_WORKBENCH_PROMPT_REFERENCE_SEGMENT_MAX_CHARS &&
+    segment !== "." &&
+    segment !== ".."
+  );
+}
+
+/**
+ * Transport shape of one reference path, decided without touching a filesystem: a bounded POSIX
+ * path relative to the workspace root, with no empty, `.` or `..` segment, no backslash, no control
+ * character and no absolute or drive-letter spelling. Whether the path names a contained, readable
+ * text file is the server's decision against the run's workspace.
+ */
+export function isCodingWorkbenchPromptReferencePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS &&
+    !value.startsWith("/") &&
+    !value.includes("\\") &&
+    !DRIVE_LETTER_PREFIX.test(value) &&
+    !containsControlCharacter(value) &&
+    value.split("/").every(referenceSegmentAdmitted)
+  );
+}
+
+export function parseCodingWorkbenchPromptReferences(
+  value: unknown,
+): CodingWorkbenchValidationResult<readonly CodingWorkbenchPromptReference[]> {
+  if (!Array.isArray(value)) return invalid("references must be an array");
+  const errors: string[] = [];
+  if (value.length === 0 || value.length > CODING_WORKBENCH_PROMPT_REFERENCES_MAX) {
+    errors.push(
+      `references must hold 1 to ${String(CODING_WORKBENCH_PROMPT_REFERENCES_MAX)} files`,
+    );
+  }
+  const seen = new Set<string>();
+  value.forEach((entry: unknown, index) => {
+    errors.push(...referenceEntryErrors(entry, index, seen));
+  });
+  return result(value, errors);
+}
+
+function referenceEntryErrors(entry: unknown, index: number, seen: Set<string>): string[] {
+  const path = `references[${String(index)}]`;
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, ["path"], path);
+  if (!isCodingWorkbenchPromptReferencePath(entry.path)) {
+    errors.push(`${path}.path must be a bounded workspace-relative path`);
+  } else if (seen.has(entry.path)) {
+    errors.push(`${path}.path repeats an earlier reference`);
+  } else {
+    seen.add(entry.path);
+  }
+  return errors;
+}
+
 export const CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS = 128;
 export const CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS = 200;
 export const CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS = 128;
@@ -156,6 +248,21 @@ export interface CodingWorkbenchRuntimeReadiness {
    * server refuses (`invalid-intent`) any start or follow-up that names an agent outside it.
    */
   readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  /**
+   * What the composed OpenCode tool profile can do with a prompt's inputs, computed server-side
+   * (#3897). Absent reads as nothing: the browser offers Send now, Queue and the `@` file picker
+   * only where this says so, and the server refuses (`invalid-intent`) a follow-up that uses one
+   * the run's runtime cannot honour, exactly as it refuses a `plan` request.
+   */
+  readonly promptInputs?: CodingWorkbenchRuntimePromptInputs | undefined;
+}
+
+/** The prompt inputs a runtime can honour; see `CodingWorkbenchRuntimeReadiness.promptInputs`. */
+export interface CodingWorkbenchRuntimePromptInputs {
+  /** A message may be sent while a turn runs, as `steer` or `queue`. */
+  readonly delivery: boolean;
+  /** Workspace files may be referenced with `@` and attached to a prompt. */
+  readonly references: boolean;
 }
 
 export interface CodingWorkbenchRuntimeProjectMemoryRequest {
@@ -202,6 +309,10 @@ export interface CodingWorkbenchRuntimeStartRequest {
 /**
  * Body of `POST /runs/:runId/follow-up`. `agent` selects the primary agent for this and the
  * following turns; absent keeps the run's current agent.
+ *
+ * `delivery` makes the message a steering or queued message for the turn that is running right now
+ * (it never starts a turn, so it cannot name an `agent`); `references` attaches workspace files to
+ * the prompt, by path relative to the run's workspace (ADR-0137 D10).
  */
 export interface CodingWorkbenchRuntimeFollowUpRequest {
   readonly requestId: string;
@@ -209,6 +320,105 @@ export interface CodingWorkbenchRuntimeFollowUpRequest {
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
   readonly taskIntent: string;
   readonly agent?: CodingWorkbenchAgent | undefined;
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+}
+
+/**
+ * The turn-revert actions of a live native run (B3, S04). `undo` stops the turn in flight, when
+ * there is one, and restores the workspace files the run's newest turn changed; `restore` re-applies
+ * them while the undo is still staged. Closed, so the browser can name nothing else.
+ */
+export type CodingWorkbenchRuntimeRevertAction = "undo" | "restore";
+
+export const CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS: readonly CodingWorkbenchRuntimeRevertAction[] =
+  Object.freeze(["undo", "restore"] as const);
+
+export function isCodingWorkbenchRuntimeRevertAction(
+  value: unknown,
+): value is CodingWorkbenchRuntimeRevertAction {
+  return isOneOf(value, CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS);
+}
+
+/** Body of `POST /runs/:runId/revert`: the usual revision-bound envelope plus the closed action. */
+export interface CodingWorkbenchRuntimeRevertRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly action: CodingWorkbenchRuntimeRevertAction;
+}
+
+/** Upper bound on a revert file or line count; matches the approval-review count bound. */
+export const CODING_WORKBENCH_RUNTIME_REVERT_MAX_COUNT = 1_000_000;
+
+/**
+ * What an undo would do or has done: counts only. `staged` says an undo is in place and a
+ * `restore` can bring the changes back; otherwise the counts describe the run's newest turn. No
+ * path, patch or message ever rides this projection.
+ */
+export interface CodingWorkbenchRuntimeRevertState {
+  readonly staged: boolean;
+  readonly fileCount: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+/** Session facet of the revert channel: the status of the presented cookie only (ADR-0141). */
+export const CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeRevertSession =
+  (typeof CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES)[number];
+
+/**
+ * `GET /runs/:runId/revert`: absent `revert` means no undo is available for the run (a runtime
+ * without snapshots, a run that is not live, or a session the runtime cannot read). An unpaired
+ * caller receives the constant `{ session: "unpaired" }` regardless of the run.
+ */
+export interface CodingWorkbenchRuntimeRevertChannelPayload {
+  readonly session: CodingWorkbenchRuntimeRevertSession;
+  readonly revert?: CodingWorkbenchRuntimeRevertState | undefined;
+}
+
+export function unpairedCodingWorkbenchRuntimeRevertChannelPayload(): CodingWorkbenchRuntimeRevertChannelPayload {
+  return { session: "unpaired" };
+}
+
+function revertCountValid(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CODING_WORKBENCH_RUNTIME_REVERT_MAX_COUNT
+  );
+}
+
+function validateRevertState(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("revertChannelPayload.revert must be an object");
+    return;
+  }
+  errors.push(
+    ...exactKeys(value, ["staged", "fileCount", "additions", "deletions"], "revertChannelPayload"),
+  );
+  if (typeof value.staged !== "boolean") errors.push("revertChannelPayload.staged is invalid");
+  for (const key of ["fileCount", "additions", "deletions"] as const) {
+    if (!revertCountValid(value[key])) errors.push(`revertChannelPayload.${key} is invalid`);
+  }
+}
+
+/** Exact keys, a valid session facet, bounded counts, and no revert state for an unpaired caller. */
+export function validateCodingWorkbenchRuntimeRevertChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeRevertChannelPayload> {
+  if (!isRecord(value)) return invalid("revert channel payload must be an object");
+  const errors = exactKeys(value, ["session", "revert"], "revertChannelPayload");
+  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES)) {
+    errors.push("revertChannelPayload.session is invalid");
+  }
+  if (value.session === "unpaired" && value.revert !== undefined) {
+    errors.push("revertChannelPayload.revert must be absent when the session is unpaired");
+  }
+  if (value.revert !== undefined) validateRevertState(value.revert, errors);
+  return result(value, errors);
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -561,6 +771,36 @@ export function parseCodingWorkbenchRuntimeRetryRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   return parseCodingWorkbenchRuntimeStartRequest(value);
+}
+
+export function parseCodingWorkbenchRuntimeFollowUpRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeFollowUpRequest> {
+  if (!isRecord(value)) return invalid("follow-up request must be an object");
+  const errors = exactKeys(
+    value,
+    ["requestId", "expectedRevision", "taskIntent", "agent", "delivery", "references"],
+    "followUpRequest",
+  );
+  validateRequestId(value.requestId, errors);
+  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
+    errors.push("expectedRevision must be a non-negative safe integer");
+  }
+  validateTaskIntent(value.taskIntent, errors);
+  validateAgent(value.agent, errors);
+  validatePromptDelivery(value, errors);
+  if (value.references !== undefined) {
+    const references = parseCodingWorkbenchPromptReferences(value.references);
+    if (!references.ok) errors.push(...references.errors);
+  }
+  return result(value, errors);
+}
+
+// A delivered message joins the turn that is running, so it cannot also switch that turn's agent.
+function validatePromptDelivery(value: Record<string, unknown>, errors: string[]): void {
+  if (value.delivery === undefined) return;
+  if (!isCodingWorkbenchPromptDelivery(value.delivery)) errors.push("delivery is invalid");
+  else if (value.agent !== undefined) errors.push("delivery cannot select an agent");
 }
 
 export function parseCodingWorkbenchRuntimeReadinessRequest(
@@ -1017,6 +1257,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
       "runtimeUnavailableReason",
       "runtimeEvidenceClass",
       "selectableAgents",
+      "promptInputs",
     ],
     "runtimeReadiness",
   );
@@ -1029,6 +1270,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
   validateRuntimeUnavailableReason(value, errors);
   validateRuntimeEvidenceClass(value, errors);
   validateSelectableAgents(value, errors);
+  validatePromptInputs(value.promptInputs, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -1106,6 +1348,19 @@ function validateSelectableAgents(value: Record<string, unknown>, errors: string
   }
   if (!agents.includes(DEFAULT_CODING_WORKBENCH_AGENT)) {
     errors.push("selectableAgents must include the default agent");
+  }
+}
+
+/** Absent reads as no prompt input; a present value is exactly the two booleans and nothing else. */
+function validatePromptInputs(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("promptInputs must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["delivery", "references"], "promptInputs"));
+  for (const field of ["delivery", "references"] as const) {
+    if (typeof value[field] !== "boolean") errors.push(`promptInputs.${field} must be boolean`);
   }
 }
 

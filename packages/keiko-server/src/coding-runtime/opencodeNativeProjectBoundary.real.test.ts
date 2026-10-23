@@ -27,6 +27,9 @@ import {
   OPENCODE_NATIVE_TOOL_DEFINITIONS,
   isOpenCodeCodeModeExecutionFailure,
 } from "./opencodeNativeTools.js";
+import { realNativeRuntime } from "../tool-catalog/__fixtures__/nativeEffectRuntimeFixture.js";
+import { createCodingToolNativeEffectFacet } from "./codingToolNativeEffect.js";
+import { parseOpenCodeNativePolicyRequest } from "./opencodeNativePolicy.js";
 import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
@@ -211,10 +214,22 @@ async function startRefusingStub(): Promise<Stub> {
   });
 }
 
-async function startFacade(): Promise<Stub> {
-  return await startStub((_self, _recorded, response) => {
-    response.writeHead(200, { "Content-Type": "application/json" }).end('{"effect":"allow"}');
-  });
+interface FacadeStub extends Stub {
+  /** The answer to a native-policy ask; every action is allowed unless a test replaces it. */
+  answer: (body: unknown) => Readonly<Record<string, unknown>>;
+}
+
+async function startFacade(): Promise<FacadeStub> {
+  // The responder runs per request, after `facade` exists, so it always reads the current answer.
+  const facade: FacadeStub = Object.assign(
+    await startStub((_self, recorded, response) => {
+      response
+        .writeHead(200, { "Content-Type": "application/json" })
+        .end(JSON.stringify(facade.answer(recorded.body)));
+    }),
+    { answer: (): Readonly<Record<string, unknown>> => ({ effect: "allow" }) },
+  );
+  return facade;
 }
 
 function pluginSource(canary: string, id: string, setupCanary?: string): string {
@@ -581,7 +596,7 @@ interface Run {
   readonly fixture: Fixture;
   readonly gateway: GatewayStub;
   readonly evil: Stub;
-  readonly facade: Stub;
+  readonly facade: FacadeStub;
   readonly service: Service;
   readonly sessionId: string;
 }
@@ -1429,5 +1444,87 @@ describe("pinned native OpenCode Code Mode semantics", () => {
       });
     },
     120_000,
+  );
+});
+
+// #3897 review: a native edit spent only its tool call, so the run's patch budget never bounded what
+// the original runtime wrote. The plugin now forwards the size of the producer's own diff of each
+// proposed edit, and the genuine authority owner reserves it before the producer writes.
+describe("pinned native OpenCode writes charge the run's patch budget", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const LARGE = `${"x".repeat(4_096)}\n`;
+  const writes = ["first.txt", "secnd.txt", "third.txt"] as const;
+
+  /** The forwarded size of every edit ask so far, in order. */
+  const editSizes = (run: Run): readonly unknown[] =>
+    run.facade.requests
+      .map((recorded) => object(recorded.body))
+      .filter((body) => body?.action === "native-policy" && body.permission === "edit")
+      .map((body) => body?.patchBytes);
+
+  /** Answers each ask through the genuine native-effect owner of a run with `maxPatchBytes`. */
+  function budgeted(maxPatchBytes: number): {
+    readonly answer: (body: unknown) => Readonly<Record<string, unknown>>;
+    readonly dispose: () => void;
+  } {
+    const runtime = realNativeRuntime(50, "autonomous-delivery", maxPatchBytes);
+    const facet = createCodingToolNativeEffectFacet(runtime.authority, runtime.context);
+    const answer = (body: unknown): Readonly<Record<string, unknown>> => {
+      const request = parseOpenCodeNativePolicyRequest(body);
+      if (request === undefined) return { effect: "deny" };
+      const { source, patchBytes } = request;
+      const admission = facet.admit({
+        capability: runtime.capability,
+        actionClass: request.permission === "edit" ? "workspace-write" : "workspace-read",
+        ...(source === undefined
+          ? {}
+          : {
+              invocation: {
+                sessionId: request.sessionID,
+                messageId: source.messageID,
+                callId: source.id,
+              },
+            }),
+        ...(patchBytes === undefined ? {} : { patchBytes }),
+      });
+      return admission.ok ? { effect: "allow" } : { effect: "deny", message: "budget exhausted" };
+    };
+    return { answer, dispose: runtime.dispose };
+  }
+
+  it.skipIf(skip)(
+    "refuses a write over the budget, admits writes up to it and refuses the next, writing nothing refused",
+    async () => {
+      await withRun({}, async (run) => {
+        const workspace = run.fixture.workspace;
+        // Measure the producer's own diff of each write once, then remove the files again: a
+        // write of an absent file produces the same diff every time.
+        for (const name of writes) await scriptedTurn(run, writeCall(name, `${name}\n`), "Write.");
+        const measured = editSizes(run).map(Number);
+        expect(measured).toHaveLength(writes.length);
+        for (const name of writes) rmSync(join(workspace, name));
+        const [first = 0, second = 0] = measured;
+        // The budget is exactly the first two writes.
+        const owner = budgeted(first + second);
+        run.facade.answer = owner.answer;
+        try {
+          await scriptedTurn(run, writeCall("large.txt", LARGE), "Write the large file.");
+          expect(editSizes(run).at(-1)).toBeGreaterThan(LARGE.length);
+          expect(existsSync(join(workspace, "large.txt"))).toBe(false);
+          await scriptedTurn(run, writeCall(writes[0], `${writes[0]}\n`), "Write.");
+          await scriptedTurn(run, writeCall(writes[1], `${writes[1]}\n`), "Write.");
+          expect(readFileSync(join(workspace, writes[0]), "utf8")).toBe(`${writes[0]}\n`);
+          expect(readFileSync(join(workspace, writes[1]), "utf8")).toBe(`${writes[1]}\n`);
+          // At the limit now: the next write is refused although it alone would fit.
+          await scriptedTurn(run, writeCall(writes[2], `${writes[2]}\n`), "Write.");
+          expect(measured[2]).toBeLessThanOrEqual(first + second);
+          expect(existsSync(join(workspace, writes[2]))).toBe(false);
+          expect(editSizes(run).slice(-3)).toEqual([first, second, measured[2]]);
+        } finally {
+          owner.dispose();
+        }
+      });
+    },
+    300_000,
   );
 });

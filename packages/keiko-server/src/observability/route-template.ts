@@ -250,6 +250,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "resume",
   "retrieve",
   "retry",
+  "revert",
   "review",
   "review-description",
   "review-items",

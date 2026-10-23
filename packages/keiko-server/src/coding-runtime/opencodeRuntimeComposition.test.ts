@@ -15,8 +15,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -132,6 +134,11 @@ import {
 } from "./opencodeProtocol.js";
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import type {
+  AdmittedPromptInputs,
+  PromptInputsAdmission,
+  PromptInputsRequest,
+} from "./opencodePromptInputs.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
@@ -217,9 +224,44 @@ interface OpenCodeRuntimeComposition {
       text: string,
       initialContext?: string,
       agent?: "build" | "plan",
+      inputs?: AdmittedPromptInputs,
     ) => Promise<boolean>;
+    /** What a prompt may carry besides its text, and the operations that honour it (ADR-0137 D10). */
+    readonly promptInputs?:
+      { readonly delivery: boolean; readonly references: boolean } | undefined;
+    readonly admitPromptInputs?:
+      ((runId: string, request: PromptInputsRequest) => PromptInputsAdmission) | undefined;
+    readonly deliverPrompt?:
+      ((runId: string, text: string, inputs: AdmittedPromptInputs) => Promise<boolean>) | undefined;
     readonly selectableAgents?: readonly ("build" | "plan")[] | undefined;
     readonly abortTask: (runId: string) => Promise<boolean>;
+    /** Undo and restore of the newest turn; offered by the native profile only (B3, S04). */
+    readonly revertTurn?:
+      | ((
+          runId: string,
+          action: "restore" | "undo",
+          correlationId?: string,
+        ) => Promise<
+          | {
+              readonly ok: true;
+              readonly fileCount: number;
+              readonly additions: number;
+              readonly deletions: number;
+            }
+          | { readonly ok: false; readonly reason: string }
+        >)
+      | undefined;
+    readonly revertState?:
+      | ((runId: string) => Promise<
+          | {
+              readonly staged: boolean;
+              readonly fileCount: number;
+              readonly additions: number;
+              readonly deletions: number;
+            }
+          | undefined
+        >)
+      | undefined;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
     readonly answerQuestion: (
@@ -545,6 +587,20 @@ interface StartBridgeControl {
       readonly promptsBefore: number;
     }[];
     readonly agentResponse?: () => Response;
+    /** The session diff and revert routes of a native run (B3, S04). */
+    readonly revert?: {
+      readonly requests: {
+        readonly method: string;
+        readonly path: string;
+        readonly body?: string;
+      }[];
+      /** What `GET .../diff` answers. */
+      diff: unknown[];
+      /** The session's messages in order; the runtime answers them newest first (`order=desc`). */
+      messages: unknown[];
+      /** What `POST .../revert/stage` answers. */
+      staged: unknown;
+    };
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
     readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
@@ -857,6 +913,25 @@ async function startBridgeFixture(
           }),
           { headers: { "content-type": "text/event-stream" } },
         ),
+      );
+    }
+    if (path === "/api/session/ses_tool/message" && control?.runControl?.revert !== undefined) {
+      return Promise.resolve(v2Envelope([...control.runControl.revert.messages].reverse()));
+    }
+    if (path === "/api/session/ses_tool/diff") {
+      control?.runControl?.revert?.requests.push({ method: init?.method ?? "GET", path });
+      return Promise.resolve(v2Envelope(control?.runControl?.revert?.diff ?? []));
+    }
+    if (path.startsWith("/api/session/ses_tool/revert")) {
+      control?.runControl?.revert?.requests.push({
+        method: init?.method ?? "GET",
+        path,
+        ...(typeof init?.body === "string" ? { body: init.body } : {}),
+      });
+      return Promise.resolve(
+        path.endsWith("/stage")
+          ? v2Envelope(control?.runControl?.revert?.staged ?? {})
+          : new Response(null, { status: 204 }),
       );
     }
     if (path === "/api/session/ses_tool/message") {
@@ -1199,7 +1274,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "b1460d786111044f072f61799a03577582bc2df847f21356de816b4f1702f16f",
+      "62cc1e6c43fb06b21b370600390bc76dab1aed9d42fa1517f71d7b1b20cbc734",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -2559,6 +2634,212 @@ describe("private OpenCode run control", () => {
       await fixture.stop();
     }
   });
+
+  // PR #4064 (P1): a run's session tree is its primary session and the subagent sessions the
+  // original runtime opened under it. The run is over only when none of them runs, and a native
+  // question of any of them reaches the human.
+  describe("the native session tree (PR #4064)", () => {
+    const nativeForm = (id: string, sessionID: string): Record<string, unknown> => ({
+      id,
+      sessionID,
+      title: "Choice",
+      fields: [
+        {
+          key: "choice",
+          title: "Choice",
+          description: `Which one? (${id})`,
+          type: "string",
+          options: [{ label: "Blue", value: "blue", description: "First" }],
+        },
+      ],
+    });
+
+    async function withChildren(
+      control: {
+        readonly runControl: NonNullable<
+          NonNullable<Parameters<typeof startBridgeFixture>[2]>["runControl"]
+        >;
+        readonly historyResponseFactory?: () => Promise<Response>;
+      },
+      body: (
+        fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+        activityLog: ReturnType<typeof createBufferedServerLogSink>,
+      ) => Promise<void>,
+    ): Promise<void> {
+      const activityLog = createBufferedServerLogSink();
+      const childSessions: Record<string, unknown>[] = [];
+      const fixture = await startBridgeFixture(facade, undefined, {
+        ...control,
+        childSessions,
+        activityLog,
+      });
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push(
+        { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+        { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+        { id: "ses_foreign", location: { directory: workspaceRoot } },
+      );
+      try {
+        await body(fixture, activityLog);
+      } finally {
+        await fixture.stop();
+      }
+    }
+
+    it("lists, answers and rejects the questions of an admitted child, and no foreign session's", async () => {
+      const questionRequests: { method: string; path: string; body?: string }[] = [];
+      await withChildren(
+        {
+          runControl: {
+            promptBodies: [],
+            abortSessions: [],
+            statusResponses: [{}],
+            questionResponses: [
+              [
+                nativeForm("frm_primary", "ses_tool"),
+                nativeForm("frm_child", "ses_child"),
+                nativeForm("frm_elsewhere", "ses_elsewhere"),
+                nativeForm("frm_foreign", "ses_foreign"),
+              ],
+            ],
+            questionRequests,
+          },
+        },
+        async ({ runtime }, activityLog) => {
+          const port = runtime.runPort;
+          const listed = await port.listQuestions(FIXTURE_RUN_ID);
+          expect(listed.map(({ id, sessionID }) => [id, sessionID])).toEqual([
+            ["que_primary", "ses_tool"],
+            ["que_child", "ses_child"],
+          ]);
+          await expect(port.answerQuestion(FIXTURE_RUN_ID, "que_child", [["Blue"]])).resolves.toBe(
+            true,
+          );
+          await expect(port.rejectQuestion(FIXTURE_RUN_ID, "que_child")).resolves.toBe(true);
+          // Another session's form is refused whichever way it is reached.
+          for (const id of ["que_elsewhere", "que_foreign"]) {
+            await expect(port.answerQuestion(FIXTURE_RUN_ID, id, [["Blue"]])).resolves.toBe(false);
+            await expect(port.rejectQuestion(FIXTURE_RUN_ID, id)).resolves.toBe(false);
+          }
+          expect(questionRequests).toEqual([
+            {
+              method: "POST",
+              path: "/api/session/ses_child/form/frm_child/reply",
+              body: '{"answer":{"choice":"blue"}}',
+            },
+            { method: "DELETE", path: "/api/session/ses_child/form/frm_child" },
+          ]);
+          const routed = activityLog.events.filter(
+            (event) => event.op === "coding-runtime.native-question.routed",
+          );
+          expect(routed.map((event) => event.extra)).toEqual([
+            expect.objectContaining({ action: "list", childFormCount: 1, formCount: 4 }),
+            expect.objectContaining({
+              action: "answer",
+              outcome: "answered",
+              sessionRelation: "child",
+            }),
+            expect.objectContaining({
+              action: "reject",
+              outcome: "rejected",
+              sessionRelation: "child",
+            }),
+            ...Array.from({ length: 4 }, (): unknown =>
+              expect.objectContaining({ outcome: "refused", refusal: "foreign-session" }),
+            ),
+          ]);
+          expect(routed.every((event) => event.correlationId === FIXTURE_RUN_ID)).toBe(true);
+          expect(JSON.stringify(routed)).not.toMatch(/ses_|frm_|que_|Which one/u);
+        },
+      );
+    });
+
+    it("keeps the run open while an owned child runs, and settles once it ended", async () => {
+      let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(
+        0,
+        1,
+      );
+      const statusResponses: unknown[] = [{ ses_child: { type: "busy" } }];
+      await withChildren(
+        {
+          runControl: { promptBodies: [], abortSessions: [], statusResponses },
+          historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+        },
+        async ({ runtime }, activityLog) => {
+          await expect(runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task")).resolves.toBe(
+            true,
+          );
+          // The primary finished its turn; its subagent still runs.
+          history = completedTurnHistory();
+          let settled = false;
+          const terminal = runtime.runPort
+            .waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(10_000))
+            .finally(() => {
+              settled = true;
+            });
+          await new Promise<void>((resolve) => setTimeout(resolve, 700));
+          expect(settled).toBe(false);
+          statusResponses[0] = {};
+          await expect(terminal).resolves.toBe(true);
+          const phases = activityLog.events
+            .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
+            .map((event) => event.extra?.phase);
+          expect(phases).toEqual(["held", "released"]);
+        },
+      );
+    });
+
+    it("is not kept open by an active session that is not the run's", async () => {
+      let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(
+        0,
+        1,
+      );
+      await withChildren(
+        {
+          runControl: {
+            promptBodies: [],
+            abortSessions: [],
+            statusResponses: [{ ses_foreign: { type: "busy" } }],
+          },
+          historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+        },
+        async ({ runtime }) => {
+          await expect(runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task")).resolves.toBe(
+            true,
+          );
+          history = completedTurnHistory();
+          await expect(
+            runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(5_000)),
+          ).resolves.toBe(true);
+        },
+      );
+    });
+
+    it("interrupts the owned children when a turn is stopped, and no other session", async () => {
+      const abortSessions: string[] = [];
+      const statusResponses: unknown[] = [{}];
+      await withChildren(
+        { runControl: { promptBodies: [], abortSessions, statusResponses } },
+        async ({ runtime }, activityLog) => {
+          // The child runs on the first read; it and the primary are quiet on the next two.
+          statusResponses.splice(
+            0,
+            1,
+            { ses_child: { type: "busy" }, ses_foreign: { type: "busy" } },
+            {},
+            {},
+          );
+          await expect(runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
+          expect(abortSessions).toEqual(["ses_tool", "ses_child"]);
+          expect(
+            activityLog.events
+              .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
+              .map((event) => event.extra),
+          ).toEqual([expect.objectContaining({ phase: "interrupted", activeChildCount: 1 })]);
+        },
+      );
+    });
+  });
 });
 
 describe("native policy asks on the tool bridge (#3897 review)", () => {
@@ -2615,6 +2896,39 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       });
       // A check that names no tool invocation (no `source`) carries no invocation identity.
       expect(admitted?.invocation).toBeUndefined();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("hands the measured size of an edit's diff to the authority owner with its invocation", async () => {
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+    });
+    try {
+      const ask = JSON.parse(
+        nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+      ) as Readonly<Record<string, unknown>>;
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, patchBytes: 4_097 }),
+      });
+      expect(response).toMatchObject({ status: 200, body: '{"effect":"allow"}' });
+      expect(admit.mock.calls[0]?.[0]).toMatchObject({
+        actionClass: "workspace-write",
+        patchBytes: 4_097,
+        invocation: { sessionId: "ses_tool", messageId: "msg_1", callId: "call_1" },
+      });
+      const malformed = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, patchBytes: -1 }),
+      });
+      // An unmeasurable diff is no policy ask: it is never allowed and never reaches the owner.
+      expect(malformed.body).not.toContain('"effect":"allow"');
+      expect(admit).toHaveBeenCalledOnce();
     } finally {
       await fixture.stop();
     }
@@ -6054,6 +6368,434 @@ describe("primary agent selection on the run port (#3897)", () => {
       }
     },
   );
+});
+
+// B3, S04: undo and restore of the newest turn on a live native run. The logic is pinned in
+// opencodeRevert.test.ts and against the pinned binary in opencodeNativeRevert.real.test.ts; this
+// suite pins the composition's wiring: which profile offers it, how it reaches the runtime, and that
+// a staged undo blocks the next turn.
+describe("turn revert on the run port (B3, S04)", () => {
+  const revertFacade: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+  const TURN = [
+    { id: "msg_old_user", time: { created: 1 }, text: "older", type: "user" },
+    { id: "msg_old_idle", time: { created: 2 }, type: "idle", outcome: "succeeded" },
+    { id: "msg_turn_user", time: { created: 3 }, text: "newest", type: "user" },
+    { id: "msg_turn_idle", time: { created: 4 }, type: "idle", outcome: "succeeded" },
+  ];
+  const CHANGED = [
+    { file: "a.txt", patch: "SECRET-PATCH", additions: 3, deletions: 1, status: "modified" },
+  ];
+
+  function revertControl(profile: "native" | "direct" | "code-mode" = "native"): {
+    readonly control: StartBridgeControl;
+    readonly revert: NonNullable<NonNullable<StartBridgeControl["runControl"]>["revert"]>;
+    readonly promptBodies: string[];
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+  } {
+    const promptBodies: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const revert = {
+      requests: [] as { method: string; path: string; body?: string }[],
+      diff: CHANGED as unknown[],
+      messages: [] as unknown[],
+      staged: { messageID: "msg_turn_user", files: CHANGED } as unknown,
+    };
+    return {
+      revert,
+      promptBodies,
+      activityLog,
+      control: {
+        activityLog,
+        readToolProfile: () => profile,
+        runControl: { promptBodies, abortSessions: [], statusResponses: [{}], revert },
+      },
+    };
+  }
+
+  it("offers undo and restore on the native profile only, whose runtime records snapshots", async () => {
+    for (const [profile, offered] of [
+      ["native", true],
+      ["direct", false],
+      ["code-mode", false],
+    ] as const) {
+      const { control } = revertControl(profile);
+      const fixture = await startBridgeFixture(revertFacade, undefined, control);
+      try {
+        const port = fixture.runtime.runPort;
+        expect(port.revertTurn !== undefined, profile).toBe(offered);
+        expect(port.revertState !== undefined, profile).toBe(offered);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  it("counts the newest turn's files through the runtime's session diff, without its patch", async () => {
+    const { control, revert, activityLog } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      await expect(fixture.runtime.runPort.revertState?.(FIXTURE_RUN_ID)).resolves.toEqual({
+        staged: false,
+        fileCount: 1,
+        additions: 3,
+        deletions: 1,
+      });
+      expect(revert.requests).toEqual([{ method: "GET", path: "/api/session/ses_tool/diff" }]);
+      expect(JSON.stringify(activityLog.events)).not.toContain("SECRET-PATCH");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("stages an undo at the newest turn, blocks the next turn until it is restored, then runs it", async () => {
+    const { control, revert, promptBodies, activityLog } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      revert.messages = TURN;
+      // The turn settles through the run port, which records the files as the turn left them.
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      await vi.waitFor(() => {
+        expect(revert.requests).toEqual([{ method: "GET", path: "/api/session/ses_tool/diff" }]);
+      });
+      revert.requests.length = 0;
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo", "corr-revert-0001")).resolves.toEqual({
+        ok: true,
+        fileCount: 1,
+        additions: 3,
+        deletions: 1,
+      });
+      expect(revert.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /api/session/ses_tool/diff",
+        "POST /api/session/ses_tool/revert/stage",
+      ]);
+      expect(revert.requests[1]?.body).toBe(
+        JSON.stringify({ messageID: "msg_turn_user", files: true }),
+      );
+
+      // The staged undo refuses a new turn: nothing is posted, and the refusal is on the log.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "SECRET-NEXT-TASK")).resolves.toBe(false);
+      expect(promptBodies).toEqual([]);
+      expect(
+        activityLog.events.filter((event) => event.op.startsWith("coding-runtime.revert.")),
+      ).toMatchObject([
+        { op: "coding-runtime.revert.applied", correlationId: "corr-revert-0001" },
+        {
+          op: "coding-runtime.revert.refused",
+          level: "warn",
+          correlationId: FIXTURE_RUN_ID,
+          extra: { runId: FIXTURE_RUN_ID, operation: "submit", reason: "turn-blocked" },
+        },
+      ]);
+      expect(JSON.stringify(activityLog.events)).not.toContain("SECRET-NEXT-TASK");
+
+      revert.messages = [];
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+        fileCount: 1,
+      });
+      expect(revert.requests.at(-1)).toEqual({
+        method: "DELETE",
+        path: "/api/session/ses_tool/revert",
+      });
+      await expect(port.submitTask(FIXTURE_RUN_ID, "the next task")).resolves.toBe(true);
+      expect(promptBodies).toEqual([JSON.stringify({ text: "the next task" })]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses to undo a settled turn whose files changed after it settled", async () => {
+    const { control, revert } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      writeFileSync(join(workspaceRoot, "a.txt"), "as the turn left it\n");
+      revert.messages = TURN;
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      // Healthy control: while the file is as the turn left it, undo and restore both apply.
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      revert.messages = [];
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+      });
+      revert.messages = TURN;
+      revert.requests.length = 0;
+      writeFileSync(join(workspaceRoot, "a.txt"), "a human edit after the turn\n");
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(revert.requests.map(({ path }) => path)).not.toContain(
+        "/api/session/ses_tool/revert/stage",
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("stops a turn in flight through the run port's own abort before it stages", async () => {
+    const { control, revert } = revertControl();
+    const runControl = control.runControl;
+    if (runControl === undefined) throw new Error("expected run control");
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      // Busy when the undo asks, idle once the abort has settled the session.
+      runControl.statusResponses.splice(0, runControl.statusResponses.length, { ses_tool: {} }, {});
+      revert.messages = TURN;
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      expect(runControl.abortSessions).toEqual(["ses_tool"]);
+      expect(revert.requests.at(-1)?.path).toBe("/api/session/ses_tool/revert/stage");
+    } finally {
+      await fixture.stop();
+    }
+  });
+});
+
+// ADR-0137 D10: a message that joins the running turn and the workspace files a prompt references.
+describe("prompt inputs on the run port (ADR-0137 D10)", () => {
+  const facadeStub: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+
+  async function inputsFixture(profile: "native" | "direct" | "code-mode" = "native"): Promise<{
+    readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+    readonly port: OpenCodeRuntimeComposition["runPort"];
+    readonly workspace: string;
+    readonly promptBodies: string[];
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+    readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+  }> {
+    const workspace = realpathSync(tempDir("keiko-prompt-inputs-workspace-"));
+    writeFileSync(join(workspace, "notes.md"), "NOTES-CANARY\n");
+    writeFileSync(join(workspace, ".env"), "TOKEN=SENSITIVE-CANARY\n");
+    const promptBodies: string[] = [];
+    const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeStub, undefined, {
+      activityLog,
+      workspaceRoot: workspace,
+      readToolProfile: () => profile,
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      runControl: { promptBodies, abortSessions: [], statusResponses: [{}] },
+    });
+    return {
+      fixture,
+      port: fixture.runtime.runPort,
+      workspace,
+      promptBodies,
+      activityLog,
+      diagnostics,
+    };
+  }
+
+  const settle = (port: OpenCodeRuntimeComposition["runPort"]): Promise<boolean> =>
+    port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+
+  const inputLines = (log: ReturnType<typeof createBufferedServerLogSink>): unknown[] =>
+    log.events
+      .filter((event) => event.op === "coding-runtime.prompt-inputs.settled")
+      .map((event) => event.extra);
+
+  it("offers delivery and references on the native service only", async () => {
+    for (const [profile, expected] of [
+      ["native", { delivery: true, references: true }],
+      ["direct", { delivery: false, references: false }],
+      ["code-mode", { delivery: false, references: false }],
+    ] as const) {
+      const { fixture, port } = await inputsFixture(profile);
+      try {
+        expect(port.promptInputs).toEqual(expected);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  it("delivers a steering message to the session of the turn in flight without arming another", async () => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+        delivery: "steer",
+        references: [{ path: "notes.md" }],
+      });
+      if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+
+      await expect(
+        port.deliverPrompt?.(FIXTURE_RUN_ID, "also read @notes.md", admitted.inputs),
+      ).resolves.toBe(true);
+
+      expect(promptBodies).toEqual([
+        JSON.stringify({ text: "first task" }),
+        JSON.stringify({
+          text: "also read @notes.md",
+          files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+          delivery: "steer",
+        }),
+      ]);
+      expect(inputLines(activityLog)).toMatchObject([
+        {
+          runId: FIXTURE_RUN_ID,
+          outcome: "accepted",
+          delivery: "steer",
+          referenceCount: 1,
+          attachedBytes: "NOTES-CANARY\n".length,
+        },
+      ]);
+      // The turn the message joined is still the one in flight: a second turn cannot be armed,
+      // and settling it is the first turn's own settlement.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "second turn")).resolves.toBe(false);
+      await expect(settle(port)).resolves.toBe(false);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /NOTES-CANARY|notes\.md|also read/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("queues a message behind the turn in flight with the closed delivery and nothing else", async () => {
+    const { fixture, port, promptBodies } = await inputsFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "queue" });
+      if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+      await expect(
+        port.deliverPrompt?.(FIXTURE_RUN_ID, "after this turn", admitted.inputs),
+      ).resolves.toBe(true);
+      expect(promptBodies[1]).toBe(JSON.stringify({ text: "after this turn", delivery: "queue" }));
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a delivery when no turn is in flight, recording a closed reason and sending nothing", async () => {
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
+    try {
+      expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "steer" })).toEqual({
+        ok: false,
+        reason: "turn-not-running",
+      });
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      await settle(port);
+      expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "queue" })).toEqual({
+        ok: false,
+        reason: "turn-not-running",
+      });
+      expect(port.admitPromptInputs?.("unknown-run", { delivery: "queue" })).toEqual({
+        ok: false,
+        reason: "run-unavailable",
+      });
+      expect(promptBodies).toEqual([JSON.stringify({ text: "first task" })]);
+      expect(inputLines(activityLog)).toMatchObject([
+        { outcome: "refused", delivery: "steer", reason: "turn-not-running" },
+        { outcome: "refused", delivery: "queue", reason: "turn-not-running" },
+        { outcome: "refused", delivery: "queue", reason: "run-unavailable" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it.each(["direct", "code-mode"] as const)(
+    "refuses a delivery and references on the governed %s profile, like a plan request",
+    async (profile) => {
+      const { fixture, port, promptBodies, activityLog } = await inputsFixture(profile);
+      try {
+        await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+        expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "steer" })).toEqual({
+          ok: false,
+          reason: "delivery-unsupported",
+        });
+        expect(
+          port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path: "notes.md" }] }),
+        ).toEqual({ ok: false, reason: "references-unsupported" });
+        expect(promptBodies).toEqual([JSON.stringify({ text: "first task" })]);
+        expect(inputLines(activityLog)).toMatchObject([
+          { reason: "delivery-unsupported" },
+          { reason: "references-unsupported" },
+        ]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  it("attaches referenced files to the prompt of a new turn and counts them against the run", async () => {
+    const { fixture, port, promptBodies, workspace } = await inputsFixture();
+    try {
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+        references: [{ path: "notes.md" }],
+      });
+      if (admitted?.ok !== true) throw new Error("expected the references to be admitted");
+      await expect(
+        port.submitTask(
+          FIXTURE_RUN_ID,
+          "summarize @notes.md",
+          undefined,
+          undefined,
+          admitted.inputs,
+        ),
+      ).resolves.toBe(true);
+      expect(promptBodies).toEqual([
+        JSON.stringify({
+          text: "summarize @notes.md",
+          files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+        }),
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("never starts a turn for a delivery: submitTask refuses it and arms nothing", async () => {
+    const { fixture, port, promptBodies } = await inputsFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "steer" });
+      if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+      await settle(port);
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "as a turn", undefined, undefined, admitted.inputs),
+      ).resolves.toBe(false);
+      expect(promptBodies).toEqual([JSON.stringify({ text: "first task" })]);
+      // Nothing was armed by the refusal: an ordinary turn is still accepted.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "an ordinary turn")).resolves.toBe(true);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a hostile reference before anything is sent and logs the closed reason, not the path", async () => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      symlinkSync("/etc/hosts", join(workspace, "hosts-link"));
+      for (const [path, reason] of [
+        ["../outside.txt", "reference-invalid"],
+        ["/etc/hosts", "reference-invalid"],
+        [".env", "reference-sensitive"],
+        ["hosts-link", "reference-outside-workspace"],
+        ["missing.md", "reference-unreadable"],
+      ] as const) {
+        expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path }] })).toEqual({
+          ok: false,
+          reason,
+        });
+      }
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(5);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /\/etc\/hosts|hosts-link|\.env|outside\.txt|missing\.md|SENSITIVE/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
 });
 
 it.each(["direct", "code-mode"] as const)(

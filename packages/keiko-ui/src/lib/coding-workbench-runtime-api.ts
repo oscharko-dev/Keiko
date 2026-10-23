@@ -27,8 +27,11 @@ import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@osc
 import { validateCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
   validateCodingWorkbenchRuntimeReadiness,
+  validateCodingWorkbenchRuntimeRevertChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
+  type CodingWorkbenchRuntimeRevertChannelPayload,
+  type CodingWorkbenchRuntimeRevertRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
@@ -143,6 +146,13 @@ function approvalReviewChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeApprovalReviewChannelPayload);
+}
+
+function revertChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeRevertChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeRevertChannelPayload);
 }
 
 export interface CodingWorkbenchDescriptionDraftResult {
@@ -385,6 +395,33 @@ export function submitCodingWorkbenchRuntimeFollowUp(
   input: CodingWorkbenchRuntimeFollowUpBody,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/follow-up"), input);
+}
+
+/**
+ * Undo the run's newest turn or restore an undo (B3, S04). The server stops the turn in flight, if
+ * any, and restores the workspace files that turn changed; the run stays live until it is stopped.
+ */
+export function revertCodingWorkbenchRuntime(
+  runId: string,
+  input: CodingWorkbenchRuntimeRevertRequest,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/revert"), input);
+}
+
+/**
+ * Reads what an undo would do or has done over the authenticated app-session channel: counts only,
+ * never a path. Absent `revert` means the run offers no undo; an unpaired window receives the
+ * constant `{ session: "unpaired" }` projection instead of an error.
+ */
+export function getCodingWorkbenchRuntimeRevertState(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeRevertChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/revert"),
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: revertChannelValidator },
+  );
 }
 
 /**

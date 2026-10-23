@@ -73,6 +73,7 @@ function pluginConstantsSource(): readonly string[] {
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
     "const fullAccess = process.env.KEIKO_CODING_MODE === 'autonomous-delivery';",
+    ...patchBytesSource(),
     "function searchPath(event) {",
     '  const path = event.metadata && typeof event.metadata === "object" ? event.metadata.path : undefined;',
     '  return typeof path === "string" && path.length > 0 && path.length <= MAX_RESOURCE_CHARS ? path : undefined;',
@@ -105,6 +106,23 @@ function pluginConstantsSource(): readonly string[] {
   ];
 }
 
+function patchBytesSource(): readonly string[] {
+  return [
+    "const ENCODER = new TextEncoder();",
+    "// The size of the unified diff the producer computed for a proposed edit; only the size leaves.",
+    "// No diff means the edit cannot apply; one this plugin cannot measure is reported as -1, which",
+    "// the server refuses, so a changed producer is refused rather than left uncharged.",
+    "function patchBytes(event) {",
+    '  if (String(event.action) !== "edit") return null;',
+    '  const metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : undefined;',
+    "  if (!metadata) return null;",
+    '  const parts = Array.isArray(metadata.files) ? metadata.files.map((file) => (file && typeof file === "object" ? file.patch : undefined)) : [metadata.diff].flat();',
+    '  if (parts.length === 0 || parts.some((part) => typeof part !== "string")) return -1;',
+    "  return parts.reduce((total, part) => total + ENCODER.encode(part).length, 0);",
+    "}",
+  ];
+}
+
 function policyEvaluationSource(): readonly string[] {
   return [
     "async function evaluate(event) {",
@@ -113,7 +131,7 @@ function policyEvaluationSource(): readonly string[] {
     "  const resources = boundedResources(event.resources);",
     '  if (resources === null) return { effect: "deny", message: OVERSIZED_MESSAGE };',
     "  try {",
-    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), configured: event.effect });',
+    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), patchBytes: patchBytes(event), configured: event.effect });',
     '    const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(WAIT_MS), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
     '    if (!response.ok || response.type === "opaqueredirect") return refusal;',
     "    const text = await response.text();",

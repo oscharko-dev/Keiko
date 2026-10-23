@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -217,6 +218,44 @@ describe("long-lived gateway network confinement", () => {
           workspaceAccess: "read-only",
           protectedWriteRoots: protectedRoots,
         },
+      }),
+    ).toThrow("runtime-gateway-policy-invalid");
+  });
+
+  it("binds the link-free plan roots into the policy digest and admits them in the private state only", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    const native = { ...input, profile: "keiko-native" as const };
+    const plain = createRuntimeGatewayConfinement({ ...native, filesystem });
+    const roots = ["/private/state/home/.opencode/plan"];
+    const guarded = createRuntimeGatewayConfinement({
+      ...native,
+      filesystem: { ...filesystem, linkFreeWriteRoots: roots },
+    });
+    expect(guarded.policyDigest).not.toBe(plain.policyDigest);
+    expect(guarded.filesystem?.linkFreeWriteRoots).toEqual(roots);
+    // A link-free root holds private notes: never the workspace, never the whole private state.
+    for (const invalid of [
+      ["/accepted/workspace/notes"],
+      ["/private/state"],
+      ["/elsewhere/plan"],
+      ["relative/plan"],
+      Array.from({ length: 9 }, (_, index) => `/private/state/plan-${String(index)}`),
+    ])
+      expect(() =>
+        createRuntimeGatewayConfinement({
+          ...native,
+          filesystem: { ...filesystem, linkFreeWriteRoots: invalid },
+        }),
+      ).toThrow("runtime-gateway-policy-invalid");
+    expect(() =>
+      createRuntimeGatewayConfinement({
+        ...input,
+        filesystem: { ...filesystem, workspaceAccess: "read-only", linkFreeWriteRoots: roots },
       }),
     ).toThrow("runtime-gateway-policy-invalid");
   });
@@ -609,6 +648,50 @@ function protectedConfigRun(guard: "protected" | undefined): unknown {
     );
     const result = runNative(tree, policy, factScript(protectedConfigProbes(tree)));
     expect(result.status).toBe(0);
+    return JSON.parse(result.stdout);
+  } finally {
+    tree.cleanup();
+  }
+}
+
+/** The plan agent's private notes directory, laid out the way the composition materializes it. */
+function linkFreePlanProbes(tree: NativeProofTree): Readonly<Record<string, string>> {
+  const home = join(tree.privateStateRoot, "home");
+  const dotOpencode = join(home, ".opencode");
+  const plan = join(dotOpencode, "plan");
+  const readme = join(tree.workspaceRoot, "README.md");
+  return {
+    noteWrite: `fs.writeFileSync(${JSON.stringify(join(plan, "plan.md"))}, 'note')`,
+    noteRewrite: `fs.writeFileSync(${JSON.stringify(join(plan, "plan.md"))}, 'note 2')`,
+    noteDirectory: `fs.mkdirSync(${JSON.stringify(join(plan, "drafts"))})`,
+    symlinkToWorkspace: `fs.symlinkSync(${JSON.stringify(readme)}, ${JSON.stringify(join(plan, "link.md"))})`,
+    shellSymlink: shellFact(
+      `ln -s ${JSON.stringify(readme)} ${JSON.stringify(join(plan, "sh-link.md"))}`,
+      tree.workspaceRoot,
+    ),
+    hardLinkToWorkspace: `fs.linkSync(${JSON.stringify(readme)}, ${JSON.stringify(join(plan, "hard.md"))})`,
+    planRename: `fs.renameSync(${JSON.stringify(plan)}, ${JSON.stringify(join(dotOpencode, "plan-moved"))})`,
+    ancestorRename: `fs.renameSync(${JSON.stringify(dotOpencode)}, ${JSON.stringify(join(home, "moved"))})`,
+    ancestorSymlinkSwap: `fs.rmSync(${JSON.stringify(dotOpencode)}, { recursive: true, force: true }); fs.symlinkSync(${JSON.stringify(tree.workspaceRoot)}, ${JSON.stringify(dotOpencode)})`,
+    homeEntryWrite: `fs.writeFileSync(${JSON.stringify(join(home, "other.txt"))}, 'x')`,
+  };
+}
+
+function linkFreePlanRun(guard: "link-free" | undefined): unknown {
+  const tree = createNativeProofTree();
+  try {
+    const plan = join(tree.privateStateRoot, "home", ".opencode", "plan");
+    mkdirSync(plan, { recursive: true });
+    writeFileSync(join(tree.workspaceRoot, "README.md"), "workspace readme\n");
+    const policy = nativeConfinement(
+      tree,
+      "loopback-only",
+      1983,
+      guard === undefined ? {} : { linkFreeWriteRoots: [plan] },
+    );
+    const result = runNative(tree, policy, factScript(linkFreePlanProbes(tree)));
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(tree.workspaceRoot, "README.md"), "utf8")).toBe("workspace readme\n");
     return JSON.parse(result.stdout);
   } finally {
     tree.cleanup();
@@ -1108,6 +1191,41 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         siblingConfigWrite: true,
         privateStateWrite: true,
         workspaceWrite: true,
+      });
+    },
+    30_000,
+  );
+
+  // #3897 review: the plan agent's notes are exempt from workspace-edit approval because they stay
+  // private. A link inside the plan directory (or a swapped ancestor) would make a note path name a
+  // workspace file, so the kernel refuses every link there while ordinary notes stay writable.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: the plan directory takes notes but no link that could reach the workspace",
+    () => {
+      const notes = {
+        noteWrite: true,
+        noteRewrite: true,
+        noteDirectory: true,
+        homeEntryWrite: true,
+      };
+      // Failing-before control: without the rule every link and swap below succeeds.
+      expect(linkFreePlanRun(undefined)).toEqual({
+        ...notes,
+        symlinkToWorkspace: true,
+        shellSymlink: true,
+        hardLinkToWorkspace: true,
+        planRename: true,
+        ancestorRename: true,
+        ancestorSymlinkSwap: true,
+      });
+      expect(linkFreePlanRun("link-free")).toEqual({
+        ...notes,
+        symlinkToWorkspace: false,
+        shellSymlink: false,
+        hardLinkToWorkspace: false,
+        planRename: false,
+        ancestorRename: false,
+        ancestorSymlinkSwap: false,
       });
     },
     30_000,

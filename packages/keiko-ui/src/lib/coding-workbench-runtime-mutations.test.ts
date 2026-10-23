@@ -484,3 +484,83 @@ describe("createRecoveryAcknowledgementMutation", () => {
     });
   });
 });
+
+// ADR-0137 D10: a message sent while a turn runs and the workspace files a prompt references ride on
+// the follow-up request; the browser authors the intent and the server decides.
+describe("prompt inputs on the follow-up mutation", () => {
+  const offered = { selectableAgents: ["build", "plan"], agent: "plan" } as const;
+
+  it.each(["steer", "queue"] as const)(
+    "sends a %s message to a running turn bound to the current revision, without an agent",
+    async (delivery) => {
+      const mutation = createFollowUpMutation(
+        "also cover the empty case",
+        stateWithRun(snapshot({ state: "running" }), offered),
+        { delivery },
+      );
+      expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+      expect(mutation.mayInstallNewRun).toBe(false);
+      await mutation.run();
+      // The turn in flight keeps its agent: a delivery never names one, even where a choice exists.
+      expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "also cover the empty case",
+        delivery,
+      });
+    },
+  );
+
+  it("admits a delivery only against a running run with a non-empty message", () => {
+    for (const state of ["paused", "idle", "awaiting-approval", "succeeded", "stopping"] as const) {
+      expect(() =>
+        createFollowUpMutation("ping", stateWithRun(snapshot({ state })), { delivery: "steer" }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(snapshot({ state: "running" })), {
+        delivery: "queue",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(null), { delivery: "steer" }),
+    ).toThrow();
+  });
+
+  it("keeps an ordinary follow-up to a paused run, whatever references it carries", async () => {
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(snapshot({ state: "running" })), {
+        references: [{ path: "src/app.ts" }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    const mutation = createFollowUpMutation(
+      "look at the file",
+      stateWithRun(snapshot({ state: "paused" }), offered),
+      { references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }] },
+    );
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "look at the file",
+      agent: "plan",
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+    });
+  });
+
+  it("sends the references of a delivery beside it, and omits an empty list", async () => {
+    const running = stateWithRun(snapshot({ state: "running" }));
+    await createFollowUpMutation("see @a.ts", running, {
+      delivery: "steer",
+      references: [{ path: "a.ts" }],
+    }).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).toMatchObject({
+      delivery: "steer",
+      references: [{ path: "a.ts" }],
+    });
+    await createFollowUpMutation("plain", running, { delivery: "queue", references: [] }).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).not.toHaveProperty(
+      "references",
+    );
+  });
+});

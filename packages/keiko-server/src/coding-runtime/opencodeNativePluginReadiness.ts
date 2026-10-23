@@ -2,15 +2,27 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
+import {
+  OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
+  OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
+} from "./opencodeNativeDeliveryTools.js";
+
 /**
  * The generated plugins a native run cannot do without (#3897): the policy hook that decides every
- * permission the producer evaluates, and the context hook that hands the model Keiko's guidance.
- * The producer keeps each built-in agent's own rules, so no configured rule stands in for the policy
- * hook; a native run becomes ready only once the producer reports both plugins active.
+ * permission the producer evaluates, the context hook that hands the model Keiko's guidance, and
+ * the delivery plugin that registers Keiko's Git delivery tools. The producer keeps each built-in
+ * agent's own rules, so no configured rule stands in for the policy hook; a native run becomes
+ * ready only once the producer reports every plugin active. The delivery plugin is required
+ * because the shell's refusal of Git writes names its tools as the way to deliver: a run without
+ * them would be told to use tools it does not have.
  */
 export const OPENCODE_NATIVE_REQUIRED_PLUGINS = Object.freeze([
   Object.freeze({ id: "keiko.native-policy", file: "keiko_native_policy.ts" }),
   Object.freeze({ id: "keiko.native-context", file: "keiko_native_context.ts" }),
+  Object.freeze({
+    id: OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
+    file: `${OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE}.ts`,
+  }),
 ]);
 
 /** `pending` while the producer is still loading plugins; `failed` is final. */

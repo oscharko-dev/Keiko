@@ -48,6 +48,7 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_CONTEXT_ADDENDUM } from "./opencodeNativeContext.js";
+import type { OpenCodeTurnOutcome } from "./opencodeRuntimeAdapter.js";
 import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeV2HttpClient,
@@ -85,7 +86,7 @@ const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
 const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const PROTOCOL_HANDSHAKE_DIGEST =
-  "1f39590ce043bf75d75a0e27849e3ba5d330418088bbe1965b12495d211401e2";
+  "96af8188171147a1ad06d8cdbb3b884e55fb953698d898307020e3f0a85fcf45";
 const PROTOCOL_HANDSHAKE_ALGORITHM = "keiko-opencode-protocol-surface-v2" as const;
 // Structural sentinel required only by the manager's test seam; it is not a native release receipt.
 const FUNCTIONAL_TEST_QUALIFICATION_RECEIPT = `sha256:${"0".repeat(64)}`;
@@ -1391,7 +1392,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
       try {
         await startNativeCompactionHarness(harness);
-        const terminals: boolean[] = [];
+        const terminals: OpenCodeTurnOutcome[] = [];
         for (let turn = 1; turn <= 3; turn += 1) {
           await expect(
             harness.runtime.runPort.submitTask(

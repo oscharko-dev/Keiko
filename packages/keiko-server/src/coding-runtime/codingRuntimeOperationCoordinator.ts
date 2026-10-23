@@ -3,7 +3,13 @@ import type {
   CodingWorkbenchRuntimeQuestionsResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import { isCodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  isCodingWorkbenchAgent,
+  isCodingWorkbenchRuntimeRevertAction,
+  parseCodingWorkbenchRuntimeFollowUpRequest,
+  type CodingWorkbenchRuntimeFollowUpRequest,
+  type CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
@@ -13,11 +19,17 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  revertRefusalFailureCode,
+  type CodingRuntimeRevertResult,
+  type CodingRuntimeRevertState,
+} from "./codingRuntimeRevert.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type {
+  CodingRuntimeTaskDeliveryResult,
   CodingRuntimeTaskDispatcher,
   CodingRuntimeTaskDispatchRequest,
   CodingRuntimeTaskDispatchResult,
@@ -110,6 +122,17 @@ const CODING_RUNTIME_FOLLOW_UP_DISPATCH_FAILED_OPERATION = defineActivityLogOper
   },
   failureClasses: ["coding-runtime-follow-up-dispatch"],
   proofIds: ["coding-runtime.follow-up.dispatch-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_REVERT_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.revert.dispatch-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: { type: "string", dataClass: "closed-enum", required: true, values: ["revert"] },
+  },
+  failureClasses: ["coding-runtime-revert-dispatch"],
+  proofIds: ["coding-runtime.revert.dispatch-failed.emitted-line"],
 });
 
 const CODING_RUNTIME_QUESTION_LIST_FAILED_OPERATION = defineActivityLogOperation({
@@ -274,6 +297,8 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "paused",
 ]);
 
+const REVERT_KEYS = ["requestId", "expectedRevision", "action"] as const;
+
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();
   private readonly taskGenerations = new Map<string, number>();
@@ -287,16 +312,13 @@ export class CodingRuntimeOperationCoordinator {
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
-      const operation = this.prepare(runId, input, followUpKeys(input));
-      const taskIntent = admittedFollowUpIntent(operation);
-      if (!operation.ok || taskIntent === undefined) {
-        if (operation.ok) operation.reservation.release();
-        // KEIKO-0722: distinguish the cap-exhausted case from an ordinary invalid-intent.
-        return failure(
-          !operation.ok && operation.reason === "replay-cap-exhausted"
-            ? "replay-cap-exhausted"
-            : "invalid-intent",
-        );
+      const admission = this.admitFollowUp(runId, input);
+      if ("refused" in admission) return admission.refused;
+      const { operation, admitted } = admission;
+      // A steering or queued message joins the turn that is running; it starts, replaces and
+      // settles nothing, so it takes none of the turn bookkeeping below.
+      if (admitted.delivery !== undefined) {
+        return this.deliverFollowUp(runId, operation, admitted, correlationId);
       }
       const refusedResume = await this.resumeForFollowUp(operation);
       if (refusedResume !== undefined) return refusedResume;
@@ -305,7 +327,7 @@ export class CodingRuntimeOperationCoordinator {
         runId,
         operation,
         live,
-        taskIntent,
+        admitted,
         correlationId,
       );
       if (!dispatched.result.ok) {
@@ -341,11 +363,89 @@ export class CodingRuntimeOperationCoordinator {
     return resumed;
   }
 
+  // The contract owns the body (its exact keys, bounds, delivery and references); the run state and
+  // the replay reservation are this coordinator's. A refusal releases whatever was reserved.
+  private admitFollowUp(
+    runId: string,
+    input: unknown,
+  ):
+    | { readonly refused: CodingRuntimeOrchestratorResult }
+    | {
+        readonly operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>;
+        readonly admitted: AdmittedFollowUp;
+      } {
+    const parsed = parseCodingWorkbenchRuntimeFollowUpRequest(input);
+    const operation = parsed.ok
+      ? this.prepare(runId, input, Object.keys(parsed.value))
+      : ({ ok: false } as const);
+    const admitted = parsed.ok ? admittedFollowUp(operation, parsed.value) : undefined;
+    if (operation.ok && admitted !== undefined) return { operation, admitted };
+    if (operation.ok) operation.reservation.release();
+    // KEIKO-0722: distinguish the cap-exhausted case from an ordinary invalid-intent.
+    return {
+      refused: failure(
+        !operation.ok && operation.reason === "replay-cap-exhausted"
+          ? "replay-cap-exhausted"
+          : "invalid-intent",
+      ),
+    };
+  }
+
+  // Delivery has no replacement and no resume: a paused run has no turn to join, and a dispatcher
+  // that cannot take a delivery refuses it as the request's own fault, like an unsupported agent.
+  private async deliverFollowUp(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    admitted: AdmittedFollowUp,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const live = this.deps.current() ?? operation.current;
+    const delivered = await this.dispatchDelivery(runId, operation, live, admitted, correlationId);
+    if (!delivered.ok) {
+      operation.reservation.release();
+      return failure(followUpDispatchRefusal(delivered));
+    }
+    // Committed at the revision the message was delivered against; advancing the revision below is
+    // what lets the next message be admitted (one admitted dispatch per revision).
+    operation.reservation.commit(live.revision);
+    return this.deps.advanceRevision(live, "task-submitted");
+  }
+
+  private async dispatchDelivery(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    live: CodingRuntimeSnapshot,
+    admitted: AdmittedFollowUp,
+    correlationId?: string,
+  ): Promise<CodingRuntimeTaskDeliveryResult> {
+    const deliver = this.deps.taskDispatcher.deliver;
+    if (deliver === undefined) return { ok: false, reason: "inputs-refused" };
+    try {
+      return await deliver({
+        runId,
+        requestId: operation.value.requestId,
+        expectedRevision: live.revision,
+        taskIntent: admitted.taskIntent,
+        ...(correlationId === undefined ? {} : { correlationId }),
+        ...(admitted.delivery === undefined ? {} : { delivery: admitted.delivery }),
+        ...(admitted.references === undefined ? {} : { references: admitted.references }),
+      });
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        runId,
+        correlationId,
+        operation: "follow-up",
+        error,
+      });
+      return { ok: false };
+    }
+  }
+
   private async dispatchFollowUp(
     runId: string,
     operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
     live: CodingRuntimeSnapshot,
-    taskIntent: string,
+    admitted: AdmittedFollowUp,
     correlationId?: string,
   ): Promise<FollowUpDispatchOutcome> {
     const replacing = operation.current.state === "paused";
@@ -360,9 +460,10 @@ export class CodingRuntimeOperationCoordinator {
         runId,
         requestId: operation.value.requestId,
         expectedRevision: live.revision,
-        taskIntent,
+        taskIntent: admitted.taskIntent,
         ...(correlationId === undefined ? {} : { correlationId }),
         ...(isCodingWorkbenchAgent(agent) ? { agent } : {}),
+        ...(admitted.references === undefined ? {} : { references: admitted.references }),
       });
       return { result, generation };
     } catch (error) {
@@ -374,6 +475,83 @@ export class CodingRuntimeOperationCoordinator {
       });
       return { result: { ok: false }, generation };
     }
+  }
+
+  /**
+   * Undo or restore of the run's newest turn (B3, S04), admitted while the run is running or paused
+   * like a follow-up. An undo stops the turn in flight, so it reserves the next task generation
+   * first: the cancelled outcome of the interrupted turn is then dropped instead of settling the
+   * run the human keeps. The run stays live and idle; the human restores the undo, or stops it.
+   */
+  public submitRevert(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.deps.serial(async () => {
+      const operation = this.prepare(runId, input, REVERT_KEYS);
+      const action = admittedRevertAction(operation);
+      if (!operation.ok || action === undefined || this.deps.taskDispatcher.revert === undefined) {
+        if (operation.ok) operation.reservation.release();
+        return failure(
+          !operation.ok && operation.reason === "replay-cap-exhausted"
+            ? "replay-cap-exhausted"
+            : "invalid-intent",
+        );
+      }
+      return this.applyRevert(runId, operation, action, correlationId);
+    });
+  }
+
+  private async applyRevert(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    action: CodingWorkbenchRuntimeRevertAction,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const generation = action === "undo" ? this.reserveTaskGeneration(runId) : undefined;
+    const result = await this.dispatchRevert(runId, operation, action, correlationId);
+    settleGenerationReservation(generation, result.ok);
+    if (!result.ok) {
+      operation.reservation.release();
+      return failure(revertRefusalFailureCode(result.reason));
+    }
+    operation.reservation.commit();
+    return this.deps.advanceRevision(operation.current);
+  }
+
+  private async dispatchRevert(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    action: CodingWorkbenchRuntimeRevertAction,
+    correlationId?: string,
+  ): Promise<CodingRuntimeRevertResult> {
+    try {
+      return (
+        (await this.deps.taskDispatcher.revert?.({
+          ...operationRequest(runId, operation),
+          action,
+          ...(correlationId === undefined ? {} : { correlationId }),
+        })) ?? { ok: false, reason: "unsupported" }
+      );
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        runId,
+        correlationId,
+        operation: "revert",
+        error,
+      });
+      return { ok: false, reason: "revert-failed" };
+    }
+  }
+
+  /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
+  public revertState(runId: string): Promise<CodingRuntimeRevertState | undefined> {
+    const current = this.deps.current();
+    if (current?.runId !== runId || !FOLLOW_UP_STATES.has(current.state)) {
+      return Promise.resolve(undefined);
+    }
+    return this.deps.taskDispatcher.revertState?.(runId) ?? Promise.resolve(undefined);
   }
 
   public listQuestions(
@@ -872,7 +1050,13 @@ interface RuntimeOperationTransportFailure {
   readonly runId: string;
   readonly correlationId?: string | undefined;
   readonly operation:
-    "follow-up" | "list" | "answer" | "reject" | "initial-turn-dispatch" | "initial-turn-stop";
+    | "follow-up"
+    | "list"
+    | "answer"
+    | "reject"
+    | "revert"
+    | "initial-turn-dispatch"
+    | "initial-turn-stop";
   readonly error: unknown;
 }
 
@@ -902,6 +1086,11 @@ function runtimeOperationTransportEvent(input: RuntimeOperationTransportFailure)
   switch (input.operation) {
     case "follow-up":
       return activityLogEvent(CODING_RUNTIME_FOLLOW_UP_DISPATCH_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+    case "revert":
+      return activityLogEvent(CODING_RUNTIME_REVERT_DISPATCH_FAILED_OPERATION, envelope, {
         ...details,
         operation: input.operation,
       });
@@ -981,33 +1170,50 @@ function validRequestId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
 }
 
-/** The follow-up's task intent when the whole operation is admissible, otherwise `undefined`. */
-function admittedFollowUpIntent(operation: PreparedRuntimeOperation): string | undefined {
+/** The revert action when the whole operation is admissible, otherwise `undefined`. */
+function admittedRevertAction(
+  operation: PreparedRuntimeOperation,
+): CodingWorkbenchRuntimeRevertAction | undefined {
   if (!operation.ok || !FOLLOW_UP_STATES.has(operation.current.state)) return undefined;
-  const intent = operation.value.taskIntent;
-  return validTaskIntent(intent) && validFollowUpAgent(operation.value.agent) ? intent : undefined;
+  const action = operation.value.action;
+  return isCodingWorkbenchRuntimeRevertAction(action) ? action : undefined;
+}
+
+/** The admissible part of a follow-up that the dispatchers read; the contract validated its shape. */
+type AdmittedFollowUp = Pick<
+  CodingWorkbenchRuntimeFollowUpRequest,
+  "taskIntent" | "delivery" | "references"
+>;
+
+/**
+ * The follow-up when the whole operation is admissible, otherwise `undefined`: the run is running
+ * or paused, the intent is not blank, and a delivery has a running turn to join (a paused run has
+ * none; its follow-up replaces the turn instead).
+ */
+function admittedFollowUp(
+  operation: PreparedRuntimeOperation,
+  body: CodingWorkbenchRuntimeFollowUpRequest,
+): AdmittedFollowUp | undefined {
+  if (!operation.ok || !FOLLOW_UP_STATES.has(operation.current.state)) return undefined;
+  if (!validTaskIntent(body.taskIntent)) return undefined;
+  if (body.delivery !== undefined && operation.current.state !== "running") return undefined;
+  return {
+    taskIntent: body.taskIntent,
+    ...(body.delivery === undefined ? {} : { delivery: body.delivery }),
+    ...(body.references === undefined ? {} : { references: body.references }),
+  };
 }
 
 // A request the run's runtime cannot honour is the request's fault (invalid-intent), not a missing
 // authority; every other refusal keeps its existing answer.
 function followUpDispatchRefusal(
-  result: Extract<CodingRuntimeTaskDispatchResult, { readonly ok: false }>,
+  result:
+    | Extract<CodingRuntimeTaskDispatchResult, { readonly ok: false }>
+    | Extract<CodingRuntimeTaskDeliveryResult, { readonly ok: false }>,
 ): "invalid-intent" | "authority-resolution-failed" {
-  return result.reason === "agent-unsupported" ? "invalid-intent" : "authority-resolution-failed";
-}
-
-// The optional `agent` key makes the exact-key set depend on the body: an absent key keeps the
-// historical three-key shape, a present one is admitted only with its closed value (checked by
-// `validFollowUpAgent`), so no other key is ever tolerated.
-function followUpKeys(input: unknown): readonly string[] {
-  const keys = ["requestId", "expectedRevision", "taskIntent"];
-  return typeof input === "object" && input !== null && "agent" in input
-    ? [...keys, "agent"]
-    : keys;
-}
-
-function validFollowUpAgent(value: unknown): boolean {
-  return value === undefined || isCodingWorkbenchAgent(value);
+  return result.reason === "agent-unsupported" || result.reason === "inputs-refused"
+    ? "invalid-intent"
+    : "authority-resolution-failed";
 }
 
 function validTaskIntent(value: unknown): value is string {

@@ -305,6 +305,81 @@ describe("OpenCode launch profile", () => {
     });
   });
 
+  // #3897 S14 (review P2): the native `read` of an image reaches the model only when the provider
+  // model declares image input, exactly as in standalone OpenCode. The declaration follows the
+  // admitted model's own capability; the mapped profiles never declare it.
+  describe("image input declaration", () => {
+    const TEXT_ONLY = { tools: true, input: ["text"], output: ["text"] };
+    const WITH_IMAGE = { tools: true, input: ["text", "image"], output: ["text"] };
+
+    function capabilitiesFor(
+      toolProfile: "direct" | "code-mode" | "native",
+      imageInput: boolean | undefined,
+    ): unknown {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile,
+        contextGeometry: {
+          ...CONTEXT_GEOMETRY,
+          ...(imageInput === undefined ? {} : { imageInput }),
+        },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected launch profile");
+      const config = JSON.parse(profile.config) as { providers: Record<string, unknown> };
+      const provider = record(config.providers["keiko-runtime"]);
+      return record(record(provider.models).coding).capabilities;
+    }
+
+    it("declares image input on the native model only when the admitted model declares it", () => {
+      expect(capabilitiesFor("native", true)).toEqual(WITH_IMAGE);
+      expect(capabilitiesFor("native", false)).toEqual(TEXT_ONLY);
+      expect(capabilitiesFor("native", undefined)).toEqual(TEXT_ONLY);
+    });
+
+    it("never declares image input on the mapped profiles", () => {
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        expect(capabilitiesFor(toolProfile, true)).toEqual(TEXT_ONLY);
+      }
+    });
+
+    it("re-asserts the declaration on the highest configuration layer", () => {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        contextGeometry: { ...CONTEXT_GEOMETRY, imageInput: true },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly providers: Record<string, unknown>;
+      };
+      const provider = record(content.providers["keiko-runtime"]);
+      expect(record(record(provider.models).coding).capabilities).toEqual(WITH_IMAGE);
+    });
+
+    it("keeps the text-only configuration byte-identical when no image input is declared", () => {
+      const declared = (imageInput: boolean | undefined): string => {
+        const profile = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile: "native",
+          contextGeometry: {
+            ...CONTEXT_GEOMETRY,
+            ...(imageInput === undefined ? {} : { imageInput }),
+          },
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!profile.ok) throw new Error("expected native launch profile");
+        return profile.config;
+      };
+      expect(declared(false)).toBe(declared(undefined));
+      expect(declared(true)).not.toBe(declared(undefined));
+    });
+  });
+
   it("preserves the V1 compatibility prompt's digest-bound edit and instruction guidance", () => {
     const config = createFixedOpenCodeConfig(CONTEXT_GEOMETRY);
     const prompt = record(record(config.agent).build).prompt;
@@ -533,6 +608,23 @@ describe("OpenCode launch profile", () => {
       maxInputTokens: 16_000,
       maxOutputTokens: 8_000,
     });
+  });
+
+  it("carries the admitted model's declared image input into the context geometry", () => {
+    const metadata = {
+      maxPromptTokens: 128_000,
+      maxOutputTokens: 8_000,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
+    };
+    expect(resolveOpenCodeContextGeometry({ ...metadata, supportsImageInput: true })).toMatchObject(
+      { imageInput: true },
+    );
+    for (const declared of [{}, { supportsImageInput: false }]) {
+      const geometry = resolveOpenCodeContextGeometry({ ...metadata, ...declared });
+      expect(geometry).toBeDefined();
+      expect(geometry).not.toHaveProperty("imageInput");
+    }
   });
 
   it("derives model-specific limits below the raw JSON transport ceiling", () => {

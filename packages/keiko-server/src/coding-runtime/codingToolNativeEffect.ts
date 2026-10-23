@@ -18,6 +18,7 @@ import type {
   CodingToolNativeSettlementInput,
 } from "./codingToolFacadePorts.js";
 import type { CodingToolAction, CodingToolResult } from "./codingToolIpc.js";
+import { isOpenCodeNativeDeliveryToolName } from "./opencodeNativeDeliveryTools.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 
 /**
@@ -50,6 +51,18 @@ const NATIVE_CALL_USAGE: CodingWorkbenchRuntimeDelegationUsage = Object.freeze({
   patchBytes: 0,
   promptTokens: 0,
 });
+
+/**
+ * A proposed edit also spends the run's patch budget: the size of the diff the producer computed for
+ * it, the measure the mapped path charges for a materialized patch (#3897 review). It rides the same
+ * invocation-bound reservation as the tool call, so a repeated check charges neither twice, and a
+ * budget it would exceed refuses the edit before the runtime writes anything.
+ */
+function nativeCallUsage(patchBytes: number | undefined): CodingWorkbenchRuntimeDelegationUsage {
+  return patchBytes === undefined || patchBytes === 0
+    ? NATIVE_CALL_USAGE
+    : { ...NATIVE_CALL_USAGE, patchBytes };
+}
 
 /**
  * The reservation identity of one native invocation: the run and the runtime's own session,
@@ -117,7 +130,7 @@ function admitNativeEffect(
     ...live,
     delegationId,
     idempotencyKey: delegationId,
-    usage: NATIVE_CALL_USAGE,
+    usage: nativeCallUsage(input.patchBytes),
   });
   if (reserved.ok) return { ok: true, charge: identity === undefined ? "per-check" : "charged" };
   // The identity is this module's own: a replay of it is the invocation's earlier check, which
@@ -182,7 +195,9 @@ function boundedKeys(capacity: number): {
  * call identity. A call the policy refused ends as `denied` (a refusal, no effect); a failure of the
  * tool itself ends as `failed`; only a completed call counts as a read or an edit. Approval is
  * never a settlement. Verification evidence is deliberately not fed: the governed verification
- * requirement belongs to Keiko's own verifier, which a native run does not call.
+ * requirement belongs to Keiko's own verifier, which a native run calls only to record the commit
+ * proof of a delivery. A Keiko delivery tool is served and settled by the facade itself, so it is
+ * not settled again here.
  */
 export function createCodingToolNativeSettlementFacet(
   onToolSettled:
@@ -196,6 +211,9 @@ export function createCodingToolNativeSettlementFacet(
       refused.add(nativeCallKey(call));
     },
     settled: (input): CodingToolNativeSettlement => {
+      // A Keiko delivery tool is served by this facade, which settles its every request itself;
+      // counting the runtime's report of the same call would count it twice (#3897).
+      if (isOpenCodeNativeDeliveryToolName(input.tool)) return "duplicate";
       const key = nativeCallKey(input);
       if (settled.has(key)) return "duplicate";
       settled.add(key);

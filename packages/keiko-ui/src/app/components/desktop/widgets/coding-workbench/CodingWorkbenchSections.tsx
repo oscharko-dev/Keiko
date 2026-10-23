@@ -4,13 +4,17 @@ import {
   useId,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactNode,
   type RefObject,
 } from "react";
 import type {
   CodingWorkbenchAgent,
   CodingWorkbenchMode,
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
   ModelReasoningEffort,
@@ -19,6 +23,13 @@ import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/cod
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
 import { CodingWorkbenchAgentToggle } from "./CodingWorkbenchAgentToggle";
+import { FileReferenceChips, FileReferencePopover } from "./CodingWorkbenchFileReferences";
+import promptStyles from "./CodingWorkbenchPromptInputs.module.css";
+import type { PromptDeliveryNotice } from "./usePromptDeliveryNotice";
+import {
+  useFileReferencePicker,
+  type FileReferencePicker,
+} from "./useCodingWorkbenchFileReferences";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -49,6 +60,7 @@ const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
 const CubeIcon = Icons.cube;
 const BrainIcon = Icons.brain;
+const LayersIcon = Icons.layers;
 
 // Only the workbench uses this glyph; retain it behind the workbench's lazy boundary.
 function StopIcon({ size }: { readonly size: number }): ReactNode {
@@ -75,7 +87,19 @@ export interface TaskComposerActions {
   readonly onStart: (draft: string) => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
-  readonly onSend: (draft: string) => void;
+  /** A follow-up to a paused run; `references` only when the draft carries `@` files. */
+  readonly onSend: (draft: string, references?: readonly CodingWorkbenchPromptReference[]) => void;
+  /**
+   * A message for the turn that is running: sent into it (`steer`) or behind it (`queue`)
+   * (ADR-0137 D10). Absent where the window offers no delivery.
+   */
+  readonly onDeliver?:
+    | ((
+        draft: string,
+        delivery: CodingWorkbenchPromptDelivery,
+        references: readonly CodingWorkbenchPromptReference[],
+      ) => void)
+    | undefined;
   readonly onStop: () => void;
 }
 
@@ -146,6 +170,15 @@ interface TaskStartSectionProps {
   /** True while a turn runs: the agent is fixed for the turn and changes only between turns. */
   readonly agentLocked: boolean;
   readonly onAgentChange: (agent: CodingWorkbenchAgent) => void;
+  /**
+   * What the server says the run's runtime can do with a prompt's inputs (ADR-0137 D10). Absent
+   * offers neither Send now / Queue while a turn runs nor the `@` file picker.
+   */
+  readonly promptInputs?: CodingWorkbenchRuntimePromptInputs | undefined;
+  /** The run's workspace root the `@` picker searches; no root, no picker. */
+  readonly referenceRoot?: string | null | undefined;
+  /** What the last message sent to the running turn came to; announced beside the composer. */
+  readonly deliveryNotice?: PromptDeliveryNotice | undefined;
 }
 
 interface TaskComposerController {
@@ -156,15 +189,30 @@ interface TaskComposerController {
   readonly submitBlocked: boolean;
   readonly submitFeedback: string | null;
   readonly submitFeedbackId: string;
-  readonly submit: () => void;
+  /** `mode` is set by Send now and Queue; a plain submit lets the run state decide. */
+  readonly submit: (mode?: CodingWorkbenchPromptDelivery) => void;
+  /** The `@` file picker; inert unless the run offers references and has a workspace root. */
+  readonly picker: FileReferencePicker;
+  /** Whether Send now and Queue are offered: a turn is running and the runtime takes messages. */
+  readonly deliveryEnabled: boolean;
+  /** True while a message cannot be sent now: an action is pending or the draft is empty. */
+  readonly deliveryBlocked: boolean;
+  readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  readonly onTextChange: (value: string, cursor: number | null) => void;
 }
 
 function submitBlockedReason(
   input: TaskStartSectionProps,
   t: CodingWorkbenchTranslate,
+  mode?: CodingWorkbenchPromptDelivery,
 ): string | null {
   if (input.mutationPending) return t("codingWorkbench.composer.blocked.busy");
-  if (input.runState === "running") return null;
+  if (input.runState === "running") {
+    // Send now and Queue need a message; a plain submit while running still means "pause".
+    return mode !== undefined && input.taskIntent.trim().length === 0
+      ? t("codingWorkbench.composer.blocked.emptyMessage")
+      : null;
+  }
   return emptySubmitReason(input, t) ?? unavailableSubmitReason(input, t);
 }
 
@@ -189,15 +237,137 @@ function unavailableSubmitReason(
   return input.startBlockedReason ?? t("codingWorkbench.composer.blocked.notReady");
 }
 
-function submitTask(input: TaskStartSectionProps, displayedDraft: string): void {
-  if (input.runState === "running") {
+function canDeliver(input: TaskStartSectionProps): boolean {
+  return (
+    input.runState === "running" &&
+    input.promptInputs?.delivery === true &&
+    input.actions.onDeliver !== undefined
+  );
+}
+
+function sendFollowUp(
+  input: TaskStartSectionProps,
+  draft: string,
+  references: readonly CodingWorkbenchPromptReference[],
+): void {
+  // The historical call stays exactly as it was when the draft references no file.
+  if (references.length === 0) input.actions.onSend(draft);
+  else input.actions.onSend(draft, references);
+}
+
+// A running turn takes a message when the runtime offers it and there is one; Enter on an empty
+// draft keeps its older meaning, pausing the run.
+function submitRunning(
+  input: TaskStartSectionProps,
+  draft: string,
+  mode: CodingWorkbenchPromptDelivery | undefined,
+  references: readonly CodingWorkbenchPromptReference[],
+): void {
+  if (!canDeliver(input) || draft.trim().length === 0) {
     input.actions.onPause();
+    return;
+  }
+  // A delivered message is a follow-up to the person typing it; the diagnostic kind is the same.
+  reportTaskSubmission(draft, input.taskIntent, "follow-up");
+  input.actions.onDeliver?.(draft, mode ?? "steer", references);
+}
+
+function submitTask(
+  input: TaskStartSectionProps,
+  displayedDraft: string,
+  mode: CodingWorkbenchPromptDelivery | undefined,
+  references: readonly CodingWorkbenchPromptReference[],
+): void {
+  if (input.runState === "running") {
+    submitRunning(input, displayedDraft, mode, references);
     return;
   }
   const kind = input.runState === "paused" ? "follow-up" : "start";
   reportTaskSubmission(displayedDraft, input.taskIntent, kind);
-  if (kind === "follow-up") input.actions.onSend(displayedDraft);
+  if (kind === "follow-up") sendFollowUp(input, displayedDraft, references);
   else input.actions.onStart(displayedDraft);
+}
+
+interface ComposerSubmit {
+  readonly submit: (mode?: CodingWorkbenchPromptDelivery) => void;
+  readonly submitBlocked: boolean;
+  readonly submitFeedback: string | null;
+}
+
+function useComposerSubmit(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+  picker: FileReferencePicker,
+): ComposerSubmit {
+  const { onTaskIntentChange, taskIntent } = input;
+  const [blockedSubmitAttempted, setBlockedSubmitAttempted] = useState(false);
+  const blockedReason = submitBlockedReason(input, t);
+  // Send now and Queue are blocked by an empty draft, which a plain submit while running is not.
+  const feedbackReason =
+    blockedReason ?? (canDeliver(input) ? submitBlockedReason(input, t, "steer") : null);
+  const submit = (mode?: CodingWorkbenchPromptDelivery): void => {
+    const displayedDraft = textareaRef.current?.value ?? taskIntent;
+    if (displayedDraft !== taskIntent) onTaskIntentChange(displayedDraft);
+    if (submitBlockedReason({ ...input, taskIntent: displayedDraft }, t, mode) !== null) {
+      setBlockedSubmitAttempted(true);
+      return;
+    }
+    setBlockedSubmitAttempted(false);
+    submitTask(input, displayedDraft, mode, picker.referencesFor(displayedDraft));
+  };
+  const feedbackShown = feedbackReason !== null;
+  useEffect(() => {
+    if (!feedbackShown) setBlockedSubmitAttempted(false);
+  }, [feedbackShown]);
+  return {
+    submit,
+    submitBlocked: blockedReason !== null,
+    submitFeedback: blockedSubmitAttempted ? feedbackReason : null,
+  };
+}
+
+function isQueueChord(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+  return (
+    event.key === "Enter" &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.shiftKey &&
+    !event.nativeEvent.isComposing
+  );
+}
+
+function useComposerPicker(
+  input: TaskStartSectionProps,
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+): FileReferencePicker {
+  return useFileReferencePicker({
+    enabled:
+      input.promptInputs?.references === true &&
+      typeof input.referenceRoot === "string" &&
+      (input.runState === "running" || input.runState === "paused"),
+    root: input.referenceRoot ?? null,
+    draft: input.taskIntent,
+    onDraftChange: input.onTaskIntentChange,
+    textareaRef,
+  });
+}
+
+// The picker gets a key first (an open list owns the arrows, Enter, Tab and Escape); then
+// Ctrl/Cmd+Enter queues while a turn runs; then Enter submits as it always has.
+function useComposerKeys(
+  picker: FileReferencePicker,
+  deliveryEnabled: boolean,
+  submit: (mode?: CodingWorkbenchPromptDelivery) => void,
+): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
+  return (event): void => {
+    if (picker.handleKey(event)) return;
+    if (deliveryEnabled && isQueueChord(event)) {
+      event.preventDefault();
+      submit("queue");
+      return;
+    }
+    if (composerEnterSubmits(event)) submit();
+  };
 }
 
 function useTaskComposerController(
@@ -208,7 +378,6 @@ function useTaskComposerController(
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const micButtonRef = useRef<HTMLButtonElement>(null);
   const submitFeedbackId = useId();
-  const [blockedSubmitAttempted, setBlockedSubmitAttempted] = useState(false);
   const voiceCapability = useVoiceCapability();
   const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
   const insertTranscript = useCallback(
@@ -221,21 +390,15 @@ function useTaskComposerController(
   const dictation = useDictation({
     onInsert: insertTranscript,
   });
-  const blockedReason = submitBlockedReason(input, t);
-  const submitBlocked = blockedReason !== null;
-  const submit = (): void => {
-    const displayedDraft = textareaRef.current?.value ?? taskIntent;
-    if (displayedDraft !== taskIntent) onTaskIntentChange(displayedDraft);
-    if (submitBlockedReason({ ...input, taskIntent: displayedDraft }, t) !== null) {
-      setBlockedSubmitAttempted(true);
-      return;
-    }
-    setBlockedSubmitAttempted(false);
-    submitTask(input, displayedDraft);
-  };
-  useEffect(() => {
-    if (!submitBlocked) setBlockedSubmitAttempted(false);
-  }, [submitBlocked]);
+  const picker = useComposerPicker(input, textareaRef);
+  const { submit, submitBlocked, submitFeedback } = useComposerSubmit(
+    input,
+    t,
+    textareaRef,
+    picker,
+  );
+  const deliveryEnabled = canDeliver(input);
+  const onKeyDown = useComposerKeys(picker, deliveryEnabled, submit);
   useComposerAutoGrow(textareaRef, taskIntent);
   return {
     textareaRef,
@@ -243,9 +406,14 @@ function useTaskComposerController(
     dictation,
     dictationVisible,
     submitBlocked,
-    submitFeedback: blockedSubmitAttempted ? blockedReason : null,
+    submitFeedback,
     submitFeedbackId,
     submit,
+    picker,
+    deliveryEnabled,
+    deliveryBlocked: input.mutationPending || taskIntent.trim().length === 0,
+    onKeyDown,
+    onTextChange: picker.track,
   };
 }
 
@@ -314,11 +482,17 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         textareaRef={controller.textareaRef}
         maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
         disabled={input.mutationPending}
-        onChange={(event): void => input.onTaskIntentChange(event.target.value)}
-        onKeyDown={(event): void => {
-          if (composerEnterSubmits(event)) controller.submit();
+        ariaControls={controller.picker.controls}
+        onChange={(event): void => {
+          input.onTaskIntentChange(event.target.value);
+          controller.onTextChange(event.target.value, event.target.selectionStart);
         }}
-        belowInput={<DictationPreview controller={controller} />}
+        onSelect={(event): void =>
+          controller.onTextChange(event.currentTarget.value, event.currentTarget.selectionStart)
+        }
+        onKeyDown={controller.onKeyDown}
+        aboveInput={<FileReferences controller={controller} t={t} />}
+        belowInput={<DictationPreview controller={controller} input={input} t={t} />}
         footer={<ComposerFooter input={input} controller={controller} t={t} />}
       />
     </div>
@@ -334,11 +508,34 @@ interface ComposerViewProps extends ControlProps {
   readonly controller: TaskComposerController;
 }
 
-function DictationPreview({
-  controller,
-}: {
-  readonly controller: TaskComposerController;
-}): ReactNode {
+function FileReferences({ controller, t }: Pick<ComposerViewProps, "controller" | "t">): ReactNode {
+  return (
+    <>
+      <FileReferencePopover picker={controller.picker} t={t} />
+      <FileReferenceChips picker={controller.picker} t={t} />
+    </>
+  );
+}
+
+// What the last message sent to the running turn came to. A sent or queued message is only news
+// while that turn runs; a refused one stays until the next action, because the draft it was
+// written in is still there.
+function DeliveryNotice({ input, t }: ControlProps): ReactNode {
+  const notice = input.deliveryNotice;
+  if (notice === undefined || notice === null) return null;
+  if (notice !== "failed" && input.runState !== "running") return null;
+  return (
+    <p
+      className={promptStyles.notice}
+      role="status"
+      data-state={notice === "failed" ? "failed" : "info"}
+    >
+      {t(`codingWorkbench.composer.delivery.${notice}`)}
+    </p>
+  );
+}
+
+function DictationPreview({ controller, input, t }: ComposerViewProps): ReactNode {
   return (
     <>
       {controller.dictationVisible ? (
@@ -348,6 +545,7 @@ function DictationPreview({
         />
       ) : null}
       <SubmitBlockedFeedback controller={controller} />
+      <DeliveryNotice input={input} t={t} />
     </>
   );
 }
@@ -558,7 +756,7 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
 
 function ComposerControls({ input, controller, t }: ComposerViewProps): ReactNode {
   if (input.runState === "running") {
-    return <RunningControl input={input} t={t} />;
+    return <RunningControl input={input} controller={controller} t={t} />;
   }
   if (input.runState === "paused") {
     return <PausedControls input={input} controller={controller} t={t} />;
@@ -593,7 +791,45 @@ function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): Reac
   );
 }
 
-function RunningControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): ReactNode {
+// Send now and Queue are the two ways to talk to a running turn (ADR-0137 D10). Both are plain
+// buttons that submit with their mode; Enter sends now and Ctrl/Cmd+Enter queues from the draft.
+function DeliveryControls({ input, controller, t }: ComposerViewProps): ReactNode {
+  const blocked = controller.deliveryBlocked;
+  return (
+    <>
+      <button
+        className="cmp-icon ui-tip"
+        type="button"
+        data-tip={t("codingWorkbench.composer.queue.help")}
+        aria-label={t("codingWorkbench.composer.queue")}
+        aria-keyshortcuts="Control+Enter Meta+Enter"
+        aria-disabled={blocked}
+        disabled={input.mutationPending}
+        onClick={(): void => controller.submit("queue")}
+      >
+        <LayersIcon size={16} />
+      </button>
+      <button
+        className="cmp-send cmp-tip-end"
+        type="button"
+        data-on={!blocked}
+        data-tip={t("codingWorkbench.composer.sendNow.help")}
+        aria-label={t("codingWorkbench.composer.sendNow")}
+        aria-keyshortcuts="Enter"
+        aria-disabled={blocked}
+        disabled={input.mutationPending}
+        aria-describedby={
+          controller.submitFeedback === null ? undefined : controller.submitFeedbackId
+        }
+        onClick={(): void => controller.submit("steer")}
+      >
+        <ArrowUpIcon size={16} />
+      </button>
+    </>
+  );
+}
+
+function RunningControl({ input, controller, t }: ComposerViewProps): ReactNode {
   return (
     <div className="cmp-bar-main">
       <button
@@ -606,6 +842,9 @@ function RunningControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): R
       >
         <MinimizeIcon size={16} />
       </button>
+      {controller.deliveryEnabled ? (
+        <DeliveryControls input={input} controller={controller} t={t} />
+      ) : null}
       <button
         className="cmp-send cmp-send-cancel cmp-tip-end"
         type="button"
@@ -649,7 +888,7 @@ function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode 
         aria-describedby={
           controller.submitFeedback === null ? undefined : controller.submitFeedbackId
         }
-        onClick={sendBlocked ? controller.submit : undefined}
+        onClick={sendBlocked ? (): void => controller.submit() : undefined}
       >
         <ArrowUpIcon size={16} />
       </button>
@@ -672,7 +911,7 @@ function StartControl({ input, controller, t }: ComposerViewProps): ReactNode {
       aria-describedby={
         controller.submitFeedback === null ? undefined : controller.submitFeedbackId
       }
-      onClick={controller.submitBlocked ? controller.submit : undefined}
+      onClick={controller.submitBlocked ? (): void => controller.submit() : undefined}
     >
       <ArrowUpIcon size={16} />
     </button>

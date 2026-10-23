@@ -31,6 +31,7 @@ import {
   CODING_TOOL_READ_MAX_WINDOW_LINES,
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
+import { isOpenCodeNativeDeliveryToolName } from "./opencodeNativeDeliveryTools.js";
 import {
   isAdmittedOpenCodeNativeToolContract,
   openCodeNativeToolSetDigest,
@@ -590,6 +591,15 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     arguments: { forceFresh: GIT_CI_STATUS_SCHEMA.properties.forceFresh },
   },
 ] as const;
+
+/**
+ * The generated-tool definitions the native profile registers (#3897): Keiko's Git delivery tools
+ * and nothing else (`opencodeNativeDeliveryTools.ts` names them and says why). Filtered from the
+ * one definition list the mapped profiles generate from, so a native run calls the identical tool
+ * source, schema and wire shape.
+ */
+export const OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS =
+  OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(({ name }) => isOpenCodeNativeDeliveryToolName(name));
 
 // OpenCode V2 no longer advertises `todowrite`; keep it blocked if it reappears.
 export const OPENCODE_PINNED_BUILT_IN_TOOLS = [

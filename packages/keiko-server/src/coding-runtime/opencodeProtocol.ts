@@ -60,7 +60,11 @@ export interface OpenCodeSseDecoder {
 
 export interface OpenCodeLiveControl {
   readonly sessionId: string;
-  readonly state: "activity" | "terminal";
+  /**
+   * `interrupted` is the V2 runtime ending an execution at a human's refusal (a dismissed question):
+   * it is not a verdict, and no idle message follows it.
+   */
+  readonly state: "activity" | "interrupted" | "terminal";
 }
 
 interface NormalizedSseData extends Record<string, unknown> {

@@ -48,6 +48,8 @@ import {
   handleCodingRuntimeResearchRevoke,
   handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
+  handleCodingRuntimeRevert,
+  handleCodingRuntimeRevertState,
   handleCodingRuntimeSkills,
   handleCodingRuntimeStatus,
   handleCodingRuntimeStop,
@@ -177,6 +179,15 @@ function runtime(
       correlationIds.push(correlationId);
       return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
+    submitRevert: (_runId: string, body: unknown, correlationId?: string) => {
+      calls.push(body);
+      correlationIds.push(correlationId);
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
+    },
+    revertState: (runId: string) =>
+      Promise.resolve(
+        runId === "run-1" ? { staged: true, fileCount: 2, additions: 12, deletions: 4 } : undefined,
+      ),
     answerQuestion: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
       correlationIds.push(correlationId);
@@ -265,6 +276,7 @@ describe("coding runtime routes", () => {
     expect(patterns.some((pattern) => pattern.endsWith("/questions/answer"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/questions/reject"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/follow-up"))).toBe(true);
+    expect(patterns.filter((pattern) => pattern.endsWith("/revert"))).toHaveLength(2);
     expect(patterns.some((pattern) => pattern.endsWith("/pause"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/resume"))).toBe(true);
     // #2387: the research revoke mutation shares the same guarded runtime group.
@@ -290,6 +302,8 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/pause",
         "POST /api/coding-workbench/runtime/runs/:runId/resume",
         "POST /api/coding-workbench/runtime/runs/:runId/follow-up",
+        "POST /api/coding-workbench/runtime/runs/:runId/revert",
+        "GET /api/coding-workbench/runtime/runs/:runId/revert",
         "POST /api/coding-workbench/runtime/runs/:runId/research/revoke",
         "POST /api/coding-workbench/runtime/runs/:runId/questions",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/answer",
@@ -312,6 +326,7 @@ describe("coding runtime routes", () => {
       handleCodingRuntimeResume,
       handleCodingRuntimeResearchRevoke,
       handleCodingRuntimeFollowUp,
+      handleCodingRuntimeRevert,
       handleCodingRuntimeQuestionAnswer,
       handleCodingRuntimeQuestionReject,
       handleCodingRuntimeQuestionList,
@@ -376,6 +391,7 @@ describe("coding runtime routes", () => {
     const correlationId = "route-correlation-id-1";
     const handlers = [
       handleCodingRuntimeFollowUp,
+      handleCodingRuntimeRevert,
       handleCodingRuntimeQuestionAnswer,
       handleCodingRuntimeQuestionReject,
       handleCodingRuntimeQuestionList,
@@ -802,6 +818,145 @@ describe("coding runtime routes", () => {
     expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
   });
 
+  describe("turn revert (B3, S04)", () => {
+    const runPath = "/api/coding-workbench/runtime/runs/run-1/revert";
+
+    it("passes the revert body and the request's correlation id to the orchestrator untouched", async () => {
+      const session = pairedAppSession();
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      const body = { requestId: "req-1", expectedRevision: 2, action: "undo" };
+
+      await expect(
+        handleCodingRuntimeRevert(
+          context(
+            JSON.stringify(body),
+            { runId: "run-1" },
+            runPath,
+            session.cookie,
+            "revert-correlation-id-1",
+          ),
+          deps,
+        ),
+      ).resolves.toEqual({ status: 200, body: snapshot });
+
+      const calls = deps as unknown as {
+        __calls: unknown[];
+        __correlationIds: (string | undefined)[];
+      };
+      expect(calls.__calls).toEqual([body]);
+      expect(calls.__correlationIds).toEqual(["revert-correlation-id-1"]);
+    });
+
+    it("logs one body-free refusal naming the revert operation when the orchestrator refuses", async () => {
+      const session = pairedAppSession();
+      const records: unknown[] = [];
+      const deps = runtime({
+        codingAppSessionChannel: session.channel,
+        activityLog: { write: (event: unknown) => void records.push(event) },
+      });
+      (deps.codingRuntimeOrchestrator as unknown as { submitRevert: unknown }).submitRevert = () =>
+        Promise.resolve({ ok: false as const, failureCode: "invalid-intent" as const });
+
+      const refused = await handleCodingRuntimeRevert(
+        context("{}", { runId: "run-1" }, runPath, session.cookie, "revert-correlation-id-2"),
+        deps,
+      );
+
+      expect(refused).toMatchObject({ status: 400 });
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          op: "coding-runtime.operation.refused",
+          correlationId: "revert-correlation-id-2",
+          errorKind: "invalid-request",
+          extra: { operation: "revert", reason: "invalid-intent", runId: "run-1" },
+        },
+      ]);
+    });
+
+    it("conceals the run from a caller without an app session, reaching no orchestrator method", async () => {
+      const { channel } = pairedAppSession();
+      const spy = spyingRuntime(channel);
+
+      const denied = await handleCodingRuntimeRevert(
+        context("{}", { runId: "run-1" }, runPath),
+        spy.deps,
+      );
+
+      expect(denied).toMatchObject({ status: 404 });
+      expect(spy.invoked).toEqual([]);
+    });
+
+    it("shows the paired operator the counts behind the undo control, and no path", async () => {
+      const session = pairedAppSession();
+
+      const state = await handleCodingRuntimeRevertState(
+        context("", { runId: "run-1" }, runPath, session.cookie),
+        runtime({ codingAppSessionChannel: session.channel }),
+      );
+
+      expect(state).toEqual({
+        status: 200,
+        body: {
+          session: "active",
+          revert: { staged: true, fileCount: 2, additions: 12, deletions: 4 },
+        },
+      });
+    });
+
+    it("reports no undo for a run the runtime cannot revert", async () => {
+      const session = pairedAppSession();
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      (deps.codingRuntimeOrchestrator as unknown as { revertState: unknown }).revertState = () =>
+        Promise.resolve(undefined);
+
+      await expect(
+        handleCodingRuntimeRevertState(
+          context("", { runId: "run-1" }, runPath, session.cookie),
+          deps,
+        ),
+      ).resolves.toEqual({ status: 200, body: { session: "active" } });
+    });
+
+    it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
+      const { channel } = pairedAppSession();
+      const unpaired = { status: 200, body: { session: "unpaired" } };
+      const spy = spyingRuntime(channel);
+      const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+        [{ runId: "run-1" }, spy.deps],
+        [{ runId: "run-9" }, spy.deps],
+        [{}, spy.deps],
+        [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
+      ];
+      for (const [params, deps] of cases) {
+        await expect(handleCodingRuntimeRevertState(context("", params), deps)).resolves.toEqual(
+          unpaired,
+        );
+      }
+      expect(spy.invoked).toEqual([]);
+    });
+
+    it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
+      const session = pairedAppSession();
+
+      await expect(
+        handleCodingRuntimeRevertState(
+          context("", { runId: "run-9" }, runPath, session.cookie),
+          runtime({ codingAppSessionChannel: session.channel }),
+        ),
+      ).resolves.toMatchObject({ status: 404 });
+      await expect(
+        handleCodingRuntimeRevertState(
+          context("", { runId: "run-1" }, runPath, session.cookie),
+          runtime({
+            codingAppSessionChannel: session.channel,
+            codingRuntimeOrchestrator: undefined,
+          }),
+        ),
+      ).resolves.toMatchObject({ status: 503 });
+    });
+  });
+
   it("#2802: the paired approval-review route shows the operator the files the change would write", () => {
     const session = pairedAppSession();
 
@@ -1038,6 +1193,8 @@ describe("coding runtime routes", () => {
         runtimeEvidenceClass: "functional-not-platform-qualified",
         // No tool profile is threaded either: the agents default to the baseline, never to plan.
         selectableAgents: ["build"],
+        // ...and the prompt inputs default to none: no delivery, no references.
+        promptInputs: { delivery: false, references: false },
       },
     });
     const serialized = JSON.stringify(result.body);
@@ -1075,6 +1232,39 @@ describe("coding runtime routes", () => {
     expect(
       selectable({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
     ).toEqual(["build"]);
+  });
+
+  it("computes the prompt inputs from the composed OpenCode tool profile (ADR-0137 D10)", () => {
+    const promptInputs = (overrides: Partial<Record<string, unknown>>): unknown => {
+      const result = handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
+      );
+      return (result.body as { promptInputs?: unknown }).promptInputs;
+    };
+    const registry = (toolProfile: string): Record<string, unknown> => ({
+      openCodeGatewayReadinessRegistry: { toolProfile },
+    });
+
+    // Only the native service can steer, queue and read a referenced file under its own policy.
+    expect(promptInputs({ codingRuntimeHostQualified: true, ...registry("native") })).toEqual({
+      delivery: true,
+      references: true,
+    });
+    for (const profile of ["direct", "code-mode"]) {
+      expect(promptInputs({ codingRuntimeHostQualified: true, ...registry(profile) })).toEqual({
+        delivery: false,
+        references: false,
+      });
+    }
+    // No composed registry fails closed to nothing, and so does one that states no profile.
+    expect(promptInputs({ codingRuntimeHostQualified: true })).toEqual({
+      delivery: false,
+      references: false,
+    });
+    expect(
+      promptInputs({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
+    ).toEqual({ delivery: false, references: false });
   });
 
   it("serves a readiness payload the shared contract validator accepts", () => {
@@ -1623,6 +1813,11 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
     resume: settle("resume"),
     revokeResearch: settle("revokeResearch"),
     submitFollowUp: settle("submitFollowUp"),
+    submitRevert: settle("submitRevert"),
+    revertState: () => {
+      invoked.push("revertState");
+      return Promise.resolve(undefined);
+    },
     answerQuestion: settle("answerQuestion"),
     rejectQuestion: settle("rejectQuestion"),
     listQuestions: () => {

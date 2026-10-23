@@ -2,12 +2,15 @@ import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-act
 import type {
   CodingWorkbenchAgent,
   CodingWorkbenchMode,
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
   codingWorkbenchRuntimeActionError,
@@ -16,6 +19,7 @@ import {
   pauseCodingWorkbenchRuntime,
   resumeCodingWorkbenchRuntime,
   retryCodingWorkbenchRuntime,
+  revertCodingWorkbenchRuntime,
   revokeCodingWorkbenchRuntimeResearchGrant,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
@@ -188,18 +192,33 @@ function validatedResumeMode(
   return requestedMode;
 }
 
+/** What a follow-up carries beside its text; both fields are absent for the ordinary follow-up. */
+export interface CodingWorkbenchFollowUpInputs {
+  /** Makes the message join the turn that is running; it never starts one (ADR-0137 D10). */
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  /** Workspace files the human referenced with `@`, by path relative to the run's workspace. */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+}
+
 export function createFollowUpMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  inputs: CodingWorkbenchFollowUpInputs = {},
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
-  // No hidden prompt queue: a drafted follow-up is only ever admitted against a paused run.
-  if (!runId || snapshot?.state !== "paused" || taskIntent.length === 0)
+  const { delivery } = inputs;
+  // An ordinary follow-up is only ever admitted against a paused run; a delivered message (`steer`
+  // or `queue`) is the one thing a running run takes, and it takes it for the turn in flight.
+  const admissible = delivery === undefined ? "paused" : "running";
+  if (!runId || snapshot?.state !== admissible || taskIntent.length === 0)
     throw codingWorkbenchRuntimeActionError(
-      "A follow-up can only be sent while the run is paused.",
+      delivery === undefined
+        ? "A follow-up can only be sent while the run is paused."
+        : "A message can only be sent to a task while its turn is running.",
     );
   const id = newCodingWorkbenchRuntimeRequestId();
+  const references = inputs.references ?? [];
   return {
     requestId: id,
     expected: { runId, revision: snapshot.revision },
@@ -209,7 +228,40 @@ export function createFollowUpMutation(
         requestId: id,
         expectedRevision: snapshot.revision,
         taskIntent,
-        ...agentSelection(current),
+        // A delivered message joins the turn that runs under its agent and never switches it.
+        ...(delivery === undefined ? agentSelection(current) : { delivery }),
+        ...(references.length === 0 ? {} : { references }),
+      }),
+  };
+}
+
+const REVERT_STATES: ReadonlySet<string> = new Set(["running", "paused"]);
+
+/**
+ * Undo or restore of the run's newest turn (B3, S04): bound to the observed revision like a
+ * follow-up, and only against a live run. The server refuses everything else; this keeps the
+ * browser from sending a request it knows cannot be admitted.
+ */
+export function createRevertMutation(
+  action: CodingWorkbenchRuntimeRevertAction,
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  if (!runId || snapshot === null || !REVERT_STATES.has(snapshot.state))
+    throw codingWorkbenchRuntimeActionError(
+      "The last turn can only be undone while the run is open.",
+    );
+  const id = newCodingWorkbenchRuntimeRequestId();
+  return {
+    requestId: id,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      revertCodingWorkbenchRuntime(runId, {
+        requestId: id,
+        expectedRevision: snapshot.revision,
+        action,
       }),
   };
 }

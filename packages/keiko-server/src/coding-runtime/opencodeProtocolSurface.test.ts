@@ -153,6 +153,45 @@ describe("OpenCode 2.1.4 admitted V2 protocol surface", () => {
     expect(JSON.stringify(operation)).toContain('"additionalProperties":false');
   });
 
+  it("admits the turn revert and diff operations, each with its closed shape", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const paths = (
+      projection as {
+        readonly paths: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+      }
+    ).paths;
+    const stage = paths["/api/session/{sessionID}/revert/stage"]?.post as
+      { readonly requestBody?: { readonly required?: boolean } } | undefined;
+    expect(stage?.requestBody?.required).toBe(true);
+    expect(JSON.stringify(stage)).toContain('"required":["messageID"]');
+    expect(JSON.stringify(stage)).toContain('"additionalProperties":false');
+    expect(paths["/api/session/{sessionID}/revert/commit"]?.post).toBeDefined();
+    expect(paths["/api/session/{sessionID}/revert"]?.delete).toBeDefined();
+    const diff = paths["/api/session/{sessionID}/diff"]?.get as
+      { readonly parameters?: readonly { readonly name: string }[] } | undefined;
+    expect(diff?.parameters?.map(({ name }) => name)).toEqual([
+      "sessionID",
+      "from",
+      "to",
+      "context",
+    ]);
+    // The staged revert and every diff entry carry file diffs, so their component is admitted too.
+    expect(JSON.stringify(projection)).toContain('"FileDiff.Info"');
+  });
+
+  it("admits no revert operation that Keiko does not use beyond the four it names", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const revertPaths = Object.keys((projection as { readonly paths: object }).paths).filter(
+      (path) => /revert|diff/u.test(path),
+    );
+    expect([...revertPaths].sort()).toEqual([
+      "/api/session/{sessionID}/diff",
+      "/api/session/{sessionID}/revert",
+      "/api/session/{sessionID}/revert/commit",
+      "/api/session/{sessionID}/revert/stage",
+    ]);
+  });
+
   it("pins the current digest to the projection of the captured document", () => {
     const { digest } = projectOpenCodeV2ProtocolSurface(fixture);
     expect(digest).toBe(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256);

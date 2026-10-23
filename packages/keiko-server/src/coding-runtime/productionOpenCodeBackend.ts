@@ -70,6 +70,7 @@ import {
 } from "./opencodeToolSchemas.js";
 import {
   openCodeConfigDirectory,
+  openCodePlanDirectory,
   resolveOpenCodeContextGeometry,
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
@@ -999,6 +1000,8 @@ function gatewayFilesystem(
             ),
             // The policy plugin and the private configuration are read-only to the shell.
             protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
+            // The plan agent's private notes take no link that could name a workspace file.
+            linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
           }
         : {}),
     },

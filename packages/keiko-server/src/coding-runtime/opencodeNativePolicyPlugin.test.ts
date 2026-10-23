@@ -86,6 +86,7 @@ async function pluginHarness(
     },
     fetch,
     AbortSignal,
+    TextEncoder,
     JSON,
     Set,
     Array,
@@ -187,6 +188,32 @@ describe("generated native policy plugin forwarding and precedence (#3897 audit)
       searchPath: "/work/ws/src",
       resources: ["// TODO"],
     });
+  });
+
+  it("forwards only the UTF-8 size of the producer's diff of an edit, never the diff", async () => {
+    const patch = "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+n\u00e9w\n";
+    const harness = await pluginHarness();
+    const edit = { ...event(["src/a.ts"]), metadata: { files: [{ file: "src/a.ts", patch }] } };
+    await harness.evaluate(edit);
+    expect(harness.requests[0]).toMatchObject({ patchBytes: Buffer.byteLength(patch, "utf8") });
+    expect(JSON.stringify(harness.requests[0])).not.toContain("+n\u00e9w");
+    const patched = {
+      ...event(["src/a.ts", "src/b.ts"]),
+      metadata: { filepath: "src/a.ts, src/b.ts", diff: [patch, patch] },
+    };
+    await harness.evaluate(patched);
+    expect(harness.requests[1]).toMatchObject({ patchBytes: 2 * Buffer.byteLength(patch, "utf8") });
+  });
+
+  it("reports an edit without a diff as unmeasured and one it cannot measure as -1", async () => {
+    const harness = await pluginHarness();
+    await harness.evaluate(event(["src/a.ts"]));
+    await harness.evaluate({ ...event(["src/a.ts"]), metadata: { files: [{ file: "src/a.ts" }] } });
+    await harness.evaluate({ ...event(["**"]), action: "read", metadata: { files: [] } });
+    const sizes = (harness.requests as readonly { readonly patchBytes?: unknown }[]).map(
+      (request) => request.patchBytes,
+    );
+    expect(sizes).toEqual([null, -1, null]);
   });
 
   it("keeps an earlier hook's deny without asking policy", async () => {

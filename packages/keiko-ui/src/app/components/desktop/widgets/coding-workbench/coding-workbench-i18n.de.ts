@@ -297,6 +297,35 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.pause": "Lauf pausieren",
   "codingWorkbench.composer.resume": "Lauf fortsetzen",
   "codingWorkbench.composer.send": "Rückfrage senden",
+  "codingWorkbench.composer.sendNow": "Jetzt senden",
+  "codingWorkbench.composer.sendNow.help":
+    "Jetzt senden: Die Nachricht erreicht die laufende Aufgabe in ihrem nächsten Schritt (Enter)",
+  "codingWorkbench.composer.queue": "Nachricht einreihen",
+  "codingWorkbench.composer.queue.help":
+    "Einreihen: Die Nachricht wird nach der aktuellen Arbeit der laufenden Aufgabe zugestellt (Strg oder Cmd+Enter)",
+  "codingWorkbench.composer.blocked.emptyMessage": "Schreibe zuerst eine Nachricht.",
+  "codingWorkbench.composer.delivery.steer":
+    "Nachricht gesendet. Sie erreicht die laufende Aufgabe in ihrem nächsten Schritt.",
+  "codingWorkbench.composer.delivery.queue":
+    "Nachricht eingereiht. Sie wird nach der aktuellen Arbeit der laufenden Aufgabe zugestellt.",
+  "codingWorkbench.composer.delivery.failed":
+    "Die Nachricht wurde nicht gesendet; dein Text bleibt erhalten. Die Aufgabe ist möglicherweise gerade fertig geworden, eine referenzierte Datei ist nicht mehr verfügbar, oder diese Laufzeit nimmt während der Arbeit keine Nachrichten an.",
+  "codingWorkbench.composer.references.label": "Referenzierte Dateien",
+  "codingWorkbench.composer.references.remove": "Verweis auf {path} entfernen",
+  "codingWorkbench.composer.references.picker.title": "Eine Aufgabendatei referenzieren",
+  "codingWorkbench.composer.references.picker.results": "Passende Aufgabendateien",
+  "codingWorkbench.composer.references.picker.option": "{path} referenzieren",
+  "codingWorkbench.composer.references.picker.active": "{name}, {position} von {total}",
+  "codingWorkbench.composer.references.picker.hint":
+    "Tippe, um die Dateien der Aufgabe zu durchsuchen.",
+  "codingWorkbench.composer.references.picker.searching": "Dateien werden gesucht...",
+  "codingWorkbench.composer.references.picker.found":
+    "{count} Dateien gefunden. Wähle mit den Pfeiltasten und referenziere mit Enter.",
+  "codingWorkbench.composer.references.picker.empty": "Keine passenden Dateien.",
+  "codingWorkbench.composer.references.picker.error":
+    "Die Dateisuche ist fehlgeschlagen. Tippe erneut, um es noch einmal zu versuchen.",
+  "codingWorkbench.composer.references.picker.limit":
+    "In einer Nachricht können höchstens {count} Dateien referenziert werden.",
   "codingWorkbench.composer.model.label": "Coding-Modell",
   "codingWorkbench.composer.model.selected": "Coding-Modell: {model}",
   "codingWorkbench.composer.model.menu": "Coding-Modell auswählen",
@@ -1264,4 +1293,25 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Sie zuzulassen ist deine Entscheidung für genau dieses Manifest.",
   "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",
   "codingWorkbench.trust.allowing": "Wird zugelassen…",
+  "codingWorkbench.revert.region": "Letzter Durchgang",
+  "codingWorkbench.revert.summary":
+    "Der letzte Durchgang hat {count} Dateien geändert (+{additions} / -{deletions}).",
+  "codingWorkbench.revert.summary.one":
+    "Der letzte Durchgang hat 1 Datei geändert (+{additions} / -{deletions}).",
+  "codingWorkbench.revert.none":
+    "Der letzte Durchgang hat keine Datei geändert, es gibt also nichts rückgängig zu machen.",
+  "codingWorkbench.revert.undo": "Letzten Durchgang rückgängig machen",
+  "codingWorkbench.revert.undo.confirm":
+    "Den letzten Durchgang rückgängig machen? Das hält den Durchgang an, falls er noch läuft, und setzt die geänderten Dateien auf ihren früheren Inhalt zurück. Solange der Run offen bleibt, kannst du die Änderungen wiederherstellen.",
+  "codingWorkbench.revert.undo.confirmAction": "Rückgängig bestätigen",
+  "codingWorkbench.revert.staged":
+    "Der letzte Durchgang ist rückgängig gemacht: {count} Dateien haben wieder ihren früheren Inhalt. Stelle die Änderungen wieder her oder beende den Run, um das Rückgängigmachen beizubehalten. Solange es besteht, startet in diesem Run keine neue Aufgabe.",
+  "codingWorkbench.revert.staged.one":
+    "Der letzte Durchgang ist rückgängig gemacht: 1 Datei hat wieder ihren früheren Inhalt. Stelle die Änderungen wieder her oder beende den Run, um das Rückgängigmachen beizubehalten. Solange es besteht, startet in diesem Run keine neue Aufgabe.",
+  "codingWorkbench.revert.restore": "Änderungen wiederherstellen",
+  "codingWorkbench.revert.restore.confirm":
+    "Die rückgängig gemachten Änderungen wiederherstellen? Die Dateien erhalten den Inhalt, den der Durchgang hinterlassen hat. Hast du eine dieser Dateien seit dem Rückgängigmachen bearbeitet, wird nichts überschrieben und die Wiederherstellung abgelehnt.",
+  "codingWorkbench.revert.restore.confirmAction": "Wiederherstellung bestätigen",
+  "codingWorkbench.revert.cancel": "Abbrechen",
+  "codingWorkbench.revert.busy": "Wird angewendet…",
 } satisfies CodingWorkbenchMessageCatalog;

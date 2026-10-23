@@ -81,6 +81,7 @@ function dispatcher(
       Promise.resolve({ ok: true as const, completion: Promise.resolve("succeeded" as const) }),
     ),
     abort: vi.fn(() => Promise.resolve(true)),
+    deliver: vi.fn(() => Promise.resolve({ ok: true as const })),
     ...overrides,
   };
 }
@@ -109,11 +110,17 @@ function coordinator(input: {
   readonly resumePaused?: (
     current: CodingRuntimeSnapshot,
   ) => Promise<CodingRuntimeOrchestratorResult>;
+  readonly advanceRevision?: (
+    current: CodingRuntimeSnapshot,
+    eventKind?: string,
+  ) => CodingRuntimeOrchestratorResult;
 }): CodingRuntimeOperationCoordinator {
   return new CodingRuntimeOperationCoordinator({
     current: input.current ?? ((): CodingRuntimeSnapshot => runningSnapshot()),
     serial: (work) => work(),
-    advanceRevision: () => ({ ok: true, snapshot: publicSnapshot() }),
+    advanceRevision:
+      input.advanceRevision ??
+      ((): CodingRuntimeOrchestratorResult => ({ ok: true, snapshot: publicSnapshot() })),
     // A follow-up into a pause resumes the run first (#3452, run 16); these fixtures dispatch
     // against a running snapshot, so the resume is never reached.
     resumePaused:
@@ -1027,6 +1034,565 @@ describe("CodingRuntimeOperationCoordinator", () => {
     // mutating operation must still be admitted.
     await expect(subject.submitFollowUp("run-1", followUp("req-mutate"))).resolves.toMatchObject({
       ok: true,
+    });
+  });
+});
+
+// ADR-0137 D10: a steering or queued message joins the turn that is running. It is admitted like
+// any follow-up (the contract's exact body, the live revision, a single-use request id) but it
+// starts, replaces and settles nothing.
+describe("CodingRuntimeOperationCoordinator prompt inputs", () => {
+  function delivery(
+    delivery: "steer" | "queue" = "steer",
+    extra: Record<string, unknown> = {},
+    requestId = "req-1",
+  ): Record<string, unknown> {
+    return { ...followUp(requestId), delivery, ...extra };
+  }
+
+  it.each(["steer", "queue"] as const)(
+    "delivers a %s message to the turn in flight and starts, replaces and settles nothing",
+    async (mode) => {
+      const taskDispatcher = dispatcher();
+      const settleTask = vi.fn();
+      const advanceRevision = vi.fn(
+        (
+          _current: CodingRuntimeSnapshot,
+          _eventKind?: string,
+        ): CodingRuntimeOrchestratorResult => ({
+          ok: true,
+          snapshot: publicSnapshot(),
+        }),
+      );
+      const subject = coordinator({ taskDispatcher, settleTask, advanceRevision });
+
+      await expect(
+        subject.submitFollowUp("run-1", delivery(mode), "corr-0123456789"),
+      ).resolves.toEqual({
+        ok: true,
+        snapshot: publicSnapshot(),
+      });
+
+      expect(taskDispatcher.deliver).toHaveBeenCalledExactlyOnceWith({
+        runId: "run-1",
+        requestId: "req-1",
+        expectedRevision: 3,
+        taskIntent: "Continue the bounded task",
+        correlationId: "corr-0123456789",
+        delivery: mode,
+      });
+      expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(taskDispatcher.replace).not.toHaveBeenCalled();
+      expect(settleTask).not.toHaveBeenCalled();
+      // The revision advances with the task-submitted event, which is what admits the next message.
+      expect(advanceRevision).toHaveBeenCalledOnce();
+      expect(advanceRevision.mock.calls[0]?.[1]).toBe("task-submitted");
+    },
+  );
+
+  it("hands the validated references to the delivery, never an absolute path or a URI", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ taskDispatcher });
+    const references = [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }];
+    await expect(
+      subject.submitFollowUp("run-1", delivery("queue", { references })),
+    ).resolves.toMatchObject({ ok: true });
+    expect(taskDispatcher.deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ delivery: "queue", references }),
+    );
+  });
+
+  it("consumes the request id on delivery, so a replay is refused and dispatches nothing", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ taskDispatcher });
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toMatchObject({ ok: true });
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.deliver).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["an unknown delivery", { delivery: "interrupt" }],
+    ["a null delivery", { delivery: null }],
+    ["a delivery that names an agent", { agent: "plan" }],
+    ["a stale revision", { expectedRevision: 2 }],
+    ["a blank message", { taskIntent: "   " }],
+    ["an unknown key", { files: [{ uri: "file:///etc/passwd" }] }],
+    ["an absolute reference", { references: [{ path: "/etc/passwd" }] }],
+    ["a parent reference", { references: [{ path: "../outside.txt" }] }],
+    ["a URI reference", { references: [{ path: "file:///etc/passwd" }] }],
+    ["an empty reference list", { references: [] }],
+    ["a reference that carries a URI", { references: [{ path: "a.ts", uri: "file:///x" }] }],
+    [
+      "too many references",
+      { references: Array.from({ length: 17 }, (_, i) => ({ path: `f${String(i)}.ts` })) },
+    ],
+  ])("refuses %s as an invalid intent before anything is delivered", async (_label, patch) => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ taskDispatcher });
+    await expect(subject.submitFollowUp("run-1", delivery("steer", patch))).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.deliver).not.toHaveBeenCalled();
+    // Nothing was reserved: the same request id still admits a well-formed message.
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toMatchObject({ ok: true });
+  });
+
+  it.each(["paused", "stopping", "succeeded", "failed", "cancelled", "awaiting-approval"] as const)(
+    "refuses a delivery to a %s run without delivering, resuming or replacing",
+    async (state) => {
+      const taskDispatcher = dispatcher();
+      const resumePaused = vi.fn((): Promise<CodingRuntimeOrchestratorResult> =>
+        Promise.resolve({ ok: true, snapshot: publicSnapshot() }),
+      );
+      const subject = coordinator({
+        taskDispatcher,
+        resumePaused,
+        current: () => ({ ...runningSnapshot(), state }),
+      });
+      await expect(subject.submitFollowUp("run-1", delivery())).resolves.toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      expect(taskDispatcher.deliver).not.toHaveBeenCalled();
+      expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(taskDispatcher.replace).not.toHaveBeenCalled();
+      expect(resumePaused).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a delivery for another run than the live one", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ taskDispatcher });
+    await expect(subject.submitFollowUp("run-2", delivery())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.deliver).not.toHaveBeenCalled();
+  });
+
+  it("refuses as the request's own fault when the dispatcher cannot deliver, never falling back to a turn", async () => {
+    const taskDispatcher = dispatcher({ deliver: undefined });
+    const subject = coordinator({ taskDispatcher });
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(taskDispatcher.replace).not.toHaveBeenCalled();
+  });
+
+  it("answers a refused delivery as an invalid intent and frees the request id", async () => {
+    let refuse = true;
+    const taskDispatcher = dispatcher({
+      deliver: vi.fn(() =>
+        Promise.resolve(
+          refuse
+            ? { ok: false as const, reason: "inputs-refused" as const }
+            : { ok: true as const },
+        ),
+      ),
+    });
+    const subject = coordinator({ taskDispatcher });
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    refuse = false;
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toMatchObject({ ok: true });
+  });
+
+  it("answers an authority refusal as authority-resolution-failed and frees the request id", async () => {
+    let refuse = true;
+    const taskDispatcher = dispatcher({
+      deliver: vi.fn(() =>
+        Promise.resolve(refuse ? { ok: false as const } : { ok: true as const }),
+      ),
+    });
+    const advanceRevision = vi.fn((): CodingRuntimeOrchestratorResult => ({
+      ok: true,
+      snapshot: publicSnapshot(),
+    }));
+    const subject = coordinator({ taskDispatcher, advanceRevision });
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(advanceRevision).not.toHaveBeenCalled();
+    refuse = false;
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toMatchObject({ ok: true });
+  });
+
+  it("logs a thrown delivery as structured evidence on the follow-up failure line and frees the request id", async () => {
+    const activityLog = createBufferedServerLogSink();
+    let fail = true;
+    const taskDispatcher = dispatcher({
+      deliver: vi.fn(() =>
+        fail
+          ? Promise.reject(new Error("delivery backend offline"))
+          : Promise.resolve({ ok: true as const }),
+      ),
+    });
+    const subject = coordinator({ taskDispatcher, activityLog });
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(activityLog.events).toMatchObject([
+      {
+        level: "warn",
+        op: "coding-runtime.follow-up.dispatch-failed",
+        extra: { runId: "run-1", operation: "follow-up" },
+      },
+    ]);
+    expect(JSON.stringify(activityLog.events)).not.toContain("delivery backend offline");
+    fail = false;
+    await expect(subject.submitFollowUp("run-1", delivery())).resolves.toMatchObject({ ok: true });
+  });
+
+  it("hands the references of an ordinary follow-up to the turn it starts, and to the replacement of a paused one", async () => {
+    const references = [{ path: "src/app.ts" }];
+    const running = dispatcher();
+    await expect(
+      coordinator({ taskDispatcher: running }).submitFollowUp("run-1", {
+        ...followUp(),
+        references,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(running.dispatch).toHaveBeenCalledWith(expect.objectContaining({ references }));
+    expect(running.deliver).not.toHaveBeenCalled();
+
+    const paused = dispatcher();
+    await expect(
+      coordinator({
+        taskDispatcher: paused,
+        current: () => ({ ...runningSnapshot(), state: "paused" }),
+      }).submitFollowUp("run-1", { ...followUp(), references }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(paused.replace).toHaveBeenCalledWith(expect.objectContaining({ references }));
+  });
+
+  it("keeps the historical follow-up request to the dispatcher byte for byte", async () => {
+    const taskDispatcher = dispatcher();
+    await coordinator({ taskDispatcher }).submitFollowUp("run-1", followUp());
+    expect(taskDispatcher.dispatch).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: "req-1",
+      expectedRevision: 3,
+      taskIntent: "Continue the bounded task",
+    });
+  });
+
+  it("turns a delivery to an ordinary refusal when the dispatcher answers an unsupported agent", async () => {
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.resolve({ ok: false, reason: "inputs-refused" }),
+    });
+    await expect(
+      coordinator({ taskDispatcher }).submitFollowUp("run-1", {
+        ...followUp(),
+        references: [{ path: "a.ts" }],
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+});
+
+describe("CodingRuntimeOperationCoordinator turn revert", () => {
+  type Outcome = "cancelled" | "failed" | "succeeded";
+  type Revert = NonNullable<CodingRuntimeTaskDispatcher["revert"]>;
+
+  function revertBody(
+    action: unknown = "undo",
+    requestId = "req-revert-1",
+    expectedRevision = 3,
+  ): Record<string, unknown> {
+    return { requestId, expectedRevision, action };
+  }
+
+  function applied(): Awaited<ReturnType<Revert>> {
+    return { ok: true, fileCount: 2, additions: 3, deletions: 1 };
+  }
+
+  function withRevert(revert: Revert): CodingRuntimeTaskDispatcher {
+    return dispatcher({ revert: vi.fn(revert) });
+  }
+
+  it("dispatches an undo with the admitted revision, the action and the request's correlation id", async () => {
+    const taskDispatcher = withRevert(() => Promise.resolve(applied()));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(
+      subject.submitRevert("run-1", revertBody("undo"), "corr-revert-0001"),
+    ).resolves.toEqual({ ok: true, snapshot: publicSnapshot() });
+
+    expect(taskDispatcher.revert).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: "req-revert-1",
+      expectedRevision: 3,
+      action: "undo",
+      correlationId: "corr-revert-0001",
+    });
+  });
+
+  it.each(["running", "paused"] as const)(
+    "admits an undo and a restore of a %s run",
+    async (state) => {
+      const taskDispatcher = withRevert(() => Promise.resolve(applied()));
+      const subject = coordinator({
+        taskDispatcher,
+        current: () => ({ ...runningSnapshot(), state }),
+      });
+
+      await expect(
+        subject.submitRevert("run-1", revertBody("undo", "req-a")),
+      ).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(
+        subject.submitRevert("run-1", revertBody("restore", "req-b")),
+      ).resolves.toMatchObject({ ok: true });
+    },
+  );
+
+  it.each([
+    "starting",
+    "ready",
+    "awaiting-approval",
+    "stopping",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "recovery-required",
+  ] as const)("refuses to revert a run that is %s, without dispatching", async (state) => {
+    const taskDispatcher = withRevert(() => Promise.resolve(applied()));
+    const subject = coordinator({
+      taskDispatcher,
+      current: () => ({ ...runningSnapshot(), state }),
+    });
+
+    await expect(subject.submitRevert("run-1", revertBody())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.revert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an unknown action", revertBody("commit")],
+    ["a missing action", { requestId: "req-1", expectedRevision: 3 }],
+    ["an extra key", { ...revertBody(), files: ["a.txt"] }],
+    ["a stale revision", revertBody("undo", "req-1", 2)],
+    ["a future revision", revertBody("undo", "req-1", 4)],
+    ["an unsafe request id", revertBody("undo", "../req")],
+    ["a non-object body", "undo"],
+  ])("refuses %s without dispatching", async (_name, body) => {
+    const taskDispatcher = withRevert(() => Promise.resolve(applied()));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitRevert("run-1", body)).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.revert).not.toHaveBeenCalled();
+  });
+
+  it("refuses another run's id and a runtime that offers no revert", async () => {
+    const withoutRevert = dispatcher();
+    await expect(
+      coordinator({ taskDispatcher: withoutRevert }).submitRevert("run-1", revertBody()),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+
+    const taskDispatcher = withRevert(() => Promise.resolve(applied()));
+    await expect(
+      coordinator({ taskDispatcher }).submitRevert("run-2", revertBody()),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(taskDispatcher.revert).not.toHaveBeenCalled();
+  });
+
+  it("dispatches each request id once and fails closed on its replay", async () => {
+    const taskDispatcher = withRevert(() => Promise.resolve(applied()));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitRevert("run-1", revertBody())).resolves.toMatchObject({ ok: true });
+    await expect(subject.submitRevert("run-1", revertBody())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.revert).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["already-staged", "invalid-intent"],
+    ["nothing-staged", "invalid-intent"],
+    ["nothing-to-undo", "invalid-intent"],
+    ["turn-boundary-missing", "invalid-intent"],
+    ["unsupported", "invalid-intent"],
+    ["workspace-changed", "invalid-intent"],
+    ["not-admitted", "authority-resolution-failed"],
+    ["interrupt-failed", "runtime-failed"],
+    ["revert-failed", "runtime-failed"],
+    ["run-unavailable", "runtime-failed"],
+    ["turn-blocked", "runtime-failed"],
+  ] as const)("answers the refusal %s as %s and releases the request id", async (reason, code) => {
+    let answer: Awaited<ReturnType<Revert>> = { ok: false, reason };
+    const taskDispatcher = withRevert(() => Promise.resolve(answer));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitRevert("run-1", revertBody())).resolves.toEqual({
+      ok: false,
+      failureCode: code,
+    });
+
+    // The refusal released the reservation: the same request id is admitted once it can succeed.
+    answer = applied();
+    await expect(subject.submitRevert("run-1", revertBody())).resolves.toMatchObject({ ok: true });
+  });
+
+  it("keeps the run alive when an undo stops its turn: the cancelled outcome is dropped", async () => {
+    const settleTask = vi.fn();
+    let finishTurn: ((outcome: Outcome) => void) | undefined;
+    const turn = new Promise<Outcome>((resolve) => {
+      finishTurn = resolve;
+    });
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.resolve({ ok: true, completion: turn }),
+      // The undo interrupts the turn in flight: its completion settles while the revert runs.
+      revert: vi.fn(() => {
+        finishTurn?.("cancelled");
+        return Promise.resolve(applied());
+      }),
+    });
+    const subject = coordinator({ settleTask, taskDispatcher });
+    await subject.submitFollowUp("run-1", followUp());
+
+    await expect(subject.submitRevert("run-1", revertBody("undo"))).resolves.toMatchObject({
+      ok: true,
+    });
+    await turn;
+    await Promise.resolve();
+
+    expect(settleTask).not.toHaveBeenCalled();
+  });
+
+  it("settles the run with the interrupted turn's outcome when an undo stopped it and then failed", async () => {
+    const settleTask = vi.fn();
+    let finishTurn: ((outcome: Outcome) => void) | undefined;
+    const turn = new Promise<Outcome>((resolve) => {
+      finishTurn = resolve;
+    });
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.resolve({ ok: true, completion: turn }),
+      revert: vi.fn(() => {
+        finishTurn?.("cancelled");
+        return Promise.resolve({ ok: false as const, reason: "revert-failed" as const });
+      }),
+    });
+    const subject = coordinator({ settleTask, taskDispatcher });
+    await subject.submitFollowUp("run-1", followUp());
+
+    await expect(subject.submitRevert("run-1", revertBody("undo"))).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-failed",
+    });
+
+    await vi.waitFor(() => {
+      expect(settleTask).toHaveBeenCalledExactlyOnceWith("run-1", "cancelled");
+    });
+  });
+
+  it("does not reserve a task generation for a restore, which interrupts nothing", async () => {
+    const settleTask = vi.fn();
+    let finishTurn: ((outcome: Outcome) => void) | undefined;
+    const turn = new Promise<Outcome>((resolve) => {
+      finishTurn = resolve;
+    });
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.resolve({ ok: true, completion: turn }),
+      revert: vi.fn(() => Promise.resolve(applied())),
+    });
+    const subject = coordinator({ settleTask, taskDispatcher });
+    await subject.submitFollowUp("run-1", followUp());
+
+    await subject.submitRevert("run-1", revertBody("restore"));
+    finishTurn?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(settleTask).toHaveBeenCalledExactlyOnceWith("run-1", "succeeded");
+    });
+  });
+
+  it("logs a throwing dispatcher as structured evidence and answers a runtime failure", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const taskDispatcher = withRevert(() => Promise.reject(new Error("revert backend offline")));
+    const subject = coordinator({ taskDispatcher, activityLog });
+
+    await expect(subject.submitRevert("run-1", revertBody(), "corr-revert-0001")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-failed",
+    });
+
+    expect(activityLog.events).toMatchObject([
+      {
+        level: "warn",
+        op: "coding-runtime.revert.dispatch-failed",
+        correlationId: "corr-revert-0001",
+        errorKind: "internal",
+        extra: { runId: "run-1", operation: "revert" },
+      },
+    ]);
+    expect(Array.isArray(activityLog.events[0]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(activityLog.events)).not.toContain("revert backend offline");
+  });
+
+  it("proves coding-runtime.revert.dispatch-failed through the registered formatter", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const subject = coordinator({
+      taskDispatcher: withRevert(() => Promise.reject(new Error("revert backend offline"))),
+      activityLog,
+    });
+    await subject.submitRevert("run-1", revertBody());
+    const [failure] = activityLog.events;
+    if (failure === undefined) throw new Error("expected revert.dispatch-failed line");
+
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.revert.dispatch-failed.emitted-line",
+        formatActivityLogProofLine(failure),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "revert" });
+  });
+
+  describe("state", () => {
+    const state = { staged: false, fileCount: 2, additions: 3, deletions: 1 };
+
+    it("reads the dispatcher's counts for a running or paused run only", async () => {
+      const revertState = vi.fn(() => Promise.resolve(state));
+      for (const live of ["running", "paused"] as const) {
+        const subject = coordinator({
+          taskDispatcher: dispatcher({ revertState }),
+          current: () => ({ ...runningSnapshot(), state: live }),
+        });
+        await expect(subject.revertState("run-1")).resolves.toEqual(state);
+      }
+      for (const settled of ["succeeded", "awaiting-approval", "recovery-required"] as const) {
+        const subject = coordinator({
+          taskDispatcher: dispatcher({ revertState }),
+          current: () => ({ ...runningSnapshot(), state: settled }),
+        });
+        await expect(subject.revertState("run-1")).resolves.toBeUndefined();
+      }
+      expect(revertState).toHaveBeenCalledTimes(2);
+    });
+
+    it("is absent for another run's id and for a runtime that offers none", async () => {
+      const revertState = vi.fn(() => Promise.resolve(state));
+      await expect(
+        coordinator({ taskDispatcher: dispatcher({ revertState }) }).revertState("run-2"),
+      ).resolves.toBeUndefined();
+      expect(revertState).not.toHaveBeenCalled();
+      await expect(coordinator({}).revertState("run-1")).resolves.toBeUndefined();
     });
   });
 });

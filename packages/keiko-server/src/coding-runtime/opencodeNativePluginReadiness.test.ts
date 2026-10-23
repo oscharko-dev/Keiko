@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
+  OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
+} from "./opencodeNativeDeliveryTools.js";
+import {
   OPENCODE_NATIVE_REQUIRED_PLUGINS,
   awaitOpenCodeNativePlugins,
   openCodeNativePluginReadiness,
@@ -62,6 +66,30 @@ describe("native plugin readiness (#3897)", () => {
     expect(openCodeNativePluginReadiness([BUILTIN, ...required().slice(1)], [DIRECTORY])).toBe(
       "pending",
     );
+  });
+
+  // The shell's refusal of a Git write names Keiko's delivery tools as the way to deliver, so a run
+  // without the plugin that registers them must never become ready (#3897).
+  it("requires the delivery plugin: a run without it waits, and one whose setup failed is refused", () => {
+    const delivery = OPENCODE_NATIVE_REQUIRED_PLUGINS.find(
+      (plugin) => plugin.id === OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
+    );
+    expect(delivery?.file).toBe(`${OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE}.ts`);
+    const others = required().filter((candidate) => candidate.id !== delivery?.id);
+    expect(others).toHaveLength(OPENCODE_NATIVE_REQUIRED_PLUGINS.length - 1);
+    expect(openCodeNativePluginReadiness([BUILTIN, ...others], [DIRECTORY])).toBe("pending");
+    const failed = entry(
+      OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
+      join(DIRECTORY, `${OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE}.ts`),
+      "failed",
+    );
+    expect(openCodeNativePluginReadiness([...others, failed], [DIRECTORY])).toBe("failed");
+    const unparsed = entry(
+      undefined,
+      join(DIRECTORY, `${OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE}.ts`),
+      "failed",
+    );
+    expect(openCodeNativePluginReadiness([...others, unparsed], [DIRECTORY])).toBe("failed");
   });
 
   it("refuses a required plugin whose setup failed", () => {

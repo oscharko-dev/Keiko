@@ -319,6 +319,8 @@ function codingSidecarProjection(
       // window against a 131k model). Four MiB keeps the model window the binding limit for
       // every declared window up to 128k input tokens while remaining the hard memory bound.
       maxRequestBytes: CODING_SIDECAR_MAX_REQUEST_BYTES,
+      // Present only for a model whose configuration declares image input; absence is text only.
+      ...(capability.supportsImageInput ? { supportsImageInput: true } : {}),
     },
     verification,
   };

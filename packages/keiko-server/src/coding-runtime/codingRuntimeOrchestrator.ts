@@ -75,6 +75,7 @@ import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
+import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 import {
   auxiliaryEventFacts,
   CodingRuntimeOrchestratorState,
@@ -2055,6 +2056,19 @@ export class CodingRuntimeOrchestrator {
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
     return this.operations.submitFollowUp(runId, input, correlationId);
+  }
+
+  /** Undo or restore of the run's newest turn; see `CodingRuntimeOperationCoordinator.submitRevert`. */
+  submitRevert(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.submitRevert(runId, input, correlationId);
+  }
+
+  revertState(runId: string): Promise<CodingRuntimeRevertState | undefined> {
+    return this.operations.revertState(runId);
   }
 
   listQuestions(

@@ -10,7 +10,9 @@ import {
   codingWorkbenchRuntimeReducer,
   codingWorkbenchSourceFromManaged,
   createInitialCodingWorkbenchRuntimeState,
+  NO_CODING_WORKBENCH_PROMPT_INPUTS,
   offeredCodingWorkbenchAgents,
+  offeredCodingWorkbenchPromptInputs,
   type CodingWorkbenchPairingState,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
@@ -676,4 +678,68 @@ it("keeps the actual managed-gateway Start projection closed when its model sele
     modelId: null,
   });
   expect(cleared.canStart).toBe(false);
+});
+
+// ADR-0137 D10: the prompt inputs the composer offers are what the server's readiness read said the
+// composed runtime can do, kept across a mode change and never widened by the browser.
+describe("prompt inputs the server offers", () => {
+  const withPromptInputs = (
+    state: CodingWorkbenchRuntimeState,
+    promptInputs?: CodingWorkbenchRuntimeReadiness["promptInputs"],
+  ): CodingWorkbenchRuntimeState =>
+    codingWorkbenchRuntimeReducer(state, {
+      kind: "runtime-set",
+      readiness: { ...readiness(), ...(promptInputs === undefined ? {} : { promptInputs }) },
+    });
+
+  it("starts with neither input and offers neither until readiness says otherwise", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(initial.promptInputs).toEqual({ delivery: false, references: false });
+    expect(offeredCodingWorkbenchPromptInputs(initial)).toBe(NO_CODING_WORKBENCH_PROMPT_INPUTS);
+  });
+
+  it("records what readiness offers", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    expect(offered.promptInputs).toEqual({ delivery: true, references: true });
+    expect(offeredCodingWorkbenchPromptInputs(offered)).toEqual({
+      delivery: true,
+      references: true,
+    });
+    const partial = withPromptInputs(readyState(), { delivery: true, references: false });
+    expect(offeredCodingWorkbenchPromptInputs(partial)).toEqual({
+      delivery: true,
+      references: false,
+    });
+  });
+
+  it("reads a readiness that states nothing as none, and a narrowing as a narrowing", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    expect(withPromptInputs(offered).promptInputs).toEqual({ delivery: false, references: false });
+    expect(withPromptInputs(offered, { delivery: false, references: false }).promptInputs).toEqual({
+      delivery: false,
+      references: false,
+    });
+  });
+
+  it("keeps the offer while a mode change reloads readiness", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    const reloading = codingWorkbenchRuntimeReducer(offered, {
+      kind: "select-mode",
+      mode: "governed-assist",
+    });
+    expect(reloading.runtime).toMatchObject({ status: "idle", value: null });
+    expect(offeredCodingWorkbenchPromptInputs(reloading)).toEqual({
+      delivery: true,
+      references: true,
+    });
+  });
+
+  it("offers neither input to a Codex subscription run, whatever the managed runtime reported", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    const codex = { ...offered, runtimePreference: "codex-subscription" as const };
+    expect(offeredCodingWorkbenchPromptInputs(codex)).toEqual({
+      delivery: false,
+      references: false,
+    });
+  });
 });

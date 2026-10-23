@@ -1329,6 +1329,43 @@ it("retains the captured backend profile through actual run composition", async 
   }
 });
 
+// #3897 S14: the admitted model's declared image input travels from the run metadata the server
+// resolves for the model profile, through the context geometry, into the actual run composition,
+// where the launch profile turns it into the native provider binding.
+it.each([
+  { declared: true, expected: true },
+  { declared: false, expected: undefined },
+  { declared: undefined, expected: undefined },
+])(
+  "carries declared image input $declared into the composed context geometry",
+  async ({ declared, expected }) => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-image-geometry-"));
+    const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+    const base = backendInput(root, windowsDevLaneRuntime(root));
+    const backend = createProductionOpenCodeBackend({
+      ...base,
+      resolveGatewayRunMetadata: (modelId) => ({
+        ...(base.resolveGatewayRunMetadata?.(modelId) ?? {
+          maxPromptTokens: 128_000,
+          maxOutputTokens: 4_096,
+          maxInputMessages: 512,
+          maxRequestBytes: 1_048_576,
+        }),
+        ...(declared === undefined ? {} : { supportsImageInput: declared }),
+      }),
+    });
+    const run = backend.createRun(runInput(root));
+    try {
+      const geometry = compose.mock.calls[0]?.[0].contextGeometry;
+      expect(geometry?.imageInput).toBe(expected);
+    } finally {
+      await run.dispose?.();
+      compose.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 it("bounds delayed child correlations and reports eviction without inventing a native child", async () => {
   await withChildActivity(async (f) => {
     const ids = await capturedChildActions(700);

@@ -1027,8 +1027,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **A native run readies only with its governing plugins active.** No configured rule stands in for
   the policy hook, so the fail-closed property lives in readiness: after the protocol digest the
   adapter enters the `policy-plugin` phase, which polls the producer's admitted `GET /api/plugin`
-  (`plugin.list`) for at most ten seconds until `keiko.native-policy` and `keiko.native-context`
-  are `active` from Keiko's own generated files (`opencodeNativePluginReadiness.ts`). A failed or
+  (`plugin.list`) for at most ten seconds until `keiko.native-policy`, `keiko.native-context` and
+  `keiko.native-delivery` are `active` from Keiko's own generated files
+  (`opencodeNativePluginReadiness.ts`). A failed or
   unparsable plugin, a required id claimed from another file or twice, or a plugin still missing
   when the bound runs out refuses the start (`runtime-profile-open`) before any session or prompt.
   The real-binary suite shows an absent and an unparsable policy plugin never read as ready and
@@ -1123,6 +1124,35 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   between turns (idle, paused) and fixed while a turn runs, sends the selection with every start,
   retry and follow-up (`build` included, so a follow-up can switch back), and names the plan agent
   in the run status line and information panel.
+- **The prompt takes a message while a turn runs and the files its text references.** A follow-up
+  may carry `delivery` (`steer` or `queue`, the closed `CODING_WORKBENCH_PROMPT_DELIVERIES`
+  vocabulary) and `references` (at most 16 `{ path }` entries relative to the run's workspace root;
+  the browser never sends an absolute path or a URI). A delivery joins the turn in flight, so it is
+  admitted only for a `running` run whose adapter still tracks a turn, never names an agent, and
+  starts, replaces and settles nothing: the turn keeps its own settlement, and an accepted message
+  advances the revision with `task-submitted` so the next one is admitted. It passes the same
+  dispatcher admission as any delegation (live authority revalidated, the revision consumed once, a
+  single-use request id). The pinned 2.1.4 behaviour is proven against the original executable
+  (`opencodeNativePromptInputs.real.test.ts`): `steer` reaches the model with the running turn's
+  next step and `queue` after its final answer, both inside one execution, so the one settlement
+  Keiko waits for covers them; a delivery sent to an idle session starts an execution nothing in
+  Keiko would settle, which is why admission requires a turn in flight. Both inputs are offered by
+  the native profile only (`openCodePromptInputs`, reported as `promptInputs` in the readiness
+  read) and refused as `invalid-intent` elsewhere and for a Codex run, exactly like a `plan`
+  request. A reference must resolve, through the descriptor-bound workspace read, to a plain UTF-8
+  text file inside the run's canonical workspace root: no `..`, no symbolic link (the real path is
+  judged again), no hard link, no sensitive path (`isDenied`, the list the kernel boundary shares),
+  at most 64 KiB per file, 192 KiB per prompt and 1 MiB per run (the runtime embeds the bytes in
+  the session history that Keiko reads back whole). The first violation refuses the whole prompt
+  before anything is sent. The attachment is the runtime's `files` entry (the `file://` URI of the
+  real path and the file name); the typed text stays the visible message and the file content stays
+  out of the timeline, Coding History and logs. Evidence is the body-free
+  `coding-runtime.prompt-inputs.settled` line: the run, `accepted` or `refused`, the closed
+  delivery, the reference count, and the attached bytes or the closed refusal reason, never a
+  path, name or text. The composer offers Send now (Enter) and Queue (Ctrl or Cmd+Enter) while a
+  turn runs and the `@` picker (the Files search over the run's workspace, no second index) while
+  a run runs or is paused. A start carries no references yet: the workspace they name does not
+  exist before the run is minted.
 - **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
   plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
   (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`
@@ -1144,9 +1174,63 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   runtime's own advertised tools; the route admits a bounded advertisement (at most 128 admissible
   names, 64 KiB per schema, 512 KiB in all; `opencodeNativeTools.ts`) and mints a `native`
   advertisement (`GatewayNativeToolAdvertisement`) the bridge forwards verbatim and binds back by
-  name only. Nothing in it registers a handler, effect or authority in Keiko (ADR-0175 D2). The
+  name only. Nothing in it registers a handler, effect or authority in Keiko (ADR-0175 D2); this
+  holds for Keiko's own delivery tools below too, which arrive as definitions like any other. The
   edit, write and patch tools are exact-content tools: their arguments reach the runtime byte for
   byte (#4009).
+- **A native run hands a read image to a model that declares image input (#3897, S14).** The
+  native provider model declares `input: ["text", "image"]` only when the admitted model's
+  configuration declares `supportsImageInput`; one projection (`runMetadata.supportsImageInput`)
+  feeds both the launch profile (`OpenCodeContextGeometry.imageInput`, read by the native profile
+  alone) and the route. The mapped profiles and a text-only model keep the text-only declaration,
+  and OpenCode then tells the model it cannot see images, as standalone. The runtime sends a read
+  image as a user message holding one `image_url` part with a base64 data URL.
+  `coding-sidecar-image-parts.ts` admits it into the existing `ChatMessage.contentParts`, so the
+  Model Gateway's provider projection, image token allowance and `gateway.prompt.admission`
+  evidence apply unchanged, only for the native profile and a declaring model, only as an inline
+  data URL of an allowed image type (the Chat attachment policy: SVG refused) of at most
+  `MAX_ATTACHMENT_BYTES` (the 4 MiB request body bounds a request first), at most 16 parts per
+  request, on a user message. A remote or file reference stays an unsupported content part; every
+  other refusal is one of five closed `coding-sidecar.gateway.rejected` reasons
+  (`image-part-invalid`, `image-mime-unsupported`, `image-part-too-large`, `image-count-exceeded`,
+  `image-input-unsupported`). Evidence is counts only (`imageCount` on
+  `coding-sidecar.gateway.request-validated`, `imageInputDeclared` on the native
+  `coding-runtime.readiness.phase` line); no image bytes, path or URL enter a log. Authority is
+  unchanged: the read stays the policy-governed, kernel-contained native `read`. The original
+  executable shows it (`opencodeNativeImageInput.real.test.ts`): a scripted `read` of a PNG puts
+  one image part, byte for byte, in the next provider request and in the request the production
+  route hands the gateway; a text-only declaration puts none.
+- **A native run delivers through Keiko's delivery tools, never the shell (#3897, T12).**
+  Standalone OpenCode commits and pushes through its shell. Keiko owns delivery (signed commits,
+  bounded refs, ADR-0135; merge is never model-visible, ADR-0087; ADR-0138 D3), so the shell policy
+  refuses Git writes and `gh pr`, `repo`, `release` and `api` in every mode, and its refusal names
+  the way to deliver (`OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE`; the native guidance names the same
+  tools). The native profile therefore registers exactly one group of Keiko tools, through the
+  generated `keiko.native-delivery` plugin (`keiko_native_delivery.ts`): `keiko_git_status`,
+  `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
+  `keiko_pull_request`, `keiko_git_execute`, `keiko_ci_status` and `keiko_verification`
+  (`opencodeNativeDeliveryTools.ts` holds the list once). `keiko_verification` is a member only
+  because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely
+  from that tool's verification; without it no native commit could ever be proposed. The plugin is
+  the mapped profiles' own generated tool source filtered to those names, so a native call is the
+  identical facade request: same capability, wire body, bounds, client deadline and approval
+  ask below Full access. **Authority is the facade's alone.** A proposal mutates nothing; the
+  operator approves it through the Workbench review per mode (ADR-0124 D6; in Full access the
+  existing delivery policy decides, ADR-0138 D3 item 5); `keiko_git_execute` redeems only an
+  approved proposal, and merge has no tool. The tools register as the mapped profiles register them
+  (`codemode: false`, the `permission` option set to their own name): a Code Mode program cannot
+  call them (`Unknown tool`), and the producer hides them from an agent whose rules deny them, so
+  Explore (`*` denied) is never offered them while Build, General and Plan (`*` allowed) are, as
+  they have the shell. The producer evaluates **no permission** for a plugin tool, measured on the pinned
+  executable with a probe plugin beside the real policy (`opencodeNativeDelivery.real.test.ts`):
+  the policy hook is never asked, so it adds no second approval and charges no second tool call,
+  and a permission that did arrive under such a name would be unclassified and refused. A General subagent's
+  child session may call them too; its governed asks (`keiko_verification` in Ask for approval,
+  `keiko_ci_status` below Full access) are refused, because the approval lane binds the run's
+  primary session, while the proposal and redemption tools ask nothing through it. The native
+  settlement owner leaves these calls to the facade that settles them, so run effort counts each
+  once. A run readies only with the plugin active (above), because the refusal and the guidance
+  point to tools it must have.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the
@@ -1271,14 +1355,59 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   entry per reserved call, bounded by `maxToolCalls`, dropped with the run's authority record). A
   child session has its own session id and so its own calls on the same run budget. A check that
   names no tool invocation cannot be recognised again and is charged on its own, so such checks can
-  only spend the budget faster. Patch bytes stay as before (a native edit's size is not known at
-  its permission check). A refused, revoked, expired, exhausted or aborted action is denied and
+  only spend the budget faster. A proposed edit also reserves patch bytes on the same reservation
+  (PR #4064 audit: native writes were charged no patch bytes at all): the producer attaches its own
+  unified diff of the edit to the permission check (`files[].patch` for `edit` and `write`, `diff`
+  for `patch`), the plugin forwards only its UTF-8 size (`patchBytes`), and a budget it would exceed
+  refuses the edit before the runtime writes. That is the measure the mapped path charges for a
+  materialized patch. An edit the producer attached no diff to cannot apply (no match, or an
+  ambiguous one) and spends only its call; a diff the plugin cannot measure is a malformed ask and
+  is never allowed. A refused, revoked, expired, exhausted or aborted action is denied and
   recorded as `authority-refused` or `cancelled`; a wiring without the owner refuses every action.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's
   mode, policy, approval lane and budget; any other session is refused. The decision line records
   the closed `sessionRelation` (`primary`, `child`).
+- **A run's session tree decides when the run is over, whose questions reach the human and how a
+  refused question ends a turn (PR #4064).** `opencodeNativeSessionTree.ts` owns the ancestry above
+  and what hangs on it: a session that is not proven a descendant never keeps a run alive, asks its
+  human or receives an interrupt.
+  - *Liveness.* The producer keeps a subagent launched with `background: true` working after its
+    parent went idle and, when it ends (completed, failed or cancelled), appends a synthetic
+    message from `subagent` and runs the parent again to read it
+    (https://opencode.ai/v2/docs/tools/#subagent; pinned by
+    `opencodeNativeChildLifecycle.real.test.ts`). The adapter's status port therefore answers for
+    the whole tree: `activity` (the primary runs), `held` (it is idle and an owned child runs) or
+    `terminal`. A success or an interruption settles only when the tree is quiet, confirmed by a
+    fresh read at the moment of settlement even when a live hint said otherwise; a failed verdict
+    ends the run at once, because settling reaps the tree. The history projection closes the gap
+    between a child's end and its parent's restart without a clock: an idle message of a parent
+    that launched a background child (a completed `subagent` call naming its session) which has
+    not yet reported back is an observation, not the end of the work (`heldIdleCount` on the
+    projection line); a failed idle stays a terminal failure. A child that never reports is bounded
+    by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
+    interrupts the primary, then every owned child still running, and the primary again when it
+    came back to read a report, and settles on two consecutive inactive reads; budget exhaustion
+    and every settled turn reap the whole process tree through the manager. Evidence:
+    `coding-runtime.native-session-tree.observed` (`held`, `released`, `interrupted`; counts only,
+    a line per change, never per poll).
+  - *Questions.* `opencodeNativeQuestions.ts` lists the pending forms of the primary session and of
+    its owned children, binds an answer or a rejection to the session that asked, and refuses
+    instead of routing a stale id or a form of any other session (another parent chain, outside
+    the workspace). Run authority and revision checks stay with the callers. The producer's General
+    and Explore agents deny `question`, so a child form arises only for an agent whose rules allow
+    it; the lane is correct for it either way. Refusing a child's question interrupts the child
+    only, and its parent continues with the failed subagent call. Evidence:
+    `coding-runtime.native-question.routed` (action, outcome, relation, counts, a closed refusal).
+  - *A refused primary question.* The producer ends that turn with `session.execution.interrupted`,
+    removes the session from the active list and writes an assistant message with
+    `error.type = aborted`, but no idle message. The live hint is observed only for an execution the
+    turn was seen running (a late interruption of a replaced turn settles nothing); the turn settles
+    `interrupted` once the tree is quiet and no later verdict was recorded, and the production turn
+    port reports it as `cancelled`, not `failed`. The run's own terminal state for a turn that did
+    not succeed is the orchestrator's, unchanged. The next turn is armed at once. Evidence:
+    `coding-runtime.native-turn.interrupted` (how long the settlement took after the interruption).
 - **Version-specific history fields are decoded strictly.** OpenCode 2.1.4's failed idle message
   carries `Session.StructuredError`; the history decoder validates its exact producer shape and
   projects only the body-free terminal failure. Readiness evidence hashes the context guidance of
@@ -1289,6 +1418,31 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **Projections admit OpenCode's own tool ids.** History, safe-activity and protocol projections
   accept any admissible tool id (native, MCP-namespaced or plugin-registered, shape-bounded); logs
   carry a native id as itself and any extension tool as `extension`.
+- **A live native run's newest turn can be undone and restored by the human (B3, S04).** The
+  Changes panel offers _Undo last turn_ and _Restore changes_, each behind a confirmation, through
+  `POST /api/coding-workbench/runtime/runs/:runId/revert` (`action` `undo` or `restore`; `GET` on
+  the same route reads counts only). The coordinator admits it like a follow-up (app session,
+  observed revision, one-use request id, a running or paused run) and the dispatcher revalidates
+  the live authority as an operator admission, which a paused run passes; the click is the approval
+  in every mode, and only the runtime's own snapshots write files, inside the task workspace. An
+  undo stops the turn in flight (the runtime refuses to rewind a busy session), stages
+  `session.revert.stage` at the first user message of the newest turn and leaves the run live; the
+  coordinator reserves the next task generation first, so the interrupted turn's cancelled outcome
+  does not settle the run. Keiko never calls `session.revert.commit`: committing, and the next
+  prompt after a staged revert, delete the rewound messages, while the history reconciliation is
+  append-only per session, so a new turn is refused (`turn-blocked`) while an undo is staged. A
+  runtime restores whole files, so Keiko proves each file unchanged by content before it lets the
+  runtime write: when a turn settles, Keiko records the SHA-256 of every file the turn changed, read
+  through a descriptor that follows no link; an undo of a settled turn is refused
+  (`workspace-changed`) unless every file still matches that image, and a restore
+  (`session.revert.clear`) is refused unless every restored file still matches the image the undo
+  left. Size and timestamps are no witness: a same-size copy that puts the old modification time
+  back would pass them. A turn still in flight is the exception: its snapshot covers the whole
+  workspace, so a change made while it ran is part of that turn and is undone with it. A settled
+  run has no
+  undo: its private state, snapshots included, is removed with it. Evidence is
+  `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts and closed words,
+  never a path, patch or message.
 - **Evidence.** `coding-runtime.native-policy.decided` records, per evaluated action, the mode, the
   closed action name, the effect (`allow`, `deny`, `ask`), the closed outcome (allowed, a hard
   denial reason, the human's approved/denied/expired/cancelled/unavailable, or
@@ -1306,7 +1460,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   never counted, and a replayed history read or a reconnect counts a call once. Only the primary
   session's history is read, so a subagent's own calls are not counted (the `subagent` call is).
   The orchestrator's edit outcome (verification requirement and refusal escalation) is not fed: it
-  belongs to Keiko's governed verifier, which a native run does not call.
+  belongs to Keiko's governed verifier, which a native run calls only to record the commit proof of
+  a delivery.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation

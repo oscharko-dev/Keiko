@@ -14,6 +14,7 @@ import {
   type WorkbenchExecutionLocationState,
 } from "./useWorkbenchExecutionLocation";
 import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
+import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import {
   CodingWorkbenchDeliveryReview,
@@ -92,6 +93,7 @@ import {
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import {
   offeredCodingWorkbenchAgents,
+  offeredCodingWorkbenchPromptInputs,
   type CodingWorkbenchClientError,
   type CodingWorkbenchMutationKind,
   type CodingWorkbenchMutationState,
@@ -150,6 +152,8 @@ import {
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
+import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
+import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
@@ -1574,6 +1578,13 @@ function WorkbenchColumns({
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
+  // Undo / Restore of the newest turn (B3): counts only, and only for a run that is still open.
+  const revert = useCodingWorkbenchRevert({
+    runId: state.run.value?.runId,
+    live: state.run.value?.state === "running" || state.run.value?.state === "paused",
+    revision: state.run.value?.revision,
+    changeSignal: changesRefreshSignal(state.events, activity.feed),
+  });
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(
     resumeSelection,
@@ -1586,6 +1597,7 @@ function WorkbenchColumns({
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
+  const promptDelivery = usePromptDeliveryNotice(state.mutation, runId);
   const startTask = (draft = taskIntent): void => {
     const submittedDraft = draft.trim();
     void issueIntake.submit(submittedDraft, async (issue): Promise<void> => {
@@ -1608,8 +1620,18 @@ function WorkbenchColumns({
         onResume: () => {
           if (resumeMode !== null) void actions.resume(resumeMode);
         },
-        onSend: (draft): void => void actions.submitFollowUp(draft.trim()),
+        onSend: (draft, references): void =>
+          void (references === undefined
+            ? actions.submitFollowUp(draft.trim())
+            : actions.submitFollowUp(draft.trim(), { references })),
+        onDeliver: (draft, delivery, references): void => {
+          promptDelivery.begin(delivery);
+          void actions.submitFollowUp(draft.trim(), { delivery, references });
+        },
       }}
+      promptInputs={offeredCodingWorkbenchPromptInputs(state)}
+      referenceRoot={runWorkspace.bound?.root ?? null}
+      deliveryNotice={promptDelivery.notice}
       canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
@@ -1796,6 +1818,11 @@ function WorkbenchColumns({
               activity={timeline.activity}
               questions={questions}
               focusRef={focusRef}
+            />
+            <CodingWorkbenchRevertBar
+              revert={revert.revert}
+              busy={state.mutation.status === "pending"}
+              onRevert={(action): void => void actions.revert(action)}
             />
             <CodingWorkbenchChangesView changes={journeyChanges} pairing={state.pairing} />
           </div>

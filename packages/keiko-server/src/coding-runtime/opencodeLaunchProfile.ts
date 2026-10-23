@@ -45,6 +45,13 @@ export interface OpenCodeContextGeometry {
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
+  /**
+   * The admitted model declares image input (`CodingWorkbenchSidecarGatewayRunMetadata.
+   * supportsImageInput`). Only the native profile acts on it (#3897 S14): it then declares image
+   * input on its one provider model so the runtime hands a read image to the model; absent or
+   * false keeps the text-only declaration, and the runtime tells the model it cannot see images.
+   */
+  readonly imageInput?: boolean | undefined;
 }
 
 export interface OpenCodeLaunchProfileInput {
@@ -194,6 +201,7 @@ export function resolveOpenCodeContextGeometry(
     contextWindowTokens: maxInputTokens + maxOutputTokens,
     maxInputTokens,
     maxOutputTokens,
+    ...(metadata.supportsImageInput === true ? { imageInput: true } : {}),
   };
 }
 
@@ -353,7 +361,7 @@ export function createFixedOpenCodeV2Config(
     snapshots: false,
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    providers: fixedOpenCodeV2Provider(contextGeometry),
+    providers: fixedOpenCodeV2Provider(contextGeometry, false),
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions,
@@ -400,7 +408,7 @@ function createNativeOpenCodeV2Config(
     snapshots: true,
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    providers: fixedOpenCodeV2Provider(contextGeometry),
+    providers: fixedOpenCodeV2Provider(contextGeometry, contextGeometry.imageInput === true),
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions: [
@@ -442,8 +450,14 @@ function nativeServerOwnedBinding(
   return Object.fromEntries(OPENCODE_NATIVE_SERVER_OWNED_KEYS.map((key) => [key, config[key]]));
 }
 
+/**
+ * `imageInput` is the one capability that varies per admitted model: the native `read` of an image
+ * becomes a model-visible image only when the provider model declares it, exactly as in standalone
+ * OpenCode (https://opencode.ai/v2/docs/tools/). The direct and Code Mode profiles never pass it.
+ */
 function fixedOpenCodeV2Provider(
   geometry: OpenCodeContextGeometry,
+  imageInput: boolean,
 ): Readonly<Record<string, unknown>> {
   return {
     "keiko-runtime": {
@@ -452,7 +466,11 @@ function fixedOpenCodeV2Provider(
       models: {
         [OPENCODE_RUNTIME_MODEL_ALIAS]: {
           name: "Keiko Governed Coding",
-          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          capabilities: {
+            tools: true,
+            input: imageInput ? ["text", "image"] : ["text"],
+            output: ["text"],
+          },
           limit: {
             context: geometry.contextWindowTokens,
             input: geometry.maxInputTokens,

@@ -407,6 +407,8 @@ export interface CodingToolNativeEffectInput {
   readonly capability: string;
   readonly actionClass: CodingWorkbenchActionClass;
   readonly invocation?: CodingToolNativeInvocation | undefined;
+  /** The UTF-8 size of the producer's diff of a proposed edit, charged to the patch budget. */
+  readonly patchBytes?: number | undefined;
 }
 
 /**
@@ -440,7 +442,10 @@ export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
   readonly state: "succeeded" | "failed";
 }
 
-/** `counted` reached the run's effort roll-up; `duplicate` was the same call seen again. */
+/**
+ * `counted` reached the run's effort roll-up; `duplicate` was already counted: the same call seen
+ * again, or a Keiko delivery tool the facade served and settled itself.
+ */
 export type CodingToolNativeSettlement = "counted" | "duplicate";
 
 /**

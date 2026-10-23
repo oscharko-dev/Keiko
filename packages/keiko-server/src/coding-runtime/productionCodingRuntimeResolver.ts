@@ -1119,17 +1119,31 @@ export function bindExplicitSkillTurns(
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text, initialContext, agent): Promise<boolean> => {
+    submitTurn: async (runId, text, initialContext, agent, inputs): Promise<boolean> => {
       explicitSkills.observeTurn(text);
-      const accepted = await turnPort.submitTurn(runId, text, initialContext, agent);
+      const accepted =
+        inputs === undefined
+          ? await turnPort.submitTurn(runId, text, initialContext, agent)
+          : await turnPort.submitTurn(runId, text, initialContext, agent, inputs);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },
     selectableAgents: turnPort.selectableAgents,
+    // A delivered message joins the turn that is running and starts none, so it neither replaces
+    // that turn's explicit-skill request nor clears it: only a turn's own submission observes text.
+    ...(turnPort.admitPromptInputs === undefined || turnPort.deliverPrompt === undefined
+      ? {}
+      : {
+          admitPromptInputs: turnPort.admitPromptInputs,
+          deliverPrompt: turnPort.deliverPrompt,
+        }),
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);
     },
+    ...(turnPort.revertTurn === undefined || turnPort.revertState === undefined
+      ? {}
+      : { revertTurn: turnPort.revertTurn, revertState: turnPort.revertState }),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       try {
         return await turnPort.waitForTerminal(runId, signal);

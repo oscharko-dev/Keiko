@@ -1,5 +1,3 @@
-import { dirname } from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -7,13 +5,8 @@ import type {
   CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
 
-import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
-import {
-  catalogRuntimeFixture,
-  RUNTIME_NOW,
-} from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
+import { RUNTIME_NOW } from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
-import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
 import type { CodingToolNativeInvocation } from "./codingToolFacadePorts.js";
 import {
   createCodingToolNativeEffectFacet,
@@ -24,138 +17,12 @@ import {
   CodingRuntimeRunEffortLedger,
   createCodingRuntimeRunEffortRegistry,
 } from "./codingRuntimeRunEffort.js";
+import { OPENCODE_NATIVE_DELIVERY_TOOL_NAMES } from "./opencodeNativeDeliveryTools.js";
 import {
-  productionRuntimeAuthorityFacts,
-  type ProductionWorkspaceAuthorityInput,
-} from "./productionRuntimeWorkspaceAuthority.js";
-import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
-import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
-
-const RUN_ID = "run-1";
-
-type NativeContext = ReturnType<Parameters<typeof createRuntimeCodingToolFacade>[1]>;
-
-// The real owner, not a mock: a genuine authority service, authority registry and capability mint
-// (the shape of the auditor's repro on PR #4064), with a tool-call budget of `maxToolCalls`.
-function realNativeRuntime(
-  maxToolCalls: number,
-  mode: CodingWorkbenchMode = "autonomous-delivery",
-): {
-  readonly authority: CodingRuntimeAuthorityService;
-  readonly capability: string;
-  readonly dispose: () => void;
-  readonly context: (nowIso?: string) => NativeContext;
-  readonly facade: ReturnType<typeof createRuntimeCodingToolFacade>;
-  readonly expiresAt: string;
-} {
-  const base = catalogRuntimeFixture(mode);
-  const trusted = { ...base.trusted, budget: { ...base.trusted.budget, maxToolCalls } };
-  const authority = new CodingRuntimeAuthorityService(
-    new EditorAgentAuthorityRegistry(),
-    () => RUN_ID,
-    () => "nonce-1",
-    undefined,
-    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(RUNTIME_NOW) }),
-  );
-  const intent = {
-    schemaVersion: "1" as const,
-    requestId: "request-1",
-    command: "start" as const,
-    taskIntent: "Read the accepted workspace",
-    requestedMode: mode,
-    modelSource: "keiko-model-gateway" as const,
-  };
-  const confirmation = authority.confirmStart(
-    intent,
-    trusted.taskId,
-    trusted.operatorId,
-    RUNTIME_NOW,
-  );
-  const minted = authority.mintStart(intent, trusted, confirmation, RUNTIME_NOW);
-  if (!minted.ok) throw new TypeError("Expected genuine runtime authority mint");
-  if (
-    !authority.transition(RUN_ID, "ready", RUNTIME_NOW) ||
-    !authority.transition(RUN_ID, "running", RUNTIME_NOW)
-  )
-    throw new TypeError("Expected running runtime authority");
-  const workspace = workspaceFor(base.root, trusted, mode);
-  const context = (nowIso = RUNTIME_NOW): NativeContext =>
-    nativeContext(workspace, base.root, trusted, minted.authorityRef.envelopeDigest, nowIso, mode);
-  return {
-    authority,
-    capability: minted.toolFacadeCapability,
-    dispose: base.dispose,
-    context,
-    facade: createRuntimeCodingToolFacade(authority, context, governedPorts()),
-    expiresAt: trusted.expiresAt,
-  };
-}
-
-function governedPorts(): CodingToolGovernedPorts {
-  const failed = (): Promise<{ readonly status: "failed" }> =>
-    Promise.resolve({ status: "failed" });
-  return {
-    repositoryRead: { execute: failed },
-    repositoryDiscover: { execute: failed },
-    repositorySearch: { execute: failed },
-    editorChangeset: { execute: failed },
-    commandRunner: { execute: failed },
-    verificationRunner: { execute: failed },
-    gitAuthority: { execute: failed },
-    deliveryAuthority: { execute: failed },
-    connectorAuthority: { execute: failed },
-    egressAuthority: { execute: failed },
-  };
-}
-
-function workspaceFor(
-  root: string,
-  trusted: ReturnType<typeof catalogRuntimeFixture>["trusted"],
-  mode: CodingWorkbenchMode,
-): ProductionWorkspaceAuthorityInput {
-  const instance = {
-    workspaceId: trusted.workspaceId,
-    repositoryId: trusted.projectId,
-    repositoryRoot: root,
-    managedWorktreePath: root,
-    taskId: trusted.taskId,
-    taskBranch: trusted.branchRef,
-    baseBranch: trusted.branch.baseRef,
-    lastVerifiedHead: "1".repeat(40),
-    lifecycleState: "active" as const,
-    health: "healthy" as const,
-    driftMarkers: [],
-  };
-  return {
-    workspaceLifecycle: {
-      getActive: () => ({ instance, binding: { activeRoot: root } }),
-    } as unknown as ProductionWorkspaceAuthorityInput["workspaceLifecycle"],
-    managedTaskWorkspaceRoot: dirname(dirname(root)),
-    deploymentCeiling: mode,
-    readWorkspaceHead: () => "1".repeat(40),
-    now: () => new Date(RUNTIME_NOW),
-  };
-}
-
-function nativeContext(
-  workspace: ProductionWorkspaceAuthorityInput,
-  root: string,
-  trusted: ReturnType<typeof catalogRuntimeFixture>["trusted"],
-  envelopeDigest: string,
-  nowIso: string,
-  mode: CodingWorkbenchMode,
-): NativeContext {
-  return {
-    adapterKind: "model-gateway-sidecar",
-    liveFacts: productionRuntimeAuthorityFacts(workspace, trusted),
-    workspaceRoot: root,
-    deploymentCeiling: mode,
-    nowIso,
-    runId: RUN_ID,
-    envelopeDigest,
-    authorityExpiresAt: trusted.expiresAt,
-  };
-}
+  governedPorts,
+  NATIVE_EFFECT_FIXTURE_RUN_ID as RUN_ID,
+  realNativeRuntime,
+} from "../tool-catalog/__fixtures__/nativeEffectRuntimeFixture.js";
 
 const runtimes: { dispose: () => void }[] = [];
 afterEach(() => {
@@ -165,8 +32,9 @@ afterEach(() => {
 function startRuntime(
   maxToolCalls: number,
   mode?: CodingWorkbenchMode,
+  maxPatchBytes?: number,
 ): ReturnType<typeof realNativeRuntime> {
-  const runtime = realNativeRuntime(maxToolCalls, mode);
+  const runtime = realNativeRuntime(maxToolCalls, mode, maxPatchBytes);
   runtimes.push(runtime);
   return runtime;
 }
@@ -377,6 +245,88 @@ describe("native permission checks charge the run's tool-call budget once per in
   });
 });
 
+describe("native edits charge the run's patch budget before the runtime writes (#3897, PR #4064)", () => {
+  // The audit's counterexample: maxPatchBytes=64, a native edit of a 4097-byte file was admitted
+  // and charged only its tool call, and the whole 64-byte allowance could still be reserved after
+  // it. A native edit now reserves the size of the producer's diff on the same reservation.
+  const admitEdit = (
+    runtime: ReturnType<typeof realNativeRuntime>,
+    callId: string,
+    patchBytes: number | undefined,
+  ): ReturnType<typeof admitNative> =>
+    createCodingToolNativeEffectFacet(runtime.authority, runtime.context).admit({
+      capability: runtime.capability,
+      actionClass: "workspace-write",
+      invocation: invocation(callId),
+      ...(patchBytes === undefined ? {} : { patchBytes }),
+    });
+  const reserveRemaining = (
+    runtime: ReturnType<typeof realNativeRuntime>,
+    patchBytes: number,
+  ): boolean => {
+    const context = runtime.context();
+    return runtime.authority.resolveCapabilityForDelegation({
+      capability: runtime.capability,
+      adapterKind: context.adapterKind,
+      liveFacts: context.liveFacts,
+      workspaceRoot: context.workspaceRoot,
+      deploymentCeiling: context.deploymentCeiling,
+      nowIso: context.nowIso,
+      delegationId: "independent-probe",
+      idempotencyKey: "independent-probe",
+      usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+    }).ok;
+  };
+
+  it("refuses an edit whose diff exceeds the allowance and leaves the allowance unspent", () => {
+    const runtime = startRuntime(10, undefined, 64);
+    expect(admitEdit(runtime, "call_write", 4_097)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+    expect(reserveRemaining(runtime, 64)).toBe(true);
+  });
+
+  it("charges an edit within the allowance, so the allowance it used can no longer be reserved", () => {
+    const runtime = startRuntime(10, undefined, 64);
+    expect(admitEdit(runtime, "call_edit", 40)).toEqual({ ok: true, charge: "charged" });
+    expect(reserveRemaining(runtime, 25)).toBe(false);
+    expect(reserveRemaining(runtime, 24)).toBe(true);
+  });
+
+  it("admits an edit at exactly the allowance and refuses the next byte cumulatively", () => {
+    const runtime = startRuntime(10, undefined, 64);
+    expect(admitEdit(runtime, "call_a", 30)).toEqual({ ok: true, charge: "charged" });
+    expect(admitEdit(runtime, "call_b", 34)).toEqual({ ok: true, charge: "charged" });
+    expect(admitEdit(runtime, "call_c", 1)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+  });
+
+  it("charges an invocation's diff once however many checks it raises, child sessions included", () => {
+    const runtime = startRuntime(10, undefined, 64);
+    expect(admitEdit(runtime, "call_a", 40)).toEqual({ ok: true, charge: "charged" });
+    expect(admitEdit(runtime, "call_a", 40)).toEqual({ ok: true, charge: "already-charged" });
+    const child = createCodingToolNativeEffectFacet(runtime.authority, runtime.context).admit({
+      capability: runtime.capability,
+      actionClass: "workspace-write",
+      invocation: invocation("call_a", "ses_child"),
+      patchBytes: 40,
+    });
+    expect(child).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+  });
+
+  it("charges only the tool call for an edit the producer attached no diff to", () => {
+    const runtime = startRuntime(10, undefined, 64);
+    expect(admitEdit(runtime, "call_unmatched", undefined)).toEqual({
+      ok: true,
+      charge: "charged",
+    });
+    expect(reserveRemaining(runtime, 64)).toBe(true);
+  });
+});
+
 function expiredAt(runtime: ReturnType<typeof realNativeRuntime>): string {
   return new Date(Date.parse(runtime.expiresAt) + 1_000).toISOString();
 }
@@ -561,6 +511,19 @@ describe("native tool calls reach the run's effort roll-up once per call (#3873,
     ]);
     expect(settle(facet, "call_unnamed", undefined, "succeeded")).toBe("counted");
     expect(seen.at(-1)).toBeUndefined();
+  });
+
+  // A Keiko delivery tool is served by the facade, which settles every request itself; the
+  // runtime's report of the same call must not count it a second time (#3897).
+  it("leaves a Keiko delivery tool to the facade that served it, whatever the call's outcome", () => {
+    const { effort, facet } = effortFor();
+    for (const [index, tool] of OPENCODE_NATIVE_DELIVERY_TOOL_NAMES.entries()) {
+      expect(settle(facet, `call_${String(index)}`, tool, "succeeded"), tool).toBe("duplicate");
+      expect(settle(facet, `call_failed_${String(index)}`, tool, "failed"), tool).toBe("duplicate");
+    }
+    expect(effort.read(RUN_ID)?.toolInvocationCount ?? 0).toBe(0);
+    expect(settle(facet, "call_read", "read", "succeeded")).toBe("counted");
+    expect(effort.read(RUN_ID)?.toolInvocationCount).toBe(1);
   });
 
   it("keeps a fixed-size memory: the oldest call is forgotten, the recent ones are not", () => {

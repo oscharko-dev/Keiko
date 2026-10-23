@@ -1,12 +1,16 @@
 import {
+  CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   isCodingWorkbenchAgent,
+  isCodingWorkbenchPromptDelivery,
   type CodingWorkbenchAgent,
+  type CodingWorkbenchPromptDelivery,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,256}$/u;
+const MESSAGE_ID = /^msg_[A-Za-z0-9_-]{1,251}$/u;
 const MAX_JSON_BYTES = OPENCODE_HISTORY_RESPONSE_MAX_BYTES;
 /**
  * The ceiling on one prompt's text as the sidecar receives it: the initial context, the `\n\n`
@@ -22,6 +26,8 @@ const MESSAGE_PAGE_SIZE = 100;
 const MAX_MESSAGE_PAGES = 64;
 const MAX_MESSAGES = 4096;
 const MAX_EVENT_FRAME_BYTES = 1024 * 1024;
+const MAX_DIFF_FILES = 4096;
+const MAX_DIFF_PATH_CHARS = 4096;
 
 export interface OpenCodeV2HttpClientOptions {
   readonly endpoint: string;
@@ -33,6 +39,43 @@ export interface OpenCodeV2HttpClientOptions {
 export interface OpenCodeV2PromptDisplay {
   readonly displayText: string;
   readonly hiddenContextSha256: string;
+}
+
+/**
+ * One file attached to a prompt (`PromptInput.FileAttachment` of the pinned 2.1.4 schema, reduced to
+ * the two fields Keiko sends): the absolute `file://` URI the runtime reads and the name it shows the
+ * model. Which file may be named is decided before this client (`opencodePromptInputs.ts`); the
+ * client only keeps the wire shape closed.
+ */
+export interface OpenCodeV2PromptFile {
+  readonly uri: string;
+  readonly name: string;
+}
+
+/**
+ * The prompt inputs beyond the text. `delivery` sends the message into the turn that is running
+ * (`steer`) or behind it (`queue`) instead of starting one; absent keeps the ordinary prompt.
+ */
+export interface OpenCodeV2PromptInputs {
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  readonly files?: readonly OpenCodeV2PromptFile[] | undefined;
+}
+
+/**
+ * One file a session turn changed, in the closed shape Keiko reads. The runtime's patch text is
+ * dropped at this boundary, so a diff can be counted and logged without ever carrying file content.
+ */
+export interface OpenCodeV2FileDiff {
+  readonly file: string;
+  readonly status: "added" | "deleted" | "modified";
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+/** A staged revert: the user message the session was rewound to and the files that restored. */
+export interface OpenCodeV2StagedRevert {
+  readonly messageId: string;
+  readonly files: readonly OpenCodeV2FileDiff[];
 }
 
 export interface OpenCodeV2HttpClient {
@@ -53,6 +96,7 @@ export interface OpenCodeV2HttpClient {
     text: string,
     signal?: AbortSignal,
     display?: OpenCodeV2PromptDisplay,
+    inputs?: OpenCodeV2PromptInputs,
   ): Promise<void>;
   interrupt(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
@@ -62,6 +106,26 @@ export interface OpenCodeV2HttpClient {
    * rejects, so a caller never reports a switch that did not happen.
    */
   switchAgent(sessionId: string, agent: CodingWorkbenchAgent, signal?: AbortSignal): Promise<void>;
+  /**
+   * The files the session's newest turn changed (`GET /api/session/{sessionID}/diff`, operation
+   * `session.diff`), without their patch text. A step still running compares against the working copy.
+   */
+  sessionDiff(sessionId: string, signal?: AbortSignal): Promise<readonly OpenCodeV2FileDiff[]>;
+  /**
+   * Rewinds the session to just before a user message and restores the files its turn changed
+   * (`POST /api/session/{sessionID}/revert/stage`, operation `session.revert.stage`). The revert is
+   * only staged: the rewound messages stay recoverable until `commitRevert`, and `clearRevert`
+   * re-applies the files. The runtime refuses a busy session (409).
+   */
+  stageRevert(
+    sessionId: string,
+    messageId: string,
+    signal?: AbortSignal,
+  ): Promise<OpenCodeV2StagedRevert>;
+  /** Makes a staged revert final (`POST .../revert/commit`, `session.revert.commit`). */
+  commitRevert(sessionId: string, signal?: AbortSignal): Promise<void>;
+  /** Drops a staged revert and re-applies its files (`DELETE .../revert`, `session.revert.clear`). */
+  clearRevert(sessionId: string, signal?: AbortSignal): Promise<void>;
   active(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   /** The producer's plugins and their load state (`GET /api/plugin`, operation `plugin.list`). */
@@ -191,6 +255,92 @@ function safeSessionId(value: string): string {
 function safeAgent(value: string): CodingWorkbenchAgent {
   if (!isCodingWorkbenchAgent(value)) throw new Error("opencode-v2-agent-invalid");
   return value;
+}
+
+function safeMessageId(value: string): string {
+  if (!MESSAGE_ID.test(value)) throw new Error("opencode-v2-message-invalid");
+  return value;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  return value;
+}
+
+function fileDiffStatus(value: unknown): OpenCodeV2FileDiff["status"] {
+  if (value !== "added" && value !== "deleted" && value !== "modified") {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  return value;
+}
+
+/** Keeps only the closed fields of every entry; the patch text is never copied. */
+function fileDiffs(value: unknown): readonly OpenCodeV2FileDiff[] {
+  if (!Array.isArray(value) || value.length > MAX_DIFF_FILES) {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  return value.map((entry: unknown): OpenCodeV2FileDiff => {
+    const diff = record(entry);
+    const file = diff?.file;
+    if (typeof file !== "string" || file.length === 0 || file.length > MAX_DIFF_PATH_CHARS) {
+      throw new Error("opencode-v2-envelope-invalid");
+    }
+    return {
+      file,
+      status: fileDiffStatus(diff?.status),
+      additions: nonNegativeInteger(diff?.additions),
+      deletions: nonNegativeInteger(diff?.deletions),
+    };
+  });
+}
+
+function stagedRevert(value: Readonly<Record<string, unknown>>): OpenCodeV2StagedRevert {
+  const messageId = value.messageID;
+  if (typeof messageId !== "string" || !MESSAGE_ID.test(messageId)) {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  return { messageId, files: value.files === undefined ? [] : fileDiffs(value.files) };
+}
+
+const PROMPT_FILE_URI = /^file:\/\/\/[^?#]{1,4090}$/u;
+const PROMPT_FILE_NAME_MAX_CHARS = 255;
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code <= 31 || code === 127;
+  });
+}
+
+function safePromptFile(file: OpenCodeV2PromptFile): OpenCodeV2PromptFile {
+  if (
+    !PROMPT_FILE_URI.test(file.uri) ||
+    hasControlCharacter(file.uri) ||
+    file.name.length === 0 ||
+    file.name.length > PROMPT_FILE_NAME_MAX_CHARS ||
+    hasControlCharacter(file.name)
+  ) {
+    throw new Error("opencode-v2-prompt-file-invalid");
+  }
+  return { uri: file.uri, name: file.name };
+}
+
+/** The body fields the prompt inputs add; none when the prompt is an ordinary text prompt. */
+function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<string, unknown> {
+  const files = inputs?.files ?? [];
+  if (files.length > CODING_WORKBENCH_PROMPT_REFERENCES_MAX) {
+    throw new Error("opencode-v2-prompt-files-oversized");
+  }
+  const delivery = inputs?.delivery;
+  if (delivery !== undefined && !isCodingWorkbenchPromptDelivery(delivery)) {
+    throw new Error("opencode-v2-prompt-delivery-invalid");
+  }
+  return {
+    ...(files.length === 0 ? {} : { files: files.map(safePromptFile) }),
+    ...(delivery === undefined ? {} : { delivery }),
+  };
 }
 
 function safeRequestId(value: string): string {
@@ -354,9 +504,10 @@ export function createOpenCodeV2HttpClient(
     sessions: async (signal) =>
       arrayEnvelope(await request("GET", "/api/session", undefined, signal)),
     messages: (sessionId, signal) => pagedMessages(request, sessionId, signal),
-    prompt: async (sessionId, value, signal, display): Promise<void> => {
+    prompt: async (sessionId, value, signal, display, inputs): Promise<void> => {
       if (Buffer.byteLength(value, "utf8") > MAX_TEXT_BYTES)
         throw new Error("opencode-v2-prompt-oversized");
+      const inputFields = promptInputFields(inputs);
       if (
         display !== undefined &&
         (Buffer.byteLength(display.displayText, "utf8") > MAX_TEXT_BYTES ||
@@ -369,6 +520,7 @@ export function createOpenCodeV2HttpClient(
           `/api/session/${safeSessionId(sessionId)}/prompt`,
           {
             text: value,
+            ...inputFields,
             ...(display === undefined ? {} : { metadata: { keikoContextPresentationV1: display } }),
           },
           signal,
@@ -385,6 +537,38 @@ export function createOpenCodeV2HttpClient(
         { agent: safeAgent(agent) },
         signal,
       );
+    },
+    sessionDiff: async (sessionId, signal): Promise<readonly OpenCodeV2FileDiff[]> => {
+      // `context=0` asks for hunks without surrounding lines: the patch text is discarded anyway.
+      const response = await request(
+        "GET",
+        `/api/session/${safeSessionId(sessionId)}/diff?context=0`,
+        undefined,
+        signal,
+      );
+      return fileDiffs(envelope(response));
+    },
+    stageRevert: async (sessionId, messageId, signal) =>
+      stagedRevert(
+        objectEnvelope(
+          await request(
+            "POST",
+            `/api/session/${safeSessionId(sessionId)}/revert/stage`,
+            { messageID: safeMessageId(messageId), files: true },
+            signal,
+          ),
+        ),
+      ),
+    commitRevert: async (sessionId, signal): Promise<void> => {
+      await request(
+        "POST",
+        `/api/session/${safeSessionId(sessionId)}/revert/commit`,
+        undefined,
+        signal,
+      );
+    },
+    clearRevert: async (sessionId, signal): Promise<void> => {
+      await request("DELETE", `/api/session/${safeSessionId(sessionId)}/revert`, undefined, signal);
     },
     active: async (signal) =>
       objectEnvelope(await request("GET", "/api/session/active", undefined, signal)),

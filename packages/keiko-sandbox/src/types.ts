@@ -57,6 +57,13 @@ export interface RuntimeGatewayFilesystem {
    * loads from its private state (#3897 review). Absent means the writable roots stay fully writable.
    */
   readonly protectedWriteRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute directories strictly inside the private state where the process
+   * writes ordinary files and directories but never creates a symbolic or hard link, and whose
+   * ancestors up to the private state cannot be replaced, so a path inside one always names a file
+   * physically inside it (the plan agent's notes, #3897 review). Absent means no such constraint.
+   */
+  readonly linkFreeWriteRoots?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
