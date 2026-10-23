@@ -2040,3 +2040,50 @@ export function createPhysicalRegistrationObservationFixture(variant = "valid") 
     Object.assign(own, { record, policy });
   });
 }
+
+export function createBooleanObservationFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    const returned = variant === "unchecked" ? "value === true && false" : "value === true";
+    own.put(
+      "packages/alpha/src/owner.ts",
+      `
+function runtimeProperty(event: object, key: PropertyKey): unknown {
+  const property: unknown = Reflect.get(event, key);
+  return property;
+}
+export function validate(event: object): boolean {
+  const value: unknown = runtimeProperty(event, "marker");
+  return ${returned};
+}
+`,
+    );
+    own.put(
+      "src/consumer.ts",
+      'import { validate } from "alpha/runtime"; export const result = validate({marker: true});',
+    );
+    const path = "packages/alpha/src/proof.test.ts";
+    own.put(path, booleanObservationProof());
+    const record = observationFixtureRecord(path, { rawObjectInput: true });
+    record.rules = ["anti-slop/no-object-parameters"];
+    record.proofAssertions = ["admits marked carrier", "refuses unmarked carrier"].map((name) => ({
+      path,
+      testName: `boolean observation ${name}`,
+    }));
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}
+
+function booleanObservationProof() {
+  return `import { it, expect } from "vitest";
+import { validate } from "alpha/runtime";
+export function observe(event: object): boolean { const result = validate(event); return result; }
+it("boolean observation admits marked carrier", () => { expect(observe({marker: true})).toBe(true); });
+it("boolean observation refuses unmarked carrier", () => { expect(observe({})).toBe(false); });
+`;
+}

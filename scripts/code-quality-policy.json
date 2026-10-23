@@ -6643,6 +6643,90 @@
           "testName": "Coding repository request guard and capture responsibility public: refuses malformed and accessor-bearing requests before capture"
         }
       ]
+    },
+    {
+      "id": "support-event-loss-marker-observation",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "raw-property-observation",
+      "rawObjectInput": true,
+      "rules": ["anti-slop/no-object-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "activityLogEventWillBeRejected",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "activityLogEventWillBeRejected"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "activityLogEventWillBeRejected"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "observePublicEventLossMarker",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/observability.test.ts",
+        "packages/keiko-activity-log/src/server-logger.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support marker pre-count observation source: preserves genuine rejection and raw absence without certifying malformed presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support marker pre-count observation source: keeps rejection-marker observation first and short-circuited"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support marker pre-count observation source: propagates unreadable metadata at its original observation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support marker pre-count observation public: preserves genuine rejection and raw absence without certifying malformed presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support marker pre-count observation public: keeps rejection-marker observation first and short-circuited"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support marker pre-count observation public: propagates unreadable metadata at its original observation"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation source: preserves healthy metadata, correlation and real formatter admission"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation source: preserves malformed raw metadata and the existing final mismatch"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation source: preserves a genuine refusal kind and one buffered-logger schema-loss count"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves healthy metadata, correlation and real formatter admission"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves malformed raw metadata and the existing final mismatch"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+          "testName": "Support logger raw metadata preservation public: preserves a genuine refusal kind and one buffered-logger schema-loss count"
+        }
+      ]
     }
   ]
 }

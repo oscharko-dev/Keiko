@@ -263,7 +263,26 @@ function validLegacyObservationOptions(record) {
   );
 }
 
+export function isObjectObservationRecord(record) {
+  return (
+    record.kind === "raw-property-observation" &&
+    record.rawObjectInput === true &&
+    record.input?.parameterIndex === 0 &&
+    record.rules.length === 1 &&
+    record.rules[0] === "anti-slop/no-object-parameters" &&
+    ![
+      "metadataSourceInput",
+      "directRawCheckerInputs",
+      "additionalObservationForms",
+      "ownedPredicateStage",
+      "ownedMarkerPair",
+      "ownedRegistrationTransport",
+    ].some((key) => Object.hasOwn(record, key))
+  );
+}
+
 function validObservationRules(record) {
+  if (isObjectObservationRecord(record)) return record.proofAssertions?.length > 0;
   if (Object.hasOwn(record, "metadataSourceInput")) return validMetadataSourceOption(record);
   const rules = [
     "anti-slop/no-object-parameters",

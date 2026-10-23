@@ -23,6 +23,7 @@ import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
   createObservationOptionsFixture,
+  createBooleanObservationFixture,
   createObjectValidatorFixture,
   createMetadataSourceFixture,
   createDirectObservationCheckerFixture,
@@ -3767,5 +3768,42 @@ describe("physical raw registration comparison inputs (#3918)", () => {
       directRawCheckerInputs: true,
     });
     expect(facts.slots.filter((slot) => slot.physicalRegistrationInput)).toEqual([]);
+  });
+});
+
+describe("boolean raw object observation facts (#3918)", () => {
+  it("accounts only the declared root while retaining the default observer facts", async () => {
+    const own = createBooleanObservationFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport({
+      ...own.record.input,
+      consumerPath: "src/consumer.ts",
+    }).identities[0];
+    const original = own.resolver.propertyObservationFacts(identity);
+    expect(original.slots).toHaveLength(3);
+    const selected = own.resolver.propertyObservationFacts(identity, { rawObjectInput: true });
+    expect(selected.slots).toHaveLength(1);
+    expect(selected.slots[0]).toMatchObject({
+      kind: "parameter",
+      index: 0,
+      rule: "anti-slop/no-object-parameters",
+      observationRoots: [{ identity, index: 0 }],
+    });
+    expect(selected.slots[0].start).toBeGreaterThan(original.slots[0].start);
+    expect(() =>
+      own.resolver.propertyObservationFacts(identity, {
+        rawObjectInput: true,
+        directRawCheckerInputs: true,
+      }),
+    ).toThrow("unsupported-object-observation-boundary");
+    own.put(
+      "packages/alpha/src/owner.ts",
+      readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8") +
+        "\n// currentness changed",
+    );
+    expect(() =>
+      own.resolver.propertyObservationFacts(identity, { rawObjectInput: true }),
+    ).toThrow();
   });
 });

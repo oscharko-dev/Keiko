@@ -7,6 +7,7 @@ import {
   ERROR_KIND_PATTERN,
   activityLogEvent,
   activityLogEventRegistration,
+  activityLogEventWillBeRejected,
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
   classifyErrorKind,
@@ -744,6 +745,7 @@ import {
   ActivityLogEventValidationError as publicActivityLogEventValidationError,
   activityLogEvent as publicActivityLogEvent,
   activityLogEventRegistration as publicActivityLogEventRegistration,
+  activityLogEventWillBeRejected as publicActivityLogEventWillBeRejected,
   activityLogOperationSchema as publicActivityLogOperationSchema,
   isActivityLogDiagnosticWhen as publicIsActivityLogDiagnosticWhen,
   copyActivityLogEventMetadata as publicCopyActivityLogEventMetadata,
@@ -1540,5 +1542,90 @@ it("public observation consumer preserves canonical validator identity and refus
     expect(() => validatePublicObservation(fresh)).toThrow(
       new publicSupportAdmission.ActivityLogEventValidationError(phase.kind),
     );
+  }
+});
+
+export function observePublicEventLossMarker(event: object): boolean {
+  const rejected = publicActivityLogEventWillBeRejected(event);
+  return rejected;
+}
+
+describe("Support marker pre-count observation", () => {
+  for (const [surface, observe] of [
+    ["source", activityLogEventWillBeRejected],
+    ["public", observePublicEventLossMarker],
+  ] as const) {
+    it(`${surface}: preserves genuine rejection and raw absence without certifying malformed presence`, () => {
+      expectTypeOf(activityLogEventWillBeRejected).parameter(0).toEqualTypeOf<object>();
+      expectTypeOf(observePublicEventLossMarker).returns.toEqualTypeOf<boolean>();
+      const registration = canonicalFixtureRegistration();
+      const healthy: unknown = Reflect.apply(activityLogEvent, undefined, [
+        registration,
+        {},
+        { generation: 1 },
+      ]);
+      const refused: unknown = Reflect.apply(activityLogEvent, undefined, [
+        registration,
+        {},
+        { generation: "invalid" },
+      ]);
+      if (
+        typeof healthy !== "object" ||
+        healthy === null ||
+        typeof refused !== "object" ||
+        refused === null
+      )
+        throw new TypeError("producer events required");
+      expect(observe(healthy)).toBe(false);
+      expect(observe(refused)).toBe(true);
+      expect(observe({})).toBe(true);
+      expect(observe((): void => undefined)).toBe(true);
+      const malformed = {};
+      Object.defineProperty(malformed, ACTIVITY_LOG_EVENT_REGISTRATION, {
+        value: { ...registration, owner: 42 },
+      });
+      expect(observe(malformed)).toBe(false);
+    });
+
+    it(`${surface}: keeps rejection-marker observation first and short-circuited`, () => {
+      const rejection = Symbol.for("@oscharko-dev/keiko-contracts/activity-log-event-rejection");
+      const reads: PropertyKey[] = [];
+      const event = new Proxy(
+        {},
+        {
+          get(_target, key): unknown {
+            reads.push(key);
+            if (key === rejection) return "invalid-field-type";
+            throw new TypeError("registration must not be observed after a refusal marker");
+          },
+        },
+      );
+      expect(observe(event)).toBe(true);
+      expect(reads).toEqual([rejection]);
+    });
+
+    it(`${surface}: propagates unreadable metadata at its original observation`, () => {
+      const rejection = Symbol.for("@oscharko-dev/keiko-contracts/activity-log-event-rejection");
+      const rows: readonly [PropertyKey, readonly PropertyKey[]][] = [
+        [rejection, [rejection]],
+        [ACTIVITY_LOG_EVENT_REGISTRATION, [rejection, ACTIVITY_LOG_EVENT_REGISTRATION]],
+      ];
+      for (const [field, expected] of rows) {
+        const reads: PropertyKey[] = [];
+        const failure = new TypeError("unreadable marker fixture");
+        const event = new Proxy(
+          {},
+          {
+            get(_target, key): unknown {
+              reads.push(key);
+              if (key === field) throw failure;
+              return undefined;
+            },
+          },
+        );
+        expect(() => observe(event)).toThrow(failure);
+        expect(reads).toEqual(expected);
+      }
+    });
   }
 });
