@@ -3670,18 +3670,18 @@
         {
           "store": "updater-state",
           "description": "The coordinator, session lock, handoff plan and recovery share the canonical runtime-state directory. UI database location no longer changes the updater plan lookup. No customer database schema migration is introduced.",
-          "userActionRequired": false,
-          "remediation": "no-action-required"
+          "userActionRequired": true,
+          "remediation": "repair-required"
         },
         {
           "store": "portable-install-state",
           "description": "Retain the registered managed root and the existing workspace and keys outside the replaceable application bundle. Published source updaters require the verified one-time bootstrap described in the warning before using the corrected handoff.",
-          "userActionRequired": false,
-          "remediation": "no-action-required"
+          "userActionRequired": true,
+          "remediation": "repair-required"
         }
       ],
-      "userActionRequired": false,
-      "remediation": "no-action-required",
+      "userActionRequired": true,
+      "remediation": "repair-required",
       "oneClickEligible": true,
       "releaseNoteBullets": [
         "Portable update handoff and recovery use the same canonical state directory even when UI data is nested or configured separately.",
