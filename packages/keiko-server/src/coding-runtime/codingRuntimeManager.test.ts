@@ -4991,6 +4991,57 @@ describe("governed-assist approval reviewability", () => {
     });
   });
 
+  it("keeps the review facts of every queued ask, not only the latest (#3897 live lab)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    // OpenCode issues parallel native edits; each ask waits in the queue with its own facts.
+    for (const [requestId, path] of [
+      ["perm-3897-edit", "src/a.ts"],
+      ["perm-3898-edit", "src/b.ts"],
+      ["perm-3899-edit", "src/c.ts"],
+    ] as const) {
+      harness.children[0]?.stdout.write(
+        permissionLine({
+          requestId,
+          kind: "workspace-write",
+          actionClass: "workspace-write",
+          reasonCode: "approval-required",
+          scopeLabel: "workspace-scope",
+          risk: "medium",
+          policyReason: "approval-required",
+          nativeAction: { permission: "edit", resources: [path] },
+        }),
+      );
+    }
+    await settle();
+
+    for (const [requestId, path] of [
+      ["perm-3897-edit", "src/a.ts"],
+      ["perm-3898-edit", "src/b.ts"],
+      ["perm-3899-edit", "src/c.ts"],
+    ] as const) {
+      expect(manager.pendingApprovalReview("run-1991", requestId)).toMatchObject({
+        requestId,
+        nativeAction: { permission: "edit", resources: [path] },
+        paths: [path],
+      });
+    }
+    expect(manager.pendingApprovalReview("run-1991", "perm-3900-edit")).toBeUndefined();
+  });
+
   it("refuses a review for a stale request id, a foreign run, and an escaping path", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

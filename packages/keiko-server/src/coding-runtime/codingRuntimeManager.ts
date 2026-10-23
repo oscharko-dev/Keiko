@@ -584,11 +584,13 @@ interface ActiveRuntime {
   readonly errorSummary: CodingRuntimeProcessSummaryAccumulator;
   streamDrainComplete: Promise<boolean>;
   /**
-   * The reviewable changeset facts of the ask currently awaiting an operator decision (#2802).
-   * Transient and run-local: it never enters a runtime event, a snapshot, the SSE projection or
-   * evidence, because the paths are model-selected content (#2644).
+   * The reviewable facts of every ask awaiting an operator decision (#2802), keyed by request id.
+   * The runtime may queue several asks at once (OpenCode issues parallel native edits, #3897), and
+   * the operator decides them one by one, so each keeps its own facts; the oldest entry is evicted
+   * beyond the bound. Transient and run-local: it never enters a runtime event, a snapshot, the
+   * SSE projection or evidence, because the paths are model-selected content (#2644).
    */
-  pendingApprovalReview: CodingWorkbenchRuntimePendingApprovalReview | undefined;
+  pendingApprovalReviews: Map<string, CodingWorkbenchRuntimePendingApprovalReview>;
   shutdownBarrierComplete: boolean;
   stopPromise: Promise<CodingRuntimeStopResult> | undefined;
   stopResultStatus: CodingRuntimeTerminalStatus;
@@ -1064,8 +1066,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) return undefined;
     const git = this.gitApprovalReview(runId, requestId);
     if (git !== undefined) return git;
-    const review = active.pendingApprovalReview;
-    return review?.requestId === requestId ? review : undefined;
+    return active.pendingApprovalReviews.get(requestId);
   }
 
   private gitApprovalReview(
@@ -2692,7 +2693,7 @@ function createActiveRuntime(
     outputSummary: createCodingRuntimeProcessSummaryAccumulator(),
     errorSummary: createCodingRuntimeProcessSummaryAccumulator(),
     streamDrainComplete: Promise.resolve(false),
-    pendingApprovalReview: undefined,
+    pendingApprovalReviews: new Map(),
     shutdownBarrierComplete: false,
     stopPromise: undefined,
     stopResultStatus: "succeeded",
@@ -2733,7 +2734,7 @@ function createInactiveRuntime(
     outputSummary: createCodingRuntimeProcessSummaryAccumulator(),
     errorSummary: createCodingRuntimeProcessSummaryAccumulator(),
     streamDrainComplete: Promise.resolve(true),
-    pendingApprovalReview: undefined,
+    pendingApprovalReviews: new Map(),
     shutdownBarrierComplete: false,
     stopPromise: undefined,
     stopResultStatus: "succeeded",
@@ -3341,7 +3342,7 @@ function sidecarRuntimeEvent(
   if (!observeCodingToolApproval(active, event, request.actionKind)) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  active.pendingApprovalReview = approvalReviewFacts(event);
+  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event));
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
@@ -3405,6 +3406,22 @@ function unavailableRuntimeActionEvent(
  * only the authenticated app-session channel, never a snapshot, the SSE projection, or evidence
  * (#2644). Only the path, the file count and the line counts travel — never a byte of the patch.
  */
+/** The most asks whose review facts a run keeps; the runtime's own pending-ask bound. */
+const MAX_PENDING_APPROVAL_REVIEWS = 64;
+
+function rememberApprovalReview(
+  reviews: Map<string, CodingWorkbenchRuntimePendingApprovalReview>,
+  review: CodingWorkbenchRuntimePendingApprovalReview | undefined,
+): void {
+  if (review === undefined) return;
+  reviews.delete(review.requestId);
+  reviews.set(review.requestId, review);
+  for (const oldest of reviews.keys()) {
+    if (reviews.size <= MAX_PENDING_APPROVAL_REVIEWS) break;
+    reviews.delete(oldest);
+  }
+}
+
 function approvalReviewFacts(
   event: SidecarPermissionEvent,
 ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
