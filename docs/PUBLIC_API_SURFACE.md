@@ -1,4 +1,4 @@
-# Public API surface — 1.2.6
+# Public API surface — 1.2.7
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,10 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.2.7: root exports and CLI entrypoints remain unchanged. Portable update coordination, locking
+  and recovery share the canonical runtime-state directory independently of UI database storage.
+  No customer database schema migration is introduced. Published source updaters require the
+  documented one-time bootstrap before using the corrected handoff.
 - 1.2.6: root exports and CLI entrypoints remain unchanged. Portable updater admission consumes
   authenticated future release-impact entries and measured archive expansion metadata. Native
   macOS application ownership is independent of the optional Endpoint Security Coding backend.
