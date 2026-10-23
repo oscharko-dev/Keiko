@@ -960,7 +960,7 @@ describe("governance public parser obligations (#3918)", () => {
 });
 
 describe("run control public parser obligations (#3918)", () => {
-  it("pins three exact public parameter-zero roots without optional grants", () => {
+  it("pins three exact public parameter-zero roots with dictionary-only declarations", () => {
     const records = policy.responsibilities.slice(51, 54);
     expect(records).toHaveLength(3);
     expect(records.map(({ id }) => id)).toEqual([
@@ -976,7 +976,10 @@ describe("run control public parser obligations (#3918)", () => {
     for (const record of records) {
       expect(record.kind).toBe("public-parser");
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);

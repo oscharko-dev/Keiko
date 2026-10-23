@@ -1013,6 +1013,14 @@ describe("runtime governance outcome public parser (#3918)", () => {
   });
 
   it("refuses malformed outcomes with exact eager ordered diagnostics", () => {
+    const healthy = {
+      kind: "runtime-governance-outcome",
+      schemaVersion: 1,
+      status: "settled",
+      events: [],
+    };
+    expect(validateRuntimeGovernanceOutcomeV1(healthy)).toEqual({ ok: true, value: healthy });
+    expect(parsePublicGovernanceOutcome(healthy)).toEqual({ ok: true, value: healthy });
     expect(parsePublicGovernanceOutcome(null)).toEqual({
       ok: false,
       errors: ["runtime governance outcome must be an object"],

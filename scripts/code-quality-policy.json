@@ -2864,7 +2864,7 @@
       "id": "run-control-snapshot-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
@@ -2924,7 +2924,7 @@
       "id": "runtime-governance-request-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
@@ -2980,7 +2980,7 @@
       "id": "runtime-governance-outcome-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",

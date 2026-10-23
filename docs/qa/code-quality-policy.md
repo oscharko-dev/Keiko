@@ -1546,3 +1546,11 @@ No root, record, runtime-typeof rule, call-result origin, shared scalar helper, 
 public API, runtime body, authority, rule scope or capacity limit is added. Real skill, facade
 and child-orchestrator consumers retain their separate physical proof obligations. Declaration
 alone is not qualification or evidence of a native-slot delta.
+
+### Run-control and runtime governance raw dictionary checks
+
+The existing snapshot, governance request and governance outcome public-parser records also
+declare the dictionary rule for their original raw-record boolean checks. Canonical raw argument
+flow, complete incoming references, current contributing proofs and existing limits determine
+each actual slot. This grants no dictionary result, helper admission or governance authority;
+unknown-input declarations, physical member checks and repeated-read refusals remain intact.
