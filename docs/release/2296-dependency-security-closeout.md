@@ -619,3 +619,9 @@ has passed.
 The root `@napi-rs/canvas` override now matches #4062's workspace requirement at 1.0.11. Keeping
 the earlier 1.0.9 override would prevent the requested update and leave no root runtime version
 for publish staging; the resulting lockfile contains one deduplicated 1.0.11 runtime node.
+
+The owner separately retained PDF.js 6.3.289 to prioritize updater delivery. Dependabot's
+transitive lockfile refresh selected 6.4.299, whose changed core-js bundle format is not admitted
+by the existing browser-baseline provider recognizer. The exact root dependency pin retains the
+verified 6.3.289 closure; the browser floors and provider-recognition gate remain unchanged.
+The compatibility-gate controls reproduce both failures with 6.4.299 before this disposition.
