@@ -12,6 +12,7 @@ import {
 import {
   measurePortableToolCatalogPair,
   portableHostEnvironment,
+  PortableCatalogBudgetError,
   portableRegenerationOptions,
   regeneratePortableToolCatalogEvidence,
 } from "../regenerate-tool-catalog-portable-evidence.mjs";
@@ -296,6 +297,20 @@ function orchestration(overrides = {}) {
 }
 
 describe("portable regeneration orchestration", () => {
+  it("retains rejected samples outside governed evidence without publishing them", async () => {
+    const deps = orchestration();
+    const documents = { calibration: { cases: {} }, measurement: { cases: {} } };
+    deps.measure.mockRejectedValue(
+      new PortableCatalogBudgetError(["baseline exceeds budget"], documents),
+    );
+    await expect(
+      regeneratePortableToolCatalogEvidence({ baseline: "origin/dev" }, context.root, deps),
+    ).rejects.toThrow("baseline exceeds budget");
+    expect(deps.write).toHaveBeenCalledTimes(1);
+    expect(deps.write.mock.calls[0][0]).toBe(join("/scratch", "failed-pair.json"));
+    expect(JSON.parse(deps.write.mock.calls[0][1])).toEqual(documents);
+  });
+
   it("parses an explicit baseline and rejects incomplete or option-like refs", () => {
     expect(portableRegenerationOptions(["--baseline", "origin/dev"])).toEqual({
       baseline: "origin/dev",

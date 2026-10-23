@@ -152,6 +152,9 @@ Review and commit all three generated documents. Their commit IDs identify the m
 commits before the evidence-only commit; the documents themselves are outside the subject digest.
 The retained baseline directory allows inspection. This procedure applies only to the tool-catalog
 target and does not change the editor D12 or coding-runtime reference environments.
+If either run exceeds a budget, both completed measurements are retained as `failed-pair.json`
+in the scratch directory for diagnosis. The command fails and leaves governed evidence untouched;
+inspect host load and the measured values before deciding whether another run is justified.
 
 The V2 case is added with the explicit one-time extension mode:
 

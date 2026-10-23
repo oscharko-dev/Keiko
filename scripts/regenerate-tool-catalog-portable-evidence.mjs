@@ -37,7 +37,16 @@ export function portableHostEnvironment() {
   };
 }
 
-function requirePassing(result) {
+export class PortableCatalogBudgetError extends TypeError {
+  constructor(verdicts, documents) {
+    super(verdicts.join("; "));
+    this.documents = documents;
+  }
+}
+
+function requirePassing(result, documents) {
+  if (result.defects.length === 0 && result.verdicts.length > 0 && documents !== undefined)
+    throw new PortableCatalogBudgetError(result.verdicts, documents);
   if (result.defects.length > 0 || result.verdicts.length > 0)
     throw new TypeError([...result.defects, ...result.verdicts].join("; "));
 }
@@ -101,14 +110,6 @@ export async function measurePortableToolCatalogPair(context, overrides = {}) {
     measuredAtIso: deps.now(),
   });
   const budget = ratchetToolCatalogPerformanceBudgets(calibration, previousBudget);
-  // A slow baseline must not authorize a slower candidate or a wider threshold.
-  const baselineCheck = buildToolCatalogPerformanceDocument(baselineRaw, {
-    ...input,
-    role: "measurement",
-    measuredAtIso: deps.now(),
-    calibrationSha256: calibration.documentSha256,
-  });
-  requirePassing(evaluateToolCatalogPerformanceEvidence(baselineCheck, calibration, budget));
   const candidateRaw = await deps.measure(root, root);
   requireSame(
     candidateRaw.environment,
@@ -122,9 +123,13 @@ export async function measurePortableToolCatalogPair(context, overrides = {}) {
     measuredAtIso: deps.now(),
     calibrationSha256: calibration.documentSha256,
   });
-  requirePassing(evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget));
   verifyStablePair(context, deps, state);
-  return { calibration, measurement, budget };
+  const documents = { calibration, measurement, budget };
+  requirePassing(
+    evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget),
+    documents,
+  );
+  return documents;
 }
 
 function verifyStablePair(
@@ -160,12 +165,21 @@ function pinnedNpm(deps) {
   return (cwd, args) => deps.run(process.execPath, [npmCli, ...args], { cwd, stdio: "inherit" });
 }
 
-export async function regeneratePortableToolCatalogEvidence(
-  { baseline },
-  root = process.cwd(),
-  overrides = {},
-) {
-  const deps = {
+async function measureWithDiagnostics(context, deps, scratch) {
+  try {
+    return await deps.measure(context);
+  } catch (error) {
+    if (error instanceof PortableCatalogBudgetError) {
+      const diagnostic = join(scratch, "failed-pair.json");
+      deps.write(diagnostic, canonicalD12ArtifactBytes(error.documents));
+      deps.log(`Rejected measurements retained for diagnosis: ${diagnostic}`);
+    }
+    throw error;
+  }
+}
+
+function regenerationDependencies(overrides) {
+  return {
     run: execFileSync,
     resolve: resolveHostExecutable,
     mkdtemp: mkdtempSync,
@@ -177,6 +191,14 @@ export async function regeneratePortableToolCatalogEvidence(
     nodeVersion: process.version,
     ...overrides,
   };
+}
+
+export async function regeneratePortableToolCatalogEvidence(
+  { baseline },
+  root = process.cwd(),
+  overrides = {},
+) {
+  const deps = regenerationDependencies(overrides);
   const gitExecutable = deps.resolve("git");
   const git = (args) => deps.run(gitExecutable, args, { cwd: root, encoding: "utf8" }).trim();
   const clean = () => {
@@ -198,7 +220,11 @@ export async function regeneratePortableToolCatalogEvidence(
     npm(subject, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
     npm(subject, ["run", "build:packages"]);
   }
-  const documents = await deps.measure({ root, baselineRoot, baselineCommit, candidateCommit });
+  const documents = await measureWithDiagnostics(
+    { root, baselineRoot, baselineCommit, candidateCommit },
+    deps,
+    scratch,
+  );
   clean();
   requireSame(git(["rev-parse", "HEAD"]), candidateCommit, "catalog candidate revision changed");
   for (const [key, path] of Object.entries(TOOL_CATALOG_PERFORMANCE_FILES))
