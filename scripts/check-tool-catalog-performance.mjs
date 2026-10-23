@@ -333,7 +333,8 @@ export async function measureToolCatalogPerformanceInFreshProcess(
       moduleUrl,
       root,
     ],
-    { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    // Imported ruler helpers resolve their own workspace from cwd; the producer root is explicit.
+    { cwd: harnessRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
   );
   return JSON.parse(output);
 }

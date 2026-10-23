@@ -9,7 +9,7 @@ The committed performance evidence documents live in `docs/release/`:
 | `1580-workspace-perf-evidence.json`      | Workspace browser-performance measurement                             | `npm run check:perf-evidence:workspace`      |
 | `2952-coding-runtime-calibration.json`   | Frozen native coding-runtime reference samples and provenance         | `npm run check:perf-evidence:coding-runtime` |
 | `2952-coding-runtime-perf-evidence.json` | Native coding-runtime candidate measurements                          | `npm run check:perf-evidence:coding-runtime` |
-| `3415-tool-catalog-calibration.json`     | Frozen tool-catalog reference samples and provenance                  | `npm run check:tool-catalog-performance`     |
+| `3415-tool-catalog-calibration.json`     | Tool-catalog reference samples and pair provenance                    | `npm run check:tool-catalog-performance`     |
 | `3415-tool-catalog-perf-evidence.json`   | Tool-catalog candidate compiler and lookup measurements               | `npm run check:tool-catalog-performance`     |
 
 ## When evidence must be regenerated
@@ -237,11 +237,12 @@ throwaway clone below; only after mounting your working checkout directly re-run
   host is an environment verdict, not a product regression — fix the load, not the code. Since
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
   decide; before that, an overrun destroyed the evidence that would have shown it.
-- **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
-  cap budgets, and every writer mode of the tool-catalog evidence (`--rebind-case-identity`,
-  `--recalibrate`, `--extend-managed-runtime`, `--write-measurement`) requires the container to
-  report exactly the committed reference environment: 16 logical cores and `totalMemoryBytes`
-  67302940672 (a 64 GiB VM), as recorded in `docs/release/3415-tool-catalog-calibration.json`.
+- **VM sizing (macOS Docker Desktop, original container procedure).** The default VM allocation
+  (~8 GiB) is marginal for the cap budgets. Against a schema 1 tool-catalog calibration, the
+  container writer modes (`--rebind-case-identity`, `--recalibrate`, `--extend-managed-runtime`,
+  `--write-measurement`) require exactly its recorded environment. The historical calibration
+  before #4050 recorded 16 logical cores and `totalMemoryBytes` 67302940672 (a 64 GiB VM).
+  A schema 2 calibration instead requires the complete portable pair procedure described above.
   Configure the VM at 64 GiB / 16 CPUs
   (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`) and
   verify it before a rebind; an 8 GiB VM fails with
