@@ -86,15 +86,17 @@ export async function awaitOpenCodeNativePlugins(
   attempts: number = OPENCODE_NATIVE_PLUGIN_READINESS_ATTEMPTS,
 ): Promise<boolean> {
   const directories = [pluginsDirectory, realpathSync(pluginsDirectory)];
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  // Each poll depends on the previous one's answer, so the polls run one after another.
+  const poll = async (remaining: number): Promise<boolean> => {
     const readiness = openCodeNativePluginReadiness(await list(signal), directories);
     if (readiness !== "pending") return readiness === "active";
-    if (attempt + 1 < attempts)
-      await delay(
-        OPENCODE_NATIVE_PLUGIN_READINESS_INTERVAL_MS,
-        undefined,
-        signal === undefined ? {} : { signal },
-      );
-  }
-  return false;
+    if (remaining <= 1) return false;
+    await delay(
+      OPENCODE_NATIVE_PLUGIN_READINESS_INTERVAL_MS,
+      undefined,
+      signal === undefined ? {} : { signal },
+    );
+    return poll(remaining - 1);
+  };
+  return attempts > 0 ? poll(attempts) : false;
 }
