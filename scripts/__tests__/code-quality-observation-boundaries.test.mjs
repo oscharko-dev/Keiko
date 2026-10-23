@@ -837,5 +837,8 @@ describe("physical raw registration contributor proofs (#3918)", () => {
         own.put(runtime, original);
       }
     },
+    // Complete semantic qualification owns a real proof child bounded at 180 seconds.
+    // Match the direct qualifier tests so the outer runner can await child cleanup.
+    195_000,
   );
 });
