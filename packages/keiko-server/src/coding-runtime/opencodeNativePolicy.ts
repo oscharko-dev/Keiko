@@ -480,7 +480,7 @@ function classifyNativeAction(
       reason: "workspace-escape",
       message: "Keiko refused this action: files outside the task workspace are not accessible.",
     };
-  // A glob/grep resource is a search pattern (`// TODO`, `*.pem`), not a path: only the searched
+  // A glob/grep resource is a search pattern (`/api/users`, `*.pem`), not a path: only the searched
   // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
   if (SEARCH_ACTIONS.has(permission))
     return guardedPaths(
