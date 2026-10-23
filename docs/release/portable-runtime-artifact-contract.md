@@ -927,6 +927,17 @@ Validation rules:
   exactly one `keiko-secure-workspace-read` entry at the fixed target path. The entry binds target,
   architecture, `KSR1`/`KSS1`, source commit and tree, unsigned and final signed-byte digests,
   signature/notarization state, and one CycloneDX `bom-ref`; it is not a sidecar runtime.
+- `nativeTools` is additive in schema v1 and carries the pinned third-party executables a payload
+  ships beside the Keiko-built helpers: today exactly one `ripgrep` entry (`kind: native-tool`),
+  the search dependency of the OpenCode coding runtime. Legacy manifests without it remain
+  parseable; every newly staged artifact contains it. The entry is the upstream release Keiko
+  approves per target, not a Keiko build: it binds the version, the upstream commit, the exact
+  archive URL and SHA-256, the extracted executable's SHA-256 (`unsignedSha256`, always the upstream
+  identity) and the shipped digest after any platform signing (`shippedSha256`), the fixed paths
+  `runtime/native/rg` (`rg.exe` on Windows) and `runtime/licenses/ripgrep/LICENSE-MIT`, the MIT text
+  digest, signature/notarization state, and one CycloneDX `bom-ref`. The complete array is duplicated
+  in the activation manifest and `reviewedBinding`; drift fails closed. It is not a sidecar runtime
+  and not a Node addon, so `nativeAddons` keeps its exactly-one-addon rule.
 - `runtimeQualification` is required for production Linux and macOS artifacts and has exactly
   `schemaVersion`, `path`, `sha256`, and `backend`. Linux requires
   `.portable/runtime-qualification.json` with backend `linux-namespace-gateway`, plus the fixed

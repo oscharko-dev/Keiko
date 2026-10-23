@@ -30,7 +30,11 @@ import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
-import type { DevLanePortableOpenCodeRuntime } from "./devLanePortableCodingRuntime.js";
+import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
+import {
+  devLaneCheckoutRoot,
+  type DevLanePortableOpenCodeRuntime,
+} from "./devLanePortableCodingRuntime.js";
 import {
   codingSafeActivityTtlMs,
   createCodingSafeActivityProjection,
@@ -69,6 +73,16 @@ import {
   resolveOpenCodeContextGeometry,
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
+import {
+  recordOpenCodeRipgrepResolution,
+  resolveOpenCodeRipgrep,
+  ripgrepLaunchEnvironment,
+  ripgrepMappedInheritedEnvNames,
+  ripgrepNativePath,
+  type OpenCodeRipgrepLocation,
+  type OpenCodeRipgrepResolution,
+} from "./opencodeRipgrepLaunch.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
@@ -148,6 +162,11 @@ export interface ProductionOpenCodeBackendInput {
    * default, which follows the default envelope duration.
    */
   readonly runtimeMaxDurationMs?: number | undefined;
+  /**
+   * Hermetic test seam: the approval table the launch verifies ripgrep against. Production
+   * composition never supplies this, so the pinned upstream digests are always the ones used.
+   */
+  readonly ripgrepManifest?: Readonly<RipgrepRuntimeManifest> | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
     | ((input: {
@@ -204,9 +223,16 @@ function createOpenCodeRun(
     input.historyCapture,
     run.onRuntimeEvent,
   );
+  const launchInput = withVerifiedRipgrep(input, run, toolProfile);
   try {
-    const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry, toolProfile);
-    const launch = openCodeLaunchMaterial(input, run, toolProfile);
+    const composition = composeOpenCodeRun(
+      launchInput,
+      run,
+      safeActivity,
+      contextGeometry,
+      toolProfile,
+    );
+    const launch = openCodeLaunchMaterial(launchInput, run, toolProfile);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
     const permissionPort = createOpenCodeRuntimePermissionPort(composition.runPort);
@@ -229,6 +255,56 @@ function createOpenCodeRun(
   }
 }
 
+/**
+ * What one launch is built from: the backend's input with the environment the child inherits from
+ * already carrying the verified ripgrep directory (when there is one), and the resolution that
+ * decided it. Every later launch decision reads this one object, so the child PATH, the inherited
+ * names and the kernel read allowlist cannot disagree.
+ */
+type LaunchInput = ProductionOpenCodeBackendInput & {
+  readonly ripgrep: OpenCodeRipgrepResolution;
+};
+
+function ripgrepLocation(portable: ResolvedPortableOpenCodeRuntime): OpenCodeRipgrepLocation {
+  if (isDevLaneRuntime(portable)) {
+    const checkoutRoot = devLaneCheckoutRoot(portable);
+    return checkoutRoot === undefined
+      ? { kind: "override-only" }
+      : { kind: "checkout", checkoutRoot };
+  }
+  if ("platformAssurance" in portable) {
+    return { kind: "packaged", resourceRoot: portable.installRoot, activation: portable.manifest };
+  }
+  return { kind: "override-only" };
+}
+
+/**
+ * Resolves the pinned ripgrep once for this launch, records the closed outcome, and returns the
+ * input whose inherited environment carries only a VERIFIED directory. An unverified ripgrep
+ * changes nothing: the run still starts, search degrades, and the reason is on the Activity Log.
+ */
+function withVerifiedRipgrep(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
+): LaunchInput {
+  const native = toolProfile === "native";
+  const ripgrep = resolveOpenCodeRipgrep({
+    target: input.portable.target,
+    location: ripgrepLocation(input.portable),
+    env: input.processEnv,
+    manifest: input.ripgrepManifest,
+  });
+  recordOpenCodeRipgrepResolution(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    native,
+    ripgrep,
+  );
+  const processEnv = ripgrepLaunchEnvironment(input.processEnv, ripgrep, native);
+  return { ...input, ...(processEnv === undefined ? {} : { processEnv }), ripgrep };
+}
+
 function compositionPortableInput(
   input: ProductionOpenCodeBackendInput,
 ): OpenCodeRuntimeCompositionInput["portable"] {
@@ -241,7 +317,7 @@ function compositionPortableInput(
 }
 
 function composeOpenCodeRun(
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   safeActivity: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>,
   contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
@@ -725,7 +801,7 @@ const NATIVE_INHERITED_ENV_ALLOWLIST: readonly string[] = Object.freeze([
 ]);
 
 function openCodeLaunchMaterial(
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun["launch"] {
@@ -739,7 +815,10 @@ function openCodeLaunchMaterial(
     gatewayUrl: input.gatewayUrl,
     modelProfileId: run.context.modelProfile.profileId,
     args: [],
-    inheritedEnvAllowlist: toolProfile === "native" ? NATIVE_INHERITED_ENV_ALLOWLIST : [],
+    inheritedEnvAllowlist:
+      toolProfile === "native"
+        ? NATIVE_INHERITED_ENV_ALLOWLIST
+        : ripgrepMappedInheritedEnvNames(input.ripgrep),
     shutdownTimeoutMs: 5_000,
     startTimeoutMs: OPEN_CODE_START_TIMEOUT_MS,
     confinement: input.portable.qualification,
@@ -760,7 +839,7 @@ function assertOpenCodeRun(run: ProductionRuntimeBackendInput): void {
 }
 
 function runtimeSupervisor(
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
@@ -791,7 +870,7 @@ function runtimeSupervisor(
 
 function linuxNamespaceGatewaySupervisor(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
@@ -811,7 +890,7 @@ function linuxNamespaceGatewaySupervisor(
 
 function devLaneSupervisor(
   portable: DevLanePortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
@@ -848,7 +927,7 @@ function devLaneSupervisor(
  */
 function appSandboxSupervisor(
   portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
@@ -877,18 +956,19 @@ function nativeDeniedReadRoots(runtimeStateRoot: string): readonly string[] {
 }
 
 /**
- * The native profile's kernel network disposition follows the run's EFFECTIVE mode (#3897): only
- * Full access keeps inherited egress, bounded by its Authority Envelope and the per-action
- * policy; Ask for approval and Supervised workspace reach loopback only (the attested Model
- * Gateway, the tool facade, local dev servers). The mapped profile has no network of its own.
+ * The native profile's kernel network disposition follows the run's launch mode (#3897,
+ * `openCodeNativeEgress`): only Full access keeps inherited egress, bounded by its Authority
+ * Envelope and the per-action policy; Ask for approval and Supervised workspace reach loopback only
+ * (the attested Model Gateway, the tool facade, local dev servers). The mapped profile has no
+ * network of its own. The composition refuses an in-place narrowing that this binding could not honor.
  */
 function nativeEgress(mode: string): RuntimeGatewayEgress {
-  return mode === "autonomous-delivery" ? "inherited" : "loopback-only";
+  return openCodeNativeEgress(mode);
 }
 
 function gatewayFilesystem(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   native: boolean,
 ): { readonly filesystem?: RuntimeGatewayFilesystem } {
@@ -911,7 +991,12 @@ function gatewayFilesystem(
       ...(native
         ? {
             deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
-            toolchainReadRoots: nativeToolchainReadRoots(process.env.PATH, homedir()),
+            // The launcher's PATH plus the one verified ripgrep directory the child gets in front
+            // of it, so the kernel opens exactly what the child can run and nothing broader.
+            toolchainReadRoots: nativeToolchainReadRoots(
+              ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH,
+              homedir(),
+            ),
             // The policy plugin and the private configuration are read-only to the shell.
             protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
           }
@@ -922,7 +1007,7 @@ function gatewayFilesystem(
 
 function runtimeGatewayConfinement(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
 ): ReturnType<typeof createRuntimeGatewayConfinement> {

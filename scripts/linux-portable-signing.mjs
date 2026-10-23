@@ -121,7 +121,9 @@ function assertProductionComponentSet(manifest) {
     !Array.isArray(manifest.nativeHelpers) ||
     manifest.nativeHelpers.length !== 2 ||
     !Array.isArray(manifest.nativeAddons) ||
-    manifest.nativeAddons.length !== 1
+    manifest.nativeAddons.length !== 1 ||
+    (manifest.nativeTools !== undefined &&
+      (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1))
   ) {
     fail("manifest production component set is invalid");
   }
@@ -138,6 +140,7 @@ function markProduction(manifest) {
   const helperState = helperProductionState();
   for (const helper of manifest.nativeHelpers) helper.signing = { ...helperState };
   for (const addon of manifest.nativeAddons) addon.signing = { ...helperState };
+  for (const tool of manifest.nativeTools ?? []) tool.signing = { ...helperState };
   manifest.releaseImpact.reviewedBinding = {
     ...manifest.releaseImpact.reviewedBinding,
     ...state,
@@ -151,6 +154,8 @@ function syncReviewedPayloads(manifest) {
   binding.sidecarRuntimes = structuredClone(manifest.sidecarRuntimes);
   binding.nativeHelpers = structuredClone(manifest.nativeHelpers);
   binding.nativeAddons = structuredClone(manifest.nativeAddons);
+  if (manifest.nativeTools !== undefined)
+    binding.nativeTools = structuredClone(manifest.nativeTools);
 }
 
 export function prepareLinuxQualifiedPayload(options, dependencies = {}) {

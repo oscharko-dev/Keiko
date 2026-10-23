@@ -18,6 +18,8 @@ import {
   computePortableSidecarPayloadTreeDigest,
   DEV_LANE_MANIFEST_FILE,
   DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH,
+  DEV_LANE_STAGED_PAYLOADS_DIR,
+  devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
@@ -560,5 +562,36 @@ describe("computePortableSidecarPayloadTreeDigest (KEIKO-0180)", () => {
     expect(computePortableSidecarPayloadTreeDigest([])).toBe(
       createHash("sha256").update("", "utf8").digest("hex"),
     );
+  });
+});
+
+describe("devLaneCheckoutRoot", () => {
+  const stagedRoot = join(
+    "/work",
+    "keiko",
+    DEV_LANE_STAGED_PAYLOADS_DIR,
+    "macos-arm64",
+    "opencode-compatible",
+  );
+
+  it("names the checkout a dev-checkout runtime was staged from", () => {
+    expect(devLaneCheckoutRoot({ lane: "dev-checkout", installRoot: stagedRoot })).toBe(
+      join("/work", "keiko"),
+    );
+  });
+
+  it("names no checkout for the npm runtime package lane, even under a lookalike layout", () => {
+    expect(
+      devLaneCheckoutRoot({ lane: "npm-runtime-package", installRoot: stagedRoot }),
+    ).toBeUndefined();
+  });
+
+  it("names no checkout for an install root outside the staged-payload layout", () => {
+    expect(
+      devLaneCheckoutRoot({
+        lane: "dev-checkout",
+        installRoot: join("/work", "keiko", "elsewhere", "macos-arm64", "opencode-compatible"),
+      }),
+    ).toBeUndefined();
   });
 });

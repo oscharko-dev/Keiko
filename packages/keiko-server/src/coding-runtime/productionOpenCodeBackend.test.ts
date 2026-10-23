@@ -1,12 +1,20 @@
 import { Script } from "node:vm";
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { openCodeCatalogAliasFor } from "../tool-catalog/catalogToolFacadeBridge.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import * as composition from "./opencodeRuntimeComposition.js";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
@@ -32,9 +40,12 @@ import {
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import {
+  devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
+import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
+import { RIPGREP_OVERRIDE_ENV, type RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import { stageDevLaneFixture } from "./devLaneFixture/_support.js";
 import { codingSafeActivityTtlMs } from "./codingSafeActivityProjection.js";
 import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support.js";
@@ -1357,5 +1368,244 @@ it("refuses an original parent restated under another actual assistant message",
     await Promise.resolve();
     expect(projectedChildren(f)).toEqual([]);
     expect(f.projection.currentContent()?.feed.droppedEventCount).toBeGreaterThan(0);
+  });
+});
+
+// #3897: OpenCode's glob/grep/file finder run ripgrep and would otherwise download it. The launch
+// resolves the one pinned executable, puts ONLY a verified directory on the child PATH, opens
+// exactly that directory in the kernel read allowlist, and records the closed outcome.
+describe("ripgrep on the OpenCode launch", () => {
+  const BINARY = "fixture ripgrep for the launch";
+  const CONTENT_ENV = {
+    PATH: `/usr/bin${delimiter}/bin`,
+    LANG: "C.UTF-8",
+    SECRET_TOKEN: "t0k3n-value",
+  };
+
+  function manifestFor(key: "linux-x64" | "win32-x64"): RipgrepRuntimeManifest {
+    return {
+      version: "0.0.0-test",
+      sourceCommit: "a".repeat(40),
+      licenseExpression: "MIT",
+      licenseFileName: "LICENSE-MIT",
+      targets: {
+        [key]: {
+          archiveKind: "tar.gz",
+          archiveUrl: "https://example.test/ripgrep.tar.gz",
+          archiveSha256: "b".repeat(64),
+          archiveSizeBytes: 10,
+          binaryMember: "ripgrep/rg",
+          binarySha256: createHash("sha256").update(BINARY).digest("hex"),
+          binarySizeBytes: BINARY.length,
+          licenseMember: "ripgrep/LICENSE-MIT",
+          licenseSha256: "c".repeat(64),
+        },
+      },
+    };
+  }
+
+  function stage(path: string, content = BINARY): string {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+    chmodSync(dirname(path), 0o755);
+    writeFileSync(path, content);
+    chmodSync(path, 0o755);
+    return dirname(path);
+  }
+
+  interface Launch {
+    readonly processEnv: NodeJS.ProcessEnv | undefined;
+    readonly allowlist: readonly string[];
+    readonly toolchainReadRoots: readonly string[] | undefined;
+    readonly events: readonly ServerLogEvent[];
+  }
+
+  function launch(
+    root: string,
+    portable: ResolvedPortableOpenCodeRuntime,
+    options: {
+      readonly native: boolean;
+      readonly processEnv?: NodeJS.ProcessEnv | undefined;
+      readonly key: "linux-x64" | "win32-x64";
+    },
+  ): Launch {
+    const events: ServerLogEvent[] = [];
+    const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+    const gatewayFactory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
+    const nativeFactory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+    const run = createProductionOpenCodeBackend({
+      ...backendInput(root, portable),
+      gatewayReadiness: createOpenCodeGatewayReadinessRegistry(
+        options.native ? "native" : "direct",
+      ),
+      ripgrepManifest: manifestFor(options.key),
+      activityLog: { write: (event) => events.push(event) },
+      ...(options.processEnv === undefined ? {} : { processEnv: options.processEnv }),
+    }).createRun(runInput(root));
+    // A test may launch twice; the spies accumulate, and the latest call is this launch's.
+    const confinement = (gatewayFactory.mock.calls.at(-1) ?? nativeFactory.mock.calls.at(-1))?.[0]
+      .gatewayConfinement;
+    return {
+      processEnv: compose.mock.calls.at(-1)?.[0].processEnv,
+      allowlist: run.launch.inheritedEnvAllowlist,
+      toolchainReadRoots: confinement?.filesystem?.toolchainReadRoots,
+      events,
+    };
+  }
+
+  function tmpRoot(): string {
+    return realpathSync(mkdtempSync(join(tmpdir(), "keiko-ripgrep-launch-")));
+  }
+
+  it("puts only the verified directory in front of the native child PATH and opens exactly it", () => {
+    const root = tmpRoot();
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      const directory = stage(join(root, "install", "runtime", "native", "rg"));
+      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "linux-x64",
+      });
+
+      expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
+      expect(result.allowlist).toContain("PATH");
+      // What the manager really hands the child: the allowlisted names of this very environment.
+      const child = buildSandboxEnv(result.processEnv ?? {}, result.allowlist);
+      expect(child.PATH?.split(delimiter)[0]).toBe(directory);
+      expect(child.SECRET_TOKEN).toBeUndefined();
+      expect(result.processEnv?.SECRET_TOKEN).toBe("t0k3n-value");
+      expect(result.toolchainReadRoots).toEqual([directory]);
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({
+        op: "coding-runtime.ripgrep.resolved",
+        level: "info",
+        correlationId: "run-windows",
+        extra: {
+          targetKey: "linux-x64",
+          outcome: "verified",
+          layout: "portable",
+          toolProfile: "native",
+          digestSource: "pinned",
+          version: "0.0.0-test",
+        },
+      });
+      expect(JSON.stringify(result.events)).not.toContain(root);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("starts the run without touching PATH when the executable does not verify", () => {
+    const root = tmpRoot();
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      stage(join(root, "install", "runtime", "native", "rg"), "not the pinned bytes");
+      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "linux-x64",
+      });
+
+      expect(result.processEnv).toBe(CONTENT_ENV);
+      expect(result.processEnv?.PATH).toBe(`/usr/bin${delimiter}/bin`);
+      expect(result.toolchainReadRoots).toEqual([]);
+      expect(result.events[0]).toMatchObject({
+        level: "warn",
+        extra: { outcome: "unverified", layout: "portable", reason: "digest-mismatch" },
+      });
+      expect(JSON.stringify(result.events)).not.toContain(root);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("gives a mapped profile the verified directory alone and no inherited entry", () => {
+    const root = tmpRoot();
+    try {
+      const directory = stage(join(root, "install", "runtime", "native", "rg"));
+      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+        native: false,
+        processEnv: CONTENT_ENV,
+        key: "linux-x64",
+      });
+
+      expect(result.allowlist).toEqual(["PATH"]);
+      expect(result.processEnv?.PATH).toBe(directory);
+      expect(buildSandboxEnv(result.processEnv ?? {}, result.allowlist)).toEqual({
+        PATH: directory,
+      });
+      expect(result.events[0]).toMatchObject({ extra: { toolProfile: "mapped" } });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the mapped profile's empty inheritance when the executable does not verify", () => {
+    const root = tmpRoot();
+    try {
+      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+        native: false,
+        processEnv: CONTENT_ENV,
+        key: "linux-x64",
+      });
+      expect(result.allowlist).toEqual([]);
+      expect(result.processEnv).toBe(CONTENT_ENV);
+      expect(result.events[0]).toMatchObject({
+        extra: { outcome: "unverified", reason: "missing", toolProfile: "mapped" },
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("ignores an environment override in a packaged runtime", () => {
+    const root = tmpRoot();
+    try {
+      const named = stage(join(root, "elsewhere", "rg"));
+      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+        native: true,
+        processEnv: { ...CONTENT_ENV, [RIPGREP_OVERRIDE_ENV]: join(named, "rg") },
+        key: "linux-x64",
+      });
+      expect(result.processEnv?.PATH).toBe(`/usr/bin${delimiter}/bin`);
+      expect(result.events[0]).toMatchObject({
+        extra: { outcome: "unverified", layout: "portable", reason: "missing" },
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("finds the provisioned executable of a development checkout and honours a verified override", () => {
+    const root = tmpRoot();
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const checkout = devLaneCheckoutRoot(portable);
+      expect(checkout).toBeDefined();
+      const provisioned = stage(
+        join(checkout ?? root, ".ripgrep", "0.0.0-test", "win32-x64", "rg.exe"),
+      );
+      const result = launch(root, portable, {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "win32-x64",
+      });
+      expect(result.processEnv?.PATH?.split(delimiter)[0]).toBe(provisioned);
+      expect(result.events[0]).toMatchObject({
+        extra: { outcome: "verified", layout: "provisioned" },
+      });
+
+      const named = stage(join(root, "chosen", "rg.exe"));
+      const overridden = launch(root, portable, {
+        native: true,
+        processEnv: { ...CONTENT_ENV, [RIPGREP_OVERRIDE_ENV]: join(named, "rg.exe") },
+        key: "win32-x64",
+      });
+      expect(overridden.processEnv?.PATH?.split(delimiter)[0]).toBe(named);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 });

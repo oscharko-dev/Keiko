@@ -115,6 +115,8 @@ describe("portable native registration policy", () => {
         join(layout.resourceRoot, "runtime", "native", "keiko-secure-workspace-read.exe"),
         join(layout.resourceRoot, "runtime", "native", "usearch.node"),
         join(layout.resourceRoot, "runtime", "licenses", "usearch", "LICENSE"),
+        join(layout.resourceRoot, "runtime", "native", "rg.exe"),
+        join(layout.resourceRoot, "runtime", "licenses", "ripgrep", "LICENSE-MIT"),
         join(layout.resourceRoot, "runtime", "sidecars", "approved", "sidecar.bin"),
       ];
       for (const path of paths) {

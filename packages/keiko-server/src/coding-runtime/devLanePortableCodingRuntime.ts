@@ -358,6 +358,22 @@ function activatedDevLaneRuntime(
   };
 }
 
+/**
+ * The repository checkout a dev-checkout runtime was staged from, or `undefined` for any other lane.
+ * Derived from the one place that composes `installRoot` (`activatedDevLaneRuntime`:
+ * `<checkout>/.portable-sidecar-payloads/<target>/opencode-compatible`), so the layout stays with
+ * its owner. The pinned ripgrep executable provisioned for development lives under this root.
+ */
+export function devLaneCheckoutRoot(
+  runtime: Pick<DevLanePortableOpenCodeRuntime, "lane" | "installRoot">,
+): string | undefined {
+  if (runtime.lane !== "dev-checkout") return undefined;
+  const stagedPayloads = dirname(dirname(runtime.installRoot));
+  return basename(stagedPayloads) === DEV_LANE_STAGED_PAYLOADS_DIR
+    ? dirname(stagedPayloads)
+    : undefined;
+}
+
 function refused(reason: DevLaneOpenCodeRefusalReason): DevLaneOpenCodeDiscovery {
   return { outcome: "refused", reason };
 }

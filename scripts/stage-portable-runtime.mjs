@@ -26,6 +26,8 @@ import {
   findPortableMetadataRedactionFailures,
   hashDirectoryTree,
   isSafePortableRelativePath,
+  nativeToolProvenance,
+  nativeToolSbomBomRef,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
   reviewedStagingEntryMatches,
@@ -50,6 +52,16 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import {
+  RIPGREP_LICENSE_MAX_BYTES,
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  RIPGREP_RUNTIME_MANIFEST,
+  ripgrepPortableExecutablePath,
+  ripgrepProvisionedDirectory,
+  ripgrepRuntimeApproval,
+  ripgrepRuntimeTargetKey,
+  verifyPinnedRuntimeFile,
+} from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
@@ -1469,7 +1481,34 @@ function nativeAddonSbomComponent(addon) {
   };
 }
 
-function sbomForManifest(manifest) {
+function nativeToolSbomComponent(tool) {
+  return {
+    type: "application",
+    "bom-ref": tool.sbomBomRef,
+    name: tool.name,
+    version: tool.version,
+    purl: `pkg:github/burntsushi/ripgrep@${tool.version}`,
+    licenses: [{ expression: RIPGREP_RUNTIME_MANIFEST.licenseExpression }],
+    hashes: [{ alg: "SHA-256", content: tool.shippedSha256 }],
+    externalReferences: [
+      {
+        type: "distribution",
+        url: tool.source.archiveUrl,
+        hashes: [{ alg: "SHA-256", content: tool.source.archiveSha256 }],
+      },
+    ],
+    properties: [
+      { name: "keiko:platform-target", value: tool.platformTarget },
+      { name: "keiko:architecture", value: tool.architecture },
+      { name: "keiko:source-commit", value: tool.source.commitSha },
+      { name: "keiko:unsigned-sha256", value: tool.unsignedSha256 },
+      { name: "keiko:executable-path", value: tool.executablePath },
+      { name: "keiko:license-path", value: tool.licensePath },
+    ],
+  };
+}
+
+export function sbomForManifest(manifest) {
   return withCyclonedxSerialNumber({
     bomFormat: "CycloneDX",
     specVersion: "1.6",
@@ -1477,11 +1516,12 @@ function sbomForManifest(manifest) {
     components: [
       ...manifest.nativeHelpers.map(nativeHelperSbomComponent),
       ...(manifest.nativeAddons ?? []).map(nativeAddonSbomComponent),
+      ...(manifest.nativeTools ?? []).map(nativeToolSbomComponent),
     ],
   });
 }
 
-function thirdPartyNotices(manifest) {
+export function thirdPartyNotices(manifest) {
   const addon = manifest.nativeAddons[0];
   return [
     "Portable runtime notices are assembled by the release pipeline.",
@@ -1492,7 +1532,19 @@ function thirdPartyNotices(manifest) {
     "The complete upstream license is included at runtime/licenses/usearch/LICENSE.",
     `Source: ${addon.source.tarballUrl}`,
     "",
+    ...(manifest.nativeTools ?? []).flatMap(nativeToolNoticeLines),
   ].join("\n");
+}
+
+function nativeToolNoticeLines(tool) {
+  return [
+    `ripgrep ${tool.version}`,
+    "Copyright (c) 2015 Andrew Gallant.",
+    "Licensed under the Unlicense or the MIT license, at the recipient's option; Keiko ships the MIT text.",
+    `The complete MIT license is included at ${tool.licensePath}.`,
+    `Source: ${tool.source.archiveUrl}`,
+    "",
+  ];
 }
 
 function writeEvidence(stageRoot, manifest, provenanceStatement) {
@@ -1530,6 +1582,7 @@ function provenanceStatementFor(
   sidecarRuntimes,
   nativeHelpers,
   nativeAddons,
+  nativeTools = [],
 ) {
   return (
     JSON.stringify({
@@ -1562,6 +1615,7 @@ function provenanceStatementFor(
         unsignedSha256: addon.unsignedSha256,
         version: addon.version,
       })),
+      ...(nativeTools.length > 0 ? { nativeTools: nativeTools.map(nativeToolProvenance) } : {}),
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
       subjectDigest: digests.assetSha256,
       target: target.platformTarget,
@@ -1712,6 +1766,119 @@ export function stageUsearchAddon(
       },
     },
   ];
+}
+
+function provisionedRipgrepRuntime(target) {
+  const targetKey = ripgrepRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
+  const approved = ripgrepRuntimeApproval(targetKey);
+  if (approved === undefined) fail("ripgrep has no approved runtime for the portable target");
+  const provisionedRoot = ripgrepProvisionedDirectory(repoRoot, approved.targetKey);
+  const sourceBinary = join(provisionedRoot, approved.binaryName);
+  const sourceLicense = join(provisionedRoot, approved.licenseFileName);
+  // The product's own verifier: a regular file, no symlink, owner and mode, pinned digest.
+  if (
+    !verifyPinnedRuntimeFile(sourceBinary, [approved.binarySha256]).ok ||
+    !verifyPinnedRuntimeFile(sourceLicense, [approved.licenseSha256], {
+      maxBytes: RIPGREP_LICENSE_MAX_BYTES,
+    }).ok
+  ) {
+    fail("ripgrep runtime is absent or failed its pinned digest; run npm run provision:ripgrep");
+  }
+  return { approved, sourceBinary, sourceLicense };
+}
+
+function stageRipgrepFiles(resourceRoot, runtime, copyFile) {
+  const executablePath = ripgrepPortableExecutablePath(runtime.approved.targetKey);
+  const licensePath = RIPGREP_PORTABLE_LICENSE_PATH;
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  const licenseDestination = join(resourceRoot, ...licensePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  mkdirSync(dirname(licenseDestination), { recursive: true });
+  copyFile(runtime.sourceBinary, destination);
+  copyFile(runtime.sourceLicense, licenseDestination);
+  chmodLauncher(destination);
+  return { destination, executablePath, licensePath };
+}
+
+function failRipgrepStaging(onFailure, message) {
+  onFailure(message);
+  throw new Error("portable ripgrep staging aborted");
+}
+
+// Re-verifies the bytes that landed in the payload, not the provisioned source they were copied
+// from: a copy that was truncated, redirected or altered must abort staging.
+function verifyStagedRipgrep(resourceRoot, staged, approved, onFailure) {
+  if (sha256(readFileSync(staged.destination)) !== approved.binarySha256) {
+    return failRipgrepStaging(
+      onFailure,
+      "ripgrep staged runtime failed its platform-pinned digest",
+    );
+  }
+  const license = join(resourceRoot, ...staged.licensePath.split("/"));
+  if (sha256(readFileSync(license)) !== approved.licenseSha256) {
+    return failRipgrepStaging(
+      onFailure,
+      "ripgrep staged license failed its platform-pinned digest",
+    );
+  }
+  return undefined;
+}
+
+/**
+ * The manifest `nativeTools` entry for a staged ripgrep. `shippedSha256` and `sizeBytes` describe the
+ * bytes on disk at `staged.destination`; `unsignedSha256` is always the approved upstream identity.
+ */
+export function ripgrepToolManifestEntry(target, approved, staged, evaluation) {
+  return {
+    name: "ripgrep",
+    kind: "native-tool",
+    version: approved.version,
+    platformTarget: target.platformTarget,
+    architecture: target.nodeArchitecture,
+    executablePath: staged.executablePath,
+    licensePath: staged.licensePath,
+    source: {
+      commitSha: approved.sourceCommit,
+      archiveUrl: approved.archiveUrl,
+      archiveSha256: approved.archiveSha256,
+      binarySha256: approved.binarySha256,
+      licenseSha256: approved.licenseSha256,
+    },
+    unsignedSha256: approved.binarySha256,
+    shippedSha256: sha256(readFileSync(staged.destination)),
+    sizeBytes: lstatSync(staged.destination).size,
+    sbomBomRef: nativeToolSbomBomRef(approved, target.platformTarget),
+    signing: {
+      signatureKind: target.signatureKind,
+      verificationStatus: nativeHelperStagingStatus(evaluation),
+      signatureVerified: false,
+      notarizationRequired: target.nodePlatform === "darwin",
+      notarizationVerified: false,
+    },
+  };
+}
+
+/**
+ * Stages the pinned ripgrep executable and its MIT license beside the USearch addon and returns the
+ * manifest's `nativeTools` section. OpenCode's glob and grep need it, and the runtime must never
+ * have to download it (Epic #3897). The bytes are re-verified after the copy against the
+ * platform-pinned digest; a signing stage later rebinds `shippedSha256` while `unsignedSha256`
+ * keeps the upstream identity.
+ */
+export function stageRipgrepTool(
+  target,
+  resourceRoot,
+  {
+    copyFile = copyFileSync,
+    onFailure = fail,
+    resolveRuntime = provisionedRipgrepRuntime,
+    evaluation = false,
+  } = {},
+) {
+  const runtime = resolveRuntime(target);
+  const staged = stageRipgrepFiles(resourceRoot, runtime, copyFile);
+  verifyStagedRipgrep(resourceRoot, staged, runtime.approved, onFailure);
+  return [ripgrepToolManifestEntry(target, runtime.approved, staged, evaluation)];
 }
 
 function buildSecureReadHelper(target, destination) {
@@ -2220,6 +2387,7 @@ function manifestReviewedBinding(input) {
     sidecarRuntimes,
     nativeHelpers,
     nativeAddons,
+    nativeTools = [],
   } = input;
   const binding = {
     releaseId: options.releaseId,
@@ -2248,6 +2416,7 @@ function manifestReviewedBinding(input) {
   if (sidecarRuntimes.length > 0) binding.sidecarRuntimes = cloneJson(sidecarRuntimes);
   binding.nativeHelpers = cloneJson(nativeHelpers);
   binding.nativeAddons = cloneJson(nativeAddons);
+  if (nativeTools.length > 0) binding.nativeTools = cloneJson(nativeTools);
   return binding;
 }
 
@@ -2301,6 +2470,7 @@ function manifestFor(
   sidecarRuntimes = [],
   nativeHelpers = [],
   nativeAddons = [],
+  nativeTools = [],
 ) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
@@ -2334,10 +2504,12 @@ function manifestFor(
       sidecarRuntimes,
       nativeHelpers,
       nativeAddons,
+      nativeTools,
     }),
     updateEligibility: manifestUpdateEligibility(options.release === true),
   };
   if (sidecarRuntimes.length > 0) manifest.sidecarRuntimes = sidecarRuntimes;
+  if (nativeTools.length > 0) manifest.nativeTools = nativeTools;
   return manifest;
 }
 
@@ -2414,12 +2586,16 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot, {
     evaluation: options.evaluation === true,
   });
+  const nativeTools = (hooks.stageRipgrepTool ?? stageRipgrepTool)(target, paths.resourceRoot, {
+    evaluation: options.evaluation === true,
+  });
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const staged = {
     nodeArchiveSha256,
     sidecarRuntimes,
     nativeHelpers,
     nativeAddons,
+    nativeTools,
   };
   const firstPass = await manifestInputFor(options, target, paths, tarball, staged);
   const firstActivation = writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
@@ -2449,6 +2625,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     staged.sidecarRuntimes,
     staged.nativeHelpers,
     staged.nativeAddons,
+    staged.nativeTools,
   );
   const provenanceSha256 = sha256(provenanceStatement);
   return {
@@ -2467,6 +2644,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
       staged.sidecarRuntimes,
       staged.nativeHelpers,
       staged.nativeAddons,
+      staged.nativeTools,
     ),
     provenanceStatement,
   };
@@ -2540,8 +2718,8 @@ function requireDarwinBuilder(target, step) {
 
 function validateGeneratedManifest(manifest, evaluation) {
   const failures = evaluation
-    ? validatePortableEvaluationManifest(manifest)
-    : validatePortableStagingManifest(manifest);
+    ? validatePortableEvaluationManifest(manifest, { requireNativeTools: true })
+    : validatePortableStagingManifest(manifest, { requireNativeTools: true });
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 

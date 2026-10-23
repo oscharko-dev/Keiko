@@ -204,7 +204,9 @@ it:
    `scripts/run-portable-assets-stage.mjs` (Linux x64 on Linux, Windows x64 on Windows, and both
    macOS targets on native runners, with each native launcher compiled in place). Manual dispatch
    can smoke the same targets but cannot reach assembly or publication.
-4. Runs the real launch/setup, USearch, and secure-read smoke on each native target. Linux binds an
+4. Runs the real launch/setup, USearch, ripgrep, and secure-read smoke on each native target. The
+   ripgrep smoke starts the staged `runtime/native/rg` (`rg.exe` on Windows) outside `PATH` and the
+   user's configuration and makes it find text in a fixture tree. Linux binds an
    OIDC-attested qualification receipt and reruns the namespace-gateway proof on a fresh runner
    without token authority. The Windows job builds `keiko-windows-x64-setup.exe` from the finalized
    ZIP and verifies its embedded script and ZIP digest. No Apple or Microsoft signing service is

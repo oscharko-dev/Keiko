@@ -1054,6 +1054,7 @@ describe("separately typed original OpenCode service-host approvals", () => {
       "scripts/portable-runtime.mjs",
       "scripts/lib/digest.mjs",
       "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts",
+      "packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts",
     ]) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       copyFileSync(join(repoRoot, path), join(root, path));
