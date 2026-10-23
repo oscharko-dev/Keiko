@@ -46,7 +46,6 @@ import type {
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
-  CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";

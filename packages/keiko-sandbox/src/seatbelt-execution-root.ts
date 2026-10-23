@@ -321,7 +321,7 @@ function protectedWriteSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
 
 function intermediateDirectories(root: string, writable: readonly string[]): readonly string[] {
   const container = writable
-    .filter((candidate) => strictlyInside(candidate, root))
+    .filter((writableRoot) => strictlyInside(writableRoot, root))
     .sort((a, b) => b.length - a.length)[0];
   if (container === undefined) return [];
   const directories: string[] = [];

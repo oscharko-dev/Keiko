@@ -66,7 +66,7 @@ export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefini
 /**
  * The native tools outside Code Mode, in producer order: the registry the native profile draws its
  * advertisement from. The producer advertises the subset it enables for the agent and model alias
- * (the real-binary suite observed `patch` and `todo` registered but not advertised).
+ * (the real-binary suite observed `patch` and the task-list tool registered but not advertised).
  */
 export const OPENCODE_NATIVE_TOOL_NAMES: readonly string[] = Object.freeze(
   OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => !tool.codemode).map((tool) => tool.id),

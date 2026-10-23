@@ -386,7 +386,7 @@ function insertPlan(
   order: number,
   open: boolean,
 ): readonly TimelineItem[] {
-  // The row identity is the message that anchors the plan, not its revision: every todo update
+  // The row identity is the message that anchors the plan, not its revision: every task-list update
   // bumps the revision, and a row keyed by it would remount the card (and close what the reader
   // had open) on each update.
   const planItem: TimelineItem = {
