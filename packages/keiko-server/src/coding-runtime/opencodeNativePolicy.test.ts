@@ -115,10 +115,85 @@ describe("native policy effects per autonomy mode", () => {
     expect(effectOf("autonomous-delivery", "execute", [])).toBe("allow");
   });
 
-  it("asks for internet use below Full access and allows it there", () => {
-    expect(effectOf("governed-assist", "webfetch", ["https://example.com/doc"])).toBe("ask");
-    expect(effectOf("supervised-coding", "websearch", ["vitest mock timers"])).toBe("ask");
+  it("refuses internet use below Full access at once and allows it there (#3897)", () => {
+    // Below Full access the sandbox is loopback-only and customer networks are firewalled: an
+    // approval the kernel would then block is replaced by an immediate, explained refusal.
+    expect(effectOf("governed-assist", "webfetch", ["https://example.com/doc"])).toBe(
+      "deny:mode-denied",
+    );
+    expect(effectOf("supervised-coding", "websearch", ["vitest mock timers"])).toBe(
+      "deny:mode-denied",
+    );
     expect(effectOf("autonomous-delivery", "webfetch", ["https://example.com/doc"])).toBe("allow");
+    const refused = decide("supervised-coding", "webfetch", ["https://example.com/doc"]);
+    expect(refused.effect === "deny" ? refused.message : "").toMatch(
+      /only available in Full access/u,
+    );
+    const allowed = decide("autonomous-delivery", "webfetch", ["https://example.com/doc"]);
+    expect(allowed.effect === "allow" ? allowed.classification.actionClass : "").toBe(
+      "network-egress",
+    );
+  });
+
+  it("classifies every simple command of a shell line on its own (#3897 audit)", () => {
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+      expect(effectOf(mode, "shell", ["npm test", "git push origin HEAD"])).toBe(
+        "deny:delivery-reserved",
+      );
+      expect(effectOf(mode, "shell", ["cat a.txt", "git commit -am done"])).toBe(
+        "deny:delivery-reserved",
+      );
+    }
+    expect(effectOf("supervised-coding", "shell", ["ls", "rm -rf build"])).toBe("ask");
+    expect(effectOf("supervised-coding", "shell", ["npm test", "npx eslint ."])).toBe("allow");
+  });
+
+  it("keeps read-only Git listings and quoted mentions available (#3897 audit)", () => {
+    for (const command of [
+      "git branch --show-current",
+      "git branch -a",
+      "git stash list",
+      "git remote -v",
+      "git tag --list",
+      "git worktree list",
+      'grep -rn "git push" docs',
+      "echo 'git commit is done by Keiko'",
+    ]) {
+      expect(effectOf("supervised-coding", "shell", [command]), command).not.toBe(
+        "deny:delivery-reserved",
+      );
+    }
+    for (const command of [
+      "git branch feature/x",
+      "git stash",
+      "git remote add origin x",
+      "git tag v1",
+      'eval "git push"',
+    ]) {
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe(
+        "deny:delivery-reserved",
+      );
+    }
+  });
+
+  it("checks the searched directory of glob and grep, not their pattern (#3897 audit)", () => {
+    const search = (pattern: string, searchPath?: string): string => {
+      const decision = decideOpenCodeNativePolicy({
+        mode: "supervised-coding",
+        workspaceRoot: WORKSPACE,
+        request: {
+          ...request("grep", [pattern]),
+          ...(searchPath === undefined ? {} : { searchPath }),
+        },
+        nowMs: 0,
+      });
+      return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+    };
+    expect(search("// TODO")).toBe("allow");
+    expect(search("/api/users")).toBe("allow");
+    expect(search("API_KEY", `${WORKSPACE}/src`)).toBe("allow");
+    expect(search("x", "/etc")).toBe("deny:workspace-escape");
+    expect(search("x", `${WORKSPACE}/.env`)).toBe("deny:sensitive-path");
   });
 
   it("keeps the hard denials in every mode", () => {
@@ -214,10 +289,10 @@ describe("native policy evidence", () => {
       decision: denied,
       outcome: "delivery-reserved",
     });
-    const asked = decide("governed-assist", "webfetch", ["https://example.com/secret-doc"]);
+    const asked = decide("governed-assist", "edit", ["src/secret-doc.ts"]);
     recordOpenCodeNativePolicyDecision(captured.activityLog, "run-native-1", {
       mode: "governed-assist",
-      request: request("webfetch", ["https://example.com/secret-doc"]),
+      request: request("edit", ["src/secret-doc.ts"]),
       decision: asked,
       outcome: "approved",
     });
@@ -248,7 +323,7 @@ describe("native policy evidence", () => {
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(second),
       ),
-    ).toMatchObject({ permission: "webfetch", effect: "ask", outcome: "approved", risk: "medium" });
+    ).toMatchObject({ permission: "edit", effect: "ask", outcome: "approved" });
     expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",

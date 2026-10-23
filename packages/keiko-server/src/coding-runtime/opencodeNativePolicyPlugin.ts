@@ -27,6 +27,8 @@ export const OPENCODE_NATIVE_SHELL_ENV_DENYLIST = Object.freeze([
 
 const DENY_MESSAGE =
   "Keiko refused this action: its policy service did not answer. Continue with another step.";
+const OVERSIZED_MESSAGE =
+  "Keiko refused this action: it is too large to review (at most 64 commands or paths of 2,048 characters each). Split it into smaller steps, or write a long script to a file first.";
 
 /**
  * Dependency-free V2 plugin source (#3897): the one place Keiko's autonomy mode touches the native
@@ -53,10 +55,16 @@ function pluginConstantsSource(): readonly string[] {
     `const MAX_MESSAGE_CHARS = ${String(OPENCODE_NATIVE_POLICY_MAX_MESSAGE_CHARS)};`,
     `const WAIT_MS = ${String(OPENCODE_NATIVE_POLICY_WAIT_MS)};`,
     `const DENY_MESSAGE = ${JSON.stringify(DENY_MESSAGE)};`,
+    `const OVERSIZED_MESSAGE = ${JSON.stringify(OVERSIZED_MESSAGE)};`,
     `const ENV_DENYLIST = new Set(${JSON.stringify(OPENCODE_NATIVE_SHELL_ENV_DENYLIST)});`,
     "const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
+    "const fullAccess = process.env.KEIKO_CODING_MODE === 'autonomous-delivery';",
+    "function searchPath(event) {",
+    '  const path = event.metadata && typeof event.metadata === "object" ? event.metadata.path : undefined;',
+    '  return typeof path === "string" && path.length > 0 && path.length <= MAX_RESOURCE_CHARS ? path : undefined;',
+    "}",
     "function boundedResources(resources) {",
     "  if (resources === undefined || resources === null) return [];",
     "  if (!Array.isArray(resources) || resources.length > MAX_RESOURCES) return null;",
@@ -76,9 +84,9 @@ function policyEvaluationSource(): readonly string[] {
     '  const refusal = { effect: "deny", message: DENY_MESSAGE };',
     "  if (!endpoint || !capability || !runId) return refusal;",
     "  const resources = boundedResources(event.resources);",
-    "  if (resources === null) return refusal;",
+    '  if (resources === null) return { effect: "deny", message: OVERSIZED_MESSAGE };',
     "  try {",
-    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), configured: event.effect });',
+    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), configured: event.effect });',
     '    const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(WAIT_MS), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
     '    if (!response.ok || response.type === "opaqueredirect") return refusal;',
     "    const text = await response.text();",
@@ -100,6 +108,8 @@ function pluginBodySource(): readonly string[] {
     '  id: "keiko.native-policy",',
     "  async setup(ctx) {",
     '    await ctx.permission.hook("evaluate", async (event) => {',
+    "      // An earlier hook's deny stands: this hook can only keep or narrow the configured effect.",
+    '      if (event.effect === "deny") return;',
     "      const decision = await evaluate(event);",
     "      event.effect = decision.effect;",
     "      if (decision.message !== undefined) event.message = decision.message;",
@@ -108,6 +118,8 @@ function pluginBodySource(): readonly string[] {
     "      for (const name of Object.keys(event.env ?? {})) {",
     '        if (ENV_DENYLIST.has(name) || name.startsWith("KEIKO_")) delete event.env[name];',
     "      }",
+    "      // The runtime's own package manager stays offline; at Full access a shell may reach registries.",
+    "      if (fullAccess && event.env) delete event.env.npm_config_offline;",
     "    });",
     "  },",
     "};",

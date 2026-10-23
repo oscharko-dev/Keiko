@@ -2672,6 +2672,43 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     }
   });
 
+  it("decides with the narrower mode after a narrowing resume (#3897 audit)", async () => {
+    const admit = admitWith({ ok: true });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+    });
+    const fetchAsk = (): string =>
+      JSON.stringify({
+        action: "native-policy",
+        runId: FIXTURE_RUN_ID,
+        sessionID: "ses_tool",
+        permission: "webfetch",
+        resources: ["https://example.invalid/doc"],
+        configured: "ask",
+      });
+    try {
+      const before = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: fetchAsk(),
+      });
+      expect(JSON.parse(before.body)).toMatchObject({ effect: "allow" });
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "supervised-coding")).toMatchObject({
+        ok: true,
+        effectiveMode: "supervised-coding",
+      });
+      const after = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: fetchAsk(),
+      });
+      expect(JSON.parse(after.body)).toMatchObject({ effect: "deny" });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("proves ancestry only through a bounded parent chain inside the workspace", async () => {
     const { nativeSessionDescendsFromRun } = await compositionModule();
     const ws = "/ws";

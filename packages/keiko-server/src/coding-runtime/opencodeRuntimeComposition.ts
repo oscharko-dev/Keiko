@@ -38,6 +38,7 @@ import type { PortableSidecarRuntimeVerification } from "../update-portable-side
 import {
   createCodingRuntimeManager,
   type CodingRuntimeManager,
+  type CodingRuntimePauseResult,
   type CodingRuntimeManagerDeps,
   type OpenCodeLifecycleAdapter,
   type OpenCodeLifecycleHandshakeRequest,
@@ -383,8 +384,11 @@ interface PreparedRun {
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
-  /** The run's effective autonomy mode, as the launch environment declares it (#3897). */
-  readonly mode: string | undefined;
+  /**
+   * The run's effective autonomy mode: the launch environment's, narrowed when the operator resumes
+   * the run with a narrower mode (#3897 audit). Native policy decisions always read this value.
+   */
+  mode: string | undefined;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
@@ -439,7 +443,20 @@ export function createOpenCodeRuntimeComposition(
     { approvals, runs },
   );
   const lifecycle = lifecycleAdapter(input, bridge, runs);
-  const manager = createCodingRuntimeManager({
+  const manager = withNativeModeNarrowing(runs, compositionManager(input, lifecycle));
+  return {
+    prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
+    manager,
+    toolBridge: bridge.publicPort,
+    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
+  };
+}
+
+function compositionManager(
+  input: OpenCodeRuntimeCompositionInput,
+  lifecycle: ReturnType<typeof lifecycleAdapter>,
+): CodingRuntimeManager {
+  return createCodingRuntimeManager({
     supervisor: input.supervisor,
     processEnv: input.processEnv ?? {},
     diagnostics: input.diagnostics,
@@ -456,12 +473,26 @@ export function createOpenCodeRuntimeComposition(
       : { codingToolApprovals: input.codingToolApprovals }),
     ...input.authorityLifecycle,
   });
-  return {
-    prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
-    manager,
-    toolBridge: bridge.publicPort,
-    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
+}
+
+/**
+ * A resume may narrow the run's mode (Full access to Ask for approval, say); the manager records it,
+ * and the native policy must decide with it from the next action on, not with the launch mode.
+ * Widening is refused by the manager itself.
+ */
+function withNativeModeNarrowing(
+  runs: ReadonlyMap<string, PreparedRun>,
+  manager: CodingRuntimeManager,
+): CodingRuntimeManager {
+  const resume = manager.resume.bind(manager);
+  manager.resume = (runId, requestedMode): CodingRuntimePauseResult => {
+    const result = resume(runId, requestedMode);
+    const run = runs.get(runId);
+    if (result.ok && result.effectiveMode !== undefined && run !== undefined)
+      run.mode = result.effectiveMode;
+    return result;
   };
+  return manager;
 }
 
 function createRunPort(

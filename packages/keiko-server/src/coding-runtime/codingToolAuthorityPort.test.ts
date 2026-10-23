@@ -3106,6 +3106,44 @@ describe("native effect admission (#3897 review)", () => {
     );
   });
 
+  it("revalidates a read without reserving a tool call, and charges an effect (#3897 audit)", () => {
+    const envelope = fullyAuthorizedEnvelope as CodingWorkbenchRuntimeAuthorityEnvelope;
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        delegationId: "native-read-1",
+        actionClass: "workspace-read",
+      }),
+    ).toEqual({ ok: true });
+    expect(authority.revalidateCapabilityForMutation).toHaveBeenCalledOnce();
+    expect(authority.resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    facade.nativeEffect?.admit({
+      capability: "runtime-capability-secret",
+      delegationId: "native-edit-1",
+      actionClass: "workspace-write",
+    });
+    expect(authority.resolveCapabilityForDelegation).toHaveBeenCalledOnce();
+    const expired = {
+      revalidateCapabilityForMutation: vi.fn(() => ({
+        ok: false as const,
+        reason: "authority-expired" as const,
+      })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    expect(
+      createRuntimeCodingToolFacade(expired, nativeContext, governedPorts()).nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        delegationId: "native-read-2",
+        actionClass: "workspace-read",
+      }),
+    ).toEqual({ ok: false, reason: "authority-expired" });
+  });
+
   it("refuses when the live authority refuses (revoked, paused, exhausted) and when the envelope lacks the class", () => {
     const refused = {
       revalidateCapabilityForMutation: vi.fn(() => ({

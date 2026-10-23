@@ -644,23 +644,34 @@ export function createRuntimeCodingToolFacade(
  * decision's replay identity. Nothing is executed here; the runtime performs the effect itself.
  */
 function nativeEffectFacet(
-  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
   context: CodingToolAuthorityContextProvider,
 ): CodingToolNativeEffectFacet {
   return {
     admit: (input): CodingToolNativeEffectAdmission => {
       const current = context();
-      const resolved = authority.resolveCapabilityForDelegation({
+      const live = {
         capability: input.capability,
         adapterKind: current.adapterKind,
         liveFacts: current.liveFacts,
-        delegationId: input.delegationId,
-        idempotencyKey: input.delegationId,
-        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
         workspaceRoot: current.workspaceRoot,
         deploymentCeiling: current.deploymentCeiling,
         nowIso: current.nowIso,
-      });
+      };
+      // Reads and planning are revalidated against live authority but reserve no tool call: a
+      // large task reads far more files than it changes, and reads have no effect to budget.
+      const resolved =
+        input.actionClass === "workspace-read"
+          ? authority.revalidateCapabilityForMutation(live)
+          : authority.resolveCapabilityForDelegation({
+              ...live,
+              delegationId: input.delegationId,
+              idempotencyKey: input.delegationId,
+              usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+            });
       if (!resolved.ok) return { ok: false, reason: resolved.reason };
       return hasClasses(resolved.envelope.authority.actionClasses, [input.actionClass])
         ? { ok: true }

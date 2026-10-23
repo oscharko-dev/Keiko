@@ -44,6 +44,8 @@ export interface OpenCodeNativePolicyRequest {
   readonly permission: string;
   readonly resources: readonly string[];
   readonly source?: { readonly messageID: string; readonly id: string } | undefined;
+  /** The directory a `glob`/`grep` searches (its permission metadata); resources are patterns. */
+  readonly searchPath?: string | undefined;
 }
 
 export type OpenCodeNativePolicyDenyReason =
@@ -80,10 +82,9 @@ export interface OpenCodeNativeActionClassification {
 type NativeActionLabel =
   "native-read" | "native-edit" | "native-shell" | "native-egress" | "native-execute";
 
+const SEARCH_ACTIONS = new Set(["glob", "grep"]);
 const READ_ACTIONS = new Set([
   "read",
-  "glob",
-  "grep",
   "list",
   "skill",
   "subagent",
@@ -338,16 +339,34 @@ export function parseOpenCodeNativePolicyRequest(
   if (record?.action !== OPENCODE_NATIVE_POLICY_ACTION) return undefined;
   const identity = parseIdentity(record);
   const bounded = boundedResources(record.resources);
+  const optional = parseOptionalFields(record);
+  if (identity === undefined || bounded === undefined || optional === undefined) return undefined;
+  return { ...identity, resources: bounded, ...optional };
+}
+
+/** The optional request fields; `undefined` when any present one is malformed. */
+function parseOptionalFields(
+  record: Readonly<Record<string, unknown>>,
+): Pick<OpenCodeNativePolicyRequest, "agent" | "source" | "searchPath"> | undefined {
   const agent = parseAgent(record.agent);
-  const parsedSource = parseSource(record.source);
-  if (identity === undefined || bounded === undefined || agent === null || parsedSource === null)
-    return undefined;
+  const source = parseSource(record.source);
+  const searchPath = parseSearchPath(record.searchPath);
+  if (agent === null || source === null || searchPath === null) return undefined;
   return {
-    ...identity,
-    resources: bounded,
     ...(agent === undefined ? {} : { agent }),
-    ...(parsedSource === undefined ? {} : { source: parsedSource }),
+    ...(source === undefined ? {} : { source }),
+    ...(searchPath === undefined ? {} : { searchPath }),
   };
+}
+
+/** `undefined` when absent, `null` when malformed (not a bounded string). */
+function parseSearchPath(value: unknown): string | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS
+    ? value
+    : null;
 }
 
 function parseIdentity(
@@ -412,6 +431,14 @@ export function decideOpenCodeNativePolicy(
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
   if (classification.actionClass === "workspace-read") return { effect: "allow", classification };
+  // Below Full access the sandbox has no route beyond this machine, and customer networks are often
+  // firewalled anyway: refuse at once with a clear reason instead of an approval the kernel would
+  // then block (#3897), so the agent continues with local files and tools.
+  if (classification.scope === "internet" && input.mode !== "autonomous-delivery")
+    return deny(
+      "mode-denied",
+      "Keiko refused this action: internet access is only available in Full access, and this run has no route outside the machine. Continue with the local files and tools.",
+    );
   const effect = codingWorkbenchPolicyEffectFor(
     input.mode,
     classification.scope,
@@ -453,6 +480,14 @@ function classifyNativeAction(
       reason: "workspace-escape",
       message: "Keiko refused this action: files outside the task workspace are not accessible.",
     };
+  // A glob/grep resource is a search pattern (`// TODO`, `*.pem`), not a path: only the searched
+  // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
+  if (SEARCH_ACTIONS.has(permission))
+    return guardedPaths(
+      request.searchPath === undefined ? [] : [request.searchPath],
+      workspaceRoot,
+      READ,
+    );
   if (READ_ACTIONS.has(permission)) return guardedPaths(resources, workspaceRoot, READ);
   if (EDIT_ACTIONS.has(permission)) return guardedPaths(resources, workspaceRoot, EDIT);
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
@@ -475,8 +510,8 @@ const EDIT: OpenCodeNativeActionClassification = Object.freeze({
   label: "native-edit",
 });
 const EGRESS: OpenCodeNativeActionClassification = Object.freeze({
-  actionClass: "command-execution",
-  kind: "command-execution",
+  actionClass: "network-egress",
+  kind: "network-egress",
   scope: "internet",
   risk: "medium",
   label: "native-egress",
@@ -542,47 +577,97 @@ export function workspaceRelative(resource: string, workspaceRoot: string): stri
 
 /**
  * A reserved Git or gh invocation at a command position anywhere in the text: the start, after a
- * list operator or `(`, or opening a quoted sub-shell (`sh -c "git push"`, `execSync('git push')`),
- * behind wrappers and `-C`/`-c`/`--git-dir` options. A mention inside a word list (`echo git push`)
- * is not one. Each fragment between command-position delimiters is read by the same tokenizer as a
- * plain segment, so the scan stays linear in the command.
+ * list operator, `(` or a backtick, or inside a quoted string that a shell or interpreter executes
+ * (`sh -c "git push"`, `node -e "…execSync('git push')"`, `eval "git push"`). A quoted mention passed
+ * to an ordinary program (`grep -rn "git push" docs`) is data, not a command. Each fragment is read
+ * by the same tokenizer as a plain segment, so the scan stays linear in the command.
  */
 function reservedInvocationInText(command: string): boolean {
-  return command.split(/[;&|(`'"]/u).some((fragment) => reservedTokens(commandTokens(fragment)));
+  let start = 0;
+  let opener = "";
+  for (let index = 0; index <= command.length; index += 1) {
+    const char = command.charAt(index);
+    if (index < command.length && !COMMAND_DELIMITERS.has(char)) continue;
+    const fragment = command.slice(start, index);
+    if (executedFragment(opener, command.slice(0, Math.max(0, start - 1))))
+      if (reservedTokens(commandTokens(fragment))) return true;
+    opener = char;
+    start = index + 1;
+  }
+  return false;
+}
+
+const COMMAND_DELIMITERS = new Set([";", "&", "|", "(", "`", "'", '"']);
+const QUOTES = new Set(["'", '"']);
+const EXECUTING_PREFIX = /(?:(?:^|\s)-[A-Za-z]*[ce]|\(|(?:^|\s)(?:eval|exec|xargs))\s*$/u;
+
+function executedFragment(opener: string, before: string): boolean {
+  return !QUOTES.has(opener) || EXECUTING_PREFIX.test(before);
+}
+
+/** Read-only forms of otherwise reserved Git subcommands stay available (status-like listings). */
+const READ_ONLY_BRANCH_FLAGS = new Set([
+  "--show-current",
+  "-a",
+  "--all",
+  "-r",
+  "--remotes",
+  "-v",
+  "-vv",
+  "--verbose",
+  "-l",
+  "--list",
+  "--no-color",
+  "--color",
+]);
+
+const READ_ONLY_GIT_FORMS: Readonly<Record<string, (args: readonly string[]) => boolean>> = {
+  branch: (args) => args.every((arg) => READ_ONLY_BRANCH_FLAGS.has(arg)),
+  stash: ([first]) => first === "list" || first === "show",
+  remote: (args) =>
+    args.every((arg) => arg === "-v" || arg === "--verbose") || args[0] === "get-url",
+  tag: ([first]) => first === undefined || first === "-l" || first === "--list",
+  worktree: ([first]) => first === "list",
+  submodule: ([first]) => first === "status",
+};
+
+function isReadOnlyGitForm(subcommand: string, args: readonly string[]): boolean {
+  const form = Object.hasOwn(READ_ONLY_GIT_FORMS, subcommand)
+    ? READ_ONLY_GIT_FORMS[subcommand]
+    : undefined;
+  return form?.(args) === true;
 }
 
 function reservedTokens(tokens: readonly string[]): boolean {
   const [program] = tokens;
   const subcommand = subcommandOf(tokens);
   if (subcommand === undefined) return false;
-  if (program === "git") return RESERVED_GIT_SUBCOMMANDS.has(subcommand);
-  return program === "gh" && RESERVED_GH_SUBCOMMANDS.has(subcommand);
+  if (program === "gh") return RESERVED_GH_SUBCOMMANDS.has(subcommand);
+  if (program !== "git" || !RESERVED_GIT_SUBCOMMANDS.has(subcommand)) return false;
+  return !isReadOnlyGitForm(subcommand, tokens.slice(tokens.indexOf(subcommand) + 1));
 }
 
+/**
+ * OpenCode reports one resource per simple command of a shell line (`npm test && git push` arrives
+ * as two), so every resource is classified on its own: any reserved delivery command refuses the
+ * whole line, and the line is vetted only when every command in it is (#3897 audit).
+ */
 function classifyShell(resources: readonly string[]): Classified {
-  const command = resources.join(" ").trim();
-  if (command.length === 0) return SHELL_UNVETTED;
-  if (isReservedCommand(command) || reservedInvocationInText(command))
+  const commands = resources.map((resource) => resource.trim()).filter((r) => r.length > 0);
+  if (commands.length === 0) return SHELL_UNVETTED;
+  if (commands.some((command) => isReservedCommand(command) || reservedInvocationInText(command)))
     return {
       reason: "delivery-reserved",
       message:
         "Keiko refused this command: Git delivery (commit, push, branches, merges) is performed by Keiko, not by the shell. Leave the verified changes in the working tree and report them.",
     };
-  const segments = commandSegments(command);
-  return segments.length > 0 && segments.every(isVettedSegment) ? SHELL_VETTED : SHELL_UNVETTED;
+  return commands.every((command) => commandSegments(command).every(isVettedSegment))
+    ? SHELL_VETTED
+    : SHELL_UNVETTED;
 }
 
 function isReservedCommand(command: string): boolean {
-  return commandSegments(command).some((segment) => {
-    const tokens = commandTokens(segment);
-    const [program] = tokens;
-    const subcommand = subcommandOf(tokens);
-    if (program === "gh")
-      return subcommand !== undefined && RESERVED_GH_SUBCOMMANDS.has(subcommand);
-    return (
-      program === "git" && subcommand !== undefined && RESERVED_GIT_SUBCOMMANDS.has(subcommand)
-    );
-  });
+  return commandSegments(command).some((segment) => reservedTokens(commandTokens(segment)));
 }
 
 function askEvent(
