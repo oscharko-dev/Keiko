@@ -245,6 +245,11 @@ describe("installed live runtime repository reads", (): void => {
 
   it.each([
     "/api/git/branches?root=%2Funmodeled",
+    "/api/git/branches",
+    "/api/git/branches?root=",
+    "/api/git/branches?root=%",
+    "/api/git/branches?root=%2Fworkspace%2F",
+    "/api/git/branches?root=%2F..%2Fetc",
     "/api/git/status?root=%2Fworkspace",
     "/api/projects",
   ])(

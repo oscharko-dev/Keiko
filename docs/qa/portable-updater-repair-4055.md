@@ -271,7 +271,8 @@ journey. Its trace contains no retry POST: the fixture root is absent from the r
 catalog and its unmocked branch reads return 400. The ready-runtime fixture now serves the
 catalog entry and branches derived from its existing active-workspace fixture. Other roots and
 non-GET requests still reach the real server. Two focused controls fail before that correction;
-all 19 route-fixture controls pass afterward.
+all 24 route-fixture controls pass afterward, including missing, empty, malformed,
+traversal-shaped and trailing-slash branch roots.
 
 A later Chromium attempt fails the Composer/Voice grounding-parity journey: the second page
 restores the first page's Composer window instead of its seeded Voice window. Both pages share
