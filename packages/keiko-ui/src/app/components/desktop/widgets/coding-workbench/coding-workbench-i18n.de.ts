@@ -250,6 +250,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.taskBranch": "Task-Branch",
   "codingWorkbench.info.runState": "Laufstatus",
   "codingWorkbench.info.model": "Modell",
+  "codingWorkbench.info.agent": "Agent",
   "codingWorkbench.info.modelReadiness": "Modellbereitschaft",
   "codingWorkbench.info.runtime": "Runtime-Verifikation",
   "codingWorkbench.info.contextWindow": "Kontextfenster",
@@ -317,6 +318,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Rechte konnten nicht geladen werden. „Um Genehmigung bitten“ bleibt ausgewählt.",
   "codingWorkbench.composer.authority.error.persist":
     "Die Rechte konnten nicht gespeichert werden. Die vorherige Auswahl bleibt aktiv.",
+  "codingWorkbench.composer.agent.label": "Agent",
+  "codingWorkbench.composer.agent.build": "Bauen",
+  "codingWorkbench.composer.agent.plan": "Planen",
+  "codingWorkbench.composer.agent.build.description":
+    "Der Agent ändert Dateien und führt Befehle im gewählten Modus aus.",
+  "codingWorkbench.composer.agent.plan.description":
+    "Der Agent analysiert und erstellt einen Plan, ohne Arbeitsbereichsdateien zu ändern.",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva verwendet in der Coding Workbench ausschließlich das aktive Projekt-Memory.",
@@ -1013,6 +1021,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.phase.tool": "Führt ein Werkzeug aus",
   "codingWorkbench.runStatus.phase.decision": "Wartet auf deine Entscheidung",
   "codingWorkbench.runStatus.readiness": "Bereitschaftsdetails",
+  "codingWorkbench.runStatus.agent.plan": "Plan-Agent",
   "codingWorkbench.resourceStatus.unavailable": "Nicht verfügbar",
   "codingWorkbench.announcement.runChecking": "Laufstatus wird geprüft.",
   "codingWorkbench.announcement.noActiveRun": "Kein aktiver Coding-Lauf.",

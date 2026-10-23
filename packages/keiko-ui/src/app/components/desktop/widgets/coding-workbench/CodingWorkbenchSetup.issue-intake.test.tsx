@@ -223,6 +223,7 @@ function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable,
+        selectableAgents: ["build"],
         ...(runtimeAvailable ? { runtimeEvidenceClass: "platform-qualified" } : {}),
       },
       error: null,
@@ -233,6 +234,7 @@ function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
 function actions(): CodingWorkbenchRuntimeActions {
   return {
     setRequestedMode: vi.fn(),
+    setAgent: vi.fn(),
     setRuntimePreference: vi.fn(),
     setSelectedModel: vi.fn(),
     setReasoningEffort: vi.fn(),

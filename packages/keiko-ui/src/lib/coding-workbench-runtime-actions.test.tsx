@@ -60,6 +60,13 @@ describe("useCodingWorkbenchRuntimeActions", () => {
     expect(dispatch).toHaveBeenCalledWith({ kind: "select-mode", mode: "supervised-coding" });
   });
 
+  it("dispatches a primary agent selection intent", () => {
+    const dispatch = vi.fn();
+    const { actions } = renderActions(dispatch);
+    actions.setAgent("plan");
+    expect(dispatch).toHaveBeenCalledWith({ kind: "select-agent", agent: "plan" });
+  });
+
   it("dispatches model and reasoning selections", () => {
     const dispatch = vi.fn();
     const { actions } = renderActions(dispatch);

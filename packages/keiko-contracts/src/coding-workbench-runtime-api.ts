@@ -148,6 +148,14 @@ export interface CodingWorkbenchRuntimeReadiness {
    * and would reproduce the green-readiness-over-an-unverified-runtime class (audit F-01).
    */
   readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  /**
+   * The primary agents this deployment's OpenCode tool profile can honour, computed server-side
+   * (#3897). Always carries the default agent (`build`); `plan` is listed only where OpenCode runs
+   * its own tools (the native profile), because a mapped profile would run a read-only request as
+   * an editing agent. The browser offers an agent switch only for what is listed here, and the
+   * server refuses (`invalid-intent`) any start or follow-up that names an agent outside it.
+   */
+  readonly selectableAgents: readonly CodingWorkbenchAgent[];
 }
 
 export interface CodingWorkbenchRuntimeProjectMemoryRequest {
@@ -1008,6 +1016,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
       "runtimeAvailable",
       "runtimeUnavailableReason",
       "runtimeEvidenceClass",
+      "selectableAgents",
     ],
     "runtimeReadiness",
   );
@@ -1019,6 +1028,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
   }
   validateRuntimeUnavailableReason(value, errors);
   validateRuntimeEvidenceClass(value, errors);
+  validateSelectableAgents(value, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -1075,6 +1085,27 @@ function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: st
   }
   if (value.runtimeAvailable === false && evidenceClass !== undefined) {
     errors.push("runtimeEvidenceClass must be absent when the runtime is unavailable");
+  }
+}
+
+/**
+ * The selectable agents are a closed, duplicate-free list that keeps the default agent. An absent,
+ * unknown or default-less list is refused rather than read as "build only": a payload that could
+ * advertise an agent this contract does not know must never reach the browser's agent switch.
+ */
+function validateSelectableAgents(value: Record<string, unknown>, errors: string[]): void {
+  const agents = value.selectableAgents;
+  if (
+    !Array.isArray(agents) ||
+    agents.length > CODING_WORKBENCH_AGENTS.length ||
+    !agents.every(isCodingWorkbenchAgent) ||
+    new Set<unknown>(agents).size !== agents.length
+  ) {
+    errors.push("selectableAgents is invalid");
+    return;
+  }
+  if (!agents.includes(DEFAULT_CODING_WORKBENCH_AGENT)) {
+    errors.push("selectableAgents must include the default agent");
   }
 }
 

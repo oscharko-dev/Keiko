@@ -106,6 +106,10 @@ function composerProps(
     reasoningEffort: null,
     onSelectedModelChange: vi.fn(),
     onReasoningEffortChange,
+    offeredAgents: ["build"],
+    agent: "build",
+    agentLocked: false,
+    onAgentChange: vi.fn(),
   };
 }
 
@@ -507,5 +511,95 @@ describe("Coding Workbench composer", () => {
     const authority = screen.getByRole("combobox", { name: "Run authority" });
     expect(authority).toHaveAttribute("aria-describedby");
     expect(authority.closest("[data-full-access='true']")).not.toBeNull();
+  });
+
+  describe("primary agent switch (#3897)", () => {
+    it("offers no agent switch while the server offers only the default agent", () => {
+      renderComposerWithOverrides({ offeredAgents: ["build"] });
+      expect(screen.queryByRole("group", { name: "Agent" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Plan" })).toBeNull();
+    });
+
+    it("shows a Build | Plan switch next to the model and authority controls", async () => {
+      const user = userEvent.setup();
+      const props = renderComposerWithOverrides({ offeredAgents: ["build", "plan"] });
+      const group = screen.getByRole("group", { name: "Agent" });
+      expect(group.closest(".cmp-bar-model")).toContainElement(
+        screen.getByRole("combobox", { name: "Run authority" }),
+      );
+      expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "true");
+      await user.click(screen.getByRole("button", { name: "Plan" }));
+      expect(props.onAgentChange).toHaveBeenCalledExactlyOnceWith("plan");
+    });
+
+    it("shows the selected agent as pressed", () => {
+      renderComposerWithOverrides({ offeredAgents: ["build", "plan"], agent: "plan" });
+      expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    });
+
+    it("keeps the switch available while the run is paused, between turns", async () => {
+      const user = userEvent.setup();
+      const props = renderComposerWithOverrides({
+        offeredAgents: ["build", "plan"],
+        runState: "paused",
+        agentLocked: false,
+      });
+      expect(screen.getByRole("button", { name: "Plan" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Plan" }));
+      expect(props.onAgentChange).toHaveBeenCalledWith("plan");
+    });
+
+    it("disables the switch while a turn is running", async () => {
+      const user = userEvent.setup();
+      const props = renderComposerWithOverrides({
+        offeredAgents: ["build", "plan"],
+        runState: "running",
+        agentLocked: true,
+      });
+      expect(screen.getByRole("button", { name: "Build" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: "Plan" }));
+      expect(props.onAgentChange).not.toHaveBeenCalled();
+    });
+
+    it("does not change how a task is started or a follow-up is sent", async () => {
+      const user = userEvent.setup();
+      const actions = composerActions();
+      render(
+        <TaskStartSection
+          {...composerProps("idle", actions)}
+          offeredAgents={["build", "plan"]}
+          agent="plan"
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(actions.onStart).toHaveBeenCalledExactlyOnceWith("Investigate the failing test");
+    });
+
+    it("is labelled in German and has no accessibility violations", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      render(
+        <I18nProvider>
+          <TaskStartSection
+            {...composerProps("idle", composerActions())}
+            offeredAgents={["build", "plan"]}
+          />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("group", { name: "Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Bauen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Planen" })).toBeInTheDocument();
+      expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+    });
+
+    it("has no accessibility violations with the switch shown", async () => {
+      renderComposerWithOverrides({ offeredAgents: ["build", "plan"], agent: "plan" });
+      expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+    });
   });
 });

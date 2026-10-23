@@ -91,12 +91,13 @@ import {
   type UseCodingWorkbenchRuntimeInput,
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
-import type {
-  CodingWorkbenchClientError,
-  CodingWorkbenchMutationKind,
-  CodingWorkbenchMutationState,
-  CodingWorkbenchRuntimeState,
-  CodingWorkbenchWorkspaceProjection,
+import {
+  offeredCodingWorkbenchAgents,
+  type CodingWorkbenchClientError,
+  type CodingWorkbenchMutationKind,
+  type CodingWorkbenchMutationState,
+  type CodingWorkbenchRuntimeState,
+  type CodingWorkbenchWorkspaceProjection,
 } from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -181,6 +182,7 @@ import {
 import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
+import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
@@ -1636,6 +1638,13 @@ function WorkbenchColumns({
       reasoningEffort={state.reasoningEffort}
       onSelectedModelChange={onSelectedModelChange}
       onReasoningEffortChange={actions.setReasoningEffort}
+      offeredAgents={offeredCodingWorkbenchAgents(state)}
+      agent={state.agent}
+      agentLocked={agentSelectionLocked(state, issuePending)}
+      onAgentChange={(agent): void => {
+        actions.setAgent(agent);
+        reportAgentSelection(agent);
+      }}
     />
   );
   const repositorySelector = (
@@ -2002,6 +2011,13 @@ function sessionRunFacts(
       value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
     },
   ];
+  // The primary agent is stated only where the server offers a choice (#3897).
+  if (offeredCodingWorkbenchAgents(state).length > 1) {
+    facts.push({
+      label: t("codingWorkbench.info.agent"),
+      value: t(`codingWorkbench.composer.agent.${state.agent}`),
+    });
+  }
   if (issue !== undefined) {
     facts.push({
       primary: true,

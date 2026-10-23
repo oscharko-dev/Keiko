@@ -1,5 +1,6 @@
 import { useMemo, type Dispatch, type RefObject } from "react";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
@@ -26,6 +27,7 @@ export interface CodingWorkbenchStartOptions {
 
 export interface CodingWorkbenchRuntimeActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
+  readonly setAgent: (agent: CodingWorkbenchAgent) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
   readonly setSelectedModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
@@ -82,6 +84,7 @@ function createCodingWorkbenchRuntimeActions({
   } = mutations;
   return {
     setRequestedMode: (mode) => dispatch({ kind: "select-mode", mode }),
+    setAgent: (agent) => dispatch({ kind: "select-agent", agent }),
     setRuntimePreference: (preference) => {
       if (stateRef.current.runtimePreference === preference) return;
       profileSequence.current += 1;

@@ -520,6 +520,7 @@ describe("useCodingWorkbenchRuntimeResources runtime and run refresh", () => {
       deploymentCeiling: "autonomous-delivery",
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
+      selectableAgents: ["build"],
     } as const;
     vi.mocked(getCodingWorkbenchRuntimeReadiness).mockResolvedValueOnce(readiness);
     const { resources, dispatch } = renderResources(runtimeState());

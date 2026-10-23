@@ -231,6 +231,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.taskBranch": "Task branch",
   "codingWorkbench.info.runState": "Run state",
   "codingWorkbench.info.model": "Model",
+  "codingWorkbench.info.agent": "Agent",
   "codingWorkbench.info.modelReadiness": "Model readiness",
   "codingWorkbench.info.runtime": "Runtime verification",
   "codingWorkbench.info.contextWindow": "Context window",
@@ -298,6 +299,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Run authority could not be loaded. Ask for approval remains selected.",
   "codingWorkbench.composer.authority.error.persist":
     "Run authority could not be saved. The previous authority remains active.",
+  "codingWorkbench.composer.agent.label": "Agent",
+  "codingWorkbench.composer.agent.build": "Build",
+  "codingWorkbench.composer.agent.plan": "Plan",
+  "codingWorkbench.composer.agent.build.description":
+    "The agent changes files and runs commands within the selected mode.",
+  "codingWorkbench.composer.agent.plan.description":
+    "The agent analyzes and writes a plan without changing workspace files.",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",
@@ -982,6 +990,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.phase.tool": "Running a tool",
   "codingWorkbench.runStatus.phase.decision": "Waiting for your decision",
   "codingWorkbench.runStatus.readiness": "Readiness details",
+  "codingWorkbench.runStatus.agent.plan": "Plan agent",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",

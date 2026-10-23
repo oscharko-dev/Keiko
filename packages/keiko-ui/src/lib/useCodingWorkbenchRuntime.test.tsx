@@ -15,7 +15,9 @@ import {
   decideCodingWorkbenchRuntimeApproval,
   getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeStatus,
+  startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
+  submitCodingWorkbenchRuntimeFollowUp,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
 import {
@@ -44,7 +46,9 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => {
     decideCodingWorkbenchRuntimeApproval: vi.fn(),
     getCodingWorkbenchRuntimeReadiness: vi.fn(),
     getCodingWorkbenchRuntimeStatus: vi.fn(),
+    startCodingWorkbenchRuntime: vi.fn(),
     stopCodingWorkbenchRuntime: vi.fn(),
+    submitCodingWorkbenchRuntimeFollowUp: vi.fn(),
     takeOverCodingWorkbenchRuntime: vi.fn(),
   };
 });
@@ -198,6 +202,7 @@ function installBootstrap(initial: CodingWorkbenchRuntimeSnapshot, refreshed = i
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "governed-assist",
     runtimeAvailable: true,
+    selectableAgents: ["build"],
   });
   vi.mocked(getCodingWorkbenchRuntimeStatus)
     .mockResolvedValueOnce(initial)
@@ -549,5 +554,95 @@ describe("useCodingWorkbenchRuntime", () => {
     expect(view.result.current.state.canStart).toBe(false);
 
     view.unmount();
+  });
+
+  describe("primary agent (#3897)", () => {
+    function offerPlan(): void {
+      vi.mocked(getCodingWorkbenchRuntimeReadiness).mockResolvedValue({
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "autonomous-delivery",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: true,
+        selectableAgents: ["build", "plan"],
+      });
+    }
+
+    it("offers only the default agent until readiness lists plan, then carries the choice into start", async () => {
+      installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+      const started = snapshot({ state: "starting", runId: "run-2", pendingPermission: undefined });
+      vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(started);
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      await waitFor(() => expect(view.result.current.state.runtime.status).toBe("ready"));
+      expect(view.result.current.state.selectableAgents).toEqual(["build"]);
+      act(() => view.result.current.actions.setAgent("plan"));
+      expect(view.result.current.state.agent).toBe("build");
+      view.unmount();
+
+      offerPlan();
+      installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+      offerPlan();
+      const planning = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      act(() => planning.result.current.actions.setSelectedModel("model-redacted"));
+      await waitFor(() => expect(planning.result.current.state.canStart).toBe(true));
+      expect(planning.result.current.state.selectableAgents).toEqual(["build", "plan"]);
+      act(() => planning.result.current.actions.setAgent("plan"));
+      await act(async () => {
+        await planning.result.current.actions.start("outline the change", {
+          projectMemoryEnabled: true,
+        });
+      });
+      expect(startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ taskIntent: "outline the change", agent: "plan" }),
+      );
+      planning.unmount();
+    });
+
+    it("carries the agent chosen between turns into each follow-up, including back to build", async () => {
+      installBootstrap(snapshot({ state: "paused", pendingPermission: undefined }));
+      offerPlan();
+      vi.mocked(submitCodingWorkbenchRuntimeFollowUp).mockResolvedValue(
+        snapshot({ state: "paused", revision: 5, pendingPermission: undefined }),
+      );
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      await waitFor(() =>
+        expect(view.result.current.state.selectableAgents).toEqual(["build", "plan"]),
+      );
+      act(() => view.result.current.actions.setAgent("plan"));
+      await act(async () => {
+        await view.result.current.actions.submitFollowUp("write the plan");
+      });
+      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ taskIntent: "write the plan", agent: "plan" }),
+      );
+
+      act(() => view.result.current.actions.setAgent("build"));
+      await act(async () => {
+        await view.result.current.actions.submitFollowUp("now implement it");
+      });
+      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ taskIntent: "now implement it", agent: "build" }),
+      );
+      view.unmount();
+    });
   });
 });

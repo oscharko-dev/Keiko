@@ -379,6 +379,71 @@ describe("createFollowUpMutation", () => {
   });
 });
 
+describe("primary agent on the mutations (#3897)", () => {
+  const offered = { selectableAgents: ["build", "plan"] } as const;
+
+  it("sends the selected agent on start and retry only where the server offers a choice", async () => {
+    for (const agent of ["plan", "build"] as const) {
+      const started = createStartMutation(
+        "outline the change",
+        stateWithRun(null, { canStart: true, ...offered, agent }),
+        { projectMemoryEnabled: true },
+      );
+      await started.run();
+      expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent }),
+      );
+      const retried = createRetryMutation(
+        "outline the change",
+        stateWithRun(snapshot(), { canRetry: true, ...offered, agent }),
+      );
+      await retried.run();
+      expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ agent }),
+      );
+    }
+  });
+
+  it("omits the agent when only the default is offered, even if the selection says plan", async () => {
+    const stale = { selectableAgents: ["build"], agent: "plan" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...stale }), {
+      projectMemoryEnabled: true,
+    }).run();
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
+    await createRetryMutation("task", stateWithRun(snapshot(), { canRetry: true, ...stale })).run();
+    expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).not.toHaveProperty("agent");
+    await createFollowUpMutation("task", stateWithRun(snapshot({ state: "paused" }), stale)).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).not.toHaveProperty(
+      "agent",
+    );
+  });
+
+  it("never sends the selected agent for a source without an agent concept", async () => {
+    const codex = { ...offered, agent: "plan", runtimePreference: "codex-subscription" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...codex }), {
+      projectMemoryEnabled: true,
+    }).run();
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
+  });
+
+  it("sends the agent with a follow-up, including a switch back to build", async () => {
+    for (const agent of ["plan", "build"] as const) {
+      const mutation = createFollowUpMutation(
+        "now implement it",
+        stateWithRun(snapshot({ state: "paused" }), { ...offered, agent }),
+      );
+      await mutation.run();
+      expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "now implement it",
+        agent,
+      });
+    }
+  });
+});
+
 describe("createResearchRevokeMutation", () => {
   const grant = { grantId: "grant-1", domains: ["nodejs.org"], expiresAt: UPDATED_AT } as const;
 

@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeFollowUpRequest,
   CodingWorkbenchRuntimeQuestionAnswerRequest,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
@@ -282,9 +283,8 @@ export interface CodingWorkbenchRuntimeQuestionRejectBody extends CodingWorkbenc
   readonly questionId: string;
 }
 
-export interface CodingWorkbenchRuntimeFollowUpBody extends CodingWorkbenchRuntimeOperationRequest {
-  readonly taskIntent: string;
-}
+/** The follow-up body is the shared wire contract, which also carries the optional primary agent. */
+export type CodingWorkbenchRuntimeFollowUpBody = CodingWorkbenchRuntimeFollowUpRequest;
 
 /** Pause binds to the run by id only; the server owns the transition guard. */
 export interface CodingWorkbenchRuntimeLifecycleBody {

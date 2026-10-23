@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeStateName,
@@ -17,6 +18,7 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
+import { CodingWorkbenchAgentToggle } from "./CodingWorkbenchAgentToggle";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -138,6 +140,12 @@ interface TaskStartSectionProps {
   readonly reasoningEffort: ModelReasoningEffort | null;
   readonly onSelectedModelChange: (modelId: string | null) => void;
   readonly onReasoningEffortChange: (effort: ModelReasoningEffort | null) => void;
+  /** The primary agents the server offers; the Build | Plan switch shows only for more than one. */
+  readonly offeredAgents: readonly CodingWorkbenchAgent[];
+  readonly agent: CodingWorkbenchAgent;
+  /** True while a turn runs: the agent is fixed for the turn and changes only between turns. */
+  readonly agentLocked: boolean;
+  readonly onAgentChange: (agent: CodingWorkbenchAgent) => void;
 }
 
 interface TaskComposerController {
@@ -397,6 +405,12 @@ function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
       <CodingModelControl input={input} t={t} />
       <ReasoningControl input={input} efforts={efforts} t={t} />
       <AuthorityControl input={input} t={t} />
+      <CodingWorkbenchAgentToggle
+        agents={input.offeredAgents}
+        value={input.agent}
+        disabled={input.agentLocked}
+        onChange={input.onAgentChange}
+      />
     </div>
   );
 }

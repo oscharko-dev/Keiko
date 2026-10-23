@@ -322,6 +322,7 @@ describe("Coding Workbench runtime API contracts", () => {
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
       runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
     };
     expect(validateCodingWorkbenchRuntimeReadiness(readiness)).toEqual({
       ok: true,
@@ -343,11 +344,70 @@ describe("Coding Workbench runtime API contracts", () => {
         effectiveMode: "supervised-coding",
         runtimeAvailable: true,
         runtimeEvidenceClass: "platform-qualified",
+        selectableAgents: ["build"],
       }),
     ).toMatchObject({ ok: true });
     expect(
       validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeAvailable: "yes" }),
     ).toMatchObject({ ok: false });
+  });
+
+  it("validates the server-computed selectable agents as a closed list that keeps the default", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+    };
+    for (const selectableAgents of [["build"], ["build", "plan"], ["plan", "build"]]) {
+      expect(
+        validateCodingWorkbenchRuntimeReadiness({ ...readiness, selectableAgents }),
+        JSON.stringify(selectableAgents),
+      ).toEqual({ ok: true, value: { ...readiness, selectableAgents } });
+    }
+    // An unavailable runtime still names the agents its profile could honour.
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        schemaVersion: "1",
+        requestedMode: "supervised-coding",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "runtime-unqualified",
+        selectableAgents: ["build"],
+      }),
+    ).toMatchObject({ ok: true });
+    // Fail closed: an absent, malformed, duplicated, unknown or default-less list is refused, so a
+    // payload that could advertise an agent the contract does not know never reaches the browser.
+    for (const selectableAgents of [
+      undefined,
+      null,
+      "build",
+      [],
+      ["plan"],
+      ["build", "build"],
+      ["build", "plan", "plan"],
+      ["build", "general"],
+      ["build", "Plan"],
+      ["build", "plan", "explore"],
+      ["build", 1],
+      [["build"]],
+      { 0: "build" },
+    ]) {
+      const candidate = { ...readiness, selectableAgents };
+      expect(
+        validateCodingWorkbenchRuntimeReadiness(candidate),
+        `list ${JSON.stringify(selectableAgents)}`,
+      ).toMatchObject({ ok: false });
+    }
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, selectableAgents: ["plan"] }),
+    ).toEqual({ ok: false, errors: ["selectableAgents must include the default agent"] });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, selectableAgents: ["build", "x"] }),
+    ).toEqual({ ok: false, errors: ["selectableAgents is invalid"] });
   });
 
   it("binds the unavailable reason to the availability boolean in both directions", () => {
@@ -358,6 +418,7 @@ describe("Coding Workbench runtime API contracts", () => {
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
       runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
     };
     const availableWithoutEvidence = {
       schemaVersion: available.schemaVersion,
@@ -365,6 +426,7 @@ describe("Coding Workbench runtime API contracts", () => {
       deploymentCeiling: available.deploymentCeiling,
       effectiveMode: available.effectiveMode,
       runtimeAvailable: available.runtimeAvailable,
+      selectableAgents: available.selectableAgents,
     };
     const unavailable = {
       ...availableWithoutEvidence,
@@ -870,6 +932,7 @@ describe("Coding Workbench runtime API failure branches", () => {
         effectiveMode: "governed-assist",
         runtimeAvailable: true,
         runtimeEvidenceClass: "platform-qualified",
+        selectableAgents: ["build"],
       }),
     ).toMatchObject({ ok: false, errors: ["schemaVersion is invalid"] });
     expect(

@@ -20,7 +20,7 @@ import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal
 
 import { createUiServer, UI_HOST } from "../server.js";
 import { fakePairingRequestBody } from "../coding-app-session/_support.js";
-import type { UiHandlerDeps } from "../deps.js";
+import { productionOpenCodeToolProfile, type UiHandlerDeps } from "../deps.js";
 import {
   defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
@@ -55,6 +55,7 @@ import {
   type ScriptedOpenCodeHarness,
 } from "./opencodeFunctionalHarness/_support.js";
 import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
+import { openCodeSelectableAgents } from "./opencodeAgents.js";
 import {
   createFunctionalRuntimeResolver,
   functionalBffDeps,
@@ -344,6 +345,8 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     effectiveMode: "autonomous-delivery",
     runtimeAvailable: true,
     runtimeEvidenceClass: "functional-not-platform-qualified",
+    // Derived from the production entry points, not restated: the platform picks the profile.
+    selectableAgents: openCodeSelectableAgents(productionOpenCodeToolProfile()),
   });
 }
 

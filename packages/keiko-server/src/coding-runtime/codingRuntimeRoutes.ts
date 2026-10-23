@@ -41,6 +41,7 @@ import {
 import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
+import { openCodeSelectableAgents } from "./opencodeAgents.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -500,6 +501,12 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
         : {
             runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
           }),
+      // The agents the composed OpenCode tool profile can honour (#3897), from the same registry
+      // the backend takes its profile from. An unthreaded registry fails closed to the default
+      // agent: `plan` is never advertised for a runtime nobody has shown can run it read-only.
+      selectableAgents: openCodeSelectableAgents(
+        deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct",
+      ),
     },
   };
 }

@@ -60,6 +60,12 @@ import {
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
+import {
+  I18nProvider,
+  I18N_STORAGE_KEY,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
 import {
@@ -253,6 +259,7 @@ const IDLE_ACTIVITY: UseCodingWorkbenchSafeActivityResult = {
 function actions(): CodingWorkbenchRuntimeActions {
   return {
     setRequestedMode: vi.fn(),
+    setAgent: vi.fn(),
     setRuntimePreference: vi.fn(),
     setSelectedModel: vi.fn(),
     setReasoningEffort: vi.fn(),
@@ -334,6 +341,7 @@ function liveState(
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable: true,
+        selectableAgents: ["build"],
         runtimeEvidenceClass: "platform-qualified",
       },
       error: null,
@@ -1463,6 +1471,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "governed-assist",
             effectiveMode: "governed-assist",
             runtimeAvailable: true,
+            selectableAgents: ["build"],
           },
         },
       }),
@@ -1492,6 +1501,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "governed-assist",
             effectiveMode: "governed-assist",
             runtimeAvailable: true,
+            selectableAgents: ["build"],
           },
         },
       }),
@@ -1520,6 +1530,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: true,
+            selectableAgents: ["build"],
           },
         },
       }),
@@ -1598,6 +1609,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: false,
+            selectableAgents: ["build"],
             runtimeUnavailableReason: "runtime-unqualified",
           },
         },
@@ -1632,6 +1644,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: false,
+            selectableAgents: ["build"],
             runtimeUnavailableReason: "runtime-unqualified",
           },
         },
@@ -1659,6 +1672,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: false,
+            selectableAgents: ["build"],
           },
         },
         workspace: {
@@ -1863,6 +1877,7 @@ describe("CodingWorkbenchWindow", () => {
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable: false,
+        selectableAgents: ["build"],
         runtimeUnavailableReason: "runtime-disabled",
       },
     } as const satisfies CodingWorkbenchRuntimeState["runtime"];
@@ -2120,6 +2135,7 @@ describe("CodingWorkbenchWindow", () => {
               deploymentCeiling: "supervised-coding",
               effectiveMode: "governed-assist",
               runtimeAvailable: false,
+              selectableAgents: ["build"],
               runtimeUnavailableReason: "runtime-disabled",
             },
           },
@@ -2154,6 +2170,7 @@ describe("CodingWorkbenchWindow", () => {
               deploymentCeiling: "supervised-coding",
               effectiveMode: "governed-assist",
               runtimeAvailable: false,
+              selectableAgents: ["build"],
               runtimeUnavailableReason: "runtime-disabled",
             },
           },
@@ -5381,5 +5398,116 @@ describe("CodingWorkbenchWindow finished answers", () => {
   it("keeps Copy on the answer of a settled run", () => {
     renderRunInState("succeeded");
     expect(copyButtons()).toHaveLength(1);
+  });
+});
+
+// #3897: the Build | Plan switch, as in standalone OpenCode's primary agent switch.
+describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
+  afterEach(() => {
+    cleanup();
+    resetClientDiagnosticWriter();
+  });
+
+  function planOffered(
+    overrides: Partial<CodingWorkbenchRuntimeState> = {},
+  ): CodingWorkbenchRuntimeState {
+    return liveState({ selectableAgents: ["build", "plan"], ...overrides });
+  }
+
+  function runIn(
+    state: CodingWorkbenchRuntimeSnapshot["state"],
+  ): CodingWorkbenchRuntimeState["run"] {
+    return { status: "ready", value: snapshot({ state, runId: "run-1" }), error: null };
+  }
+
+  it("offers no agent switch while the server offers only the default agent", () => {
+    renderWorkbench(liveState());
+    expect(screen.queryByRole("group", { name: "Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coding-runtime-agent")).not.toBeInTheDocument();
+  });
+
+  it("selects the plan agent through the runtime and reports only the closed agent id", async () => {
+    const user = userEvent.setup();
+    const reports: string[] = [];
+    setClientDiagnosticWriter((message) => {
+      reports.push(message);
+    });
+    const liveActions = renderWorkbench(planOffered(), actions());
+    expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Plan" }));
+
+    expect(liveActions.setAgent).toHaveBeenCalledExactlyOnceWith("plan");
+    expect(reports).toContain("[keiko] coding workbench agent selected: plan");
+  });
+
+  it("names the plan agent in the status line and the information panel while it is selected", () => {
+    renderWorkbench(planOffered({ agent: "plan", run: runIn("succeeded") }));
+    expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("coding-runtime-agent")).toHaveTextContent("Plan agent");
+    const dialog = openWorkbenchInformation();
+    expect(within(dialog).getByText("Agent")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("AgentPlan");
+  });
+
+  it("states the build agent in the information panel without a status label", () => {
+    renderWorkbench(planOffered({ run: runIn("succeeded") }));
+    expect(screen.queryByTestId("coding-runtime-agent")).not.toBeInTheDocument();
+    expect(openWorkbenchInformation()).toHaveTextContent("AgentBuild");
+  });
+
+  it.each(["starting", "ready", "running", "awaiting-approval", "stopping"] as const)(
+    "disables the switch while the run is %s",
+    (state) => {
+      renderWorkbench(planOffered({ run: runIn(state) }));
+      expect(screen.getByRole("button", { name: "Build" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+    },
+  );
+
+  it.each(["idle", "paused", "succeeded", "failed"] as const)(
+    "keeps the switch operable between turns, while the run is %s",
+    (state) => {
+      renderWorkbench(planOffered({ run: runIn(state) }));
+      expect(screen.getByRole("button", { name: "Build" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Plan" })).toBeEnabled();
+    },
+  );
+
+  it("disables the switch while a runtime mutation is pending", () => {
+    renderWorkbench(
+      planOffered({
+        run: runIn("paused"),
+        mutation: { status: "pending", kind: "follow-up", requestId: "request-1", error: null },
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+  });
+
+  it("has no accessibility violations with the switch and the plan label shown", async () => {
+    renderWorkbench(planOffered({ agent: "plan" }));
+    expect(
+      await axe(document.body, { rules: { region: { enabled: false } } }),
+    ).toHaveNoViolations();
+  });
+
+  it("labels the switch in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      runtimeHookMock.mockReturnValue({ state: planOffered(), actions: actions() });
+      render(
+        <I18nProvider>
+          <CodingWorkbenchWindow selectedRoot="/repo" />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("group", { name: "Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Bauen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Planen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
   });
 });

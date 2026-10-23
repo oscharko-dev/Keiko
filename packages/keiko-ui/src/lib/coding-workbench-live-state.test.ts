@@ -10,6 +10,7 @@ import {
   codingWorkbenchRuntimeReducer,
   codingWorkbenchSourceFromManaged,
   createInitialCodingWorkbenchRuntimeState,
+  offeredCodingWorkbenchAgents,
   type CodingWorkbenchPairingState,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
@@ -71,13 +72,16 @@ function statusEvent(
   };
 }
 
-function readiness(): CodingWorkbenchRuntimeReadiness {
+function readiness(
+  selectableAgents: CodingWorkbenchRuntimeReadiness["selectableAgents"] = ["build"],
+): CodingWorkbenchRuntimeReadiness {
   return {
     schemaVersion: "1",
     requestedMode: "supervised-coding",
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "supervised-coding",
     runtimeAvailable: true,
+    selectableAgents,
   };
 }
 
@@ -475,6 +479,84 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
     expect(codingWorkbenchRuntimeReducer(state, { kind: "pairing-set", pairing: "paired" })).toBe(
       state,
     );
+  });
+});
+
+describe("primary agent selection (#3897)", () => {
+  const offering = (state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState =>
+    codingWorkbenchRuntimeReducer(state, {
+      kind: "runtime-set",
+      readiness: readiness(["build", "plan"]),
+    });
+
+  it("starts on the default agent and offers only it until readiness says otherwise", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(initial).toMatchObject({ agent: "build", selectableAgents: ["build"] });
+    expect(offeredCodingWorkbenchAgents(initial)).toEqual(["build"]);
+    expect(codingWorkbenchRuntimeReducer(initial, { kind: "select-agent", agent: "plan" })).toBe(
+      initial,
+    );
+  });
+
+  it("records the agents readiness offers and lets the operator select one of them", () => {
+    const offered = offering(readyState());
+    expect(offeredCodingWorkbenchAgents(offered)).toEqual(["build", "plan"]);
+    const planned = codingWorkbenchRuntimeReducer(offered, { kind: "select-agent", agent: "plan" });
+    expect(planned.agent).toBe("plan");
+    expect(codingWorkbenchRuntimeReducer(planned, { kind: "select-agent", agent: "plan" })).toBe(
+      planned,
+    );
+    expect(
+      codingWorkbenchRuntimeReducer(planned, { kind: "select-agent", agent: "build" }).agent,
+    ).toBe("build");
+  });
+
+  it("keeps the offered agents and the selection while a mode change reloads readiness", () => {
+    const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
+      kind: "select-agent",
+      agent: "plan",
+    });
+    const reloading = codingWorkbenchRuntimeReducer(planned, {
+      kind: "select-mode",
+      mode: "governed-assist",
+    });
+    expect(reloading.runtime).toMatchObject({ status: "idle", value: null });
+    expect(reloading.agent).toBe("plan");
+    expect(offeredCodingWorkbenchAgents(reloading)).toEqual(["build", "plan"]);
+  });
+
+  it("falls back to the default agent when readiness stops offering the selected one", () => {
+    const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
+      kind: "select-agent",
+      agent: "plan",
+    });
+    const narrowed = codingWorkbenchRuntimeReducer(planned, {
+      kind: "runtime-set",
+      readiness: readiness(["build"]),
+    });
+    expect(narrowed.agent).toBe("build");
+    expect(offeredCodingWorkbenchAgents(narrowed)).toEqual(["build"]);
+  });
+
+  it("offers only the default agent for a source that has no agent concept", () => {
+    const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
+      kind: "select-agent",
+      agent: "plan",
+    });
+    const codex = codingWorkbenchRuntimeReducer(planned, {
+      kind: "select-runtime-preference",
+      preference: "codex-subscription",
+    });
+    expect(codex.agent).toBe("build");
+    expect(offeredCodingWorkbenchAgents(codex)).toEqual(["build"]);
+    expect(codingWorkbenchRuntimeReducer(codex, { kind: "select-agent", agent: "plan" })).toBe(
+      codex,
+    );
+    const managed = codingWorkbenchRuntimeReducer(codex, {
+      kind: "select-runtime-preference",
+      preference: "managed-gateway",
+    });
+    expect(offeredCodingWorkbenchAgents(managed)).toEqual(["build", "plan"]);
   });
 });
 

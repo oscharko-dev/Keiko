@@ -801,6 +801,8 @@ export interface UiHandlerDeps {
     ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
+        /** Server-owned tool profile the runtime was composed with; read by the readiness route. */
+        readonly toolProfile?: OpenCodeToolProfile;
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;

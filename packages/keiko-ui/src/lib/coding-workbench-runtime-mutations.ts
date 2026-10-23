@@ -1,5 +1,6 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
@@ -21,7 +22,10 @@ import {
   submitCodingWorkbenchRuntimeFollowUp,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
-import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state";
+import {
+  offeredCodingWorkbenchAgents,
+  type CodingWorkbenchRuntimeState,
+} from "./coding-workbench-live-state";
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
@@ -43,6 +47,17 @@ function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): Run
   };
 }
 
+/**
+ * The agent is sent only where the server offers a choice, so a deployment that offers the default
+ * alone keeps its request bodies exactly as before. Where the choice exists the selection is always
+ * stated, including `build`: a follow-up after a `plan` turn has to be able to switch back.
+ */
+function agentSelection(current: CodingWorkbenchRuntimeState): {
+  readonly agent?: CodingWorkbenchAgent;
+} {
+  return offeredCodingWorkbenchAgents(current).length > 1 ? { agent: current.agent } : {};
+}
+
 function startRequest(
   id: string,
   taskIntent: string,
@@ -57,6 +72,7 @@ function startRequest(
     runtimePreference: current.runtimePreference,
     projectMemory: { enabled: options.projectMemoryEnabled },
     ...managedGatewayModelSelection(current),
+    ...agentSelection(current),
   };
   if (options.issue === undefined) return request;
   return {
@@ -193,6 +209,7 @@ export function createFollowUpMutation(
         requestId: id,
         expectedRevision: snapshot.revision,
         taskIntent,
+        ...agentSelection(current),
       }),
   };
 }
@@ -217,6 +234,7 @@ export function createRetryMutation(
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
         ...managedGatewayModelSelection(current),
+        ...agentSelection(current),
       }),
   };
 }

@@ -8,6 +8,7 @@ import type {
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
+import { validateCodingWorkbenchRuntimeReadiness } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -1035,11 +1036,64 @@ describe("coding runtime routes", () => {
         // ADR-0163 D9 fail-closed default: this deps fixture threads NO evidence class, and an
         // unthreaded path must degrade to the weak value, never silently to a verified claim.
         runtimeEvidenceClass: "functional-not-platform-qualified",
+        // No tool profile is threaded either: the agents default to the baseline, never to plan.
+        selectableAgents: ["build"],
       },
     });
     const serialized = JSON.stringify(result.body);
     for (const forbidden of ["workspace", "authority", "endpoint", "credential", "path"]) {
       expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  it("computes the selectable agents from the composed OpenCode tool profile (#3897)", () => {
+    const selectable = (overrides: Partial<Record<string, unknown>>): unknown => {
+      const result = handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
+      );
+      return (result.body as { selectableAgents?: unknown }).selectableAgents;
+    };
+    const registry = (toolProfile: string): Record<string, unknown> => ({
+      openCodeGatewayReadinessRegistry: { toolProfile },
+    });
+
+    // Only the native service can honour OpenCode's read-only plan agent.
+    expect(selectable({ codingRuntimeHostQualified: true, ...registry("native") })).toEqual([
+      "build",
+      "plan",
+    ]);
+    for (const profile of ["direct", "code-mode"]) {
+      expect(selectable({ codingRuntimeHostQualified: true, ...registry(profile) })).toEqual([
+        "build",
+      ]);
+    }
+    // No composed registry (unqualified host, or an unthreaded dependency) fails closed to build.
+    expect(selectable({ codingRuntimeHostQualified: true })).toEqual(["build"]);
+    expect(selectable({ codingRuntimeHostQualified: false })).toEqual(["build"]);
+    // A registry that does not state a profile is not a native one.
+    expect(
+      selectable({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
+    ).toEqual(["build"]);
+  });
+
+  it("serves a readiness payload the shared contract validator accepts", () => {
+    for (const toolProfile of ["native", "direct"]) {
+      for (const codingRuntimeHostQualified of [true, false]) {
+        const result = handleCodingRuntimeReadiness(
+          context(
+            "",
+            {},
+            "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding",
+          ),
+          runtime({
+            codingRuntimeOrchestrator: undefined,
+            codingRuntimeHostQualified,
+            openCodeGatewayReadinessRegistry: { toolProfile },
+          }),
+        );
+        expect(validateCodingWorkbenchRuntimeReadiness(result.body)).toMatchObject({ ok: true });
+      }
     }
   });
 
