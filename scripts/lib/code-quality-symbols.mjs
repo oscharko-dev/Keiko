@@ -3984,6 +3984,31 @@ function additionalObservationFacts(compiler, identity, states, options, observe
   return { slots, facts };
 }
 
+function booleanObservationFacts(compiler, identity, states, observer, options) {
+  assertObservationOptions(options);
+  const root = states[0];
+  const signatures = root.context.checker.getTypeAtLocation(root.callable).getCallSignatures();
+  if (
+    !objectValidatorSignature(root.callable) ||
+    root.callable.type.kind !== ts.SyntaxKind.BooleanKeyword ||
+    signatures.length !== 1 ||
+    (root.context.checker.getReturnTypeOfSignature(signatures[0]).flags &
+      ts.TypeFlags.BooleanLike) ===
+      0 ||
+    options.additionalObservationForms !== undefined ||
+    options.directRawCheckerInputs !== undefined
+  )
+    throw new TypeError("unsupported-object-observation-boundary");
+  const { slots } = observationRootFacts(identity, root);
+  compiler.assertCurrent();
+  return {
+    identity: observer.identity,
+    root: identity,
+    slots: slots.map((slot) => ({ ...slot, observationRoots: [{ identity, index: 0 }] })),
+    additionalObservations: [{ form: "boolean-object-observation", identity }],
+  };
+}
+
 function propertyObservationFacts(compiler, identity, options = {}) {
   const states = reachedObservationCallables(compiler, identity);
   const candidates = states.filter((state) => observationSignature(state));
@@ -3993,6 +4018,11 @@ function propertyObservationFacts(compiler, identity, options = {}) {
     throw new TypeError("unsupported-property-observation-exposure");
   const call = observationBody(state);
   if (!call) throw new TypeError("unsupported-property-observation-body");
+  if (
+    options.rawObjectInput === true &&
+    states[0].callable.type?.kind === ts.SyntaxKind.BooleanKeyword
+  )
+    return booleanObservationFacts(compiler, identity, states, state, options);
   const slots = [
     {
       ...annotationSlot(
@@ -4870,17 +4900,45 @@ function observationResultOwner(compiler, context, callable, signature, producer
   );
 }
 
-function observationBinding(compiler, request, producer) {
+function publicObservationFlow(compiler, request, producer) {
   const { context, source } = ownedSource(compiler, request.consumerPath, true);
   const callable = observationConsumer(context, source, request.exportName);
   const result = callable && parserResult(callable);
-  if (
-    !result ||
-    !parserImport(context, result.call, request.specifier) ||
-    !directDiagnosticProducer(compiler, context, result.call, producer) ||
-    !sameParserFlow(context, callable, result)
-  )
-    return { bound: false, status: "incomplete" };
+  return result &&
+    parserImport(context, result.call, request.specifier) &&
+    directDiagnosticProducer(compiler, context, result.call, producer) &&
+    sameParserFlow(context, callable, result)
+    ? { context, callable, result }
+    : null;
+}
+
+function booleanObservationBinding(compiler, request, producer) {
+  const flow = publicObservationFlow(compiler, request, producer);
+  if (!flow) return { bound: false, status: "incomplete" };
+  const { context, callable, result } = flow;
+  const signatures = context.checker.getTypeAtLocation(result.call.expression).getCallSignatures();
+  const signature = context.checker.getResolvedSignature(result.call);
+  const bound =
+    signatures.length === 1 &&
+    signature?.parameters.length === 1 &&
+    !signature.typeParameters?.length &&
+    callable.type.kind === ts.SyntaxKind.BooleanKeyword &&
+    (context.checker.getReturnTypeOfSignature(signature).flags & ts.TypeFlags.BooleanLike) !== 0 &&
+    context.checker.getTypeAtLocation(callable.type) ===
+      context.checker.getReturnTypeOfSignature(signature);
+  compiler.assertCurrent();
+  return {
+    bound,
+    status: bound ? "ready" : "incomplete",
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [{ path: request.consumerPath, start: result.call.getStart(), end: result.call.end }],
+  };
+}
+
+function observationBinding(compiler, request, producer) {
+  const flow = publicObservationFlow(compiler, request, producer);
+  if (!flow) return { bound: false, status: "incomplete" };
+  const { context, callable, result } = flow;
   const signatures = context.checker.getTypeAtLocation(result.call.expression).getCallSignatures();
   const signature = context.checker.getResolvedSignature(result.call);
   const bound =
@@ -5008,6 +5066,8 @@ function assertCapturedPredicateOption(value) {
 function validationBoundaryOperations(compiler) {
   return {
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
+    booleanObservationBinding: (request, producer) =>
+      booleanObservationBinding(compiler, request, producer),
     parserBinding: (request, producer) => parserBinding(compiler, request, producer),
     objectValidatorFacts: (identity, ownedPredicateStage = false) => {
       if (typeof ownedPredicateStage !== "boolean")

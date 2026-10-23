@@ -81,13 +81,14 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(123);
+    expect(production.responsibilities).toHaveLength(124);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
         .map((rule) => rule.id),
     ).toEqual([
       "anti-slop/no-chained-type-assertions",
+      "anti-slop/no-object-parameters",
       "anti-slop/no-reflect-get",
       "anti-slop/no-unknown-returns",
       "anti-slop/require-safety-comment-for-type-assertion",
@@ -177,52 +178,56 @@ describe("production code-quality invocation wiring (#3915)", () => {
     );
   });
 
-  it.each(["src/index.ts", "src/future.generated.ts", "vitest.config.ts"])(
-    "rejects native contracts unknown returns in %s outside qualified return coordinates",
-    async (suffix) => {
-      const root = contractsAssertionFixture();
-      const path = `packages/alpha/${suffix}`;
-      const original =
-        suffix === "src/index.ts"
-          ? read("packages/keiko-contracts/src/memory-fixtures.ts")
-          : "export {};\n";
+  it.each([
+    ["anti-slop/no-unknown-returns", "src/index.ts"],
+    ["anti-slop/no-unknown-returns", "src/future.generated.ts"],
+    ["anti-slop/no-unknown-returns", "vitest.config.ts"],
+    ["anti-slop/no-object-parameters", "src/index.ts"],
+    ["anti-slop/no-object-parameters", "src/future.generated.ts"],
+    ["anti-slop/no-object-parameters", "vitest.config.ts"],
+  ])("rejects native contracts %s in %s outside qualified coordinates", async (id, suffix) => {
+    const root = contractsAssertionFixture();
+    const path = `packages/alpha/${suffix}`;
+    const original =
+      suffix === "src/index.ts"
+        ? read("packages/keiko-contracts/src/memory-fixtures.ts")
+        : "export {};\n";
+    writeFileSync(join(root, path), original);
+    const inventory = await collectPolicyInventory(root);
+    const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
+    const policy = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
+    const inactive = structuredClone(policy);
+    inactive.rules.find((rule) => rule.id === id).activeScopes = [];
+    try {
+      writeFileSync(
+        join(root, path),
+        original +
+          (id === "anti-slop/no-unknown-returns"
+            ? "\nexport function outsideReturn(value: unknown): unknown { return value; }\n"
+            : "\nexport function outsideObject(value: object): object { return value; }\n"),
+      );
+      const scan = runNativePolicy(root, scope.files);
+      expect(scan.visited).toBe(scope.files.length);
+      const introduced = scan.diagnostics.filter(
+        (finding) => finding.rule === id && finding.path === path,
+      );
+      expect(introduced).toHaveLength(1);
+      const baseline = assessPolicyDiagnostics(scan.diagnostics, scope.files, inactive);
+      const activated = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
+      expect(baseline.census).toEqual(activated.census);
+      expect(baseline.violations.filter((finding) => finding.rule === id)).toEqual([]);
+      expect(activated.violations.filter((finding) => finding.rule === id)).toEqual(introduced);
+      expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+    } finally {
       writeFileSync(join(root, path), original);
-      const inventory = await collectPolicyInventory(root);
-      const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
-      const policy = JSON.parse(
-        readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"),
-      );
-      const id = "anti-slop/no-unknown-returns";
-      const inactive = structuredClone(policy);
-      inactive.rules.find((rule) => rule.id === id).activeScopes = [];
-      try {
-        writeFileSync(
-          join(root, path),
-          original + "\nexport function outsideReturn(value: unknown): unknown { return value; }\n",
-        );
-        const scan = runNativePolicy(root, scope.files);
-        expect(scan.visited).toBe(scope.files.length);
-        const introduced = scan.diagnostics.filter(
-          (finding) => finding.rule === id && finding.path === path,
-        );
-        expect(introduced).toHaveLength(1);
-        const baseline = assessPolicyDiagnostics(scan.diagnostics, scope.files, inactive);
-        const activated = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
-        expect(baseline.census).toEqual(activated.census);
-        expect(baseline.violations.filter((finding) => finding.rule === id)).toEqual([]);
-        expect(activated.violations.filter((finding) => finding.rule === id)).toEqual(introduced);
-        expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
-      } finally {
-        writeFileSync(join(root, path), original);
-      }
-      const restored = runNativePolicy(root, scope.files);
-      expect(restored.visited).toBe(scope.files.length);
-      expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
-      expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual(
-        [],
-      );
-    },
-  );
+    }
+    const restored = runNativePolicy(root, scope.files);
+    expect(restored.visited).toBe(scope.files.length);
+    expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
+    expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual(
+      [],
+    );
+  });
 
   it("retains genuine finite child failures with body-free status", async () => {
     const options = { encoding: "utf8", timeout: 1000, killSignal: "SIGKILL", maxBuffer: 1024 };

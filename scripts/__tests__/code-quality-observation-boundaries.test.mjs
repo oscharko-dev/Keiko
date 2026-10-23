@@ -11,6 +11,7 @@ import {
 import { emitSymbolFixture } from "./support/code-quality-symbol-fixture.mjs";
 import {
   createObservationOptionsFixture,
+  createBooleanObservationFixture,
   createObjectValidatorFixture,
   objectValidatorRecord,
   metadataSourceRecord,
@@ -839,6 +840,99 @@ describe("physical raw registration contributor proofs (#3918)", () => {
     },
     // Complete semantic qualification owns a real proof child bounded at 180 seconds.
     // Match the direct qualifier tests so the outer runner can await child cleanup.
+    195_000,
+  );
+});
+
+async function booleanObservationSemanticFixture(variant) {
+  const own = createBooleanObservationFixture(variant);
+  await installSemanticFixtureTools(own);
+  const path = "packages/alpha/tsconfig.json";
+  const config = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+  config.compilerOptions.lib.push("DOM");
+  own.put(path, config);
+  return own;
+}
+
+describe("boolean raw object observation responsibility (#3918)", () => {
+  it("requires the exact root declaration without mixed observation options", () => {
+    const own = createBooleanObservationFixture();
+    roots.push(own.root);
+    expect(validatePolicy(own.policy)).toEqual([]);
+    for (const key of ["directRawCheckerInputs", "ownedMarkerPair", "ownedPredicateStage"]) {
+      const invalid = structuredClone(own.policy);
+      invalid.responsibilities[0][key] = true;
+      expect(validatePolicy(invalid)).not.toEqual([]);
+    }
+    const wrongIndex = structuredClone(own.policy);
+    wrongIndex.responsibilities[0].input.parameterIndex = 1;
+    expect(validatePolicy(wrongIndex)).not.toEqual([]);
+  });
+
+  it("requires completed same-parent public proofs for its one root", async () => {
+    const own = await booleanObservationSemanticFixture("valid");
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const record = report.assessments[0];
+    expect(record.structural).toBe("ready");
+    expect(record.consumerBinding).toMatchObject({ bound: true, status: "ready" });
+    expect(record.slots).toHaveLength(1);
+    const { path, rule, line, column } = record.slots[0];
+    const diagnostic = { violations: [{ path, rule, line, column }] };
+    expect(adaptResponsibilityDiagnostics(diagnostic, report).adaptations).toEqual([]);
+    const ready = {
+      ...record,
+      semantic: "qualified",
+      proofs: record.proofs.map((proof) => ({ ...proof, executed: true })),
+      proofAssertions: own.record.proofAssertions.map((proof) => ({ ...proof, status: "passed" })),
+    };
+    expect(
+      adaptResponsibilityDiagnostics(diagnostic, { assessments: [ready] }).adaptations,
+    ).toHaveLength(1);
+    expect(
+      adaptResponsibilityDiagnostics(diagnostic, {
+        assessments: [{ ...ready, proofAssertions: [] }],
+      }).adaptations,
+    ).toEqual([]);
+    expect(
+      adaptResponsibilityDiagnostics(diagnostic, {
+        assessments: [ready, { ...ready }],
+      }).adaptations,
+    ).toEqual([]);
+  });
+
+  it("refuses a public consumer that changes the observed boolean", async () => {
+    const own = await booleanObservationSemanticFixture("valid");
+    const path = "packages/alpha/src/proof.test.ts";
+    const source = readFileSync(join(own.root, path), "utf8");
+    own.put(path, source.replace("return result;", "return !result;"));
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("invalid");
+    expect(report.assessments[0].reasons).toContain("unsupported-object-observation-consumer");
+  });
+
+  it.skipIf(process.platform === "win32").each(["valid", "unchecked"])(
+    "executes actual public observation proofs for %s output",
+    async (variant) => {
+      const own = await booleanObservationSemanticFixture(variant);
+      const subject = await collectPolicySubject(own.root);
+      const pending = assessPolicyResponsibilities(subject, own.policy);
+      expect(pending.assessments[0].structural).toBe("ready");
+      if (variant === "unchecked") {
+        await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
+          "semantic-proof-execution-failed",
+        );
+        return;
+      }
+      const report = await qualifyPolicyResponsibilities(subject, own.policy);
+      const assessment = report.assessments[0];
+      expect(assessment.structural).toBe("ready");
+      expect(assessment.semantic).toBe("qualified");
+      const assertion = assessment.proofAssertions.find(
+        (proof) => proof.testName === "boolean observation admits marked carrier",
+      );
+      expect(assertion.status).toBe("passed");
+    },
+    // The qualifier owns a real proof child bounded at 180 seconds.
     195_000,
   );
 });

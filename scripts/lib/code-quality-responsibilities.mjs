@@ -8,6 +8,7 @@ import {
   collectiveHelperBudgetDetails,
 } from "./code-quality-symbols.mjs";
 import { compareStrings } from "./compare-strings.mjs";
+import { isObjectObservationRecord } from "./code-quality-policy.mjs";
 
 function inventoryFile(subject, path) {
   return subject.inventory.files.find((file) => file.path === path);
@@ -296,6 +297,14 @@ function typedOrCanonicalConsumer(resolver, record, roles) {
 }
 
 function propertyObservationConsumer(resolver, record, roles, reasons) {
+  if (isObjectObservationRecord(record)) {
+    const binding = resolver.booleanObservationBinding(
+      record.consumer,
+      roles.transform.identities[0],
+    );
+    if (!binding.bound) reasons.push("unsupported-object-observation-consumer");
+    return binding;
+  }
   const binding = record.metadataSourceInput
     ? resolver.metadataSourceBinding(
         roles.consumer.identities[0],

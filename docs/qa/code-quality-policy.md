@@ -1496,3 +1496,36 @@ supported by the existing resolver are eligible; the existing source/public iden
 task observations, malformed field, physical-array and hostile-inspection proofs remain required.
 Nested task/argument helpers, shared run-result validators and raw event payloads receive no
 additional authority. The original unknown slot and all six selected catalog proofs remain.
+
+### Raw marker loss pre-count observation
+
+An existing raw-property observation may declare only `no-object-parameters` together with
+`rawObjectInput: true` for one exported non-generic object-to-boolean observation. The existing
+canonical private property reader must be reached and validated; only the public root parameter
+is a slot. No reader/helper input, return, reflection, dictionary or admission authority follows.
+The exact public forwarding proof and every selected owning proof must complete on the same
+current parent before adaptation; legacy observation rules and defaults remain unchanged.
+
+`activityLogEventWillBeRejected` observes the refusal marker or absent raw registration so the
+logger can count loss before handing an event to the sink. False is not certification: malformed
+present metadata keeps its zero pre-count and remains subject to the final formatter refusal.
+The record's consumer is honestly the public proof forwarder. The real `writeCounted` caller is
+inside the factory's returned logger closure and is not statically bound by the existing consumer
+graph. Its source/public logger counter, metadata identity and real formatter proofs remain
+separate selected obligations, including healthy zero, malformed-present zero and genuine-refusal
+one. Source/public marker ordering and unreadable receiver behavior also remain required.
+This adds no scope activation, record-type waiver, generic factory/callback analysis or product API.
+
+### Contracts object-input activation
+
+The complete contracts production scope now enforces `anti-slop/no-object-parameters`, including
+future and generated production members and its production-classified `vitest.config.ts`. Tests and
+foreign owners retain their existing scopes. The current 244-member qualification accounts for all
+21 raw object-input coordinates through their exact owning responsibility and executed proofs; a raw
+observation is not an unsafe DTO or a blanket exception. Unmatched new inputs remain violations,
+and missing, stale or failed semantic proofs cannot admit registered coordinates. The factory-owned
+logger caller remains statically unbound; its runtime counter and physical formatter proofs retain
+their separate obligations.
+
+This activates only the object-input rule. Runtime-typeof, unknown-input, unsafe-dictionary and
+known-value-widening migration scopes, the remaining accepted owners and whole #3918 are incomplete.
