@@ -405,19 +405,16 @@ Notes:
   community-maintained packages with a small maintainer base. The pinned versions, the lockfile
   integrity hashes, the SBOM + license gate (`npm run check:workspace-supply-chain`), and the
   no-CDN policy are the controls that bound this supply-chain exposure (blueprint §12, risk R1).
-- **Known advisory — resolved for the host mount via a patched override (#1196); runtime sink stays
-  closed.** `monaco-editor@0.56.0` declares `dompurify@3.4.8` as an npm dependency, which carries a set
-  of **moderate** DOMPurify advisories (`npm audit` reports several distinct XSS / mutation-XSS /
-  prototype-pollution items affecting `<= 3.4.10`), all rated moderate (0 high/critical). #1193 deferred
-  any change before the host runtime path existed because the only `npm audit fix` was a semver-major
-  downgrade. #1196 mounts the editor in `keiko-ui`, so the chain
-  `keiko-ui → keiko-editor → monaco-editor → dompurify` now enters keiko-ui's audit closure and the
-  `ui` CI job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` gate fails. The
-  resolution is a root `overrides: { dompurify: "3.4.13" }` entry:
-  - **Patched version, not a silencing pin.** `3.4.13` is the fixed DOMPurify line (the advisories
-    affect `<= 3.4.10`), so the override removes the vulnerable package from the installed npm tree
-    rather than masking the warning. `monaco-editor` stays pinned at the ADR-0042-mandated `0.56.0`;
-    `npm audit`'s own `fixAvailable` (a `0.53.0` downgrade) is still **not** taken.
+- **DOMPurify npm patch and runtime controls.** `monaco-editor@0.56.0` declares
+  `dompurify@3.4.8` as an npm dependency. The root override now resolves the npm dependency to
+  `3.4.17`, which fixes the reviewed advisories affecting versions through `3.4.16`, including
+  critical and high findings. The dated advisory disposition is in the
+  [dependency security closeout](../../docs/release/2296-dependency-security-closeout.md).
+  The existing override was introduced for the #1196 host mount; it does not replace Monaco's
+  separately vendored sanitizer.
+  - **Patched npm dependency.** The root `overrides: { dompurify: "3.4.17" }` entry updates the
+    installed npm graph while preserving the reviewed `monaco-editor@0.56.0` pin. The npm audit
+    proposal to downgrade Monaco does not address the separately governed runtime controls.
   - **Runtime rendering independently constrained.** Monaco still bundles a **vendored** DOMPurify copy
     (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is
     reached only through Markdown-rendering surfaces (hover tooltips, suggest-widget docs, parameter
@@ -442,10 +439,11 @@ Notes:
     language service, not Monaco's local worker. The original all-sinks-disabled posture is therefore
     superseded by a narrower executable invariant: active markup never crosses a bridge, hover input
     is inert-fenced, and every other enabled governed surface receives primitive plain text only.
-  - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
-    that vendors DOMPurify `> 3.4.10`; as of 0.3.8, Monaco 0.56.0 still declares and vendors `3.4.8`,
-    so the patched override plus inert hover rendering are the interim controls. Revisit when a
-    suggest-documentation or other `IMarkdownString` surface is wired, or when a newer Monaco ships.
+  - **Vendored sanitizer upgrade.** The durable remediation requires a Monaco release whose
+    vendored DOMPurify fixes the reviewed advisories. Monaco 0.56.0 still declares and vendors
+    `3.4.8`, so the patched npm dependency and inert rendering remain separate controls. Revisit
+    when a suggest-documentation or other `IMarkdownString` surface is wired, or when a newer Monaco
+    ships.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers and mounted by
   `keiko-ui` through the #1196 client-only Workspace editor surface.
 
