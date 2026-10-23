@@ -3,10 +3,11 @@
  *
  * Every editor "fundamental" the issue mandates is encoded here as data, not configured ad hoc in
  * the React shell, so each one is asserted by a node test and the component stays thin. The
- * `monaco-editor` import is type-only (no runtime is loaded), keeping this node-safe and
- * import-side-effect-free.
+ * Only Monaco's standalone enum definitions are loaded; its editor runtime remains lazy. The
+ * enum module has no DOM dependencies, keeping this builder node-safe.
  */
 import type * as monaco from "monaco-editor";
+import { ShowLightbulbIconMode } from "monaco-editor/editor/common/standalone/standaloneEnums.js";
 
 export interface KeikoEditorPreferenceOptions {
   readonly fontSize: number;
@@ -161,7 +162,7 @@ function buildAssistanceOptions(
     colorDecorators: false,
     codeLens: false,
     lightbulb: {
-      enabled: (codeActionsEnabled ? "on" : "off") as monaco.editor.ShowLightbulbIconMode,
+      enabled: codeActionsEnabled ? ShowLightbulbIconMode.On : ShowLightbulbIconMode.Off,
     },
     inlayHints: { enabled: inlayHintsEnabled ? "on" : "off" },
   };

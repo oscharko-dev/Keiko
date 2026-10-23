@@ -24,6 +24,14 @@ uses the existing runtime-state resolver for all three consumers. Recovery conti
 existing body-free `update.runtime.state-write` evidence; the regression asserts it. The complete
 SSD update, data continuity, restart and normal eject must still pass before this issue can close.
 
+After this correction, a separate full-product macOS fixture completed two consecutive updates,
+99.0.0 → 99.0.1 → 99.0.2, using the real `buildUiHandlerDeps` composition and the normal nested
+`state/ui` database directory. The fixture replaced only release transport and trusted fixture keys;
+it did not inject a different updater composition. Both successors settled as `succeeded`, retained
+the synthetic workspace marker and key-file digest, and the final application stopped normally.
+This verifies the corrected production composition through native handoff and restart. It uses
+synthetic releases on the internal disk and does not establish published-release SSD acceptance.
+
 ## Stop failure follow-up (2026-10-22)
 
 After the long-running SSD session, the root process exited but its native receipt remained
