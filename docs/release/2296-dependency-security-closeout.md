@@ -629,3 +629,25 @@ The compatibility-gate controls reproduce both failures with 6.4.299 before this
 The owner also retained the existing axe-core 4.12.1 test dependency. GitHub dependency review
 rejects the proposed 4.14.0 MPL-2.0 update under its existing permissive-license policy. This
 disposition adds no license exception or policy change and does not remove accessibility tests.
+
+## PR #4050: service-host Zod and development URI security patches
+
+On 2026-10-23 the required OSV Scanner 2.7.0 job reported
+[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) in the private
+OpenCode service-host lockfile. Its existing override mechanism now resolves every Zod consumer
+to 4.6.7, removing the vulnerable 3.25.76, 4.1.8 and 4.6.5 copies. The original GitLab provider
+remains unchanged: its actual direct-access client accepts string-valued header records and
+rejects malformed values with the patched runtime. The complete service-host suite passes
+70 tests, including the existing MCP issuer binding, native routes and governed tool boundaries.
+
+The collection regression is reproduced against the original Zod 4.1.8: an array exceeding its
+declared maximum still validates all three elements and accumulates their errors. With 4.6.7,
+the same input visits no elements and returns only the size violation. The committed regression
+also checks valid input at the size boundary. This is scoped proof for constrained collections,
+not a claim that unbounded schemas impose an application-specific input limit.
+
+The same local recursive scan then found GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg,
+GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h in development-only fast-uri 3.1.8. Its existing
+root override advances to 3.1.9. With both lockfiles updated, OSV Scanner 2.7.0 reports no issues
+under the unchanged repository configuration. No suppression or gate threshold was added or
+relaxed. The earlier 3.1.8 inventory above is historical; the active version is 3.1.9.
