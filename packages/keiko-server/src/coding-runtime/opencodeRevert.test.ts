@@ -18,9 +18,13 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
+  beginOpenCodeTurnImages,
   createOpenCodeRevertRunPort,
   newestTurnBoundary,
+  noteOpenCodeEditTargets,
+  openCodeNativeCallKey,
   openCodeRevertBlocksTurn,
+  recordOpenCodeEditSettled,
   recordOpenCodeTurnImage,
   recordRevertTurnBlocked,
   type OpenCodeRevertRun,
@@ -138,6 +142,18 @@ function subject(
   return { run, client, abortTask, port, log, order, settled: Promise.resolve(run.turnImage) };
 }
 
+/** One of the turn's own native edits wrote `files` and settled, as the composition reports it. */
+async function agentWrote(
+  run: OpenCodeRevertRun,
+  files: readonly string[],
+  call = "call_edit",
+): Promise<void> {
+  const key = openCodeNativeCallKey("msg_turn_reply", call);
+  noteOpenCodeEditTargets(run, key, files);
+  recordOpenCodeEditSettled(run, key, undefined);
+  await run.agentImages?.work;
+}
+
 describe("newestTurnBoundary", () => {
   it("names the first user message of the newest turn", () => {
     expect(newestTurnBoundary(TURN)).toBe("msg_turn_user");
@@ -223,7 +239,8 @@ describe("undo of the newest turn", () => {
   });
 
   it("stops the turn in flight before it stages, never the other way round", async () => {
-    const { port, order, log } = subject({ busy: true });
+    const { port, order, log, run } = subject({ busy: true });
+    await agentWrote(run, ["a.txt"]);
 
     await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
 
@@ -236,6 +253,7 @@ describe("undo of the newest turn", () => {
 
   it("refuses without staging when the turn in flight cannot be stopped", async () => {
     const { port, client, run, log } = subject({ busy: true, abort: false });
+    await agentWrote(run, ["a.txt"]);
 
     await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toEqual({
       ok: false,
@@ -312,11 +330,95 @@ describe("undo of the newest turn", () => {
     expect(client.stageRevert).not.toHaveBeenCalled();
   });
 
-  it("undoes a turn in flight without a settled image: its snapshot covers what changed meanwhile", async () => {
-    const { port, client } = subject({ busy: true, image: false });
+  it("undoes a turn in flight whose changed files its own native edits wrote", async () => {
+    const { port, client, run } = subject({ busy: true, image: false });
+    await agentWrote(run, ["a.txt"]);
 
     await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
     expect(client.stageRevert).toHaveBeenCalledOnce();
+  });
+
+  it("refuses, without stopping it, a turn in flight whose changed file none of its edits wrote", async () => {
+    const { port, client, abortTask } = subject({ busy: true, image: false });
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "workspace-changed",
+    });
+    expect(abortTask).not.toHaveBeenCalled();
+    expect(client.stageRevert).not.toHaveBeenCalled();
+  });
+
+  it("never overwrites a human edit made while the turn waits for its next model reply", async () => {
+    const root = workspace({ "a.txt": "the native edit\n" });
+    const { port, client, abortTask, run } = subject({ root, busy: true, image: false });
+    await agentWrote(run, ["a.txt"]);
+    writeFileSync(join(root, "a.txt"), "a human edit while the turn runs\n");
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "workspace-changed",
+    });
+    expect(abortTask).not.toHaveBeenCalled();
+    expect(client.stageRevert).not.toHaveBeenCalled();
+  });
+
+  it("proves the files again once the turn stopped: an edit during the interrupt is kept", async () => {
+    const root = workspace({ "a.txt": "the native edit\n" });
+    const { port, client, abortTask, run } = subject({ root, busy: true, image: false });
+    await agentWrote(run, ["a.txt"]);
+    abortTask.mockImplementation(() => {
+      writeFileSync(join(root, "a.txt"), "a human edit during the interrupt\n");
+      return Promise.resolve(true);
+    });
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "workspace-changed",
+    });
+    expect(abortTask).toHaveBeenCalledOnce();
+    expect(client.stageRevert).not.toHaveBeenCalled();
+  });
+
+  it("proves a native edit by its own image even after the turn settled over a later human edit", async () => {
+    const root = workspace({ "a.txt": "the native edit\n" });
+    const { port, client, run } = subject({ root, image: false });
+    await agentWrote(run, ["a.txt"]);
+    writeFileSync(join(root, "a.txt"), "a human edit before the turn settled\n");
+    recordOpenCodeTurnImage(run, undefined);
+    await run.turnImage;
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({
+      reason: "workspace-changed",
+    });
+    expect(client.stageRevert).not.toHaveBeenCalled();
+  });
+
+  it("forgets the last turn's images when a new turn starts", async () => {
+    const { port, run } = subject();
+    await agentWrote(run, ["a.txt"]);
+    beginOpenCodeTurnImages(run);
+
+    expect(run.turnImage).toBeUndefined();
+    expect(run.agentImages?.files.size).toBe(0);
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({
+      reason: "workspace-changed",
+    });
+  });
+
+  it("refuses an edit whose image could not be taken, and says why on the log", async () => {
+    const root = workspace({ "a.txt": "x\n" });
+    const { port, run, log } = subject({ root, busy: true, image: false });
+    const key = openCodeNativeCallKey("msg_turn_reply", "call_edit");
+    noteOpenCodeEditTargets(run, key, ["a.txt"]);
+    const broken = { ...run, workspaceRoot: join(root, "a.txt") };
+    recordOpenCodeEditSettled(broken, key, log);
+    await run.agentImages?.work;
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({
+      reason: "workspace-changed",
+    });
+    expect(log.events.some((event) => event.extra?.reason === "revert-failed")).toBe(true);
   });
 
   it("undoes, restores and undoes again while the files stay as the turn left them", async () => {

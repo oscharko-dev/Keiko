@@ -682,6 +682,21 @@ function externalDirectory(resources: readonly string[], planRoot: string | unde
 }
 
 /** Workspace-relative POSIX path, or undefined when the resource points outside the workspace. */
+/**
+ * The workspace files an admitted native `edit` check names, workspace-relative as the runtime's
+ * own diff names them; plan notes and anything outside the workspace are not workspace files.
+ */
+export function openCodeNativeEditFiles(
+  request: Pick<OpenCodeNativePolicyRequest, "permission" | "resources">,
+  workspaceRoot: string,
+): readonly string[] {
+  if (!EDIT_ACTIONS.has(request.permission)) return [];
+  return request.resources.flatMap((resource) => {
+    const file = workspaceRelative(resource, workspaceRoot);
+    return file === undefined || file === "" ? [] : [file];
+  });
+}
+
 export function workspaceRelative(resource: string, workspaceRoot: string): string | undefined {
   const candidate = resource.trim();
   if (candidate.includes("\0")) return undefined;

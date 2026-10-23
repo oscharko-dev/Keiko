@@ -3414,6 +3414,78 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
     }
   }
 
+  it("records what a native edit wrote, so an undo never overwrites a human edit made after it", async () => {
+    const settled: string[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const revert = {
+      requests: [] as { method: string; path: string; body?: string }[],
+      diff: [
+        { file: "a.txt", patch: "", additions: 1, deletions: 1, status: "modified" },
+      ] as unknown[],
+      messages: [] as unknown[],
+      staged: {
+        messageID: "msg_user",
+        files: [{ file: "a.txt", patch: "", additions: 1, deletions: 1, status: "modified" }],
+      } as unknown,
+    };
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement: createCodingToolNativeSettlementFacet((action) => {
+          settled.push(String(action));
+        }),
+      },
+      undefined,
+      {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        runControl: { promptBodies: [], abortSessions: [], statusResponses: [{}], revert },
+      },
+    );
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      const file = join(workspaceRoot, "a.txt");
+      writeFileSync(file, "as the native edit wrote it\n");
+      const ask = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "edit",
+          resources: ["a.txt"],
+          source: { type: "tool", messageID: "msg_assistant", id: "call_edit_1" },
+          configured: "allow",
+        }),
+      });
+      expect(ask.body).toBe('{"effect":"allow"}');
+      revert.messages = [...history([part("call_edit_1", "edit", "completed")])].reverse();
+      streams[0]?.enqueue(frame("session.step.ended", 1));
+      await vi.waitFor(() => {
+        expect(settled).toEqual(["edit"]);
+      });
+      writeFileSync(file, "a human edit after it\n");
+      const port = fixture.runtime.runPort;
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(revert.requests.map(({ path }) => path)).not.toContain(
+        "/api/session/ses_tool/revert/stage",
+      );
+      // Healthy control: with the file as the native edit wrote it, the undo stages.
+      writeFileSync(file, "as the native edit wrote it\n");
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("counts each completed native call once, a policy refusal as a refusal, and a running call not at all", async () => {
     const { settled } = await runHistory("native");
     expect(settled).toEqual([
@@ -6537,19 +6609,24 @@ describe("turn revert on the run port (B3, S04)", () => {
     }
   });
 
-  it("stops a turn in flight through the run port's own abort before it stages", async () => {
+  it("does not stop a turn in flight whose changed files none of its own native edits wrote", async () => {
     const { control, revert } = revertControl();
     const runControl = control.runControl;
     if (runControl === undefined) throw new Error("expected run control");
     const fixture = await startBridgeFixture(revertFacade, undefined, control);
     try {
       const port = fixture.runtime.runPort;
-      // Busy when the undo asks, idle once the abort has settled the session.
       runControl.statusResponses.splice(0, runControl.statusResponses.length, { ses_tool: {} }, {});
       revert.messages = TURN;
-      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
-      expect(runControl.abortSessions).toEqual(["ses_tool"]);
-      expect(revert.requests.at(-1)?.path).toBe("/api/session/ses_tool/revert/stage");
+      // Nothing proves who changed the file while the turn runs: the undo is refused, unstopped.
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(runControl.abortSessions).toEqual([]);
+      expect(revert.requests.map(({ path }) => path)).not.toContain(
+        "/api/session/ses_tool/revert/stage",
+      );
     } finally {
       await fixture.stop();
     }

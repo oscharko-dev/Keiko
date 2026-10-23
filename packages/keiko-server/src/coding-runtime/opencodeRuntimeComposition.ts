@@ -102,10 +102,15 @@ import {
   type OpenCodePromptInputsRunPort,
 } from "./opencodePromptInputs.js";
 import {
+  beginOpenCodeTurnImages,
   createOpenCodeRevertRunPort,
+  noteOpenCodeEditTargets,
+  openCodeNativeCallKey,
   openCodeRevertBlocksTurn,
+  recordOpenCodeEditSettled,
   recordOpenCodeTurnImage,
   recordRevertTurnBlocked,
+  type OpenCodeAgentImages,
   type OpenCodeRevertRun,
   type OpenCodeRevertRunPort,
   type OpenCodeStagedRevert,
@@ -124,6 +129,7 @@ import {
 import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   decideOpenCodeNativePolicy,
+  openCodeNativeEditFiles,
   parseOpenCodeNativePolicyRequest,
   recordOpenCodeNativePolicyDecision,
   type OpenCodeNativeAuthorityEvidence,
@@ -555,6 +561,8 @@ interface PreparedRun {
   revert?: OpenCodeStagedRevert | undefined;
   /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
   turnImage?: OpenCodeRevertRun["turnImage"];
+  /** What the newest turn's own native edits wrote (`recordOpenCodeEditSettled`). */
+  agentImages?: OpenCodeAgentImages | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
 }
@@ -770,6 +778,8 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     if (!run.runtimeAdapter.armTurn()) return false;
+    // A new turn: what an undo must find unchanged is recorded afresh from here on.
+    beginOpenCodeTurnImages(run);
     return postTurnPrompt(run, text, initialContext, inputs, diagnostics, activityLog);
   };
 }
@@ -1344,8 +1354,9 @@ type CompositionSafeActivitySignal =
  */
 function adapterSafeActivitySink(
   input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
 ): Pick<Parameters<typeof createOpenCodeRuntimeAdapter>[0], "safeActivitySink"> {
-  const settle = nativeToolSettlementObserver(input);
+  const settle = nativeToolSettlementObserver(input, run);
   const activity = input.safeActivity;
   if (activity === undefined && settle === undefined) return {};
   return {
@@ -1361,14 +1372,22 @@ function adapterSafeActivitySink(
   };
 }
 
+/** The native tools whose completed call wrote the files its edit check named. */
+const NATIVE_FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "patch"]);
+
 function nativeToolSettlementObserver(
   input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
 ): ((signal: CompositionSafeActivitySignal) => void) | undefined {
   const settlement = input.toolProfile === "native" ? input.toolFacade.nativeSettlement : undefined;
   if (settlement === undefined) return undefined;
   return (signal): void => {
     if (signal.kind !== "tool" || signal.messageId === undefined) return;
     if (signal.state !== "succeeded" && signal.state !== "failed") return;
+    if (signal.state === "succeeded" && NATIVE_FILE_WRITE_TOOLS.has(signal.tool ?? "")) {
+      const key = openCodeNativeCallKey(signal.messageId, signal.callId);
+      recordOpenCodeEditSettled(run, key, input.activityLog);
+    }
     settlement.settled({
       messageId: signal.messageId,
       callId: signal.callId,
@@ -1407,7 +1426,7 @@ async function handshake(
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
       readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),
       governedSink: input.governedEventSink,
-      ...adapterSafeActivitySink(input),
+      ...adapterSafeActivitySink(input, run),
       control: {
         status: createNativeTreeStatusPort({
           runId: run.runId,
@@ -2676,9 +2695,20 @@ async function settleNativePolicyOutcome(
     request,
     signal,
   );
-  return admission.ok
-    ? { outcome, authority: { charge: admission.charge } }
-    : { outcome: "authority-refused", authority: { reason: admission.reason } };
+  if (!admission.ok)
+    return { outcome: "authority-refused", authority: { reason: admission.reason } };
+  noteAdmittedEditTargets(run, request);
+  return { outcome, authority: { charge: admission.charge } };
+}
+
+/** An admitted native edit's targets, so its settlement can record what the turn itself wrote. */
+function noteAdmittedEditTargets(run: PreparedRun, request: OpenCodeNativePolicyRequest): void {
+  if (request.source === undefined) return;
+  noteOpenCodeEditTargets(
+    run,
+    openCodeNativeCallKey(request.source.messageID, request.source.id),
+    openCodeNativeEditFiles(request, run.workspaceRoot),
+  );
 }
 
 interface NativePolicySettlement {

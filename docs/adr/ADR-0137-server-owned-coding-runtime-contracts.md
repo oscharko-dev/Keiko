@@ -1439,16 +1439,20 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   coordinator reserves the next task generation first, so the interrupted turn's cancelled outcome
   does not settle the run. Keiko never calls `session.revert.commit`: committing, and the next
   prompt after a staged revert, delete the rewound messages, while the history reconciliation is
-  append-only per session, so a new turn is refused (`turn-blocked`) while an undo is staged. A
+  append-only per session, so a new turn is refused (`turn-blocked`) while an undo is staged. The
   runtime restores whole files, so Keiko proves each file unchanged by content before it lets the
-  runtime write: when a turn settles, Keiko records the SHA-256 of every file the turn changed, read
-  through a descriptor that follows no link; an undo of a settled turn is refused
-  (`workspace-changed`) unless every file still matches that image, and a restore
-  (`session.revert.clear`) is refused unless every restored file still matches the image the undo
-  left. Size and timestamps are no witness: a same-size copy that puts the old modification time
-  back would pass them. A turn still in flight is the exception: its snapshot covers the whole
-  workspace, so a change made while it ran is part of that turn and is undone with it. A settled
-  run has no
+  runtime write: the SHA-256 of its bytes, read through a descriptor that follows no link. Size and
+  timestamps are no witness, since a same-size copy that puts the old modification time back would
+  pass them. The targets of each admitted native `edit`, `write` or `patch` call are fingerprinted
+  when the call settles, which is the file as the turn itself wrote it. An undo needs every file the
+  turn changed to match its edit's image; a file no edit of the turn wrote (one a shell command
+  changed) is proven only by the image recorded when the turn settled, so a turn still in flight
+  cannot prove such a file and its undo is refused (`workspace-changed`) without stopping it. After
+  the interrupt of a turn in flight the files are proven once more. A restore
+  (`session.revert.clear`) needs every restored file to match the image the undo left. A human
+  change made while a turn ran, to a file no edit of that turn wrote, is the one change Keiko cannot
+  tell apart from the turn's own once the turn settled; the runtime's snapshot counts it as the
+  turn's. A settled run has no
   undo: its private state, snapshots included, is removed with it. Evidence is
   `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts and closed words,
   never a path, patch or message.

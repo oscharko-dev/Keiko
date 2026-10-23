@@ -132,6 +132,30 @@ export interface OpenCodeStagedRevert extends CodingRuntimeRevertCounts {
   witness: OpenCodeRevertWitness | undefined;
 }
 
+/**
+ * What Keiko proved about the files the newest turn's own native edits wrote (#3897 review): the
+ * targets of each admitted `edit`/`write`/`patch` call, and each file's content fingerprint right
+ * after the newest such call that wrote it settled. Reset when a turn starts.
+ */
+export interface OpenCodeAgentImages {
+  /** The admitted edit calls' targets, until the runtime reports the call settled. */
+  readonly pending: Map<string, readonly string[]>;
+  /** Each file's fingerprint as the turn's own newest edit of it left it. */
+  readonly files: Map<string, string>;
+  /** The captures still running; a revert waits for them. */
+  work: Promise<void>;
+}
+
+/** The run slice that records agent images; the composition's `PreparedRun` satisfies it. */
+export interface OpenCodeAgentImageRun {
+  readonly runId: string;
+  readonly workspaceRoot: string;
+  agentImages?: OpenCodeAgentImages | undefined;
+}
+
+/** Calls remembered between their admission and their settlement; the oldest is forgotten first. */
+const AGENT_IMAGE_PENDING_MAX = 256;
+
 /** The slice of a ready native run the revert needs; the composition's `ReadyRun` satisfies it. */
 export interface OpenCodeRevertRun {
   readonly runId: string;
@@ -147,6 +171,7 @@ export interface OpenCodeRevertRun {
    * (`recordOpenCodeTurnImage`); `undefined` inside the promise when recording them failed.
    */
   turnImage?: Promise<OpenCodeRevertWitness | undefined> | undefined;
+  agentImages?: OpenCodeAgentImages | undefined;
 }
 
 export interface OpenCodeRevertPorts {
@@ -201,20 +226,21 @@ async function undoLastTurn(
   run: OpenCodeRevertRun,
 ): Promise<RevertOutcome> {
   if (run.revert !== undefined) return { ok: false, reason: "already-staged" };
-  // Both checks precede the interrupt: a request that cannot succeed never ends a working turn.
-  const changed = (await run.client.sessionDiff(run.sessionId)).map((diff) => diff.file);
+  // Every check precedes the interrupt: a request that cannot succeed never ends a working turn.
+  const changed = await changedFiles(run);
   if (changed.length === 0) return { ok: false, reason: "nothing-to-undo" };
   const boundary = newestTurnBoundary(await run.client.messages(run.sessionId));
   if (boundary === undefined) return { ok: false, reason: "turn-boundary-missing" };
   const busy = Object.hasOwn(await run.client.active(), run.sessionId);
+  // The runtime restores whole files, so a turn is undone only while every file it changed is
+  // exactly as the turn itself left it: a human edit is never overwritten.
+  if (!(await turnUnchanged(run, changed, busy))) return { ok: false, reason: "workspace-changed" };
   if (busy) {
-    // The runtime refuses to rewind a busy session, so a turn in flight is stopped first. Its
-    // snapshot covers the whole workspace, so a change made while it ran is part of the turn.
+    // The runtime refuses to rewind a busy session, so a turn in flight is stopped first; what it
+    // changed by the time it stopped is then proven once more.
     if (!(await ports.abortTask(run.runId))) return { ok: false, reason: "interrupt-failed" };
-  } else if (!(await witnessHolds(run.workspaceRoot, changed, await run.turnImage))) {
-    // The runtime restores whole files, so a settled turn is undone only while its files are
-    // exactly as it left them: a human edit made after the turn is never overwritten.
-    return { ok: false, reason: "workspace-changed" };
+    if (!(await turnUnchanged(run, await changedFiles(run), true)))
+      return { ok: false, reason: "workspace-changed" };
   }
   const staged = await run.client.stageRevert(run.sessionId, boundary);
   const record: OpenCodeStagedRevert = {
@@ -366,6 +392,91 @@ async function witnessHolds(
     const recorded = witness.get(file);
     return recorded !== undefined && recorded !== "unverifiable" && current[index] === recorded;
   });
+}
+
+async function changedFiles(run: OpenCodeRevertRun): Promise<readonly string[]> {
+  return (await run.client.sessionDiff(run.sessionId)).map((diff) => diff.file);
+}
+
+/**
+ * Whether every file the turn changed is as the turn left it. A file one of the turn's own native
+ * edits wrote is proven by that edit's image. Any other file (one a shell command changed, say) is
+ * proven only by the image the settled turn left; a turn still in flight has none, so such a file
+ * cannot be proven and the undo is refused rather than guessing who changed it.
+ */
+async function turnUnchanged(
+  run: OpenCodeRevertRun,
+  files: readonly string[],
+  busy: boolean,
+): Promise<boolean> {
+  await run.agentImages?.work;
+  const agent = run.agentImages?.files;
+  const settled = busy ? undefined : await run.turnImage;
+  const current = await signatures(run.workspaceRoot, files);
+  return files.every((file, index) => {
+    const recorded = agent?.get(file) ?? settled?.get(file);
+    return recorded !== undefined && recorded !== "unverifiable" && current[index] === recorded;
+  });
+}
+
+/** The identity of one native tool call, as both its permission check and its settlement name it. */
+export function openCodeNativeCallKey(messageId: string, callId: string): string {
+  return `${messageId}\u0000${callId}`;
+}
+
+function freshAgentImages(): OpenCodeAgentImages {
+  return { pending: new Map(), files: new Map(), work: Promise.resolve() };
+}
+
+/** A new turn starts: neither the last turn's settled image nor its edits prove anything now. */
+export function beginOpenCodeTurnImages(run: OpenCodeRevertRun): void {
+  run.turnImage = undefined;
+  run.agentImages = freshAgentImages();
+}
+
+/** Remembers the targets of an admitted native edit call until the runtime reports it settled. */
+export function noteOpenCodeEditTargets(
+  run: OpenCodeAgentImageRun,
+  callKey: string,
+  files: readonly string[],
+): void {
+  if (files.length === 0) return;
+  run.agentImages ??= freshAgentImages();
+  const { pending } = run.agentImages;
+  pending.delete(callKey);
+  pending.set(callKey, files);
+  const oldest = pending.size > AGENT_IMAGE_PENDING_MAX ? pending.keys().next().value : undefined;
+  if (oldest !== undefined) pending.delete(oldest);
+}
+
+/**
+ * A native edit call completed: its targets' contents now are what the turn itself wrote, so they
+ * become the files' agent images. A failed capture leaves them unproven, which refuses an undo.
+ */
+export function recordOpenCodeEditSettled(
+  run: OpenCodeAgentImageRun,
+  callKey: string,
+  activityLog: ServerLogSink | undefined,
+): void {
+  const images = run.agentImages;
+  const files = images?.pending.get(callKey);
+  if (images === undefined || files === undefined) return;
+  images.pending.delete(callKey);
+  images.work = images.work
+    .then(async () => {
+      const current = await signatures(run.workspaceRoot, files);
+      files.forEach((file, index) => images.files.set(file, current[index] ?? "unverifiable"));
+    })
+    .catch((error: unknown) => {
+      for (const file of files) images.files.set(file, "unverifiable");
+      recordRevertRefused(activityLog, {
+        runId: run.runId,
+        operation: "state",
+        reason: "revert-failed",
+        correlationId: undefined,
+        error,
+      });
+    });
 }
 
 /**

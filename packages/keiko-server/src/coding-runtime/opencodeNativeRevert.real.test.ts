@@ -22,6 +22,9 @@ import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeL
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import {
   createOpenCodeRevertRunPort,
+  noteOpenCodeEditTargets,
+  openCodeNativeCallKey,
+  recordOpenCodeEditSettled,
   recordOpenCodeTurnImage,
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
@@ -483,6 +486,17 @@ async function settledTurn(
   await state.turnImage;
 }
 
+/**
+ * What the composition records when the runtime reports a native edit call completed: the call's
+ * admitted target, fingerprinted as the edit left it.
+ */
+async function agentWrote(state: OpenCodeRevertRun, file = FIXTURE_FILE): Promise<void> {
+  const key = openCodeNativeCallKey("msg_native_edit", `call_${file}`);
+  noteOpenCodeEditTargets(state, key, [file]);
+  recordOpenCodeEditSettled(state, key, undefined);
+  await state.agentImages?.work;
+}
+
 async function sessionRevert(run: Run): Promise<unknown> {
   const sessions = await run.service.client.sessions();
   return sessions.find((session) => session.id === run.sessionId)?.revert;
@@ -662,7 +676,7 @@ describe("pinned native OpenCode undo semantics", () => {
     "Keiko stops a turn in flight before it undoes the turn's edit",
     async () => {
       await withRun(async (run) => {
-        const { port, aborts } = keikoRevertPort(run);
+        const { port, state, aborts } = keikoRevertPort(run);
         run.gateway.holdAfterTool = true;
         run.gateway.call = editCall("original", "edited");
         run.gateway.toolTurns = 1;
@@ -670,6 +684,7 @@ describe("pinned native OpenCode undo semantics", () => {
         await expect
           .poll(() => workspaceFile(run), { timeout: 30_000 })
           .toBe("revert fixture edited\n");
+        await agentWrote(state);
         expect(await sessionIsIdle(run)).toBe(false);
         expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
         expect(aborts).toHaveLength(1);
@@ -677,6 +692,34 @@ describe("pinned native OpenCode undo semantics", () => {
         expect(await sessionIsIdle(run)).toBe(true);
         expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
         expect(workspaceFile(run)).toBe("revert fixture edited\n");
+      });
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "Keiko never overwrites a human edit made while the turn waits for its next model reply",
+    async () => {
+      await withRun(async (run) => {
+        const { port, state, aborts } = keikoRevertPort(run);
+        run.gateway.holdAfterTool = true;
+        run.gateway.call = editCall("original", "edited");
+        run.gateway.toolTurns = 1;
+        await run.service.client.prompt(run.sessionId, "Edit the notes file.");
+        await expect
+          .poll(() => workspaceFile(run), { timeout: 30_000 })
+          .toBe("revert fixture edited\n");
+        await agentWrote(state);
+        // The model's final reply is held; meanwhile a human changes the file the turn edited.
+        writeFileSync(join(run.fixture.workspace, FIXTURE_FILE), "a human edit while it runs\n");
+        expect(await port.revertTurn("run", "undo")).toEqual({
+          ok: false,
+          reason: "workspace-changed",
+        });
+        expect(workspaceFile(run)).toBe("a human edit while it runs\n");
+        expect(aborts).toEqual([]);
+        expect(await sessionIsIdle(run)).toBe(false);
+        expect(state.revert).toBeUndefined();
       });
     },
     180_000,
