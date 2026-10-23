@@ -33,6 +33,9 @@ import {
   verifyCodingRuntimeNpmCandidate,
 } from "../build-coding-runtime-npm-package.mjs";
 import { computePortableSidecarPayloadTreeDigest } from "../../packages/keiko-server/dist/coding-runtime/devLanePortableCodingRuntime.js";
+import { ripgrepRuntimeApproval } from "../../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
+import { portableTargetByName } from "../portable-runtime.mjs";
+import { stageRipgrepTool } from "../stage-portable-runtime.mjs";
 import { hashHelperSourceTree } from "../stage-dev-coding-runtime.mjs";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
 
@@ -56,6 +59,33 @@ function write(path, body) {
 }
 
 const HELPER = "built-helper";
+const RIPGREP = "pinned-upstream-ripgrep";
+const RIPGREP_MIT = "MIT license text shipped with ripgrep";
+const sha256Of = (value) => createHash("sha256").update(value).digest("hex");
+
+// The pinned ripgrep release is data the server owns (ripgrepRuntime.ts); the builder stages and
+// verifies against it. These tests substitute a manifest whose digests bind their own fixture bytes.
+function fixtureRipgrepApproval() {
+  return ripgrepRuntimeApproval("darwin-arm64", {
+    version: "0.0.0-test",
+    sourceCommit: "a".repeat(40),
+    licenseExpression: "Unlicense OR MIT",
+    licenseFileName: "LICENSE-MIT",
+    targets: {
+      "darwin-arm64": {
+        archiveKind: "tar.gz",
+        archiveUrl: "https://example.test/ripgrep-0.0.0-test.tar.gz",
+        archiveSha256: "b".repeat(64),
+        archiveSizeBytes: 10,
+        binaryMember: "ripgrep/rg",
+        binarySha256: sha256Of(RIPGREP),
+        binarySizeBytes: RIPGREP.length,
+        licenseMember: "ripgrep/LICENSE-MIT",
+        licenseSha256: sha256Of(RIPGREP_MIT),
+      },
+    },
+  });
+}
 
 function catalogUpstreamVersion() {
   const catalog = JSON.parse(
@@ -79,6 +109,7 @@ async function releaseFixture() {
   const payload = join(packageDir, "runtime/opencode-compatible/payload");
   chmodSync(join(payload, "bin/opencode"), 0o755);
   chmodSync(join(packageDir, "runtime/native/keiko-secure-workspace-read"), 0o755);
+  chmodSync(join(packageDir, "runtime/native/rg"), 0o755);
   const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
   const approval = {
     packageName: built.name,
@@ -97,6 +128,7 @@ async function releaseFixture() {
     ]),
     licenseSha256: digest(join(payload, "evidence/LICENSE")),
     sbomSha256: digest(join(payload, "evidence/sbom.cdx.json")),
+    ripgrep: fixtureRipgrepApproval(),
   };
   const calls = [];
   const deps = {
@@ -134,10 +166,17 @@ function releaseInput(fixture) {
 }
 
 function fakeDeps(overrides = {}) {
-  const calls = { prepare: [], build: [] };
+  const calls = { prepare: [], build: [], ripgrep: [] };
   return {
     calls,
     deps: {
+      stageRipgrep: async (target, packageRoot) => {
+        calls.ripgrep.push({ target, packageRoot });
+        write(join(packageRoot, "runtime/native/rg"), RIPGREP);
+        chmodSync(join(packageRoot, "runtime/native/rg"), 0o755);
+        write(join(packageRoot, "runtime/licenses/ripgrep/LICENSE-MIT"), RIPGREP_MIT);
+        return fixtureRipgrepApproval();
+      },
       prepareSidecars: async (argv) => {
         calls.prepare.push(argv);
         const target = argv[1];
@@ -199,7 +238,7 @@ describe("coding runtime npm package", () => {
       expect(readFileSync(prepared.tarballPath).subarray(0, 2)).toStrictEqual(
         Buffer.from([0x1f, 0x8b]),
       );
-      expect(prepared.receipt.files).toHaveLength(6);
+      expect(prepared.receipt.files).toHaveLength(9);
       expect(statSync(prepared.tarballPath).mode & 0o222).toBe(0);
       expect(statSync(prepared.receiptPath).mode & 0o222).toBe(0);
     },
@@ -226,6 +265,9 @@ describe("coding runtime npm package", () => {
     ["OpenCode", "runtime/opencode-compatible/payload/bin/opencode", "different-executable"],
     ["license", "runtime/opencode-compatible/payload/evidence/LICENSE", "different-license"],
     ["SBOM", "runtime/opencode-compatible/payload/evidence/sbom.cdx.json", "different-sbom"],
+    ["ripgrep executable", "runtime/native/rg", "different-ripgrep"],
+    ["ripgrep license", "runtime/licenses/ripgrep/LICENSE-MIT", "different-ripgrep-license"],
+    ["ripgrep SBOM", "runtime/licenses/ripgrep/sbom.cdx.json", "different-ripgrep-sbom"],
   ])("refuses a stale %s against the independently approved pins", async (_label, path, body) => {
     const fixture = await releaseFixture();
     writeFileSync(join(fixture.packageDir, path), body);
@@ -437,6 +479,151 @@ describe("coding runtime npm package", () => {
     });
     // The staging directory with the downloaded archive is gone.
     expect(existsSync(calls.prepare[0][3])).toBe(false);
+  });
+
+  describe("pinned ripgrep (#4064)", () => {
+    const RG = "runtime/native/rg";
+    const RG_LICENSE = "runtime/licenses/ripgrep/LICENSE-MIT";
+    const RG_SBOM = "runtime/licenses/ripgrep/sbom.cdx.json";
+
+    it("stages the pinned executable, its MIT text and a component SBOM in the portable layout", async () => {
+      const outDir = join(scratch(), "package");
+      const { calls, deps } = fakeDeps();
+
+      await buildCodingRuntimeNpmPackage({ target: "macos-arm64", version: "1.2.3", outDir, deps });
+
+      expect(calls.ripgrep).toStrictEqual([{ target: "macos-arm64", packageRoot: outDir }]);
+      expect(readFileSync(join(outDir, RG), "utf8")).toBe(RIPGREP);
+      expect(readFileSync(join(outDir, RG_LICENSE), "utf8")).toBe(RIPGREP_MIT);
+      const sbom = JSON.parse(readFileSync(join(outDir, RG_SBOM), "utf8"));
+      expect(sbom.bomFormat).toBe("CycloneDX");
+      expect(sbom.components).toHaveLength(1);
+      expect(sbom.components[0]).toMatchObject({
+        name: "ripgrep",
+        version: "0.0.0-test",
+        hashes: [{ alg: "SHA-256", content: sha256Of(RIPGREP) }],
+        externalReferences: [
+          {
+            url: "https://example.test/ripgrep-0.0.0-test.tar.gz",
+            hashes: [{ alg: "SHA-256", content: "b".repeat(64) }],
+          },
+        ],
+      });
+      // The component describes the bytes in the package, so a reproducible build is byte-identical.
+      const again = join(scratch(), "package");
+      await buildCodingRuntimeNpmPackage({
+        target: "macos-arm64",
+        version: "1.2.3",
+        outDir: again,
+        deps: fakeDeps().deps,
+      });
+      expect(readFileSync(join(again, RG_SBOM), "utf8")).toBe(
+        readFileSync(join(outDir, RG_SBOM), "utf8"),
+      );
+    });
+
+    it("names ripgrep, its license choice and its source in the shipped notice", async () => {
+      const outDir = join(scratch(), "package");
+      await buildCodingRuntimeNpmPackage({
+        target: "macos-arm64",
+        version: "1.2.3",
+        outDir,
+        deps: fakeDeps().deps,
+      });
+      const notice = readFileSync(join(outDir, "LICENSE.md"), "utf8");
+      expect(notice).toContain("three components");
+      expect(notice).toContain("`runtime/native/rg`");
+      expect(notice).toContain("ripgrep 0.0.0-test");
+      expect(notice).toContain("Unlicense OR MIT");
+      expect(notice).toContain("`runtime/licenses/ripgrep/LICENSE-MIT`");
+      expect(notice).toContain("https://example.test/ripgrep-0.0.0-test.tar.gz");
+    });
+
+    it("lists the three ripgrep files in the candidate and binds the pinned release in the receipt", async () => {
+      const fixture = await releaseFixture();
+      const { receipt } = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+      expect(receipt.files.map(({ path }) => path)).toStrictEqual(
+        expect.arrayContaining([RG, RG_LICENSE, RG_SBOM]),
+      );
+      expect(receipt.files.find(({ path }) => path === RG)).toMatchObject({
+        sha256: sha256Of(RIPGREP),
+        sizeBytes: RIPGREP.length,
+        mode: 0o755,
+      });
+      expect(receipt.ripgrep).toStrictEqual({
+        version: "0.0.0-test",
+        sourceCommit: "a".repeat(40),
+        archiveSha256: "b".repeat(64),
+        binarySha256: sha256Of(RIPGREP),
+        licenseSha256: sha256Of(RIPGREP_MIT),
+      });
+    });
+
+    it("refuses a package that does not carry ripgrep instead of sealing it", async () => {
+      const fixture = await releaseFixture();
+      rmSync(join(fixture.packageDir, RG));
+      await expect(
+        packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+      ).rejects.toThrow("exactly the nine approved package files");
+      expect(existsSync(fixture.artifactDir)).toBe(false);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "refuses a ripgrep executable that lost its executable permission",
+      async () => {
+        const fixture = await releaseFixture();
+        chmodSync(join(fixture.packageDir, RG), 0o644);
+        await expect(
+          packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+        ).rejects.toThrow("executable permissions");
+        expect(existsSync(fixture.artifactDir)).toBe(false);
+      },
+    );
+
+    it("provisions and stages the target's own release through the shared portable staging", () => {
+      const calls = [];
+      const approval = builder.stagePinnedNpmRipgrep("macos-x64", "/package", {
+        provision: (options) => calls.push(["provision", options]),
+        stage: (target, root, options) => calls.push(["stage", target, root, options]),
+      });
+      // The target's release, never the build host's: one Mac builds both architectures.
+      expect(approval).toStrictEqual(ripgrepRuntimeApproval("darwin-x64"));
+      expect(calls.map(([kind]) => kind)).toStrictEqual(["provision", "stage"]);
+      expect(calls[0][1]).toMatchObject({ hostPlatform: "darwin", hostArchitecture: "x64" });
+      expect(calls[1].slice(1, 3)).toStrictEqual([portableTargetByName("macos-x64"), "/package"]);
+      // Both stages fail closed by throwing: neither may exit the process mid-build.
+      expect(() => calls[0][1].failWith("boom")).toThrow("boom");
+      expect(() => calls[1][3].onFailure("boom")).toThrow("boom");
+      expect(() => builder.stagePinnedNpmRipgrep("linux-x64", "/package")).toThrow(
+        "unsupported npm runtime package target",
+      );
+    });
+
+    it("stages the real shared function's output into the package layout with its executable bit", () => {
+      const root = scratch();
+      const sourceBinary = join(root, "source", "rg");
+      const sourceLicense = join(root, "source", "LICENSE-MIT");
+      write(sourceBinary, RIPGREP);
+      write(sourceLicense, RIPGREP_MIT);
+      const packageRoot = join(root, "package");
+      builder.stagePinnedNpmRipgrep("macos-arm64", packageRoot, {
+        provision: () => undefined,
+        stage: (target, destination, options) =>
+          stageRipgrepTool(target, destination, {
+            ...options,
+            resolveRuntime: () => ({
+              approved: fixtureRipgrepApproval(),
+              sourceBinary,
+              sourceLicense,
+            }),
+          }),
+      });
+      expect(readFileSync(join(packageRoot, RG), "utf8")).toBe(RIPGREP);
+      expect(readFileSync(join(packageRoot, RG_LICENSE), "utf8")).toBe(RIPGREP_MIT);
+      if (process.platform !== "win32") {
+        expect(statSync(join(packageRoot, RG)).mode & 0o111).not.toBe(0);
+      }
+    });
   });
 
   it("refuses a relative output directory", async () => {
@@ -780,7 +967,7 @@ describe("trusted archive tool in actual npm candidate verification", () => {
         };
         const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
         const verified = await verifyCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
-        expect(prepared.receipt.files).toHaveLength(6);
+        expect(prepared.receipt.files).toHaveLength(9);
         expect(verified.receipt).toStrictEqual(prepared.receipt);
         expect(existsSync(marker)).toBe(false);
       } finally {

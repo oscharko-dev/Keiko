@@ -27,6 +27,7 @@ import {
   NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
+import { ripgrepBinaryName, ripgrepTargetKeyForPortableTarget } from "./ripgrepRuntime.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM } from "./opencodeProtocolSurface.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
@@ -242,7 +243,9 @@ function discoverNpmLanePackage(
   const selected = selectNpmLanePackage(runtimeRoot, target, approval, previous);
   if (!selected.ok) return refused(selected.refusal);
   const { helper, helperPath, payload } = selected;
-  if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
+  // The pinned ripgrep (#3897) ships beside the helper. Its name is admitted here; its bytes are
+  // judged at launch against the pinned digest, which degrades search instead of refusing the lane.
+  if (!trustedNativeHelperDirectory(runtimeRoot, target, [npmLaneRipgrepName(target)])) {
     return refused("native-helper-directory-untrusted");
   }
   const secureRead: DevLaneSecureReadBinding = {
@@ -372,6 +375,24 @@ export function devLaneCheckoutRoot(
   return basename(stagedPayloads) === DEV_LANE_STAGED_PAYLOADS_DIR
     ? dirname(stagedPayloads)
     : undefined;
+}
+
+/**
+ * The installed npm runtime package a runtime was activated from, or `undefined` for any other lane.
+ * Derived from the one place that composes `installRoot` (`discoverNpmLaneOpenCode`:
+ * `<package>/runtime/opencode-compatible`), so the layout stays with its owner. The pinned ripgrep
+ * executable the package ships lives under this root, at `runtime/native/rg`.
+ */
+export function npmLanePackageRoot(
+  runtime: Pick<DevLanePortableOpenCodeRuntime, "lane" | "installRoot">,
+): string | undefined {
+  if (runtime.lane !== "npm-runtime-package") return undefined;
+  const runtimeRoot = dirname(runtime.installRoot);
+  return basename(runtimeRoot) === NPM_LANE_RUNTIME_DIR ? dirname(runtimeRoot) : undefined;
+}
+
+function npmLaneRipgrepName(target: Exclude<DevLaneOpenCodeTarget, "windows-x64">): string {
+  return ripgrepBinaryName(ripgrepTargetKeyForPortableTarget(target));
 }
 
 function refused(reason: DevLaneOpenCodeRefusalReason): DevLaneOpenCodeDiscovery {
@@ -717,15 +738,20 @@ function verifiedRuntimeSupervisor(
 function trustedNativeHelperDirectory(
   stagedTargetRoot: string,
   target: DevLaneOpenCodeTarget,
+  optionalNames: readonly string[] = [],
 ): boolean {
   const nativeDirectory = join(stagedTargetRoot, "native");
   const expected = new Set([basename(helperRelativePath(target))]);
   if (target === "windows-x64") expected.add(basename(runtimeSupervisorRelativePath(target)));
   try {
-    const entries = readdirSync(nativeDirectory);
+    const entries = new Set(readdirSync(nativeDirectory));
     return (
-      entries.length === expected.size &&
-      entries.every((entry) => expected.has(entry) && isRegularFile(join(nativeDirectory, entry)))
+      [...expected].every((name) => entries.has(name)) &&
+      [...entries].every((entry) =>
+        expected.has(entry)
+          ? isRegularFile(join(nativeDirectory, entry))
+          : optionalNames.includes(entry),
+      )
     );
   } catch {
     return false;

@@ -145,8 +145,14 @@ search then fails silently. Keiko ships the identical upstream release (15.1.0) 
 SHA-256-verified in `packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`: the script fetches
 the one approved archive for the host, extracts only `rg` and `LICENSE-MIT` into the gitignored
 `.ripgrep/<version>/<target>/`, and verifies both again. Portable staging copies those verified files
-to `runtime/native/rg` (`rg.exe` on Windows). Unit tests are hermetic and do not need it; the
-customer-shape qualification and the portable stage jobs do, and CI runs it as a setup step there.
+to `runtime/native/rg` (`rg.exe` on Windows). The npm runtime package builder
+(`scripts/build-coding-runtime-npm-package.mjs`) stages the same verified `rg`, its `LICENSE-MIT` and a
+component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same paths, provisioning the
+TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
+`<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
+remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
+customer-shape qualification, the portable stage jobs and the npm runtime package build do, and CI runs
+it as a setup step there.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.

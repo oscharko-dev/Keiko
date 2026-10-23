@@ -9115,7 +9115,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["portable", "provisioned", "override", "none"],
+        values: ["portable", "provisioned", "npm-package", "override", "none"],
       },
       toolProfile: {
         type: "string",

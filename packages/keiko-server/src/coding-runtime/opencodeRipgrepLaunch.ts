@@ -75,7 +75,7 @@ const RIPGREP_RESOLVED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["portable", "provisioned", "override", "none"],
+      values: ["portable", "provisioned", "npm-package", "override", "none"],
     },
     toolProfile: {
       type: "string",
@@ -112,7 +112,7 @@ const RIPGREP_RESOLVED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-export type OpenCodeRipgrepLayout = "portable" | "provisioned" | "override";
+export type OpenCodeRipgrepLayout = "portable" | "provisioned" | "npm-package" | "override";
 
 export type OpenCodeRipgrepResolution =
   | {
@@ -140,7 +140,14 @@ export type OpenCodeRipgrepLocation =
   | { readonly kind: "packaged"; readonly resourceRoot: string; readonly activation: unknown }
   /** A development checkout: `<checkoutRoot>/.ripgrep/<version>/<target>/rg`. */
   | { readonly kind: "checkout"; readonly checkoutRoot: string }
-  /** No fixed place (npm runtime package, functional harness): only an explicit override. */
+  /**
+   * An npm runtime package (`@oscharko-dev/keiko-coding-runtime-<target>`):
+   * `<packageRoot>/runtime/native/rg`, the unmodified upstream bytes, so only the pinned upstream
+   * digest applies and no signature rebinds it. A package published before ripgrep shipped in it
+   * simply has no file there.
+   */
+  | { readonly kind: "npm-package"; readonly packageRoot: string }
+  /** No fixed place (functional harness): only an explicit override. */
   | { readonly kind: "override-only" };
 
 export interface OpenCodeRipgrepRequest {
@@ -210,25 +217,36 @@ function layoutAttempt(
   targetKey: RipgrepRuntimeTargetKey,
 ): Attempt | undefined {
   const { location } = request;
-  if (location.kind === "override-only") return undefined;
-  if (location.kind === "checkout") {
-    return attemptFrom(
-      "provisioned",
-      resolveVerifiedRipgrep(location.checkoutRoot, targetKey, {
-        ...verifierOptions(request),
-        layout: "provisioned",
-      }),
-    );
+  const options = verifierOptions(request);
+  switch (location.kind) {
+    case "override-only":
+      return undefined;
+    case "checkout":
+      return attemptFrom(
+        "provisioned",
+        resolveVerifiedRipgrep(location.checkoutRoot, targetKey, {
+          ...options,
+          layout: "provisioned",
+        }),
+      );
+    case "npm-package":
+      // The package ships the upstream bytes untouched: the portable path, the pinned digest alone.
+      return attemptFrom(
+        "npm-package",
+        resolveVerifiedRipgrep(location.packageRoot, targetKey, { ...options, layout: "portable" }),
+      );
+    case "packaged": {
+      const bound = ripgrepActivationDigest(location.activation, targetKey, request.manifest);
+      return attemptFrom(
+        "portable",
+        resolveVerifiedRipgrep(location.resourceRoot, targetKey, {
+          ...options,
+          layout: "portable",
+          ...(bound === undefined ? {} : { acceptedSha256: [bound] }),
+        }),
+      );
+    }
   }
-  const bound = ripgrepActivationDigest(location.activation, targetKey, request.manifest);
-  return attemptFrom(
-    "portable",
-    resolveVerifiedRipgrep(location.resourceRoot, targetKey, {
-      ...verifierOptions(request),
-      layout: "portable",
-      ...(bound === undefined ? {} : { acceptedSha256: [bound] }),
-    }),
-  );
 }
 
 function rejectionOf(attempt: Attempt | undefined): OpenCodeRipgrepUnverifiedReason | undefined {

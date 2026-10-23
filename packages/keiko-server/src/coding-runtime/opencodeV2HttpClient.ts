@@ -59,6 +59,60 @@ export interface OpenCodeV2PromptFile {
 export interface OpenCodeV2PromptInputs {
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   readonly files?: readonly OpenCodeV2PromptFile[] | undefined;
+  /**
+   * The message's own id (`Session.Message.ID` of the pinned 2.1.4 schema, the prompt body's `id`).
+   * The producer stores one input per id and answers a repeated post with the receipt it holds, so a
+   * caller that resends the id after a lost acknowledgement does not create a second input. The
+   * receipt must name this id, or the post fails with `OpenCodeV2ReceiptMismatchError`.
+   */
+  readonly id?: string | undefined;
+}
+
+/**
+ * The prompt was refused before any byte left: a bound or a shape the client itself checks. Nothing
+ * reached the producer, so nothing can be accepted there.
+ */
+export class OpenCodeV2PromptRefusedError extends Error {
+  public constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "OpenCodeV2PromptRefusedError";
+  }
+}
+
+/** The producer answered with an HTTP error status; the status is the whole of what is kept. */
+export class OpenCodeV2HttpStatusError extends Error {
+  public constructor(public readonly status: number) {
+    super("opencode-v2-response-invalid");
+    this.name = "OpenCodeV2HttpStatusError";
+  }
+}
+
+/** The producer accepted the prompt (HTTP 2xx) but its receipt does not name the id that was sent. */
+export class OpenCodeV2ReceiptMismatchError extends Error {
+  public constructor() {
+    super("opencode-v2-prompt-receipt-mismatch");
+    this.name = "OpenCodeV2ReceiptMismatchError";
+  }
+}
+
+/**
+ * What a failed prompt post tells about the producer's side, in the only three words a retry needs:
+ * `not-submitted` (the client refused it before any byte left, or the producer refused it with a 4xx
+ * status it declares for this route), `possibly-accepted` (anything else: the connection was lost or
+ * timed out after the request was sent, a 5xx the route does not declare, a 2xx whose receipt could
+ * not be read) and `receipt-mismatch` (accepted, under an id other than the one sent). Unknown
+ * failures are `possibly-accepted`, never `not-submitted`: a retry that reuses the id is safe for
+ * every accepted input, a retry that did not could duplicate one.
+ */
+export type OpenCodeV2PromptFailure = "not-submitted" | "possibly-accepted" | "receipt-mismatch";
+
+export function classifyOpenCodeV2PromptFailure(error: unknown): OpenCodeV2PromptFailure {
+  if (error instanceof OpenCodeV2PromptRefusedError) return "not-submitted";
+  if (error instanceof OpenCodeV2ReceiptMismatchError) return "receipt-mismatch";
+  if (error instanceof OpenCodeV2HttpStatusError && error.status >= 400 && error.status < 500) {
+    return "not-submitted";
+  }
+  return "possibly-accepted";
 }
 
 /**
@@ -187,10 +241,8 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
 
 async function boundedJson(response: Response): Promise<Readonly<Record<string, unknown>>> {
   if (response.status === 204) return {};
-  if (
-    !response.ok ||
-    !(response.headers.get("content-type") ?? "").startsWith("application/json")
-  ) {
+  if (!response.ok) throw new OpenCodeV2HttpStatusError(response.status);
+  if (!(response.headers.get("content-type") ?? "").startsWith("application/json")) {
     throw new Error("opencode-v2-response-invalid");
   }
   const length = Number(response.headers.get("content-length"));
@@ -338,9 +390,66 @@ function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<s
     throw new Error("opencode-v2-prompt-delivery-invalid");
   }
   return {
+    ...(inputs?.id === undefined ? {} : { id: safeMessageId(inputs.id) }),
     ...(files.length === 0 ? {} : { files: files.map(safePromptFile) }),
     ...(delivery === undefined ? {} : { delivery }),
   };
+}
+
+interface PreparedPrompt {
+  readonly path: string;
+  readonly body: Record<string, unknown>;
+  readonly sessionId: string;
+  readonly messageId: string | undefined;
+}
+
+/**
+ * Every check that can refuse a prompt before a byte is sent, in one place: a failure here is
+ * `not-submitted` by construction, whichever check raised it, with the check's own message.
+ */
+function preparedPrompt(
+  sessionId: string,
+  value: string,
+  display: OpenCodeV2PromptDisplay | undefined,
+  inputs: OpenCodeV2PromptInputs | undefined,
+): PreparedPrompt {
+  try {
+    if (Buffer.byteLength(value, "utf8") > MAX_TEXT_BYTES)
+      throw new Error("opencode-v2-prompt-oversized");
+    const inputFields = promptInputFields(inputs);
+    if (
+      display !== undefined &&
+      (Buffer.byteLength(display.displayText, "utf8") > MAX_TEXT_BYTES ||
+        !/^[a-f0-9]{64}$/u.test(display.hiddenContextSha256))
+    )
+      throw new Error("opencode-v2-prompt-display-invalid");
+    return {
+      path: `/api/session/${safeSessionId(sessionId)}/prompt`,
+      sessionId,
+      messageId: inputs?.id,
+      body: {
+        text: value,
+        ...inputFields,
+        ...(display === undefined ? {} : { metadata: { keikoContextPresentationV1: display } }),
+      },
+    };
+  } catch (error) {
+    throw new OpenCodeV2PromptRefusedError(
+      error instanceof Error ? error.message : "opencode-v2-prompt-invalid",
+      { cause: error },
+    );
+  }
+}
+
+/** The receipt the producer answered with must be the input that was sent, under the id it carried. */
+function reconcileReceipt(
+  receipt: Readonly<Record<string, unknown>>,
+  prepared: PreparedPrompt,
+): void {
+  if (prepared.messageId === undefined) return;
+  if (receipt.id !== prepared.messageId || receipt.sessionID !== prepared.sessionId) {
+    throw new OpenCodeV2ReceiptMismatchError();
+  }
 }
 
 function safeRequestId(value: string): string {
@@ -505,27 +614,9 @@ export function createOpenCodeV2HttpClient(
       arrayEnvelope(await request("GET", "/api/session", undefined, signal)),
     messages: (sessionId, signal) => pagedMessages(request, sessionId, signal),
     prompt: async (sessionId, value, signal, display, inputs): Promise<void> => {
-      if (Buffer.byteLength(value, "utf8") > MAX_TEXT_BYTES)
-        throw new Error("opencode-v2-prompt-oversized");
-      const inputFields = promptInputFields(inputs);
-      if (
-        display !== undefined &&
-        (Buffer.byteLength(display.displayText, "utf8") > MAX_TEXT_BYTES ||
-          !/^[a-f0-9]{64}$/u.test(display.hiddenContextSha256))
-      )
-        throw new Error("opencode-v2-prompt-display-invalid");
-      objectEnvelope(
-        await request(
-          "POST",
-          `/api/session/${safeSessionId(sessionId)}/prompt`,
-          {
-            text: value,
-            ...inputFields,
-            ...(display === undefined ? {} : { metadata: { keikoContextPresentationV1: display } }),
-          },
-          signal,
-        ),
-      );
+      const prepared = preparedPrompt(sessionId, value, display, inputs);
+      const receipt = objectEnvelope(await request("POST", prepared.path, prepared.body, signal));
+      reconcileReceipt(receipt, prepared);
     },
     interrupt: async (sessionId, signal): Promise<void> => {
       await request("POST", `/api/session/${safeSessionId(sessionId)}/interrupt`, {}, signal);

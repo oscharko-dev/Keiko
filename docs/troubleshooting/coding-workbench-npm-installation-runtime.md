@@ -31,6 +31,10 @@ npm package carries neither, so until 1.1.2 an npm installation could never star
 3. `coding-runtime.dev-lane.refused` with `lane: "npm-runtime-package"` means a runtime package is
    installed and failed verification; `reason` names the first failed check
    (`payload-tampered`, `secure-read-helper-stale`, `native-helper-directory-untrusted`, …).
+4. A run starts but the agent's `glob` and `grep` fail: read `coding-runtime.ripgrep.resolved` for
+   the run. `layout: "npm-package"` with `reason: "missing"` means the installed runtime package
+   predates the bundled ripgrep; `digest-mismatch` or `not-regular-file` means its `rg` is not the
+   pinned release. The engine stays active either way; only search is degraded.
 
 **Resolution**
 
@@ -57,7 +61,10 @@ npm install -g @oscharko-dev/keiko-coding-runtime-darwin-x64 && keiko restart
 
 Keiko finds the package by name and, at every start, verifies the OpenCode executable, its license
 and SBOM, and the helper against digests compiled into Keiko itself. A refused package is
-reinstalled from the registry; it is never repaired in place.
+reinstalled from the registry; it is never repaired in place. The package also carries the pinned
+ripgrep search executable, which Keiko verifies at every run launch; for a `missing` or mismatching
+one, update the runtime package to the current release the same way. `KEIKO_RIPGREP_BINARY_PATH` is
+a developer and qualification override, not the remedy for a customer installation.
 
 The npm lane is digest-verified, not platform-signed: the readiness answer reports
 `runtimeEvidenceClass: "functional-not-platform-qualified"`, and on macOS the engine runs without

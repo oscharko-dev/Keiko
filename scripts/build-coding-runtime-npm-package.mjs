@@ -11,6 +11,13 @@
 // the desktop packages use, and the helper is compiled by the same build script. The server
 // re-verifies both against digests pinned in its own source at every start (npm lane,
 // devLanePortableCodingRuntime.ts), so this package never vouches for itself.
+//
+// OpenCode's glob and grep tools run ripgrep and would otherwise download it on first use, which a
+// firewalled customer cannot do (#3897, #4064). The package therefore also carries the pinned,
+// digest-verified upstream `rg` and its MIT text at the portable payload's own paths, staged by the
+// same function the desktop packages use. The server verifies `runtime/native/rg` against the
+// digest pinned in ripgrepRuntime.ts at every run launch, so this package vouches for nothing there
+// either; a package that lacks it only degrades search.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -37,8 +44,21 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
-import { extractPackedRuntimePackage, stageNodeRuntime } from "./stage-portable-runtime.mjs";
+import {
+  extractPackedRuntimePackage,
+  ripgrepToolManifestEntry,
+  sbomForManifest,
+  stageNodeRuntime,
+  stageRipgrepTool,
+} from "./stage-portable-runtime.mjs";
+import { provisionRipgrep } from "./provision-ripgrep.mjs";
 import { portableTargetByName } from "./portable-runtime.mjs";
+import {
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  ripgrepPortableExecutablePath,
+  ripgrepRuntimeApproval,
+  ripgrepRuntimeTargetKey,
+} from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import {
   NPM_PACK_STDIO_MAX_BUFFER,
   packFiles,
@@ -59,14 +79,22 @@ const HELPER_RELATIVE_PATH = "native/keiko-secure-workspace-read";
 const EXECUTABLE_PATH = "runtime/opencode-compatible/payload/bin/opencode";
 const LICENSE_PATH = "runtime/opencode-compatible/payload/evidence/LICENSE";
 const SBOM_PATH = "runtime/opencode-compatible/payload/evidence/sbom.cdx.json";
-const CANDIDATE_FILES = [
-  "LICENSE.md",
-  "package.json",
-  `runtime/${HELPER_RELATIVE_PATH}`,
-  EXECUTABLE_PATH,
-  LICENSE_PATH,
-  SBOM_PATH,
-].sort(compareStrings);
+const RIPGREP_SBOM_PATH = "runtime/licenses/ripgrep/sbom.cdx.json";
+
+/** Every file a candidate carries; the ripgrep executable name is the target release's own. */
+function candidateFiles(ripgrep) {
+  return [
+    "LICENSE.md",
+    "package.json",
+    `runtime/${HELPER_RELATIVE_PATH}`,
+    EXECUTABLE_PATH,
+    LICENSE_PATH,
+    SBOM_PATH,
+    ripgrepPortableExecutablePath(ripgrep.targetKey),
+    RIPGREP_PORTABLE_LICENSE_PATH,
+    RIPGREP_SBOM_PATH,
+  ].sort(compareStrings);
+}
 
 /** The platform list and its naming are owned by the release workspace policy. */
 export const NPM_RUNTIME_PACKAGE_TARGETS = platformRuntimePackages;
@@ -79,7 +107,8 @@ export function codingRuntimePackageManifest(target, version) {
     version,
     description:
       "Keiko Coding Workbench runtime for npm installations: the review-approved OpenCode " +
-      "executable and Keiko's native secure workspace read helper. Verified by Keiko at every start.",
+      "executable, Keiko's native secure workspace read helper and the pinned ripgrep search " +
+      "executable. Verified by Keiko at every start.",
     // A valid SPDX expression, never "SEE LICENSE IN …": the supply-chain gates evaluate the
     // license of everything the main package can install and refuse what they cannot parse.
     // OpenCode is MIT, the helper is Keiko's own Apache-2.0 code.
@@ -96,19 +125,77 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function licenseNotice(target) {
+function licenseNotice(target, ripgrep) {
   return [
     `# ${codingRuntimePackageName(target)}`,
     "",
-    "This package redistributes two components:",
+    "This package redistributes three components:",
     "",
     "- `runtime/opencode-compatible/payload/bin/opencode`: OpenCode, MIT License. The upstream",
     "  license text is `runtime/opencode-compatible/payload/evidence/LICENSE`, and its software",
     "  bill of materials is `runtime/opencode-compatible/payload/evidence/sbom.cdx.json`.",
     "- `runtime/native/keiko-secure-workspace-read`: part of Keiko, under Keiko's license",
     "  (https://github.com/oscharko-dev/Keiko/blob/dev/LICENSE).",
+    `- \`${ripgrepPortableExecutablePath(ripgrep.targetKey)}\`: ripgrep ${ripgrep.version}, the unmodified upstream`,
+    `  release executable, licensed under ${ripgrep.licenseExpression}, at the recipient's option.`,
+    `  Keiko ships the MIT text at \`${RIPGREP_PORTABLE_LICENSE_PATH}\` and`,
+    `  records the component in \`${RIPGREP_SBOM_PATH}\`.`,
+    `  Source: ${ripgrep.archiveUrl}`,
     "",
   ].join("\n");
+}
+
+/**
+ * The CycloneDX record of the ripgrep component, derived from the pinned approval and the bytes
+ * actually staged in `packageDir`, so the build and the candidate inspection cannot disagree.
+ */
+function ripgrepSbomText(target, ripgrep, packageDir) {
+  const executablePath = ripgrepPortableExecutablePath(ripgrep.targetKey);
+  const entry = ripgrepToolManifestEntry(
+    portableTargetByName(target),
+    ripgrep,
+    {
+      destination: join(packageDir, ...executablePath.split("/")),
+      executablePath,
+      licensePath: RIPGREP_PORTABLE_LICENSE_PATH,
+    },
+    false,
+  );
+  const sbom = sbomForManifest({ nativeHelpers: [], nativeAddons: [], nativeTools: [entry] });
+  return `${JSON.stringify(sbom, null, 2)}\n`;
+}
+
+/**
+ * Provisions (once, verified) and stages the pinned ripgrep of the TARGET release at the portable
+ * payload's own paths, and returns its approval. Reuses `provision-ripgrep` and the portable
+ * `stageRipgrepTool` rather than a second fetch or verify path; one Mac builds both architectures,
+ * so the target's release is provisioned, never the build host's. Both stages throw instead of
+ * exiting the process.
+ */
+export function stagePinnedNpmRipgrep(
+  target,
+  packageRoot,
+  { provision = provisionRipgrep, stage = stageRipgrepTool } = {},
+) {
+  const portableTarget = portableTargetByName(target);
+  if (portableTarget === undefined || NPM_RUNTIME_PACKAGE_TARGETS[target] === undefined) {
+    throw new TypeError(`unsupported npm runtime package target: ${target}`);
+  }
+  const approval = ripgrepRuntimeApproval(
+    ripgrepRuntimeTargetKey(portableTarget.nodePlatform, portableTarget.nodeArchitecture),
+  );
+  if (approval === undefined) throw new Error(`no pinned ripgrep for ${target}`);
+  const refuse = (message) => {
+    throw new Error(`ripgrep staging refused: ${message}`);
+  };
+  provision({
+    hostPlatform: portableTarget.nodePlatform,
+    hostArchitecture: portableTarget.nodeArchitecture,
+    failWith: refuse,
+    log: (message) => console.error(message),
+  });
+  stage(portableTarget, packageRoot, { onFailure: refuse });
+  return approval;
 }
 
 /**
@@ -122,6 +209,7 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
   }
   const prepare = deps.prepareSidecars ?? prepareApprovedSidecarPayloads;
   const runBuild = deps.runBuild ?? runSecureWorkspaceReadBuild;
+  const stageRipgrep = deps.stageRipgrep ?? stagePinnedNpmRipgrep;
   const manifest = codingRuntimePackageManifest(target, version);
   const staging = mkdtempSync(join(tmpdir(), "keiko-coding-runtime-npm-"));
   try {
@@ -139,8 +227,11 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
     const buildScript = join(repoRoot, "scripts", "build-secure-workspace-read.mjs");
     const status = await runBuild({ argv: [process.execPath, buildScript, target, helperPath] });
     if (status !== 0) throw new Error(`secure-workspace-read build failed with status ${status}`);
+    const ripgrep = await stageRipgrep(target, outDir);
+    mkdirSync(dirname(join(outDir, RIPGREP_SBOM_PATH)), { recursive: true });
+    writeFileSync(join(outDir, RIPGREP_SBOM_PATH), ripgrepSbomText(target, ripgrep, outDir));
     writeFileSync(join(outDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-    writeFileSync(join(outDir, "LICENSE.md"), licenseNotice(target));
+    writeFileSync(join(outDir, "LICENSE.md"), licenseNotice(target, ripgrep));
     return {
       helperSha256: sha256File(helperPath),
       helperSizeBytes: statSync(helperPath).size,
@@ -491,7 +582,7 @@ export async function buildCodingRuntimeNpmServiceHostCandidate(input) {
   writeEvidence(input.outDir, "package.json", manifest);
   writeFileSync(
     join(input.outDir, "LICENSE.md"),
-    licenseNotice(input.target) +
+    readFileSync(join(input.outDir, "LICENSE.md"), "utf8") +
       "\nThe private original service host retains its full dependency notices and SBOM under\n`runtime/opencode-compatible/service-host/payload/evidence`. Component dispositions in PR #3895\napply only to the documented exact original artifacts; platform qualification, full native parity\nand production activation remain separate.\n",
   );
   const stagedAttestation = await attestServiceHost(host.root, owners);
@@ -536,12 +627,23 @@ function sealPrivateServiceReceipt(input, build, host, candidate, tarball, final
   };
 }
 
+/**
+ * Everything a candidate is pinned against: the server's compiled npm-lane approval plus the pinned
+ * ripgrep release the server verifies `runtime/native/rg` against at every run launch.
+ */
 async function loadRuntimeApproval(target) {
   const { NPM_LANE_RUNTIME_APPROVALS } =
     await import("../packages/keiko-server/dist/coding-runtime/npmLaneRuntimeApprovals.js");
   const approval = NPM_LANE_RUNTIME_APPROVALS[target];
-  if (approval === undefined) throw new TypeError("unsupported npm runtime package target");
-  return approval;
+  const portableTarget = portableTargetByName(target);
+  if (approval === undefined || portableTarget === undefined) {
+    throw new TypeError("unsupported npm runtime package target");
+  }
+  const ripgrep = ripgrepRuntimeApproval(
+    ripgrepRuntimeTargetKey(portableTarget.nodePlatform, portableTarget.nodeArchitecture),
+  );
+  if (ripgrep === undefined) throw new TypeError("unsupported npm runtime package target");
+  return { ...approval, ripgrep };
 }
 
 function verifyHelperSourceCommit(commit) {
@@ -565,10 +667,10 @@ function candidateFilePaths(root, prefix = "") {
   });
 }
 
-function candidateFileFacts(packageDir) {
+function candidateFileFacts(packageDir, ripgrep) {
   const paths = candidateFilePaths(packageDir).sort();
-  if (!isDeepStrictEqual(paths, CANDIDATE_FILES)) {
-    throw new Error("runtime candidate must contain exactly the six approved package files");
+  if (!isDeepStrictEqual(paths, candidateFiles(ripgrep))) {
+    throw new Error("runtime candidate must contain exactly the nine approved package files");
   }
   return fileFactsForPaths(packageDir, paths);
 }
@@ -581,18 +683,28 @@ function fileFactsForPaths(packageDir, paths) {
   });
 }
 
-function assertCandidatePins(files, approval) {
+function assertCandidatePins(files, approval, packageDir, target) {
+  const ripgrep = approval.ripgrep;
+  const ripgrepPath = ripgrepPortableExecutablePath(ripgrep.targetKey);
   const expected = new Map([
     [`runtime/${HELPER_RELATIVE_PATH}`, approval.helperSha256],
     [LICENSE_PATH, approval.licenseSha256],
     [SBOM_PATH, approval.sbomSha256],
+    [ripgrepPath, ripgrep.binarySha256],
+    [RIPGREP_PORTABLE_LICENSE_PATH, ripgrep.licenseSha256],
+    [
+      RIPGREP_SBOM_PATH,
+      createHash("sha256")
+        .update(ripgrepSbomText(target, ripgrep, packageDir))
+        .digest("hex"),
+    ],
   ]);
   for (const file of files) {
     const pin = expected.get(file.path);
     if (pin !== undefined && file.sha256 !== pin)
       throw new Error("runtime candidate digest mismatch");
   }
-  for (const path of [EXECUTABLE_PATH, `runtime/${HELPER_RELATIVE_PATH}`]) {
+  for (const path of [EXECUTABLE_PATH, `runtime/${HELPER_RELATIVE_PATH}`, ripgrepPath]) {
     if (
       process.platform !== "win32" &&
       ((files.find((file) => file.path === path)?.mode ?? 0) & 0o111) === 0
@@ -612,8 +724,8 @@ async function inspectRuntimeCandidate({ target, version, packageDir }, deps) {
   ) {
     throw new Error("runtime candidate manifest, version or architecture mismatch");
   }
-  const files = candidateFileFacts(packageDir);
-  assertCandidatePins(files, approval);
+  const files = candidateFileFacts(packageDir, approval.ripgrep);
+  assertCandidatePins(files, approval, packageDir, target);
   const helper = files.find((file) => file.path === `runtime/${HELPER_RELATIVE_PATH}`);
   if (helper.sizeBytes !== approval.helperSizeBytes)
     throw new Error("runtime helper size mismatch");
@@ -674,6 +786,14 @@ function runtimeCandidateReceipt({
       executableTreeSha256,
       licenseSha256: approval.licenseSha256,
       sbomSha256: approval.sbomSha256,
+    },
+    // The release the server verifies `runtime/native/rg` against at every run launch.
+    ripgrep: {
+      version: approval.ripgrep.version,
+      sourceCommit: approval.ripgrep.sourceCommit,
+      archiveSha256: approval.ripgrep.archiveSha256,
+      binarySha256: approval.ripgrep.binarySha256,
+      licenseSha256: approval.ripgrep.licenseSha256,
     },
     files,
   };

@@ -724,6 +724,32 @@ function windowsDevLaneRuntime(root: string): DevLanePortableOpenCodeRuntime {
   return discovery.runtime;
 }
 
+/**
+ * What `discoverNpmLaneOpenCode` activates on an Apple-silicon Mac: the macOS runtime of the
+ * `npm-runtime-package` lane, rooted at `<root>/npm-package/runtime/opencode-compatible`.
+ */
+function npmLaneMacRuntime(root: string): DevLanePortableOpenCodeRuntime {
+  const {
+    nativeHelperPath: _helper,
+    nativeHelperSha256: _digest,
+    ...base
+  } = windowsDevLaneRuntime(root);
+  const installRoot = join(root, "npm-package", "runtime", "opencode-compatible");
+  mkdirSync(join(installRoot, base.sidecar.payloadRootPath), { recursive: true });
+  return {
+    ...base,
+    lane: "npm-runtime-package",
+    target: "macos-arm64",
+    installRoot,
+    qualification: {
+      platform: "darwin",
+      arch: "arm64",
+      backend: "macos-app-sandbox",
+      releaseReceipt: `sha256:${"a".repeat(64)}`,
+    },
+  };
+}
+
 function createNativeStateRoot(root: string, kind: "canonical" | "alias" | "missing"): string {
   const stateRoot = join(root, ".keiko");
   if (kind !== "missing") mkdirSync(stateRoot, { mode: 0o700 });
@@ -1419,7 +1445,7 @@ describe("ripgrep on the OpenCode launch", () => {
     SECRET_TOKEN: "t0k3n-value",
   };
 
-  function manifestFor(key: "linux-x64" | "win32-x64"): RipgrepRuntimeManifest {
+  function manifestFor(key: "darwin-arm64" | "linux-x64" | "win32-x64"): RipgrepRuntimeManifest {
     return {
       version: "0.0.0-test",
       sourceCommit: "a".repeat(40),
@@ -1462,7 +1488,7 @@ describe("ripgrep on the OpenCode launch", () => {
     options: {
       readonly native: boolean;
       readonly processEnv?: NodeJS.ProcessEnv | undefined;
-      readonly key: "linux-x64" | "win32-x64";
+      readonly key: "darwin-arm64" | "linux-x64" | "win32-x64";
     },
   ): Launch {
     const events: ServerLogEvent[] = [];
@@ -1642,6 +1668,76 @@ describe("ripgrep on the OpenCode launch", () => {
       });
       expect(overridden.processEnv?.PATH?.split(delimiter)[0]).toBe(named);
     } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // The clean npm installation (#4064): no override, no ripgrep on the launcher's PATH. The runtime
+  // package installed next to Keiko carries the executable, and the launch finds it normally.
+  it("verifies the ripgrep an npm runtime package ships and opens exactly its directory", () => {
+    const root = tmpRoot();
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      const directory = stage(join(root, "npm-package", "runtime", "native", "rg"));
+      const result = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "darwin-arm64",
+      });
+
+      expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
+      expect(
+        buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
+      ).toBe(directory);
+      expect(result.toolchainReadRoots).toEqual([directory]);
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({
+        op: "coding-runtime.ripgrep.resolved",
+        level: "info",
+        extra: {
+          targetKey: "darwin-arm64",
+          outcome: "verified",
+          layout: "npm-package",
+          digestSource: "pinned",
+        },
+      });
+      expect(JSON.stringify(result.events)).not.toContain(root);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("starts the run with search degraded when the npm runtime package has no verified ripgrep", () => {
+    const root = tmpRoot();
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      const absent = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "darwin-arm64",
+      });
+      expect(absent.processEnv).toBe(CONTENT_ENV);
+      expect(absent.toolchainReadRoots).toEqual([]);
+      expect(absent.events[0]).toMatchObject({
+        level: "warn",
+        extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },
+      });
+
+      stage(join(root, "npm-package", "runtime", "native", "rg"), "not the pinned bytes");
+      const tampered = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "darwin-arm64",
+      });
+      expect(tampered.processEnv).toBe(CONTENT_ENV);
+      expect(tampered.events[0]).toMatchObject({
+        level: "warn",
+        extra: { outcome: "unverified", layout: "npm-package", reason: "digest-mismatch" },
+      });
+      expect(JSON.stringify([absent.events, tampered.events])).not.toContain(root);
+    } finally {
+      vi.unstubAllEnvs();
       rmSync(root, { force: true, recursive: true });
     }
   });

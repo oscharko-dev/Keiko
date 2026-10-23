@@ -33,6 +33,7 @@ import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAgg
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import {
   devLaneCheckoutRoot,
+  npmLanePackageRoot,
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
 import {
@@ -268,6 +269,8 @@ type LaunchInput = ProductionOpenCodeBackendInput & {
 
 function ripgrepLocation(portable: ResolvedPortableOpenCodeRuntime): OpenCodeRipgrepLocation {
   if (isDevLaneRuntime(portable)) {
+    const packageRoot = npmLanePackageRoot(portable);
+    if (packageRoot !== undefined) return { kind: "npm-package", packageRoot };
     const checkoutRoot = devLaneCheckoutRoot(portable);
     return checkoutRoot === undefined
       ? { kind: "override-only" }

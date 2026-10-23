@@ -13,7 +13,7 @@ ADR recorded it, and do not create a new ADR merely to correct existing text.
 ```bash
 npm install                # install all workspaces from the single root lockfile
 npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2
-npm run provision:ripgrep  # coding-runtime search tool; needed by customer-shape + portable staging — AGENTS.md §2
+npm run provision:ripgrep  # coding-runtime search tool; needed by customer-shape, portable staging + npm runtime package build — AGENTS.md §2
 npm run build              # compile TypeScript outputs
 npm run typecheck          # strict type-checking for src + tests
 npm run lint               # ESLint, zero-warning policy

@@ -119,7 +119,9 @@ Launch verifies the executable against the same pinned digest (or the activation
 through the same verifier before the runtime may use it, and puts only that verified directory on
 the child `PATH` (and, for the native macOS profile, on the matching Seatbelt read allowlist). A
 ripgrep that does not verify never blocks the run: search is degraded, the closed reason is recorded
-by `coding-runtime.ripgrep.resolved`, and no path is logged. Details:
+by `coding-runtime.ripgrep.resolved`, and no path is logged. The npm runtime packages of ADR-0140 D2a
+ship the same unmodified executable at the same paths (amended 2026-10-24), verified against the
+same pinned digest at every launch. Details:
 [`docs/qa/ripgrep-runtime-evidence.md`](../qa/ripgrep-runtime-evidence.md).
 
 There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its

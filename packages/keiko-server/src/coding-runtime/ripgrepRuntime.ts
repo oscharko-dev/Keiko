@@ -12,10 +12,13 @@
 // this very file through Node's type stripping (`scripts/provision-ripgrep.mjs` runs in CI before
 // anything is built), so a second copy of the approval table cannot exist and drift.
 //
-// Layouts the product verifies (the same digests apply to both):
+// Layouts the product verifies (the same digests apply to all):
 //   - provisioned: `<repo>/.ripgrep/<version>/<target>/rg[.exe]`, written by `npm run
 //     provision:ripgrep` for development checkouts and CI;
-//   - portable:    `<resource root>/runtime/native/rg[.exe]`, staged by the portable build.
+//   - portable:    `<resource root>/runtime/native/rg[.exe]`, staged by the portable build. The npm
+//     runtime package (`@oscharko-dev/keiko-coding-runtime-<target>`) uses this same path under its
+//     installed package root, staged by `scripts/build-coding-runtime-npm-package.mjs` with the
+//     unmodified upstream bytes, so only the pinned upstream digest applies there.
 
 import { createHash } from "node:crypto";
 import {

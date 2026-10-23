@@ -123,6 +123,13 @@ const packaged = (
   activation,
 });
 
+// An npm runtime package ships the unmodified upstream bytes at the same `runtime/native/rg` path
+// the portable payload uses; its root is the installed package directory.
+const npmPackage = (value: Fixture): OpenCodeRipgrepRequest["location"] => ({
+  kind: "npm-package",
+  packageRoot: value.root,
+});
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop() ?? "", { recursive: true, force: true });
 });
@@ -173,6 +180,84 @@ describe("resolveOpenCodeRipgrep", () => {
       outcome: "verified",
       layout: "provisioned",
       directory: value.provisionedDirectory,
+    });
+  });
+
+  describe("npm runtime package", () => {
+    it("verifies the unmodified upstream executable the package installs next to Keiko", () => {
+      const value = fixture();
+      expect(resolveOpenCodeRipgrep(request(value, npmPackage(value)))).toEqual({
+        outcome: "verified",
+        targetKey: "darwin-arm64",
+        layout: "npm-package",
+        version: "0.0.0-test",
+        digestSource: "pinned",
+        directory: value.portableDirectory,
+      });
+    });
+
+    it("resolves without any override or PATH entry, which is the clean offline customer lane", () => {
+      const value = fixture();
+      const env = { PATH: "/usr/bin" };
+      expect(resolveOpenCodeRipgrep(request(value, npmPackage(value), env))).toMatchObject({
+        outcome: "verified",
+        layout: "npm-package",
+      });
+    });
+
+    it("degrades with a closed reason for a tampered, missing or linked executable", () => {
+      const value = fixture();
+      const location = npmPackage(value);
+      writeFileSync(join(value.portableDirectory, "rg"), "tampered");
+      expect(resolveOpenCodeRipgrep(request(value, location))).toEqual({
+        outcome: "unverified",
+        targetKey: "darwin-arm64",
+        layout: "npm-package",
+        reason: "digest-mismatch",
+      });
+      rmSync(join(value.portableDirectory, "rg"));
+      expect(resolveOpenCodeRipgrep(request(value, location))).toMatchObject({
+        outcome: "unverified",
+        layout: "npm-package",
+        reason: "missing",
+      });
+      if (POSIX) {
+        const elsewhere = writeExecutable(join(temporaryRoot(), "real-rg"), BINARY);
+        symlinkSync(elsewhere, join(value.portableDirectory, "rg"));
+        expect(resolveOpenCodeRipgrep(request(value, location))).toMatchObject({
+          outcome: "unverified",
+          layout: "npm-package",
+          reason: "not-regular-file",
+        });
+      }
+    });
+
+    it("accepts no platform-signed digest, because the package never carries a signature", () => {
+      const value = fixture();
+      writeFileSync(join(value.portableDirectory, "rg"), "platform signed ripgrep");
+      expect(resolveOpenCodeRipgrep(request(value, npmPackage(value)))).toMatchObject({
+        outcome: "unverified",
+        layout: "npm-package",
+        reason: "digest-mismatch",
+      });
+    });
+
+    it("keeps the explicit override ahead of the package copy and reports a rejected one", () => {
+      const value = fixture();
+      const named = writeExecutable(join(temporaryRoot(), "chosen", "rg"), BINARY);
+      expect(
+        resolveOpenCodeRipgrep(
+          request(value, npmPackage(value), { [RIPGREP_OVERRIDE_ENV]: named }),
+        ),
+      ).toMatchObject({ outcome: "verified", layout: "override", directory: dirname(named) });
+      const bad = writeExecutable(join(temporaryRoot(), "chosen", "rg"), "some other rg");
+      expect(
+        resolveOpenCodeRipgrep(request(value, npmPackage(value), { [RIPGREP_OVERRIDE_ENV]: bad })),
+      ).toMatchObject({
+        outcome: "verified",
+        layout: "npm-package",
+        overrideReason: "digest-mismatch",
+      });
     });
   });
 
@@ -377,22 +462,31 @@ describe("the kernel read allowlist the verified directory produces", () => {
   // The native profile's toolchain roots come from the child's PATH (keiko-sandbox, read-only
   // here). Exactly the verified directory must become a root: not its parent, not a sibling.
   it.each([
-    ["portable", (value: Fixture): string => value.portableDirectory],
-    ["provisioned", (value: Fixture): string => value.provisionedDirectory],
-  ] as const)("admits exactly the %s ripgrep directory and nothing broader", (_layout, pick) => {
-    const value = fixture();
-    const directory = pick(value);
-    const path = ripgrepNativePath("/usr/bin:/bin", {
-      outcome: "verified",
-      targetKey: "darwin-arm64",
-      layout: "portable",
-      version: "x",
-      digestSource: "pinned",
-      directory,
-    });
-    expect(homedir().startsWith(value.root)).toBe(false);
-    expect(nativeToolchainReadRoots(path, homedir())).toEqual([realpathSync(directory)]);
-  });
+    ["portable", packaged, (value: Fixture): string => value.portableDirectory],
+    ["npm-package", npmPackage, (value: Fixture): string => value.portableDirectory],
+    [
+      "provisioned",
+      (value: Fixture): OpenCodeRipgrepRequest["location"] => ({
+        kind: "checkout",
+        checkoutRoot: value.root,
+      }),
+      (value: Fixture): string => value.provisionedDirectory,
+    ],
+  ] as const)(
+    "admits exactly the %s ripgrep directory and nothing broader",
+    (layout, location, pick) => {
+      const value = fixture();
+      const resolution = resolveOpenCodeRipgrep(request(value, location(value)));
+      expect(resolution).toMatchObject({
+        outcome: "verified",
+        layout,
+        directory: pick(value),
+      });
+      const path = ripgrepNativePath("/usr/bin:/bin", resolution);
+      expect(homedir().startsWith(value.root)).toBe(false);
+      expect(nativeToolchainReadRoots(path, homedir())).toEqual([realpathSync(pick(value))]);
+    },
+  );
 });
 
 describe("recordOpenCodeRipgrepResolution", () => {
@@ -431,6 +525,22 @@ describe("recordOpenCodeRipgrepResolution", () => {
     });
     expect(JSON.stringify(event)).not.toContain(value.root);
     expect(JSON.stringify(event)).not.toContain("runtime/native");
+  });
+
+  it("records the npm runtime package layout, and its absence of ripgrep, body-free", () => {
+    const value = fixture();
+    const [verified] = recorded(resolveOpenCodeRipgrep(request(value, npmPackage(value))));
+    expect(verified).toMatchObject({
+      level: "info",
+      extra: { outcome: "verified", layout: "npm-package", digestSource: "pinned" },
+    });
+    rmSync(join(value.portableDirectory, "rg"));
+    const [missing] = recorded(resolveOpenCodeRipgrep(request(value, npmPackage(value))));
+    expect(missing).toMatchObject({
+      level: "warn",
+      extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },
+    });
+    expect(JSON.stringify([verified, missing])).not.toContain(value.root);
   });
 
   it("records an unverified launch at warn with the closed reason", () => {
@@ -472,11 +582,14 @@ describe("recordOpenCodeRipgrepResolution", () => {
 
   // The generated registry learns the operation when `npm run generate:op-catalog` runs; until then
   // the production sink cannot persist the line, so this proof starts running the moment it can.
-  it.skipIf(activityLogOperationSchema("coding-runtime.ripgrep.resolved") === undefined)(
-    "persists through the registered production sink with closed, bounded fields",
-    () => {
+  it.skipIf(activityLogOperationSchema("coding-runtime.ripgrep.resolved") === undefined).each([
+    ["portable", packaged],
+    ["npm-package", npmPackage],
+  ] as const)(
+    "persists the %s layout through the registered production sink with closed, bounded fields",
+    (layout, location) => {
       const value = fixture();
-      const [event] = recorded(resolveOpenCodeRipgrep(request(value, packaged(value))));
+      const [event] = recorded(resolveOpenCodeRipgrep(request(value, location(value))));
       const line = expectActivityLogProof(
         "coding-runtime.ripgrep.resolved.emitted-line",
         formatActivityLogProofLine(event ?? {}),
@@ -484,7 +597,7 @@ describe("recordOpenCodeRipgrepResolution", () => {
       expect(line).toMatchObject({
         correlationId: "run-ripgrep-0001",
         outcome: "verified",
-        layout: "portable",
+        layout,
         version: "0.0.0-test",
       });
       expect(JSON.stringify(line)).not.toContain(value.root);

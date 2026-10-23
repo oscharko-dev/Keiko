@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,8 +16,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   discoverNpmLaneOpenCode,
+  npmLanePackageRoot,
   type DevLaneOpenCodeDiscovery,
 } from "./devLanePortableCodingRuntime.js";
+import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
+import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { NpmLaneRuntimeApproval } from "./npmLaneRuntimeApprovals.js";
 
@@ -68,7 +72,9 @@ function approvalFor(): NpmLaneRuntimeApproval {
   };
 }
 
-function globalInstall(options: { readonly withRuntimePackage?: boolean } = {}): GlobalInstall {
+function globalInstall(
+  options: { readonly withRuntimePackage?: boolean; readonly ripgrep?: string } = {},
+): GlobalInstall {
   const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-npm-lane-")));
   roots.push(prefix);
   const scope = join(prefix, "lib", "node_modules", "@oscharko-dev");
@@ -83,6 +89,8 @@ function globalInstall(options: { readonly withRuntimePackage?: boolean } = {}):
     write(join(payload, "evidence", "LICENSE"), LICENSE);
     write(join(payload, "evidence", "sbom.cdx.json"), SBOM);
     write(join(runtimeRoot, "native", "keiko-secure-workspace-read"), HELPER, 0o755);
+    if (options.ripgrep !== undefined)
+      write(join(runtimeRoot, "native", "rg"), options.ripgrep, 0o755);
   }
   return {
     approval: approvalFor(),
@@ -220,6 +228,136 @@ describe("npm-lane OpenCode discovery", () => {
     expect(discover(install)).toEqual({
       outcome: "refused",
       reason: "native-helper-directory-untrusted",
+    });
+  });
+
+  // The pinned ripgrep (#3897) ships in the runtime package beside the helper. The directory check
+  // admits that one name; the executable's bytes are judged at launch by the ripgrep verifier, which
+  // degrades search instead of refusing the engine, so a bad `rg` must not take the lane away.
+  describe("pinned ripgrep in the native directory", () => {
+    const RG = "pinned ripgrep bytes";
+    const manifest: RipgrepRuntimeManifest = {
+      version: "0.0.0-test",
+      sourceCommit: "a".repeat(40),
+      licenseExpression: "MIT",
+      licenseFileName: "LICENSE-MIT",
+      targets: {
+        "darwin-arm64": {
+          archiveKind: "tar.gz",
+          archiveUrl: "https://example.test/ripgrep.tar.gz",
+          archiveSha256: "b".repeat(64),
+          archiveSizeBytes: 10,
+          binaryMember: "ripgrep/rg",
+          binarySha256: sha256(RG),
+          binarySizeBytes: RG.length,
+          licenseMember: "ripgrep/LICENSE-MIT",
+          licenseSha256: "c".repeat(64),
+        },
+      },
+    };
+
+    it("activates a package that carries the pinned ripgrep beside the helper", () => {
+      const install = globalInstall({ ripgrep: RG });
+      const discovery = discover(install);
+      expect(discovery.outcome).toBe("activated");
+      if (discovery.outcome !== "activated") return;
+      const packageRoot = npmLanePackageRoot(discovery.runtime);
+      expect(packageRoot).toBe(dirname(install.runtimeRoot));
+      expect(
+        resolveOpenCodeRipgrep({
+          target: discovery.runtime.target,
+          location: { kind: "npm-package", packageRoot: packageRoot ?? "" },
+          env: {},
+          manifest,
+        }),
+      ).toMatchObject({
+        outcome: "verified",
+        layout: "npm-package",
+        directory: join(install.runtimeRoot, "native"),
+      });
+    });
+
+    it("still refuses any other entry beside the helper and the pinned ripgrep", () => {
+      const install = globalInstall({ ripgrep: RG });
+      write(join(install.runtimeRoot, "native", "extra"), "x", 0o755);
+      expect(discover(install)).toEqual({
+        outcome: "refused",
+        reason: "native-helper-directory-untrusted",
+      });
+      const renamed = globalInstall();
+      write(join(renamed.runtimeRoot, "native", "rg.exe"), RG, 0o755);
+      expect(discover(renamed)).toEqual({
+        outcome: "refused",
+        reason: "native-helper-directory-untrusted",
+      });
+    });
+
+    it("keeps an earlier published package without ripgrep active, with search degraded", () => {
+      const install = globalInstall();
+      const discovery = discover(install);
+      expect(discovery.outcome).toBe("activated");
+      if (discovery.outcome !== "activated") return;
+      expect(
+        resolveOpenCodeRipgrep({
+          target: discovery.runtime.target,
+          location: {
+            kind: "npm-package",
+            packageRoot: npmLanePackageRoot(discovery.runtime) ?? "",
+          },
+          env: {},
+          manifest,
+        }),
+      ).toEqual({
+        outcome: "unverified",
+        targetKey: "darwin-arm64",
+        layout: "npm-package",
+        reason: "missing",
+      });
+    });
+
+    it.each([
+      ["tampered", "digest-mismatch"],
+      ["linked", "not-regular-file"],
+    ] as const)(
+      "keeps the engine active and degrades search for a %s ripgrep (%s)",
+      (kind, reason) => {
+        const install = globalInstall({ ripgrep: kind === "tampered" ? "other bytes" : RG });
+        if (kind === "linked") {
+          const elsewhere = join(dirname(install.runtimeRoot), "real-rg");
+          write(elsewhere, RG, 0o755);
+          rmSync(join(install.runtimeRoot, "native", "rg"));
+          symlinkSync(elsewhere, join(install.runtimeRoot, "native", "rg"));
+        }
+        const discovery = discover(install);
+        expect(discovery.outcome).toBe("activated");
+        if (discovery.outcome !== "activated") return;
+        expect(
+          resolveOpenCodeRipgrep({
+            target: discovery.runtime.target,
+            location: {
+              kind: "npm-package",
+              packageRoot: npmLanePackageRoot(discovery.runtime) ?? "",
+            },
+            env: {},
+            manifest,
+          }),
+        ).toMatchObject({ outcome: "unverified", layout: "npm-package", reason });
+      },
+    );
+
+    it("derives a package root for the npm lane only", () => {
+      const install = globalInstall();
+      const installRoot = join(install.runtimeRoot, "opencode-compatible");
+      expect(npmLanePackageRoot({ lane: "npm-runtime-package", installRoot })).toBe(
+        dirname(install.runtimeRoot),
+      );
+      expect(npmLanePackageRoot({ lane: "dev-checkout", installRoot })).toBeUndefined();
+      expect(
+        npmLanePackageRoot({
+          lane: "npm-runtime-package",
+          installRoot: join(dirname(install.runtimeRoot), "elsewhere", "opencode-compatible"),
+        }),
+      ).toBeUndefined();
     });
   });
 

@@ -8,7 +8,8 @@ sources of truth are:
 - `packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts` (the approval table and the verifier);
 - `scripts/provision-ripgrep.mjs`;
 - `scripts/stage-portable-runtime.mjs` and `scripts/portable-runtime.mjs` (the `nativeTools`
-  section); and
+  section);
+- `scripts/build-coding-runtime-npm-package.mjs` (the npm runtime package); and
 - `scripts/smoke-portable-ripgrep.mjs`.
 
 ## Why it is shipped
@@ -78,6 +79,16 @@ executed.
   manifest's `nativeTools`, the activation manifest, `reviewedBinding`, provenance, the CycloneDX
   SBOM and the third-party notices. Platform signing rewrites only `shippedSha256`;
   `unsignedSha256` keeps the upstream identity.
+- The npm runtime package (`@oscharko-dev/keiko-coding-runtime-<target>`, ADR-0140 D2a) carries the
+  same unmodified upstream executable at `runtime/native/rg`, its MIT text at
+  `runtime/licenses/ripgrep/LICENSE-MIT` and a CycloneDX record of the component at
+  `runtime/licenses/ripgrep/sbom.cdx.json`. `scripts/build-coding-runtime-npm-package.mjs` provisions
+  the TARGET's release (one Mac builds both architectures), stages it through the same
+  `stageRipgrepTool` the portable build uses, and refuses to seal a candidate whose executable,
+  license or component record differs from the pinned digests, whose executable lost its permission
+  bit, or that lacks any of the three files. The sealed `receipt.json` binds the pinned release.
+  The package ships no signature, so no activation-bound digest applies there: only the pinned
+  upstream bytes verify.
 - `scripts/smoke-portable-ripgrep.mjs` starts the staged executable outside `PATH` and the user's
   ripgrep configuration and makes it report the approved release, find text, list files and exit 1
   on a miss.
@@ -89,8 +100,13 @@ Every OpenCode launch resolves one verified ripgrep before the child starts
 
 - A packaged runtime verifies `runtime/native/rg` against the digest the signed activation manifest
   binds. A development checkout verifies `.ripgrep/<version>/<target>/` against the pinned upstream
-  digest. `KEIKO_RIPGREP_BINARY_PATH` is honoured for non-packaged lanes only, and only for a file
-  that passes the same verifier; a packaged runtime ignores it.
+  digest. An npm runtime package verifies `<package>/runtime/native/rg` against the pinned upstream
+  digest at every run launch, with the package root derived from the activated runtime
+  (`npmLanePackageRoot`); the lane's native-directory check admits that one file name beside the
+  secure-read helper and judges nothing else about it, so a missing, tampered or linked `rg` degrades
+  search with a closed reason and never takes the engine away. A package published before ripgrep
+  shipped in it simply reports `missing`. `KEIKO_RIPGREP_BINARY_PATH` is honoured for non-packaged
+  lanes only, and only for a file that passes the same verifier; a packaged runtime ignores it.
 - Only the verified executable's directory is prepended to the child `PATH`, for the native and the
   mapped profile. The native macOS Seatbelt read allowlist is derived from that same `PATH`, so it
   admits exactly that directory and nothing wider. The mapped macOS profile cannot execute `rg` at
@@ -100,8 +116,9 @@ Every OpenCode launch resolves one verified ripgrep before the child starts
   attempt at Full access, where egress is inherited; below Full access the loopback-only lane refuses
   it.
 - `coding-runtime.ripgrep.resolved` records once per launch the outcome (`verified`/`unverified`),
-  the closed `reason`, the `layout` (`portable`/`provisioned`/`override`/`none`), the digest source,
-  the version and the target class. It never records a path, a digest or a command line.
+  the closed `reason`, the `layout` (`portable`/`provisioned`/`npm-package`/`override`/`none`), the
+  digest source, the version and the target class. It never records a path, a digest or a command
+  line.
 
 ## CI
 
@@ -109,6 +126,9 @@ Every OpenCode launch resolves one verified ripgrep before the child starts
 the portable-assets stage jobs (`stage`, `stage-linux-manual`, `stage-linux-production`), the
 pull-request customer-shape job (`qualify`) and the release customer-shape job
 (`qualify-customer-shape`). The stage jobs also run `scripts/smoke-portable-ripgrep.mjs` against the
-staged tree. The customer-shape qualifier installs the npm package, whose runtime tree cannot carry
-the binary, so it verifies the provisioned copy and hands it to the runtime through
-`KEIKO_RIPGREP_BINARY_PATH`; a missing or tampered copy fails before the journey starts.
+staged tree. The customer-shape qualifier installs the npm package together with the runtime
+packages the root manifest pins. Those pins still name the published packages that predate the
+bundled ripgrep, so the qualifier verifies the provisioned copy and hands it to the runtime through
+`KEIKO_RIPGREP_BINARY_PATH`; a missing or tampered copy fails before the journey starts. The
+override is dropped in the change that moves the pins to the republished runtime packages, which
+makes that journey the clean, override-free offline proof.
