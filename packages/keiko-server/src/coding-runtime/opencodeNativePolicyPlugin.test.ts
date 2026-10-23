@@ -252,10 +252,31 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     expect(allowed.requests).toHaveLength(1);
   });
 
-  it("leaves Code Mode itself and its read-only or self-asserting tools to the runtime", async () => {
+  // #3897 review: the producer asserts no permission for a Code Mode program, so without this the
+  // mode policy never gated model-authored JavaScript (its `fetch` reaches loopback services) even in
+  // Ask for approval. The program is decided like a command, before it starts.
+  it("asks policy for a Code Mode program and blocks it before it starts on refusal", async () => {
+    const refused = await pluginHarness("governed-assist", {
+      effect: "deny",
+      message: "needs approval",
+    });
+    await expect(
+      refused.toolBefore({ ...nested("execute"), input: { code: "return 1 + 1;" } }),
+    ).rejects.toThrow("needs approval");
+    expect(refused.requests[0]).toMatchObject({
+      permission: "execute",
+      resources: [],
+      source: { type: "tool", messageID: "msg_code_mode", id: "call_execute" },
+    });
+    expect(JSON.stringify(refused.requests)).not.toContain("return 1 + 1");
+    const allowed = await pluginHarness("autonomous-delivery", { effect: "allow" });
+    await expect(allowed.toolBefore(nested("execute"))).resolves.toBeUndefined();
+    expect(allowed.requests).toHaveLength(1);
+  });
+
+  it("leaves Code Mode's read-only or self-asserting tools to the runtime", async () => {
     const harness = await pluginHarness("supervised-coding", { effect: "deny" });
     for (const tool of [
-      "execute",
       "opencode_models",
       "opencode_worktree_list",
       "opencode_session_rename",

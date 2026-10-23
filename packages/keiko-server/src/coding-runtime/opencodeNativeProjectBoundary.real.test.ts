@@ -18,8 +18,16 @@ import {
   createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
-import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
-import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
+import {
+  buildOpenCodeLaunchProfile,
+  openCodeConfigDirectory,
+  openCodePlanDirectory,
+} from "./opencodeLaunchProfile.js";
+import {
+  OPENCODE_NATIVE_TOOL_DEFINITIONS,
+  isOpenCodeCodeModeExecutionFailure,
+} from "./opencodeNativeTools.js";
+import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
@@ -31,7 +39,8 @@ import {
 /**
  * Original-runtime negative controls for the native profile (#3897 review): a repository must
  * neither execute plugin modules nor select another model route before an operator admits its
- * executable effects (#3903); the `ask` baseline holds an action when the policy plugin is absent;
+ * executable effects (#3903); a run whose policy plugin is not active never becomes ready, and every
+ * built-in agent keeps its own rules (Plan cannot write project files whatever Keiko's mode allows);
  * the agent's shell cannot rewrite the policy plugin; and the Code Mode facts the policy plugin
  * relies on hold for the pinned producer. The pinned executable runs under the real native
  * Seatbelt wrapper with the profile `buildOpenCodeLaunchProfile` produces. Run with
@@ -293,8 +302,11 @@ interface LaunchStubs {
 
 interface LaunchOptions {
   readonly projectLayer: "off" | "on";
-  /** `absent` is the negative control: the governing hook never loads. */
-  readonly policyPlugin: "present" | "absent";
+  /**
+   * `absent` is the negative control: the governing hook never loads; `unparsable` writes a policy
+   * plugin module the producer cannot load (a corrupted file).
+   */
+  readonly policyPlugin: "present" | "absent" | "unparsable";
   /** `off` is the negative control: the run's configuration directory stays writable. */
   readonly protectedConfig: "on" | "off";
   /** `on` loads the throwaway observation plugin beside the policy plugin (never product code). */
@@ -347,7 +359,13 @@ function materializePrivateConfiguration(
     mkdirSync(path, { recursive: true, mode: 0o700 });
   writeFileSync(join(configRoot, "opencode.json"), config, { mode: 0o600 });
   for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native"))) {
-    if (options.policyPlugin === "absent" && name === "keiko_native_policy") continue;
+    if (options.policyPlugin !== "present" && name === "keiko_native_policy") {
+      if (options.policyPlugin === "unparsable")
+        writeFileSync(join(configRoot, "plugins", `${name}.ts`), "export default {", {
+          mode: 0o600,
+        });
+      continue;
+    }
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
   }
   if (options.probe === "on")
@@ -553,14 +571,6 @@ function lastToolResult(gateway: Stub): string {
     .filter((message) => message?.role === "tool")
     .at(-1);
   return typeof result?.content === "string" ? result.content : "";
-}
-
-/** Prompts one scripted tool-call turn without waiting for the follow-up request. */
-async function promptScripted(run: Run, call: ScriptedCall, prompt: string): Promise<void> {
-  run.gateway.call = call;
-  run.gateway.toolTurns = 1;
-  await run.service.client.prompt(run.sessionId, prompt);
-  await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBeGreaterThan(0);
 }
 
 const CODE_MODE_TOOL_NAMES = OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => tool.codemode).map(
@@ -883,10 +893,10 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
     120_000,
   );
 
-  // #3897 review (P1): the ordinary tools still run when the loaded hook answers, because the
-  // hook sets the final effect of every action the `ask` baseline leaves undecided.
+  // #3897 review (P1): the ordinary tools run when the loaded hook answers, because the hook sets
+  // the final effect of every action the producer's own agent rules allow or ask.
   it.skipIf(skip)(
-    "runs an ordinary read and edit through the hook under the ask baseline",
+    "runs an ordinary read and edit through the hook under the producer's agent rules",
     async () => {
       await withRun({}, async (run) => {
         await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file.");
@@ -912,27 +922,33 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
     120_000,
   );
 
-  // #3897 review (P1), negative control: a policy plugin that never loads must not leave the
-  // baseline open. With the old `allow` baseline this very action executed and its result reached
-  // the model; with `ask` it waits for a human, so nothing executes.
+  // #3897 review (P1), negative control: a policy plugin that never loads must not leave the run
+  // ungoverned. Keiko writes no rule over the producer's own agent rules (that would cancel Plan's
+  // edit denial), so this property lives in readiness: Keiko starts no session and sends no prompt
+  // until the producer reports its governing plugins active (`awaitOpenCodeNativePlugins`, pinned
+  // in the composition suite). This proves the producer's side of that predicate: absent and
+  // unparsable policy plugins never read as active, and the production launch does.
   it.skipIf(skip)(
-    "control: without the policy plugin an action is held for approval and not executed",
+    "control: without an active policy plugin the producer's plugin list never reads as ready",
     async () => {
+      const ready = async (run: Run): Promise<boolean> =>
+        await awaitOpenCodeNativePlugins(
+          (signal) => run.service.client.plugins(signal),
+          join(openCodeConfigDirectory(run.fixture.state), "plugins"),
+          undefined,
+          25,
+        );
       await withRun({ policyPlugin: "absent" }, async (run) => {
-        await promptScripted(run, READ_FIXTURE_CALL, "Read the fixture file.");
-        await expect
-          .poll(async () => (await run.service.client.permissions()).length, { timeout: 30_000 })
-          .toBeGreaterThan(0);
-        const pending = await run.service.client.permissions();
-        expect(pending.map((request) => object(request)?.action)).toEqual(["read"]);
-        // The held call produced no result: the model saw no second request, no file content.
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
-        expect(run.gateway.requests).toHaveLength(1);
-        expect(JSON.stringify(run.gateway.requests)).not.toContain("native boundary fixture");
-        expect(run.facade.requests).toHaveLength(0);
+        expect(await ready(run)).toBe(false);
+      });
+      await withRun({ policyPlugin: "unparsable" }, async (run) => {
+        expect(await ready(run)).toBe(false);
+      });
+      await withRun({}, async (run) => {
+        expect(await ready(run)).toBe(true);
       });
     },
-    120_000,
+    180_000,
   );
 
   // #3897 review (P1): the policy plugin and the private configuration are read-only to the shell
@@ -1002,6 +1018,163 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
 // The Code Mode facts the policy plugin's governance of `execute` relies on (owner decision,
 // 2026-10-23: Code Mode stays available). Observed on the pinned producer through a throwaway
 // probe plugin that stands in for the policy plugin; the probe is test-only and never product code.
+/**
+ * Every `state` of a tool content part named `tool` in the producer's messages, in order (2.1.4:
+ * `{ type: "tool", name, state: { status, metadata } }` inside an assistant message's content).
+ */
+function collectToolStates(value: unknown, tool: string): readonly unknown[] {
+  if (Array.isArray(value)) return value.flatMap((item) => collectToolStates(item, tool));
+  const record = object(value);
+  if (record === undefined) return [];
+  if (record.type === "tool" && record.name === tool && object(record.state) !== undefined)
+    return [record.state];
+  return Object.values(record).flatMap((item) => collectToolStates(item, tool));
+}
+
+interface AgentRule {
+  readonly action: string;
+  readonly resource: string;
+  readonly effect: string;
+}
+
+/** The effective rules the producer reports for one built-in agent (`GET /api/agent`). */
+async function agentRules(run: Run, agent: string): Promise<readonly AgentRule[]> {
+  let rules: unknown;
+  await expect
+    .poll(
+      async () => {
+        const listed = object(await run.service.request("GET", "/api/agent"));
+        const agents = Array.isArray(listed?.data) ? listed.data : [];
+        rules = agents.map(object).find((entry) => entry?.id === agent)?.permissions;
+        return Array.isArray(rules);
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  return rules as readonly AgentRule[];
+}
+
+/** The effect the producer resolves for `action` on an ordinary resource: last match wins. */
+function ordinaryEffect(rules: readonly AgentRule[], action: string): string | undefined {
+  for (let index = rules.length - 1; index >= 0; index -= 1) {
+    const rule = rules[index];
+    if (
+      rule !== undefined &&
+      (rule.action === "*" || rule.action === action) &&
+      rule.resource === "*"
+    )
+      return rule.effect;
+  }
+  return undefined;
+}
+
+function writeCall(path: string, content: string): ScriptedCall {
+  return { name: "write", arguments: { path, content } };
+}
+
+// #3897 review (P1): Keiko configured a blanket rule after the producer's own agent rules, and the
+// last match won, so Plan's `edit` denial (and Explore's read-only floor, General's subagent
+// restriction) was replaced before Keiko's hook ever ran. Keiko now writes no rule naming an
+// ordinary action: the producer's agent selection stays independent of Keiko's mode.
+describe("pinned native OpenCode built-in agent restrictions", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "keeps every built-in agent's own rules and appends only Keiko's external-directory rules",
+    async () => {
+      await withRun({}, async (run) => {
+        const build = await agentRules(run, "build");
+        expect(ordinaryEffect(build, "edit")).toBe("allow");
+        expect(ordinaryEffect(build, "shell")).toBe("allow");
+        const plan = await agentRules(run, "plan");
+        expect(ordinaryEffect(plan, "edit")).toBe("deny");
+        const explore = await agentRules(run, "explore");
+        expect(ordinaryEffect(explore, "edit")).toBe("deny");
+        expect(ordinaryEffect(explore, "execute")).toBe("deny");
+        const general = await agentRules(run, "general");
+        expect(ordinaryEffect(general, "subagent")).toBe("deny");
+        // The listing carries each agent's own rules; Keiko's global rules (only external
+        // directories) join at evaluation, as the configured-deny control above proves.
+        for (const rules of [build, plan, explore, general])
+          expect(rules.filter((rule) => rule.effect === "ask" && rule.action === "*")).toEqual([]);
+      });
+    },
+    120_000,
+  );
+
+  // #3897 review: the producer asserts no permission for a Code Mode program; the generated policy
+  // plugin asks Keiko's policy for it before it starts (here the facade allows everything).
+  it.skipIf(skip)(
+    "asks Keiko's policy for a Code Mode program before it runs",
+    async () => {
+      await withRun({}, async (run) => {
+        const result = await scriptedTurn(run, executeCall("return 6 * 7;"), "Run the program.");
+        expect(result).toBe("42");
+        const asked = run.facade.requests.map((recorded) => object(recorded.body));
+        expect(asked).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ permission: "execute", resources: [] }),
+          ]),
+        );
+        expect(JSON.stringify(asked)).not.toContain("6 * 7");
+      });
+    },
+    120_000,
+  );
+
+  // #3897 (resilience): a model that names a tool the request did not offer gets the producer's
+  // own unavailable-tool result and the turn goes on, as standalone; no effect and no hook runs.
+  it.skipIf(skip)(
+    "answers an unoffered tool name with the producer's own error result and continues the turn",
+    async () => {
+      await withRun({}, async (run) => {
+        const before = run.facade.requests.length;
+        const result = await scriptedTurn(
+          run,
+          { name: "bash", arguments: { command: "touch HALLUCINATED" } },
+          "Run the scripted call.",
+        );
+        expect(result.length).toBeGreaterThan(0);
+        expect(result).toMatch(/bash/u);
+        expect(existsSync(join(run.fixture.workspace, "HALLUCINATED"))).toBe(false);
+        expect(run.facade.requests.length).toBe(before);
+        expect(await run.service.client.permissions()).toEqual([]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps Plan from writing a project file Keiko's policy would allow; its plan file and Build's write go through",
+    async () => {
+      // The production launch: the generated policy plugin is loaded and the facade allows every
+      // action it is asked about, as Full access would. Only the producer's own Plan rule can refuse.
+      await withRun({}, async (run) => {
+        const readme = join(run.fixture.workspace, FIXTURE_FILE);
+        const original = readFileSync(readme, "utf8");
+        await run.service.client.switchAgent(run.sessionId, "plan");
+        await scriptedTurn(run, writeCall(readme, "PLAN-WROTE-PROJECT"), "Write the readme.");
+        expect(readFileSync(readme, "utf8")).toBe(original);
+        const askedEdits = (): readonly unknown[] =>
+          run.facade.requests
+            .map((recorded) => object(recorded.body))
+            .filter((body) => body?.permission === "edit")
+            .map((body) => body?.resources);
+        // The producer's denial is final: Keiko's hook was never asked about that edit.
+        expect(askedEdits()).toEqual([]);
+        const planFile = join(openCodePlanDirectory(run.fixture.state), "keiko-plan.md");
+        await scriptedTurn(run, writeCall(planFile, "PLAN-WROTE-PLAN"), "Write the plan.");
+        expect(readFileSync(planFile, "utf8")).toBe("PLAN-WROTE-PLAN");
+        expect(askedEdits()).toEqual([[planFile]]);
+        await run.service.client.switchAgent(run.sessionId, "build");
+        await scriptedTurn(run, writeCall(readme, "BUILD-WROTE-PROJECT"), "Write the readme.");
+        expect(readFileSync(readme, "utf8")).toBe("BUILD-WROTE-PROJECT");
+      });
+    },
+    180_000,
+  );
+});
+
 describe("pinned native OpenCode Code Mode semantics", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 
@@ -1152,7 +1325,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
           (await probedTurn(run, executeCall(code))).events.filter(
             (event) => event.hook === "permission.evaluate",
           );
-        // The producer's own default already allows the listing, whatever the baseline says.
+        // Build's own `*` allow is the configured effect of every nested tool that asserts one.
         expect(await evaluated("return await tools.opencode.list_mcp_resources({});")).toEqual([
           expect.objectContaining({
             action: "opencode_list_mcp_resources",
@@ -1176,7 +1349,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
           `return await tools.opencode.worktree_remove({ directory: ${JSON.stringify(directory)} });`,
         );
         expect(removal).toEqual([
-          expect.objectContaining({ action: "edit", resources: [directory], configured: "ask" }),
+          expect.objectContaining({ action: "edit", resources: [directory], configured: "allow" }),
         ]);
         const resource = await evaluated(
           'return await tools.opencode.read_mcp_resource({ server: "none", uri: "none://x" });',
@@ -1185,7 +1358,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
           expect.objectContaining({
             action: "opencode_read_mcp_resource",
             resources: ["none:none://x"],
-            configured: "ask",
+            configured: "allow",
           }),
         ]);
         for (const ordinary of ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE) {
@@ -1199,6 +1372,27 @@ describe("pinned native OpenCode Code Mode semantics", () => {
       });
     },
     180_000,
+  );
+
+  // #3897 review (P2): the producer catches an exception inside a Code Mode program and settles the
+  // `execute` part `completed` with `metadata.error: true`; Keiko's projection must read it failed.
+  it.skipIf(skip)(
+    "reports a thrown Code Mode program as completed with the error flag Keiko reads as failed",
+    async () => {
+      await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
+        const executeStates = async (): Promise<readonly unknown[]> =>
+          collectToolStates(await run.service.client.messages(run.sessionId), "execute");
+        await probedTurn(run, executeCall('throw new Error("SYNTHETIC-CODE-MODE-FAILURE");'));
+        const [thrown] = await executeStates();
+        expect(object(thrown)?.status).toBe("completed");
+        expect(isOpenCodeCodeModeExecutionFailure("execute", thrown)).toBe(true);
+        await probedTurn(run, executeCall("return 1 + 1;"));
+        const states = await executeStates();
+        expect(states).toHaveLength(2);
+        expect(isOpenCodeCodeModeExecutionFailure("execute", states[1])).toBe(false);
+      });
+    },
+    120_000,
   );
 
   // `fetch` is a Code Mode primitive. Neither hook sees it: the only governance is the enclosing

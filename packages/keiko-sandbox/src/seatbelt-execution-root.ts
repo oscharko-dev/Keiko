@@ -330,6 +330,21 @@ function intermediateDirectories(root: string, writable: readonly string[]): rea
   return directories;
 }
 
+/**
+ * The one process-authority rule for a Seatbelt profile that starts from `allow default` (ADR-0043,
+ * #3901). A confined process and every descendant may signal and inspect itself and the processes
+ * of its own sandbox, which covers shells cancelling their children, process groups, a runtime
+ * stopping its tree and a descendant reparented to launchd. Any other process of the same OS user
+ * is refused: a process outside the run, and the tree of another run, whose sandbox is a separate
+ * instance even when the profile text is identical. The check is made on the sender, so the
+ * unsandboxed server still stops the runtime it launched. The last matching rule wins, so the
+ * `allow` follows the `deny`, and nothing in a profile that includes this rule may match
+ * `signal` or `process-info*` afterwards.
+ */
+export const OWN_PROCESS_TARGETS_SEATBELT_RULE =
+  "(deny signal process-info*)" +
+  "(allow signal process-info* (target self) (target same-sandbox))";
+
 export function executionRootSeatbeltProfile(
   plan: IsolatedRunPlan,
   systemReadRoots: readonly string[],
@@ -346,8 +361,7 @@ export function executionRootSeatbeltProfile(
   return (
     "(version 1)(allow default)" +
     `(deny file-read* file-write* ${plan.network === "none" ? "network* " : ""}mach-lookup appleevent-send lsopen)` +
-    "(deny signal process-info*)" +
-    "(allow signal process-info* (target self) (target same-sandbox))" +
+    OWN_PROCESS_TARGETS_SEATBELT_RULE +
     installedLibraryReads(systemReadRoots) +
     `(allow file-read* ${pathFilters("subpath", reads)} ${pathFilters("literal", READ_LITERALS)})` +
     `(allow file-read-metadata ${pathFilters("literal", reads.flatMap(ancestors))})` +

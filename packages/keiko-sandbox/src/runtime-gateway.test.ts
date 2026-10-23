@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -22,7 +22,10 @@ import {
 import { resolveDarwinGitExecutable } from "./darwin-git.js";
 import { nativeToolchainReadRoots } from "./native-toolchain-roots.js";
 import { currentPlatform, probeBackends } from "./probe.js";
-import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
+import {
+  copyRuntimeGatewayFilesystem,
+  OWN_PROCESS_TARGETS_SEATBELT_RULE,
+} from "./seatbelt-execution-root.js";
 import type { RuntimeGatewayFilesystem } from "./types.js";
 
 const input: RuntimeGatewayConfinementInput = {
@@ -281,6 +284,38 @@ describe("long-lived gateway network confinement", () => {
       expect(profile).toContain(`(deny ${denied})`);
   });
 
+  // #3901 review (P1) pin: the native profile starts from `allow default`, so its process
+  // authority is exactly the rule the execution-root profile owns. A widened target, a second
+  // `signal` or `process-info*` clause, or a copy of the rule would each fail here.
+  it.each(["loopback-only", "inherited"] as const)(
+    "native profile (%s) carries the shared own-sandbox process rule and no other signal rule",
+    (egress) => {
+      const policy = createRuntimeGatewayConfinement({
+        ...input,
+        profile: "keiko-native",
+        egress,
+        filesystem: {
+          workspaceRoot: "/accepted/workspace",
+          workspaceAccess: "read-write",
+          privateStateRoot: "/private/state",
+          runtimeReadRoot: "/immutable/runtime",
+        },
+      });
+      const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/trusted/opencode", ["serve"]);
+      const profile = wrapped.args[1] ?? "";
+      expect(OWN_PROCESS_TARGETS_SEATBELT_RULE).toBe(
+        "(deny signal process-info*)(allow signal process-info* (target self) (target same-sandbox))",
+      );
+      expect(profile.split(OWN_PROCESS_TARGETS_SEATBELT_RULE)).toHaveLength(2);
+      expect(profile.replace(OWN_PROCESS_TARGETS_SEATBELT_RULE, "")).not.toMatch(
+        /signal|process-info/u,
+      );
+      expect(profile.indexOf("(allow default)")).toBeLessThan(
+        profile.indexOf(OWN_PROCESS_TARGETS_SEATBELT_RULE),
+      );
+    },
+  );
+
   it("keeps IPv6 destinations separate from IPv4 and preserves the exact boundary ports", () => {
     for (const port of [1, 65_535]) {
       const policy = createRuntimeGatewayConfinement({
@@ -365,19 +400,34 @@ interface ChildRun {
   readonly stdout: string;
 }
 
+interface DetailedRun extends ChildRun {
+  readonly stderr: string;
+}
+
+function runDetailed(
+  command: string,
+  args: readonly string[],
+  env?: Readonly<Record<string, string>>,
+  cwd?: string,
+): DetailedRun {
+  const result = spawnSync(command, [...args], {
+    timeout: 10_000,
+    encoding: "utf8",
+    ...(env === undefined ? {} : { env }),
+    ...(cwd === undefined ? {} : { cwd }),
+  });
+  if (result.error !== undefined) return { status: null, stdout: "", stderr: result.error.message };
+  return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+}
+
 function run(
   command: string,
   args: readonly string[],
   env?: Readonly<Record<string, string>>,
   cwd?: string,
 ): ChildRun {
-  const result = spawnSync(command, [...args], {
-    timeout: 10_000,
-    ...(env === undefined ? {} : { env }),
-    ...(cwd === undefined ? {} : { cwd }),
-  });
-  if (result.error !== undefined) return { status: null, stdout: "" };
-  return { status: result.status, stdout: result.stdout.toString("utf8").trim() };
+  const { status, stdout } = runDetailed(command, args, env, cwd);
+  return { status, stdout };
 }
 
 function note(message: string): void {
@@ -594,21 +644,21 @@ function nativeConfinement(
   });
 }
 
+/** The launcher's environment shape: the run's private state is HOME, the toolchain is on PATH. */
+function nativeEnvironment(tree: NativeProofTree): Readonly<Record<string, string>> {
+  return {
+    HOME: tree.privateStateRoot,
+    PATH: [dirname(process.execPath), dirname(gitExecutable), "/usr/bin", "/bin"].join(delimiter),
+  };
+}
+
 function runNative(
   tree: NativeProofTree,
   policy: RuntimeGatewayConfinement,
   script: string,
 ): ChildRun {
   const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, ["-e", script]);
-  return run(
-    wrapped.command,
-    wrapped.args,
-    {
-      HOME: tree.privateStateRoot,
-      PATH: [dirname(process.execPath), dirname(gitExecutable), "/usr/bin", "/bin"].join(delimiter),
-    },
-    tree.workspaceRoot,
-  );
+  return run(wrapped.command, wrapped.args, nativeEnvironment(tree), tree.workspaceRoot);
 }
 
 // One probe per line: `fact name -> expression that throws when the operation is refused`.
@@ -707,6 +757,94 @@ function connectUnixProbe(path: string): string {
     "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); });",
   ].join("");
 }
+
+// ---- #3901: the confined tree signals and inspects its own processes and no others ----
+
+interface OwnedProcess {
+  readonly pid: number;
+  /** Settles with the signal that ended the process, or null for a normal exit. */
+  readonly exited: Promise<NodeJS.Signals | null>;
+  /** Settles once the process has written its first byte of output. */
+  readonly announced: Promise<void>;
+  readonly running: () => boolean;
+  readonly stop: () => void;
+}
+
+// The test starts every process it signals or inspects, so a proof never targets a developer
+// process: a synthetic `/bin/sleep` stands for any process of the same user outside the run.
+async function startOwnedProcess(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions = {},
+): Promise<OwnedProcess> {
+  const child = spawn(command, [...args], { ...options, stdio: ["ignore", "pipe", "ignore"] });
+  const exited = new Promise<NodeJS.Signals | null>((resolve) => {
+    child.once("exit", (_code, signal) => {
+      resolve(signal);
+    });
+  });
+  const announced = new Promise<void>((resolve) => {
+    child.stdout.once("data", () => {
+      resolve();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+  if (child.pid === undefined) throw new Error("owned-process-not-started");
+  return {
+    pid: child.pid,
+    exited,
+    announced,
+    running: () => child.exitCode === null && child.signalCode === null,
+    stop: (): void => {
+      child.kill("SIGKILL");
+    },
+  };
+}
+
+// What a native shell, an interpreter and the system `kill` can attempt against one process id.
+// Signal 0 takes the kernel's and Seatbelt's `signal` authorization without ending the target.
+function signalProbes(tree: NativeProofTree, pid: number): Readonly<Record<string, string>> {
+  const target = String(pid);
+  return {
+    interpreterSignal: `process.kill(${target}, 0)`,
+    shellBuiltinSignal: shellFact(`kill -0 ${target}`, tree.workspaceRoot),
+    systemKillSignal: shellFact(`/bin/kill -0 ${target}`, tree.workspaceRoot),
+  };
+}
+
+// The cancellation and toolchain paths the native runtime depends on, all inside the run's tree.
+function ownProcessProbes(tree: NativeProofTree): Readonly<Record<string, string>> {
+  const { workspaceRoot: ws } = tree;
+  return {
+    shellCancelsItsChild: shellFact("sleep 30 & kill $!; wait", ws),
+    shellCancelsASiblingBranch: shellFact('sleep 30 & P=$!; /bin/sh -c "kill -TERM $P"; wait', ws),
+    interpreterCancelsItsChild: `const c = cp.spawn('/bin/sleep', ['30'], { stdio: 'ignore' }); process.kill(c.pid, 0); process.kill(c.pid, 'SIGTERM')`,
+    interpreterCancelsItsGroup: `const c = cp.spawn('/bin/sh', ['-c', 'sleep 30 & wait'], { detached: true, stdio: 'ignore' }); process.kill(-c.pid, 'SIGTERM')`,
+    ownResourceUse: "process.memoryUsage(); process.resourceUsage(); process.cpuUsage()",
+    nodeChild: `cp.execFileSync(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })`,
+    gitVersion: `cp.execFileSync(${JSON.stringify(gitExecutable)}, ['--version'], { stdio: 'ignore' })`,
+    shellPipeline: shellFact("echo ok | tr a-z A-Z | grep -q OK", ws),
+  };
+}
+
+// `proc_pidinfo(PROC_PIDTBSDINFO)` through the system Ruby: the per-pid process-info call a shell
+// toolchain can make without a setuid binary (`ps` and `top` cannot start under any Seatbelt
+// profile, with or without a process rule). The call returns the struct size when allowed and 0
+// when the kernel refuses it.
+const PROCESS_INFO_RUBY = [
+  'require "fiddle"',
+  'lib = Fiddle.dlopen("/usr/lib/libproc.dylib")',
+  "types = [Fiddle::TYPE_INT, Fiddle::TYPE_INT, Fiddle::TYPE_LONG_LONG, Fiddle::TYPE_VOIDP, Fiddle::TYPE_INT]",
+  'info = Fiddle::Function.new(lib["proc_pidinfo"], types, Fiddle::TYPE_INT)',
+  "buffer = Fiddle::Pointer.malloc(512)",
+  'puts ARGV.map { |pid| info.call(pid.to_i, 3, 0, buffer, 512) > 0 ? "read" : "refused" }.join(",")',
+].join("\n");
+// Reads, in order: the foreign process, the shell itself and the shell's own child.
+const PROCESS_INFO_SHELL =
+  'sleep 30 & CHILD=$!; /usr/bin/ruby --disable-gems -e "$1" "$2" $$ $CHILD; kill $CHILD';
 
 describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
   const seatbeltAvailable = probeBackends().seatbelt;
@@ -1124,6 +1262,159 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
       }
     },
     20_000,
+  );
+
+  // #3901 review (P1): the profile starts from `allow default`, so without a process rule a shell
+  // inside the tree could signal any process the OS user owns. Every process below is one the test
+  // started; the control proves the unconfined `kill` is effective, so the refusal is the kernel's.
+  it.skipIf(!canProveOnThisHost).each(["loopback-only", "inherited"] as const)(
+    "native profile (%s): the confined tree cannot signal a process outside the run",
+    async (egress) => {
+      const tree = createNativeProofTree();
+      const control = await startOwnedProcess("/bin/sleep", ["300"]);
+      const sibling = await startOwnedProcess("/bin/sleep", ["300"]);
+      try {
+        expect(run("/bin/kill", ["-TERM", String(control.pid)]).status).toBe(0);
+        expect(await control.exited).toBe("SIGTERM");
+        const probes = factScript(signalProbes(tree, sibling.pid));
+        const unconfined = run(
+          process.execPath,
+          ["-e", probes],
+          nativeEnvironment(tree),
+          tree.workspaceRoot,
+        );
+        expect(JSON.parse(unconfined.stdout)).toEqual({
+          interpreterSignal: true,
+          shellBuiltinSignal: true,
+          systemKillSignal: true,
+        });
+
+        const policy = nativeConfinement(tree, egress);
+        const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/bin/kill", [
+          "-TERM",
+          String(sibling.pid),
+        ]);
+        const direct = runDetailed(
+          wrapped.command,
+          wrapped.args,
+          nativeEnvironment(tree),
+          tree.workspaceRoot,
+        );
+        expect(direct.status).not.toBe(0);
+        expect(direct.stderr).toContain("Operation not permitted");
+        const confined = runNative(tree, policy, probes);
+        expect(JSON.parse(confined.stdout)).toEqual({
+          interpreterSignal: false,
+          shellBuiltinSignal: false,
+          systemKillSignal: false,
+        });
+        expect(sibling.running()).toBe(true);
+      } finally {
+        control.stop();
+        sibling.stop();
+        tree.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  // Another run's tree is a foreign process too: two runs share the OS user and the profile text,
+  // but not the sandbox, so neither can end the other.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: one run's confined tree cannot signal another run's confined tree",
+    async () => {
+      const [first, second] = [createNativeProofTree(), createNativeProofTree()];
+      const peerCommand = buildRuntimeGatewaySeatbeltCommand(
+        nativeConfinement(first, "loopback-only"),
+        "/bin/sh",
+        ["-c", "echo ready; exec /bin/sleep 300"],
+      );
+      const peer = await startOwnedProcess(peerCommand.command, peerCommand.args, {
+        env: nativeEnvironment(first),
+        cwd: first.workspaceRoot,
+      });
+      try {
+        await peer.announced;
+        const killer = buildRuntimeGatewaySeatbeltCommand(
+          nativeConfinement(second, "loopback-only"),
+          "/bin/kill",
+          ["-TERM", String(peer.pid)],
+        );
+        const result = runDetailed(
+          killer.command,
+          killer.args,
+          nativeEnvironment(second),
+          second.workspaceRoot,
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Operation not permitted");
+        expect(peer.running()).toBe(true);
+      } finally {
+        peer.stop();
+        first.cleanup();
+        second.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(!canProveOnThisHost).each(["loopback-only", "inherited"] as const)(
+    "native profile (%s): the confined tree cannot read a foreign process's information",
+    async (egress) => {
+      const tree = createNativeProofTree();
+      const sibling = await startOwnedProcess("/bin/sleep", ["300"]);
+      try {
+        const args = ["-c", PROCESS_INFO_SHELL, "probe", PROCESS_INFO_RUBY, String(sibling.pid)];
+        const unconfined = run("/bin/sh", args, nativeEnvironment(tree), tree.workspaceRoot);
+        expect(unconfined.stdout).toBe("read,read,read");
+        const wrapped = buildRuntimeGatewaySeatbeltCommand(
+          nativeConfinement(tree, egress),
+          "/bin/sh",
+          args,
+        );
+        const confined = run(
+          wrapped.command,
+          wrapped.args,
+          nativeEnvironment(tree),
+          tree.workspaceRoot,
+        );
+        expect(confined.stdout).toBe("refused,read,read");
+      } finally {
+        sibling.stop();
+        tree.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  // The refusals above must not cost the runtime its own cancellation or the agent's toolchain:
+  // the shell starts, signals and cancels its own descendants, and node, Git and a pipeline run.
+  it.skipIf(!canProveOnThisHost).each(["loopback-only", "inherited"] as const)(
+    "native profile (%s): the confined tree still cancels its own processes and runs its toolchain",
+    (egress) => {
+      const tree = createNativeProofTree();
+      try {
+        const result = runNative(
+          tree,
+          nativeConfinement(tree, egress),
+          factScript(ownProcessProbes(tree)),
+        );
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          shellCancelsItsChild: true,
+          shellCancelsASiblingBranch: true,
+          interpreterCancelsItsChild: true,
+          interpreterCancelsItsGroup: true,
+          ownResourceUse: true,
+          nodeChild: true,
+          gitVersion: true,
+          shellPipeline: true,
+        });
+      } finally {
+        tree.cleanup();
+      }
+    },
+    30_000,
   );
 
   it("refuses a native profile whose filesystem is not writable, and the reverse", () => {

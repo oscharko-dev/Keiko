@@ -9,6 +9,7 @@ import {
   executionRootSeatbeltProfile,
   gatewayFilesystemSeatbeltRules,
   nativeWorkspaceSeatbeltRules,
+  OWN_PROCESS_TARGETS_SEATBELT_RULE,
 } from "./seatbelt-execution-root.js";
 import type {
   IsolatedRunPlan,
@@ -243,6 +244,8 @@ export function buildGatewaySeatbeltCommand(
     "(version 1)(allow default)(deny network*)" +
     gatewayProcessExecPolicy(command, childExecutable) +
     "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
+    // Same process authority as every other Keiko Seatbelt profile: own tree only (#3897 review).
+    OWN_PROCESS_TARGETS_SEATBELT_RULE +
     (filesystem === undefined ? "" : gatewayFilesystemSeatbeltRules(filesystem, childExecutable)) +
     `(allow network-outbound (remote ${family} "localhost:${String(closedGateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;
@@ -264,9 +267,11 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
  * OpenCode. What the kernel enforces for the whole process tree is the filesystem boundary (a read
  * allowlist of the workspace, the private state, the system and toolchain roots; writes only inside
  * the workspace and the private state, whose `tmp` is the runtime's TMPDIR; credential stores,
- * credential files and Keiko's state unreadable) and the service escape surfaces. Network follows the run's
- * mode: loopback only below Full access; inherited at Full access, where the per-action permission
- * policy and the accepted Authority Envelope bound it.
+ * credential files and Keiko's state unreadable), the service escape surfaces and the process
+ * boundary (signals and process information reach the tree's own sandbox only, never another
+ * process of the same OS user). Network follows the run's mode: loopback only below Full access;
+ * inherited at Full access, where the per-action permission policy and the accepted Authority
+ * Envelope bound it.
  */
 function buildNativeSeatbeltCommand(
   command: string,
@@ -279,6 +284,7 @@ function buildNativeSeatbeltCommand(
   if (filesystem === undefined) throw new TypeError("native-seatbelt-filesystem-invalid");
   const profile =
     "(version 1)(allow default)(deny appleevent-send)(deny lsopen)" +
+    OWN_PROCESS_TARGETS_SEATBELT_RULE +
     nativeWorkspaceSeatbeltRules(filesystem) +
     (egress === "inherited" ? "" : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };

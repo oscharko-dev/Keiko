@@ -7,6 +7,7 @@ import type {
   CodingSafeActivityPlanStepInput,
   CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
+import { isOpenCodeCodeModeExecutionFailure } from "./opencodeNativeTools.js";
 import {
   isOpenCodeFacadeDispatchedTool,
   OPENCODE_PLAN_CARRIER_TOOLS,
@@ -245,7 +246,7 @@ function toolPartSignal(
   if (state === "completed" && (tool === undefined || isOpenCodeFacadeDispatchedTool(tool)))
     return { kind: "skip" };
   const normalizedState: CodingSafeActivityToolState | undefined =
-    state === "completed" ? "succeeded" : toolPartState(state);
+    state === "completed" ? completedToolState(tool, record(part.state)) : toolPartState(state);
   const messageId = string(part.messageID);
   const callId = string(part.callID);
   if (
@@ -276,6 +277,16 @@ function calledToolSignal(data: Record<string, unknown>): CodingSafeActivitySign
         kind: "value",
         value: { kind: "tool", messageId, callId, tool, state: "running", occurredAt },
       };
+}
+
+// A completed part succeeded, except a Code Mode `execute` whose program failed: the producer
+// returns that as a completed part carrying its own `metadata.error` flag (#3897), which the
+// history projection reads through the same predicate.
+function completedToolState(
+  tool: string | undefined,
+  state: Record<string, unknown> | undefined,
+): Extract<CodingSafeActivityToolState, "succeeded" | "failed"> {
+  return isOpenCodeCodeModeExecutionFailure(tool, state) ? "failed" : "succeeded";
 }
 
 function toolPartState(

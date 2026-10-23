@@ -8,7 +8,10 @@ import {
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
-import { executionRootSeatbeltProfile } from "./seatbelt-execution-root.js";
+import {
+  executionRootSeatbeltProfile,
+  OWN_PROCESS_TARGETS_SEATBELT_RULE,
+} from "./seatbelt-execution-root.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
 const plan: IsolatedRunPlan = {
@@ -215,6 +218,7 @@ describe("buildWrappedCommand", () => {
       "(deny file-read* file-write* network* mach-lookup appleevent-send lsopen)",
     );
     expect(profile).toContain('(subpath "/work/root\\"quoted")');
+    expect(profile).toContain(OWN_PROCESS_TARGETS_SEATBELT_RULE);
     expect(profile).not.toContain("localhost");
     expect(profile).not.toContain('(subpath "/Users")');
     const home = "/Users/test-owner";
@@ -354,6 +358,9 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
+    // #3897 review (P1): the gateway profile also starts from `allow default`, so it carries the
+    // same own-process rule as the native and execution-root profiles, exactly once.
+    expect(profile?.split(OWN_PROCESS_TARGETS_SEATBELT_RULE)).toHaveLength(2);
   });
 
   it("rejects a relative runtime executable before compiling the profile", () => {

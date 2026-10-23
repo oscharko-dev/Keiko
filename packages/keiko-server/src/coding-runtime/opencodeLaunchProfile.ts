@@ -368,9 +368,16 @@ export function createFixedOpenCodeV2Config(
  * of mode: no self-update, no sharing, one provider reached through the Model Gateway, and the
  * mode-independent hard denial of external directories.
  *
- * The baseline for every other action is `ask`, never `allow`: the Keiko policy hook
- * (`keiko.native-policy`) sets the final effect of each action it evaluates, so a policy plugin
- * that fails to load leaves every action waiting for a human instead of silently allowed.
+ * Every built-in agent keeps the producer's own rules (https://opencode.ai/v2/docs/agents/#builtins):
+ * Plan and Explore stay unable to edit project files, General stays unable to launch subagents.
+ * Keiko never widens them, because the producer appends configured rules after an agent's own and
+ * the last match wins, so any global rule naming an action would replace the agent's denial
+ * (#3897 review). The Keiko policy hook (`keiko.native-policy`) then narrows whatever a rule allows
+ * or asks, and an agent's own denial stays final.
+ *
+ * No configured rule can stand in for that hook, so the hook is not optional: a native run whose
+ * policy plugin the producer does not report `active` never becomes ready (readiness checks
+ * `GET /api/plugin`), which keeps the fail-closed property without rewriting any agent's rules.
  *
  * Code Mode (the `execute` tool and the `opencode` management tools behind it) stays available for
  * standalone parity (owner decision, 2026-10-23); its governance is the policy plugin's concern.
@@ -397,7 +404,6 @@ function createNativeOpenCodeV2Config(
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions: [
-      { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
       // Last match wins: the plan agent's own plan directory is the one admitted external path.
       ...(stateRoot === undefined

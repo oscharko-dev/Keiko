@@ -5,6 +5,7 @@ import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity
 
 import {
   decideOpenCodeNativePolicy,
+  nativeAuthorityReasonLogValue,
   parseOpenCodeNativePolicyRequest,
   recordOpenCodeNativePolicyDecision,
   workspaceRelative,
@@ -333,6 +334,65 @@ describe("native policy evidence", () => {
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain("git push");
     expect(serialized).not.toContain("example.com");
+  });
+});
+
+describe("native authority evidence (#3897 review)", () => {
+  it("names a refusal reason in closed words, every binding drift as one", () => {
+    for (const reason of [
+      "authority-budget-exceeded",
+      "authority-expired",
+      "revoked",
+      "authority-resolution-failed",
+      "action-not-authorized",
+      "unavailable",
+    ])
+      expect(nativeAuthorityReasonLogValue(reason)).toBe(reason);
+    for (const drift of ["workspace-drift", "task-drift", "branch-drift", "budget-drift"])
+      expect(nativeAuthorityReasonLogValue(drift)).toBe("drift");
+    expect(nativeAuthorityReasonLogValue("PRIVATE_/path/to/secret")).toBe("other");
+    expect(nativeAuthorityReasonLogValue("authority-replayed")).toBe("other");
+  });
+
+  // Needs the regenerated operation catalog: the proof validates the persisted line against the
+  // generated registry, which declares `invocationCharge` and `authorityReason` once regenerated.
+  it("records how a check was charged and why the authority refused one, body-free", () => {
+    const records: ServerLogEvent[] = [];
+    const sink: ServerLogSink = { write: (event) => void records.push(event) };
+    const allowed = decide("supervised-coding", "read", ["src/index.ts"]);
+    recordOpenCodeNativePolicyDecision(sink, "run-native-1", {
+      mode: "supervised-coding",
+      request: request("read", ["src/index.ts"]),
+      decision: allowed,
+      outcome: "allowed",
+      sessionRelation: "child",
+      authority: { charge: "already-charged" },
+    });
+    recordOpenCodeNativePolicyDecision(sink, "run-native-1", {
+      mode: "supervised-coding",
+      request: request("read", ["src/index.ts"]),
+      decision: allowed,
+      outcome: "authority-refused",
+      authority: { reason: "authority-budget-exceeded" },
+    });
+    const [charged, refused] = records;
+    if (charged === undefined || refused === undefined) throw new Error("log");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.native-policy.decided.emitted-line",
+        formatActivityLogProofLine(charged),
+      ),
+    ).toMatchObject({ outcome: "allowed", invocationCharge: "already-charged" });
+    const refusedLine = expectActivityLogProof(
+      "coding-runtime.native-policy.decided.emitted-line",
+      formatActivityLogProofLine(refused),
+    );
+    expect(refusedLine).toMatchObject({
+      outcome: "authority-refused",
+      authorityReason: "authority-budget-exceeded",
+    });
+    expect(refusedLine).not.toHaveProperty("invocationCharge");
+    expect(JSON.stringify(records)).not.toContain("src/index.ts");
   });
 });
 

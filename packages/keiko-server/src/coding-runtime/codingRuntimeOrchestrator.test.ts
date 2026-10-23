@@ -76,6 +76,7 @@ import {
   UNREPAIRABLE_EDIT_REFUSAL_BOUND,
 } from "./codingRuntimeRefusalEscalation.js";
 import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
+import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -7360,6 +7361,64 @@ describe("run effort roll-up (#3873)", () => {
       verificationCount: 1,
       operatorDecisionCount: 1,
       operatorWaitMs: 60_000,
+    };
+    expect(settled.extra).toMatchObject({ runId: "run-1", state: "succeeded", ...rollUp });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject(rollUp);
+    expect(JSON.stringify(log.records)).not.toContain(start.taskIntent);
+  });
+
+  // #3873, #3897 review: native tools run in the original runtime, outside the facade, and used to
+  // roll up as zero. The runtime's terminal calls reach the same registry once per call identity.
+  it("rolls the native tool calls the runtime executed up onto the settled line, once each", async () => {
+    const clock = controlledClock();
+    const host = createCodingRuntimeRunEffortRegistry({ nowMs: clock.now });
+    const native = createCodingToolNativeSettlementFacet((action, status) => {
+      host.toolSettled("run-1", action, status);
+    });
+    const log = captureActivityLog();
+    const f = fixture(
+      undefined,
+      () => new Date(clock.now()),
+      [],
+      undefined,
+      log.activityLog,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      host.read,
+    );
+    const finish = deferredTask(f);
+    await f.orchestrator.start(start);
+    const call = (callId: string, tool: string, state: "succeeded" | "failed"): void => {
+      native.settled({ messageId: "msg_1", callId, tool, state });
+    };
+    call("call_read_1", "read", "succeeded");
+    call("call_edit_1", "edit", "succeeded");
+    call("call_read_2", "read", "succeeded");
+    // A reconnect reports the same calls again; an edit that failed did not apply.
+    call("call_read_1", "read", "succeeded");
+    call("call_edit_1", "edit", "succeeded");
+    call("call_edit_2", "edit", "failed");
+    clock.advance(10_000);
+    finish("succeeded");
+
+    const settled = await settledRunLine(f, log.records, "succeeded");
+    const rollUp = {
+      toolInvocationCount: 4,
+      workspaceReadCount: 2,
+      editCount: 1,
+      editRefusedCount: 1,
     };
     expect(settled.extra).toMatchObject({ runId: "run-1", state: "succeeded", ...rollUp });
     expect(

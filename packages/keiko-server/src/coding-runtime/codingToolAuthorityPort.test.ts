@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type {
   CodingWorkbenchRuntimeAuthorityEnvelope,
@@ -34,6 +34,7 @@ import {
   codingRuntimeCommandPolicyForMode,
   codingRuntimeConnectorScopesForMode,
   codingRuntimeNetworkPolicyForMode,
+  type CodingRuntimeAuthorityService,
   type CodingRuntimeCapabilityDelegationInput,
 } from "./runtimeAuthorityService.js";
 import {
@@ -3078,110 +3079,157 @@ describe("native effect admission (#3897 review)", () => {
     envelopeDigest: DIGEST,
     authorityExpiresAt: "2026-07-12T12:00:00.000Z",
   });
+  const call = {
+    sessionId: "ses_primary",
+    messageId: "msg_1",
+    callId: "call_1",
+  };
+  type RevalidateFn = CodingRuntimeAuthorityService["revalidateCapabilityForMutation"];
+  type ReserveFn = CodingRuntimeAuthorityService["resolveCapabilityForDelegation"];
+  const mockedAuthority = (
+    envelope: CodingWorkbenchRuntimeAuthorityEnvelope = fullyAuthorizedEnvelope,
+  ): {
+    readonly revalidateCapabilityForMutation: Mock<RevalidateFn>;
+    readonly resolveCapabilityForDelegation: Mock<ReserveFn>;
+  } => ({
+    revalidateCapabilityForMutation: vi.fn<RevalidateFn>(() => ({ ok: true, envelope })),
+    resolveCapabilityForDelegation: vi.fn<ReserveFn>(() => ({ ok: true, envelope })),
+  });
 
-  it("admits an effect through the delegation path, reserving one tool call under its own identity", () => {
-    const envelope = fullyAuthorizedEnvelope as CodingWorkbenchRuntimeAuthorityEnvelope;
-    const authority = {
-      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-    };
+  it("admits an effect through the delegation path, reserving one tool call under the invocation's identity", () => {
+    const authority = mockedAuthority();
     const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
     expect(facade.nativeEffect).toBeDefined();
     expect(
       facade.nativeEffect?.admit({
         capability: "runtime-capability-secret",
-        delegationId: "native-decision-1",
         actionClass: "command-execution",
+        invocation: call,
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, charge: "charged" });
     expect(authority.resolveCapabilityForDelegation).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: "runtime-capability-secret",
-        delegationId: "native-decision-1",
-        idempotencyKey: "native-decision-1",
+        delegationId: expect.stringMatching(/^native-invocation-[a-f0-9]{64}$/u) as string,
         usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
         workspaceRoot: "/managed/workspace",
         deploymentCeiling: "autonomous-delivery",
       }),
     );
+    const reserved = authority.resolveCapabilityForDelegation.mock.calls[0]?.[0];
+    expect(reserved?.idempotencyKey).toBe(reserved?.delegationId);
+    // The identity carries no session, message or call text.
+    expect(reserved?.delegationId).not.toContain("msg_1");
+    expect(reserved?.delegationId).not.toContain("call_1");
   });
 
-  it("revalidates a read without reserving a tool call, and charges an effect (#3897 audit)", () => {
-    const envelope = fullyAuthorizedEnvelope as CodingWorkbenchRuntimeAuthorityEnvelope;
-    const authority = {
-      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-    };
+  // CORRECTED INVARIANT (PR #4064 audit). This test replaces "revalidates a read without reserving a
+  // tool call", which pinned the defect: the read exemption let 100 distinct native reads through a
+  // 10-call envelope. A read is a tool call like any other: every check revalidates live authority,
+  // and the invocation's one call is reserved on its first check, whatever the action class.
+  it("revalidates every check and charges a read once per invocation like any other tool call", () => {
+    const authority = mockedAuthority();
     const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
-    expect(
+    const admitRead = (callId: string): unknown =>
       facade.nativeEffect?.admit({
         capability: "runtime-capability-secret",
-        delegationId: "native-read-1",
         actionClass: "workspace-read",
-      }),
-    ).toEqual({ ok: true });
+        invocation: { ...call, callId },
+      });
+    expect(admitRead("call_1")).toEqual({ ok: true, charge: "charged" });
     expect(authority.revalidateCapabilityForMutation).toHaveBeenCalledOnce();
-    expect(authority.resolveCapabilityForDelegation).not.toHaveBeenCalled();
-    facade.nativeEffect?.admit({
-      capability: "runtime-capability-secret",
-      delegationId: "native-edit-1",
-      actionClass: "workspace-write",
-    });
     expect(authority.resolveCapabilityForDelegation).toHaveBeenCalledOnce();
-    const expired = {
-      revalidateCapabilityForMutation: vi.fn(() => ({
-        ok: false as const,
-        reason: "authority-expired" as const,
-      })),
-      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-    };
-    expect(
-      createRuntimeCodingToolFacade(expired, nativeContext, governedPorts()).nativeEffect?.admit({
-        capability: "runtime-capability-secret",
-        delegationId: "native-read-2",
-        actionClass: "workspace-read",
-      }),
-    ).toEqual({ ok: false, reason: "authority-expired" });
+    // The authority's replay ledger answers the second check of the same invocation: no new charge,
+    // but live authority is revalidated again.
+    authority.resolveCapabilityForDelegation.mockReturnValueOnce({
+      ok: false,
+      reason: "authority-replayed",
+    });
+    expect(admitRead("call_1")).toEqual({ ok: true, charge: "already-charged" });
+    expect(authority.revalidateCapabilityForMutation).toHaveBeenCalledTimes(2);
+    const identities = authority.resolveCapabilityForDelegation.mock.calls.map(
+      ([input]) => input.delegationId,
+    );
+    expect(identities[0]).toBe(identities[1]);
+    // Another call id is another invocation, hence another identity.
+    expect(admitRead("call_2")).toEqual({ ok: true, charge: "charged" });
+    expect(authority.resolveCapabilityForDelegation.mock.calls[2]?.[0].delegationId).not.toBe(
+      identities[0],
+    );
   });
 
-  it("refuses when the live authority refuses (revoked, paused, exhausted) and when the envelope lacks the class", () => {
-    const refused = {
-      revalidateCapabilityForMutation: vi.fn(() => ({
-        ok: false as const,
-        reason: "authority-budget-exceeded" as const,
-      })),
-      resolveCapabilityForDelegation: vi.fn(() => ({
-        ok: false as const,
-        reason: "authority-budget-exceeded" as const,
+  it("charges a check that names no invocation on its own, and never treats a replay of it as charged", () => {
+    const authority = mockedAuthority();
+    const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
+    const admit = (): unknown =>
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+      });
+    expect(admit()).toEqual({ ok: true, charge: "per-check" });
+    expect(admit()).toEqual({ ok: true, charge: "per-check" });
+    const [first, second] = authority.resolveCapabilityForDelegation.mock.calls.map(
+      ([input]) => input.delegationId,
+    );
+    expect(first).toMatch(/^native-[a-f0-9]{24}$/u);
+    expect(second).not.toBe(first);
+    authority.resolveCapabilityForDelegation.mockReturnValueOnce({
+      ok: false,
+      reason: "authority-replayed",
+    });
+    expect(admit()).toEqual({ ok: false, reason: "authority-replayed" });
+  });
+
+  it("refuses a read on an expired authority without attempting a reservation", () => {
+    const authority = {
+      ...mockedAuthority(),
+      revalidateCapabilityForMutation: vi.fn<RevalidateFn>(() => ({
+        ok: false,
+        reason: "authority-expired",
       })),
     };
     expect(
-      createRuntimeCodingToolFacade(refused, nativeContext, governedPorts()).nativeEffect?.admit({
+      createRuntimeCodingToolFacade(authority, nativeContext, governedPorts()).nativeEffect?.admit({
         capability: "runtime-capability-secret",
-        delegationId: "native-decision-2",
         actionClass: "workspace-read",
+        invocation: call,
+      }),
+    ).toEqual({ ok: false, reason: "authority-expired" });
+    expect(authority.resolveCapabilityForDelegation).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the budget is exhausted, and when the envelope lacks the class without reserving", () => {
+    const exhausted = {
+      ...mockedAuthority(),
+      resolveCapabilityForDelegation: vi.fn<ReserveFn>(() => ({
+        ok: false,
+        reason: "authority-budget-exceeded",
+      })),
+    };
+    expect(
+      createRuntimeCodingToolFacade(exhausted, nativeContext, governedPorts()).nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+        invocation: call,
       }),
     ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
 
-    const envelope = restrictedEnvelope({ actionClasses: ["workspace-read"] });
-    const narrow = {
-      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-    };
+    const narrow = mockedAuthority(restrictedEnvelope({ actionClasses: ["workspace-read"] }));
     const facade = createRuntimeCodingToolFacade(narrow, nativeContext, governedPorts());
     expect(
       facade.nativeEffect?.admit({
         capability: "runtime-capability-secret",
-        delegationId: "native-decision-3",
         actionClass: "command-execution",
+        invocation: call,
       }),
     ).toEqual({ ok: false, reason: "action-not-authorized" });
+    expect(narrow.resolveCapabilityForDelegation).not.toHaveBeenCalled();
     expect(
       facade.nativeEffect?.admit({
         capability: "runtime-capability-secret",
-        delegationId: "native-decision-4",
         actionClass: "workspace-read",
+        invocation: call,
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, charge: "charged" });
   });
 });

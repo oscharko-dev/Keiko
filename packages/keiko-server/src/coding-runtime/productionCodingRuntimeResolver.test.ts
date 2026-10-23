@@ -1056,6 +1056,52 @@ describe("production coding runtime resolver", () => {
     });
     expect(host.runEffort?.read("run-other")).toBeUndefined();
   });
+
+  // #3873, #3897 review: native tool calls execute in the original runtime, outside the facade's
+  // `execute()`, so the roll-up was zero for a run that read and edited. The runtime's validated
+  // terminal calls reach the SAME effort owner the facade's own calls reach, once per call.
+  it("counts a run's native tool calls from the runtime's terminal reports once, for its effort roll-up", () => {
+    const fixture = workspaceFixture();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(fixture.nowMs());
+    ciRepairBudgetOverride.current = {
+      admitTool: () => undefined,
+      canChargePrompt: () => ({ accepted: true }),
+      chargePrompt: () => ({ accepted: true }),
+      observed: () => undefined,
+    };
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    const settlement = createRun.mock.calls[0]?.[0].toolFacade.nativeSettlement;
+    if (settlement === undefined) throw new Error("expected the composed run's native evidence");
+
+    const call = (callId: string, tool: string, state: "succeeded" | "failed"): void => {
+      settlement.settled({ messageId: "msg_1", callId, tool, state });
+    };
+    call("call_read_1", "read", "succeeded");
+    call("call_edit_1", "edit", "succeeded");
+    call("call_read_2", "read", "succeeded");
+    // A history read after a reconnect reports the same calls again; a failed edit did not apply.
+    call("call_read_1", "read", "succeeded");
+    call("call_edit_1", "edit", "succeeded");
+    call("call_edit_2", "edit", "failed");
+    expect(host.runEffort?.read(request.runId)).toMatchObject({
+      toolInvocationCount: 4,
+      workspaceReadCount: 2,
+      editCount: 1,
+      editRefusedCount: 1,
+    });
+    expect(host.runEffort?.read("run-other")).toBeUndefined();
+  });
 });
 
 interface PromptSettlementPort {

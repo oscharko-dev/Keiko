@@ -100,6 +100,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { dirname } from "node:path";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type {
@@ -131,6 +132,7 @@ import {
 } from "./opencodeProtocol.js";
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
@@ -503,6 +505,8 @@ interface StartBridgeControl {
   };
   readonly toolFacadeCapability?: string;
   readonly readToolProfile?: () => "direct" | "code-mode" | "native";
+  /** What `plugin.list` reports; absent reports Keiko's generated plugins active. */
+  readonly pluginEntries?: (launch: RuntimeSupervisorLaunchRequest | undefined) => unknown[];
   readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
   readonly onSpawn?: (() => void) | undefined;
   readonly stdinLifetime?: {
@@ -668,10 +672,12 @@ function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   const nativeTextRead = facade.nativeTextRead;
   const acceptedInitialization = facade.acceptedInitialization;
   const nativeEffect = facade.nativeEffect;
+  const nativeSettlement = facade.nativeSettlement;
   return {
     ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
     ...(nativeEffect === undefined ? {} : { nativeEffect }),
+    ...(nativeSettlement === undefined ? {} : { nativeSettlement }),
     execute: (input) =>
       input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
         ? Promise.resolve({ status: "observed", evidence: [] })
@@ -695,6 +701,31 @@ function fixturePreparation(
     verification,
     timeoutMs: 100,
   };
+}
+
+/**
+ * The `plugin.list` entries the pinned producer reports for Keiko's generated plugins (shape
+ * observed on 2.1.4: id, local source path, server feature, active state), beside a built-in one.
+ */
+function fixturePlugins(
+  launch: RuntimeSupervisorLaunchRequest | undefined,
+  status: "active" | "failed" = "active",
+): unknown[] {
+  const directory = join(launch?.env.OPENCODE_CONFIG_DIR ?? "", "plugins");
+  return [
+    {
+      id: "opencode.tool.read",
+      source: { type: "builtin" },
+      features: { server: true },
+      state: { status: "active" },
+    },
+    ...OPENCODE_NATIVE_REQUIRED_PLUGINS.map((plugin) => ({
+      id: plugin.id,
+      source: { type: "local", path: join(directory, plugin.file) },
+      features: { server: true },
+      state: status === "active" ? { status } : { status, error: "fixture" },
+    })),
+  ];
 }
 
 /** Exact Info.location.directory shape qualified by original pinned native HTTP create/get. */
@@ -879,6 +910,11 @@ async function startBridgeFixture(
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
       });
       return Promise.resolve(v2Envelope({}));
+    }
+    if (path === "/api/plugin") {
+      return Promise.resolve(
+        v2Envelope(control?.pluginEntries?.(capturedLaunch) ?? fixturePlugins(capturedLaunch)),
+      );
     }
     if (path === "/api/permission/request") {
       const responses = control?.runControl?.permissionResponses;
@@ -1163,7 +1199,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "9432dd292cbfdb7c20b2f6ca52e00b135bd75f2fdd0ea6d017bad2b471ac9b0f",
+      "b1460d786111044f072f61799a03577582bc2df847f21356de816b4f1702f16f",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -2532,7 +2568,11 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     read: { text: "fixture", byteCount: 7, digest: "f".repeat(64) },
   };
   const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
-  const nativeAsk = (sessionID: string, permission = "read"): string =>
+  const nativeAsk = (
+    sessionID: string,
+    permission = "read",
+    source?: { readonly messageID: string; readonly id: string },
+  ): string =>
     JSON.stringify({
       action: "native-policy",
       runId: FIXTURE_RUN_ID,
@@ -2540,17 +2580,23 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       permission,
       resources: ["src/index.ts"],
       configured: "allow",
+      ...(source === undefined ? {} : { source: { type: "tool", ...source } }),
     });
   type NativeAdmit = NonNullable<CodingToolFacade["nativeEffect"]>["admit"];
+  const CHARGED = { ok: true, charge: "charged" } as const;
   const admitWith = (result: ReturnType<NativeAdmit>): Mock<NativeAdmit> =>
     vi.fn<NativeAdmit>(() => result);
-  const facadeWith = (admit: NativeAdmit | undefined): CodingToolFacade => ({
+  const facadeWith = (
+    admit: NativeAdmit | undefined,
+    nativeSettlement?: CodingToolFacade["nativeSettlement"],
+  ): CodingToolFacade => ({
     execute: vi.fn(() => Promise.resolve(completed)),
     ...(admit === undefined ? {} : { nativeEffect: { admit } }),
+    ...(nativeSettlement === undefined ? {} : { nativeSettlement }),
   });
 
   it("releases an allowed effect only after the facade's live authority owner admits it", async () => {
-    const admit = admitWith({ ok: true });
+    const admit = admitWith(CHARGED);
     const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
       mode: "supervised-coding",
     });
@@ -2567,7 +2613,8 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         actionClass: "workspace-read",
         capability: TOOL_CAPABILITY,
       });
-      expect(admitted?.delegationId).toMatch(/^native-[a-f0-9]{24}$/u);
+      // A check that names no tool invocation (no `source`) carries no invocation identity.
+      expect(admitted?.invocation).toBeUndefined();
     } finally {
       await fixture.stop();
     }
@@ -2606,7 +2653,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   });
 
   it("cancels an already-aborted ask without consulting authority", async () => {
-    const admit = admitWith({ ok: true });
+    const admit = admitWith(CHARGED);
     const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
       mode: "autonomous-delivery",
     });
@@ -2625,7 +2672,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   });
 
   it("binds a native child session to its parent run and refuses a foreign session", async () => {
-    const admit = admitWith({ ok: true });
+    const admit = admitWith(CHARGED);
     const childSessions: Record<string, unknown>[] = [];
     const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
       mode: "autonomous-delivery",
@@ -2662,7 +2709,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
 
   it("refuses a child session whose ancestry cannot be read and records a correlated diagnostic", async () => {
     const diagnostics = persistedDiagnostics();
-    const admit = admitWith({ ok: true });
+    const admit = admitWith(CHARGED);
     let failList = false;
     const childSessions = new Proxy<Record<string, unknown>[]>([], {
       get(target, property, receiver): unknown {
@@ -2696,7 +2743,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   });
 
   it("decides with the narrower mode after a narrowing resume (#3897 audit)", async () => {
-    const admit = admitWith({ ok: true });
+    const admit = admitWith(CHARGED);
     const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
       mode: "autonomous-delivery",
     });
@@ -2732,6 +2779,182 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     }
   });
 
+  // #3897 review (P1): a native tree launched in Full access keeps the inherited egress the kernel
+  // bound at launch, so narrowing it below Full access in place would acknowledge authority the
+  // tree still holds. The resume is refused and recorded; narrowing below Full stays in place.
+  it("refuses to narrow a native Full access tree in place and records why", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+    });
+    try {
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      for (const narrower of ["supervised-coding", "governed-assist"] as const)
+        expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, narrower)).toEqual({
+          ok: false,
+          failureCode: "authority-resolution-failed",
+          retryable: false,
+        });
+      const refused = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-narrowing.refused",
+      );
+      expect(refused.map((event) => event.extra)).toEqual([
+        expect.objectContaining({
+          runId: FIXTURE_RUN_ID,
+          launchMode: "autonomous-delivery",
+          requestedMode: "supervised-coding",
+        }),
+        expect.objectContaining({
+          runId: FIXTURE_RUN_ID,
+          launchMode: "autonomous-delivery",
+          requestedMode: "governed-assist",
+        }),
+      ]);
+      expect(refused[0]).toMatchObject({ level: "warn", correlationId: FIXTURE_RUN_ID });
+      expectActivityLogProof(
+        "coding-runtime.native-narrowing.refused.emitted-line",
+        formatActivityLogProofLine(refused[0] ?? {}),
+      );
+      // Resuming in the launch mode is not a narrowing and resumes the paused run.
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "autonomous-delivery")).toMatchObject({
+        ok: true,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("control: a native tree launched below Full access narrows in place", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "supervised-coding",
+      readToolProfile: () => "native",
+      activityLog,
+    });
+    try {
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "governed-assist")).toMatchObject({
+        ok: true,
+        effectiveMode: "governed-assist",
+      });
+      expect(
+        activityLog.events.some((event) => event.op === "coding-runtime.native-narrowing.refused"),
+      ).toBe(false);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  const SOURCE = { messageID: "msg_assistant_1", id: "call_read_1" } as const;
+  const handleAsk = (
+    fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+    body: string,
+  ): Promise<{ readonly status: number; readonly body: string }> =>
+    fixture.runtime.toolBridge.handle({ method: "POST", headers: new Headers(authorized), body });
+
+  it("hands the authority owner the original invocation identity of a tool-sourced check (#3897 review)", async () => {
+    const admit = admitWith(CHARGED);
+    const childSessions: Record<string, unknown>[] = [];
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+      childSessions,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    childSessions.push({
+      id: "ses_child",
+      parentID: "ses_tool",
+      location: { directory: workspaceRoot },
+    });
+    try {
+      // Two checks of one tool call (an edit and the directory it touches) name one invocation.
+      await handleAsk(fixture, nativeAsk("ses_tool", "read", SOURCE));
+      await handleAsk(fixture, nativeAsk("ses_tool", "edit", SOURCE));
+      // The same message and call ids in a child session are the child's own invocation.
+      await handleAsk(fixture, nativeAsk("ses_child", "read", SOURCE));
+      expect(admit.mock.calls.map(([input]) => input.invocation)).toEqual([
+        { sessionId: "ses_tool", messageId: "msg_assistant_1", callId: "call_read_1" },
+        { sessionId: "ses_tool", messageId: "msg_assistant_1", callId: "call_read_1" },
+        { sessionId: "ses_child", messageId: "msg_assistant_1", callId: "call_read_1" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records how a check was charged and why the authority refused one, without a path (#3897 review)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const answers = [
+      { ok: true, charge: "charged" },
+      { ok: true, charge: "already-charged" },
+      { ok: false, reason: "authority-budget-exceeded" },
+      { ok: false, reason: "workspace-drift" },
+    ] as const;
+    let asked = 0;
+    const admit = vi.fn<NativeAdmit>(() => {
+      const answer = answers[asked] ?? CHARGED;
+      asked += 1;
+      return answer;
+    });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "supervised-coding",
+      activityLog,
+    });
+    try {
+      for (const callId of ["call_1", "call_1", "call_2", "call_3"])
+        await handleAsk(fixture, nativeAsk("ses_tool", "read", { messageID: "msg_1", id: callId }));
+      const decided = activityLog.events
+        .filter((event) => event.op === "coding-runtime.native-policy.decided")
+        .map((event) => event.extra);
+      expect(decided).toMatchObject([
+        { outcome: "allowed", invocationCharge: "charged" },
+        { outcome: "allowed", invocationCharge: "already-charged" },
+        { outcome: "authority-refused", authorityReason: "authority-budget-exceeded" },
+        { outcome: "authority-refused", authorityReason: "drift" },
+      ]);
+      expect(decided[2]).not.toHaveProperty("invocationCharge");
+      expect(decided[0]).not.toHaveProperty("authorityReason");
+      expect(JSON.stringify(decided)).not.toContain("src/index.ts");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("tells the run evidence owner which call a refusal ended, and no call that was admitted", async () => {
+    const refused = vi.fn();
+    const nativeSettlement = { refused, settled: vi.fn() } as unknown as NonNullable<
+      CodingToolFacade["nativeSettlement"]
+    >;
+    const admit = vi.fn<NativeAdmit>((input) =>
+      input.invocation?.callId === "call_exhausted"
+        ? { ok: false, reason: "authority-budget-exceeded" }
+        : CHARGED,
+    );
+    const fixture = await startBridgeFixture(facadeWith(admit, nativeSettlement), undefined, {
+      mode: "supervised-coding",
+    });
+    const source = (id: string): { readonly messageID: string; readonly id: string } => ({
+      messageID: "msg_1",
+      id,
+    });
+    try {
+      await handleAsk(fixture, nativeAsk("ses_tool", "read", source("call_ok")));
+      expect(refused).not.toHaveBeenCalled();
+      // Refused by policy (internet below Full access), by the authority owner, and a check with no
+      // tool source (nothing to tell: no call can be named).
+      await handleAsk(fixture, nativeAsk("ses_tool", "webfetch", source("call_policy")));
+      await handleAsk(fixture, nativeAsk("ses_tool", "read", source("call_exhausted")));
+      await handleAsk(fixture, nativeAsk("ses_tool", "webfetch"));
+      expect(refused.mock.calls).toEqual([
+        [{ messageId: "msg_1", callId: "call_policy" }],
+        [{ messageId: "msg_1", callId: "call_exhausted" }],
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("proves ancestry only through a bounded parent chain inside the workspace", async () => {
     const { nativeSessionDescendsFromRun } = await compositionModule();
     const ws = "/ws";
@@ -2751,6 +2974,145 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     );
     expect(nativeSessionDescendsFromRun(deep, "s9", "p", ws)).toBe(false);
     expect(nativeSessionDescendsFromRun(deep, "s6", "p", ws)).toBe(true);
+  });
+});
+
+describe("native tool evidence from the runtime's own history (#3873, #3897 review)", () => {
+  const completed = {
+    status: "completed" as const,
+    evidence: [],
+    read: { text: "fixture", byteCount: 7, digest: "f".repeat(64) },
+  };
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const TOOL_ERROR = { type: "ToolError", message: "PRIVATE_TOOL_ERROR" };
+  const part = (
+    callId: string,
+    name: string,
+    status: "running" | "completed" | "error",
+  ): Record<string, unknown> => ({
+    type: "tool",
+    id: callId,
+    name,
+    executed: true,
+    native: {},
+    time: { created: 5, ran: 6, ...(status === "running" ? {} : { completed: 7 }) },
+    state: {
+      status,
+      input: { filePath: "PRIVATE_PATH" },
+      ...(status === "completed" ? { content: [{ type: "text", text: "PRIVATE_OUTPUT" }] } : {}),
+      ...(status === "error" ? { error: TOOL_ERROR } : {}),
+    },
+  });
+  // The history endpoint lists newest first.
+  const history = (
+    content: readonly Record<string, unknown>[],
+  ): readonly Readonly<Record<string, unknown>>[] =>
+    [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" },
+      { id: "msg_assistant", type: "assistant", time: { created: 2 }, content },
+    ].reverse();
+  const frame = (type: string, number: number): Uint8Array =>
+    new TextEncoder().encode(
+      `data: ${JSON.stringify({
+        id: `evt_native_${String(number)}`,
+        type,
+        data: { sessionID: "ses_tool", assistantMessageID: "msg_assistant", ordinal: 0 },
+      })}\n\n`,
+    );
+  const policyAsk = (permission: string, callId: string): string =>
+    JSON.stringify({
+      action: "native-policy",
+      runId: FIXTURE_RUN_ID,
+      sessionID: "ses_tool",
+      permission,
+      resources: ["https://example.invalid/doc"],
+      source: { type: "tool", messageID: "msg_assistant", id: callId },
+      configured: "ask",
+    });
+
+  async function runHistory(
+    profile: "native" | "direct",
+  ): Promise<{ readonly settled: [string | undefined, string][] }> {
+    const settled: [string | undefined, string][] = [];
+    const nativeSettlement = createCodingToolNativeSettlementFacet((action, status) => {
+      settled.push([action, status]);
+    });
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    // A mapped profile's history only admits Keiko's own tool names.
+    const tool = (native: string): string =>
+      profile === "native" ? native : "keiko_workspace_read";
+    let content: readonly Record<string, unknown>[] = [
+      part("call_read_1", tool("read"), "completed"),
+      part("call_edit_1", tool("edit"), "completed"),
+    ];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement,
+      },
+      undefined,
+      {
+        mode: "supervised-coding",
+        readToolProfile: () => profile,
+        historyCalls,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: () => Promise.resolve(v2Envelope(history(content))),
+      },
+    );
+    try {
+      const stream = streams[0];
+      if (stream === undefined) throw new Error("expected the event stream");
+      let hints = 0;
+      const reread = async (): Promise<void> => {
+        const reads = historyCalls.length;
+        hints += 1;
+        stream.enqueue(frame("session.step.ended", hints));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThan(reads);
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      await reread();
+      // The policy refused the fetch (internet is a Full access capability): the runtime ends it as a
+      // failed call, the later calls run, and one is still running when the history is read.
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: policyAsk("webfetch", "call_fetch_1"),
+      });
+      content = [
+        ...content,
+        part("call_fetch_1", tool("webfetch"), "error"),
+        part("call_read_2", tool("read"), "completed"),
+        part("call_shell_1", tool("shell"), "running"),
+      ];
+      await reread();
+      // A reconnect or a repeated history read reports the same calls again.
+      await reread();
+      await reread();
+      return { settled };
+    } finally {
+      await fixture.stop();
+    }
+  }
+
+  it("counts each completed native call once, a policy refusal as a refusal, and a running call not at all", async () => {
+    const { settled } = await runHistory("native");
+    expect(settled).toEqual([
+      ["read", "completed"],
+      ["edit", "completed"],
+      ["egress", "denied"],
+      ["read", "completed"],
+    ]);
+  });
+
+  it("control: a mapped profile's calls reach the run's effort through the facade, never through its history", async () => {
+    const { settled } = await runHistory("direct");
+    expect(settled).toEqual([]);
   });
 });
 
@@ -3188,6 +3550,56 @@ describe("private OpenCode tool bridge", () => {
       });
     } finally {
       await fixture.stop();
+    }
+  });
+
+  // #3897 review (P1): the native profile keeps every built-in agent's own permission rules, so the
+  // policy hook is what governs the run. A native run whose governing plugin the producer reports
+  // failed never becomes ready, before any session or prompt; a mapped run never depends on it.
+  it("refuses a native start whose governing plugin the producer reports failed", async () => {
+    let pluginLists = 0;
+    const sessionCreateCalls: string[] = [];
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        readToolProfile: () => "native",
+        sessionCreateCalls,
+        pluginEntries: (launch): unknown[] => {
+          pluginLists += 1;
+          return fixturePlugins(launch, "failed");
+        },
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "runtime-profile-open", retryable: false },
+      },
+    );
+    try {
+      expect(pluginLists).toBe(1);
+      expect(sessionCreateCalls).toEqual([]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("control: a native start with its governing plugins active readies; a mapped one never asks", async () => {
+    for (const profile of ["native", "direct"] as const) {
+      let pluginLists = 0;
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve(completed)) },
+        undefined,
+        {
+          readToolProfile: () => profile,
+          pluginEntries: (launch): unknown[] => {
+            pluginLists += 1;
+            return fixturePlugins(launch);
+          },
+        },
+      );
+      try {
+        expect(pluginLists).toBe(profile === "native" ? 1 : 0);
+      } finally {
+        await fixture.stop();
+      }
     }
   });
 

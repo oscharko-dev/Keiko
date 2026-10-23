@@ -71,6 +71,7 @@ const OPEN_CODE_READINESS_PHASES = [
   "authenticated-health-version",
   "unauthenticated-health",
   "openapi-digest",
+  "policy-plugin",
   "gateway-challenge",
   "tool-facade-challenge",
   "sse-history-reconciliation",
@@ -301,6 +302,11 @@ export interface OpenCodeRuntimeAdapterPorts {
       authorization: "basic" | "none",
     ) => Promise<{ readonly status: number; readonly version?: string }>;
     readonly openApiDigest: () => Promise<string>;
+    /**
+     * The native profile's governing plugins are active in the producer (#3897). Absent for a
+     * profile whose configured rules govern on their own; a native run without it never readies.
+     */
+    readonly policyPluginActive?: (() => Promise<boolean>) | undefined;
     readonly gatewayChallenge: () => Promise<boolean>;
     readonly toolFacadeChallenge: () => Promise<boolean>;
     readonly subscribe: (signal: AbortSignal) => AsyncIterable<OpenCodeSyncHint>;
@@ -740,6 +746,10 @@ async function startAdapter(
     phase = recordReadinessPhase(ports, "openapi-digest");
     if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest) {
       return fail("openapi-digest");
+    }
+    if (readiness.policyPluginActive !== undefined) {
+      phase = recordReadinessPhase(ports, "policy-plugin");
+      if (!(await readiness.policyPluginActive())) return fail("policy-plugin");
     }
     phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     const firstHint = await openSubscription();

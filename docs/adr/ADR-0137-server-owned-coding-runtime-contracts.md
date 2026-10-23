@@ -1003,24 +1003,38 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 
 ### D10 — The native tool profile binds the autonomy mode through supported hooks
 
-- **One profile selects it.** `PRODUCTION_OPENCODE_TOOL_PROFILE` in `deps.ts` is the server-owned
-  selection of the `native` profile (`OPENCODE_TOOL_PROFILES`); no request field can select a
-  profile. The mapped `direct` and `code-mode` profiles remain available to tests and to an
+- **One profile selects it.** `productionOpenCodeToolProfile()` in `deps.ts` is the server-owned
+  selection of the `native` profile on macOS (`OPENCODE_TOOL_PROFILES`; Linux and Windows map to
+  `direct` until a native boundary is qualified there); no request field can select a profile. The mapped `direct` and `code-mode` profiles remain available to tests and to an
   explicit server selection, and the governed `keiko_*` catalog, the tool facade and Chat
   repository search stay in place for the surfaces that use them.
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
-  native profile (`opencodeLaunchProfile.ts`) sets the permission baseline to `ask` for every
-  native action, denies the mode-independent `external_directory` escape, keeps `update` and
-  `share` off, keeps the single `keiko-runtime` provider behind the Model Gateway, and enables
-  native snapshots. The baseline is `ask`, never `allow`: the policy hook sets the final effect of
-  each action it evaluates, so a policy plugin that fails to load leaves every action waiting for
-  a human instead of silently allowed. The real-binary control with the plugin absent
-  (`opencodeNativeProjectBoundary.real.test.ts`) shows a pending `read` permission request and no
-  execution, where the former `allow` baseline ran the read and returned its content to the model.
-  A configured `deny` is applied before the hook and cannot be raised by it (an
-  `external_directory` read is refused with the facade never asked). Repository text decides
-  nothing about authority: the policy hook runs after OpenCode's own rule evaluation and decides
-  only the actions the baseline leaves to it.
+  native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
+  mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
+  `update` and `share` off, keeps the single `keiko-runtime` provider behind the Model Gateway, and
+  enables native snapshots. The producer appends configured rules after each built-in agent's own
+  rules and the last match wins, so any configured rule naming an ordinary action would replace an
+  agent's own denial: the earlier blanket `allow` (and a blanket `ask`) let the Plan agent write
+  project files in Full access (#3897 review). Without it every built-in agent keeps the producer's
+  rules (https://opencode.ai/v2/docs/agents/#builtins): Plan cannot edit project files and may
+  write only its plan directory, Explore keeps its read-only `*` denial, General cannot launch
+  subagents. The policy hook then narrows whatever an agent's rules allow or ask; an agent's own
+  `deny` is final before the hook. Agent selection is therefore independent of the Keiko mode:
+  Full access is not Build, and Plan stays read-only in every mode. The real-binary suite
+  (`opencodeNativeProjectBoundary.real.test.ts`) pins it with the production plugin and a facade
+  that allows everything: Plan's project write leaves the file unchanged without asking the hook,
+  its plan-file write and Build's write go through.
+- **A native run readies only with its governing plugins active.** No configured rule stands in for
+  the policy hook, so the fail-closed property lives in readiness: after the protocol digest the
+  adapter enters the `policy-plugin` phase, which polls the producer's admitted `GET /api/plugin`
+  (`plugin.list`) for at most ten seconds until `keiko.native-policy` and `keiko.native-context`
+  are `active` from Keiko's own generated files (`opencodeNativePluginReadiness.ts`). A failed or
+  unparsable plugin, a required id claimed from another file or twice, or a plugin still missing
+  when the bound runs out refuses the start (`runtime-profile-open`) before any session or prompt.
+  The real-binary suite shows an absent and an unparsable policy plugin never read as ready and
+  the production launch does. A configured `deny` is applied before the hook and cannot be raised
+  by it (an `external_directory` read is refused with the facade never asked). Repository text
+  decides nothing about authority: the policy hook runs after OpenCode's own rule evaluation.
 - **Code Mode stays available (owner decision, 2026-10-23); no rule names its `execute` action.**
   The native profile offers the producer's `execute` tool with the ordinary tools, and its catalog
   lists exactly the eight `tools.opencode.*` management tools (session rename and move, worktree
@@ -1037,8 +1051,23 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `opencode_read_mcp_resource`, `opencode_list_mcp_resources` (whose producer default is already
   `allow`) and `worktree_remove` (as `edit` on the worktree directory); worktree creation, session
   moves and renames, model search and the worktree listing assert nothing, and the `execute` call
-  itself evaluates no permission. `fetch` is a Code Mode primitive that neither hook sees: only
-  the enclosing `execute` code and the kernel egress rule govern it (loopback below Full access).
+  itself evaluates no permission. The generated plugin therefore decides the Code Mode program
+  itself through `tool.hook("execute.before")`: the policy classifies `execute` as command
+  execution, so Ask for approval asks before a program starts and a refusal blocks it before it
+  runs (the program text is never sent to the policy). `fetch` is a Code Mode primitive that
+  neither hook sees inside an admitted program: the kernel egress rule governs it (loopback below
+  Full access).
+- **An unoffered native tool name is the producer's to answer.** The gateway binds a native call
+  by name only and grants nothing (ADR-0175 D2). A model that names a tool the request did not
+  offer (a hallucinated `bash`, say) reaches OpenCode, which answers with its own unavailable-tool
+  result and continues the turn, as standalone; refusing it at the gateway ended the whole turn.
+  `gateway.tool-catalog.native-passthrough` counts such calls as `unofferedCount`.
+- **Narrowing cannot outlive the launch egress.** Seatbelt binds a native tree's egress when it
+  execs (`openCodeNativeEgress`). A tree launched in Full access keeps inherited egress, so a
+  resume that narrows it below Full access is refused (`authority-resolution-failed`, recorded on
+  `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
+  `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
+  Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
   standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
@@ -1084,7 +1113,14 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   a start before any run exists and a follow-up before the adapter is reached. The switch only
   narrows what a turn may do; the Authority Envelope, the mode and the policy hook below decide
   every action as before. Each effective switch is recorded body-free as
-  `coding-runtime.agent.selected` (run, new and previous agent).
+  `coding-runtime.agent.selected` (run, new and previous agent). The browser learns what it may
+  offer from the readiness read it already performs before a start: `selectableAgents` (always
+  carrying `build`) is computed from the composed tool profile through `openCodeSelectableAgents`,
+  and the contract validator refuses an absent, duplicated, unknown or `build`-less list. The
+  composer shows a Build | Plan switch only where that list offers `plan`, keeps it operable
+  between turns (idle, paused) and fixed while a turn runs, sends the selection with every start,
+  retry and follow-up (`build` included, so a follow-up can switch back), and names the plan agent
+  in the run status line and information panel.
 - **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
   plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
   (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`
@@ -1157,7 +1193,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   entry names, never their files or sibling subtrees) because the runtime opens the workspace's
   parent to canonicalize it (the 2026-10-23 customer-shape qualification found OpenCode 2.0.10
   unable to `realpath` its workspace otherwise). The runtime's `HOME` is its private state, so no
-  user-home dotfile is needed. Executable transitions are inherited. **Egress follows the run's
+  user-home dotfile is needed. Executable transitions are inherited. **Process authority is the
+  tree's own sandbox (#3901):** the profile starts from `allow default`, so it carries the rule the
+  execution-root profile already owns, `OWN_PROCESS_TARGETS_SEATBELT_RULE`:
+  `(deny signal process-info*)(allow signal process-info* (target self) (target same-sandbox))`.
+  A shell, interpreter or `kill` in the tree signals and reads the process information of itself
+  and its descendants (also one reparented to launchd, and process groups of its own children) and
+  of no other process of the OS user. The PR audit's `/bin/kill -TERM` against an unsandboxed
+  sibling is refused with `Operation not permitted` and the sibling keeps running; another run's
+  tree is as foreign as any other process, because each launch is a separate sandbox even when the
+  profile text is identical; `proc_pidinfo` of a foreign pid returns nothing. The check is made on
+  the sender, so the unsandboxed server still stops the runtime it launched, and the rule is bound
+  into the policy digest. It does not hide the sysctl process table (`pgrep`, argument queries);
+  `ps` and `top` are setuid and cannot start under any Seatbelt profile, so they are unaffected.
+  The kernel proof is `runtime-gateway.test.ts`, with unsandboxed controls for each refusal and for
+  the cancellation and toolchain paths that must keep working. **Egress follows the run's
   effective mode and is enforced by the kernel, not only by the per-action policy:** below Full
   access (`governed-assist`, `supervised-coding`) the Seatbelt profile denies all network except
   loopback (the attested Model Gateway, the tool facade and local dev servers), including unix
@@ -1204,14 +1254,24 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   assignments, transparent wrappers (`env`, `exec`, `nohup`, …), program paths, Git's
   value-taking global options and quoted sub-shells. A repository script that delivers internally
   is outside text classification.
-- **Every released native effect is revalidated against live authority.** After the policy (and
-  any human decision) allows an effect, the bridge admits it through the tool facade's
-  native-effect owner, which takes the same delegation path as a governed tool call: the
-  capability is authenticated, the run must be running on its tree binding, the envelope's action
-  classes must include the effect's class, and one tool call of the run's cumulative budget is
-  reserved under a fresh replay identity. A refused, revoked, expired, exhausted or aborted effect
-  is denied and recorded as `authority-refused` or `cancelled`; a wiring without the owner refuses
-  every effect.
+- **Every native permission check is revalidated against live authority, and every native tool
+  call costs one tool call once.** After the policy (and any human decision) allows an action, the
+  bridge admits it through the tool facade's native-effect owner, which takes the same delegation
+  path as a governed tool call: the capability is authenticated, the run must be running on its
+  tree binding, the envelope's action classes must include the action's class (checked before
+  anything is reserved), and the invocation's one tool call of the run's cumulative budget is
+  reserved. Reads are tool calls like any other: an earlier read exemption let 100 distinct reads
+  through a 10-call envelope (PR #4064 audit). The reservation is keyed by the original invocation
+  identity, a digest of the run and the runtime's own session, message and tool-call ids, so the
+  several checks one call raises (an edit and the directory it touches, a repeated evaluation)
+  revalidate every time but charge once: the authority's replay ledger answers `authority-replayed`
+  for the repeat, which the owner reads as already charged. That ledger is the only memory (one
+  entry per reserved call, bounded by `maxToolCalls`, dropped with the run's authority record). A
+  child session has its own session id and so its own calls on the same run budget. A check that
+  names no tool invocation cannot be recognised again and is charged on its own, so such checks can
+  only spend the budget faster. Patch bytes stay as before (a native edit's size is not known at
+  its permission check). A refused, revoked, expired, exhausted or aborted action is denied and
+  recorded as `authority-refused` or `cancelled`; a wiring without the owner refuses every action.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's
@@ -1231,7 +1291,20 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   closed action name, the effect (`allow`, `deny`, `ask`), the closed outcome (allowed, a hard
   denial reason, the human's approved/denied/expired/cancelled/unavailable, or
   `authority-refused`), the session relation, the risk, the resource count and a digest of the
-  resources, never a path, command or URL.
+  resources, never a path, command or URL. An admitted check also carries `invocationCharge`
+  (`charged`, `already-charged`, `per-check`) and a refusal `authorityReason` (a closed word: the
+  budget, expiry, revocation, a resolution failure, a class outside the envelope, a binding drift,
+  no owner, or `other`).
+- **A native run's effort roll-up counts the calls the runtime executed.** Native tools run outside
+  `execute()`, so the facade never answered them. The runtime's validated terminal tool reports
+  (history signals `succeeded` and `failed`, ingested after the reconciler committed them) reach
+  the same run-effort owner once per call identity (message and call id; at most 4,096 remembered,
+  oldest first): a completed `read` is a workspace read, a completed `edit`/`write`/`patch` an edit,
+  and a failure is a refused edit or a failed call, a policy refusal a `denied` one. Approval is
+  never counted, and a replayed history read or a reconnect counts a call once. Only the primary
+  session's history is read, so a subagent's own calls are not counted (the `subagent` call is).
+  The orchestrator's edit outcome (verification requirement and refusal escalation) is not fed: it
+  belongs to Keiko's governed verifier, which a native run does not call.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation

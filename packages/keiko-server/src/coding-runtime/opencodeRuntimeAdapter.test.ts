@@ -65,6 +65,7 @@ type ReadinessPhase =
   | "authenticated-health-version"
   | "unauthenticated-health"
   | "openapi-digest"
+  | "policy-plugin"
   | "gateway-challenge"
   | "tool-facade-challenge"
   | "sse-history-reconciliation"
@@ -136,6 +137,7 @@ interface OpenCodeRuntimeAdapterPorts {
       authorization: "basic" | "none",
     ) => Promise<{ readonly status: number; readonly version?: string }>;
     readonly openApiDigest: () => Promise<string>;
+    policyPluginActive?: () => Promise<boolean>;
     gatewayChallenge: () => Promise<boolean>;
     readonly toolFacadeChallenge: () => Promise<boolean>;
     subscribe: (signal: AbortSignal) => AsyncIterable<OpenCodeSyncHint>;
@@ -429,6 +431,7 @@ function readinessPorts(failAt?: ReadinessPhase): {
         },
         openApiDigest: (): Promise<string> =>
           Promise.resolve(failed("openapi-digest") ? DIGEST : "b".repeat(64)),
+        policyPluginActive: (): Promise<boolean> => Promise.resolve(failed("policy-plugin")),
         gatewayChallenge: (): Promise<boolean> => Promise.resolve(failed("gateway-challenge")),
         toolFacadeChallenge: (): Promise<boolean> =>
           Promise.resolve(failed("tool-facade-challenge")),
@@ -904,6 +907,7 @@ describe("OpenCode runtime adapter readiness", () => {
     "authenticated-health-version",
     "unauthenticated-health",
     "openapi-digest",
+    "policy-plugin",
     "gateway-challenge",
     "tool-facade-challenge",
     "sse-history-reconciliation",
@@ -928,6 +932,18 @@ describe("OpenCode runtime adapter readiness", () => {
       "wipe-ephemeral-state",
       "require-manager-reap",
     ]);
+  });
+
+  // #3897 review (P1): only a profile that depends on a governing plugin carries the port; a mapped
+  // profile's configured rules govern on their own, so its readiness never enters the phase.
+  it("enters the policy-plugin phase only when the composition supplies the check", async () => {
+    const harness = readinessPorts();
+    const { policyPluginActive: _omitted, ...withoutCheck } = harness.ports.readiness;
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      readiness: withoutCheck,
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
   });
 
   it("keeps readiness closed until pending history covers a live identity", async () => {

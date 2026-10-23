@@ -105,8 +105,8 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
         policy.runtimeArtifactDigest,
         policy.modelProfileDigest,
         policy.profile === "keiko-native"
-          ? "native-exec-inherited-no-appleevents-no-lsopen"
-          : "fork-allowed-exec-runtime-and-apple-git-only-no-mach-lookup-no-appleevents-no-lsopen",
+          ? "native-exec-inherited-own-sandbox-process-targets-no-appleevents-no-lsopen"
+          : "fork-allowed-exec-runtime-and-apple-git-only-own-sandbox-process-targets-no-mach-lookup-no-appleevents-no-lsopen",
         ...(policy.egress === undefined ? [] : [`native-egress-${policy.egress}-v1`]),
         ...(policy.filesystem === undefined
           ? []

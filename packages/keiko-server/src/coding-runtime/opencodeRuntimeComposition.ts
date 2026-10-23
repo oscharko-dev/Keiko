@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -69,6 +69,7 @@ import type {
   CodingToolNativeReadFileIO,
   CodingToolNativeReadFilePacket,
   CodingToolNativeInvocationRefusal,
+  CodingToolNativeEffectAdmission,
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
@@ -97,6 +98,7 @@ import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2ApprovalDecision,
@@ -108,12 +110,15 @@ import {
   decideOpenCodeNativePolicy,
   parseOpenCodeNativePolicyRequest,
   recordOpenCodeNativePolicyDecision,
+  type OpenCodeNativeAuthorityEvidence,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyOutcome,
   type OpenCodeNativeSessionRelation,
   type OpenCodeNativePolicyRequest,
 } from "./opencodeNativePolicy.js";
 import { OPENCODE_NATIVE_POLICY_ACTION } from "./opencodeNativePolicyPlugin.js";
+import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
+import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
 import {
@@ -180,6 +185,42 @@ const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
 });
 
 const CODING_WORKBENCH_AGENT_VALUES = ["build", "plan"] as const;
+
+const CODING_WORKBENCH_MODE_VALUES = [
+  "governed-assist",
+  "supervised-coding",
+  "autonomous-delivery",
+] as const;
+
+const NATIVE_NARROWING_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-narrowing.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeNarrowingRefused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    launchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["autonomous-delivery", "unknown"],
+    },
+    requestedMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CODING_WORKBENCH_MODE_VALUES,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-narrowing.refused.emitted-line"],
+  releaseImpact: "patch",
+});
 
 const AGENT_SELECTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -444,6 +485,8 @@ interface PreparedRun {
    * the run with a narrower mode (#3897 audit). Native policy decisions always read this value.
    */
   mode: string | undefined;
+  /** The mode the tree was launched with; its kernel egress was bound then and cannot narrow. */
+  readonly launchMode: string | undefined;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
@@ -503,7 +546,12 @@ export function createOpenCodeRuntimeComposition(
     { approvals, runs },
   );
   const lifecycle = lifecycleAdapter(input, bridge, runs);
-  const manager = withNativeModeNarrowing(runs, compositionManager(input, lifecycle));
+  const manager = withNativeModeNarrowing(
+    runs,
+    compositionManager(input, lifecycle),
+    toolProfile === "native",
+    input.activityLog,
+  );
   return {
     prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
     manager,
@@ -542,23 +590,62 @@ function compositionManager(
 }
 
 /**
- * A resume may narrow the run's mode (Full access to Ask for approval, say); the manager records it,
- * and the native policy must decide with it from the next action on, not with the launch mode.
- * Widening is refused by the manager itself.
+ * A resume may narrow the run's mode (Supervised workspace to Ask for approval, say); the manager
+ * records it, and the native policy must decide with it from the next action on, not with the launch
+ * mode. Widening is refused by the manager itself. A native tree launched in Full access keeps the
+ * inherited egress the kernel bound at launch, which no later policy can take back (a shell or a
+ * Code Mode `fetch` would keep Internet access), so a resume that narrows it below Full access is
+ * refused instead of acknowledged with authority the tree still holds (#3897 review).
  */
 function withNativeModeNarrowing(
   runs: ReadonlyMap<string, PreparedRun>,
   manager: CodingRuntimeManager,
+  native: boolean,
+  activityLog: ServerLogSink | undefined,
 ): CodingRuntimeManager {
   const resume = manager.resume.bind(manager);
   manager.resume = (runId, requestedMode): CodingRuntimePauseResult => {
-    const result = resume(runId, requestedMode);
     const run = runs.get(runId);
+    if (native && run !== undefined && narrowsLaunchEgress(run.launchMode, requestedMode)) {
+      recordNativeNarrowingRefused(activityLog, runId, run.launchMode, requestedMode);
+      return { ok: false, failureCode: "authority-resolution-failed", retryable: false };
+    }
+    const result = resume(runId, requestedMode);
     if (result.ok && result.effectiveMode !== undefined && run !== undefined)
       run.mode = result.effectiveMode;
     return result;
   };
   return manager;
+}
+
+function narrowsLaunchEgress(
+  launchMode: string | undefined,
+  requestedMode: CodingWorkbenchMode | undefined,
+): requestedMode is CodingWorkbenchMode {
+  return (
+    requestedMode !== undefined &&
+    openCodeNativeEgress(launchMode) === "inherited" &&
+    openCodeNativeEgress(requestedMode) !== "inherited"
+  );
+}
+
+function recordNativeNarrowingRefused(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  launchMode: string | undefined,
+  requestedMode: CodingWorkbenchMode,
+): void {
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_NARROWING_REFUSED_OPERATION,
+      { level: "warn", correlationId: runId },
+      {
+        runId,
+        launchMode: launchMode === "autonomous-delivery" ? launchMode : "unknown",
+        requestedMode,
+      },
+    ),
+  );
 }
 
 function createRunPort(
@@ -1197,9 +1284,56 @@ function preparedRun(
     configDigest,
     verification,
     mode,
+    launchMode: mode,
     observedPermissionIds: new Set(),
     initialTurnBaselineStable: false,
     ready: false,
+  };
+}
+
+type CompositionSafeActivitySignal =
+  import("./codingSafeActivityProjection.js").CodingSafeActivitySignal;
+
+/**
+ * The adapter ingests each fresh, committed history signal once. The native profile's tools execute
+ * in the original runtime, outside the facade, so its terminal tool signals are also the run's tool
+ * evidence (#3873, #3897 review): they reach the facade's native settlement owner, which counts each
+ * call once by its identity. Counted whether or not the safe-activity projection accepts the
+ * signal; approval never reaches here, only the runtime's own completed or failed call.
+ */
+function adapterSafeActivitySink(
+  input: OpenCodeRuntimeCompositionInput,
+): Pick<Parameters<typeof createOpenCodeRuntimeAdapter>[0], "safeActivitySink"> {
+  const settle = nativeToolSettlementObserver(input);
+  const activity = input.safeActivity;
+  if (activity === undefined && settle === undefined) return {};
+  return {
+    safeActivitySink: {
+      ingest: (signal): boolean => {
+        settle?.(signal);
+        return activity?.ingest(signal) ?? true;
+      },
+      recordDrops: (count): void => {
+        activity?.recordDrops(count);
+      },
+    },
+  };
+}
+
+function nativeToolSettlementObserver(
+  input: OpenCodeRuntimeCompositionInput,
+): ((signal: CompositionSafeActivitySignal) => void) | undefined {
+  const settlement = input.toolProfile === "native" ? input.toolFacade.nativeSettlement : undefined;
+  if (settlement === undefined) return undefined;
+  return (signal): void => {
+    if (signal.kind !== "tool" || signal.messageId === undefined) return;
+    if (signal.state !== "succeeded" && signal.state !== "failed") return;
+    settlement.settled({
+      messageId: signal.messageId,
+      callId: signal.callId,
+      tool: signal.tool,
+      state: signal.state,
+    });
   };
 }
 
@@ -1232,14 +1366,7 @@ async function handshake(
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
       readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),
       governedSink: input.governedEventSink,
-      ...(input.safeActivity
-        ? {
-            safeActivitySink: {
-              ingest: input.safeActivity.ingest,
-              recordDrops: input.safeActivity.recordDrops,
-            },
-          }
-        : {}),
+      ...adapterSafeActivitySink(input),
       control: {
         status: async (sessionId, signal) => {
           return (await v2SessionIsTerminal(client, sessionId, signal)) ? "terminal" : "activity";
@@ -1324,6 +1451,16 @@ function readinessV2Ports(
         : unauthenticatedV2Health(input.fetch, endpoint, request.signal),
     openApiDigest: async (): Promise<string> =>
       projectOpenCodeV2ProtocolSurface(await client.document()).digest,
+    ...(input.toolProfile === "native"
+      ? {
+          policyPluginActive: (): Promise<boolean> =>
+            awaitOpenCodeNativePlugins(
+              (signal) => client.plugins(signal),
+              join(openCodeConfigDirectory(run.runRoot), "plugins"),
+              request.signal,
+            ),
+        }
+      : {}),
     gatewayChallenge: () =>
       challengeV2Gateway(input, run, client, fixedSessionId, request, startupRead),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
@@ -2417,15 +2554,31 @@ async function handleNativePolicyRequest(
     request,
     nowMs: Date.now(),
   });
-  const outcome = await settleNativePolicyOutcome(run, decision, signal, deps, approvals);
+  const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, approvals);
+  const { outcome } = settled;
+  if (outcome !== "allowed" && outcome !== "approved") noteNativeCallRefused(deps, request);
   recordOpenCodeNativePolicyDecision(deps.activityLog, run.runId, {
     mode: run.mode,
     request,
     decision,
     outcome,
     sessionRelation,
+    ...(settled.authority === undefined ? {} : { authority: settled.authority }),
   });
   return nativePolicyResult(outcome, decision);
+}
+
+// A refused call ends as a failed tool in the runtime's history; the run's effort evidence reads it
+// as a refusal rather than a failure of the tool itself.
+function noteNativeCallRefused(
+  deps: ToolBridgeExecutionDeps,
+  request: OpenCodeNativePolicyRequest,
+): void {
+  if (request.source === undefined) return;
+  deps.facade.nativeSettlement?.refused({
+    messageId: request.source.messageID,
+    callId: request.source.id,
+  });
 }
 
 function nativePolicyResult(
@@ -2449,42 +2602,66 @@ const NATIVE_SESSION_ANCESTRY_MAX_DEPTH = 8;
 
 /**
  * The policy's answer, revalidated against live authority before an effect is released (#3897
- * review): an already-aborted ask is cancelled, and an allowed or human-approved effect is
+ * review): an already-aborted ask is cancelled, and an allowed or human-approved action is
  * admitted through the facade's native-effect owner, which authenticates the capability, requires
- * the run to be running on its tree binding, checks the envelope's action classes and reserves
- * one tool call of the run's budget. A wiring without that owner refuses every effect.
+ * the run to be running on its tree binding, checks the envelope's action classes and charges the
+ * run's tool-call budget once per original tool invocation, reads included. A wiring without that
+ * owner refuses every effect.
  */
 async function settleNativePolicyOutcome(
   run: PreparedRun,
   decision: OpenCodeNativePolicyDecision,
+  request: OpenCodeNativePolicyRequest,
   signal: AbortSignal | undefined,
   deps: ToolBridgeExecutionDeps,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
-): Promise<OpenCodeNativePolicyOutcome> {
-  if (signal?.aborted === true) return "cancelled";
-  if (decision.effect === "deny") return decision.reason;
+): Promise<NativePolicySettlement> {
+  if (signal?.aborted === true) return { outcome: "cancelled" };
+  if (decision.effect === "deny") return { outcome: decision.reason };
   const outcome: OpenCodeNativePolicyOutcome =
     decision.effect === "ask"
       ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
       : "allowed";
-  if (outcome !== "allowed" && outcome !== "approved") return outcome;
-  return nativeEffectAdmitted(deps, decision.classification.actionClass, signal)
-    ? outcome
-    : "authority-refused";
+  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  const admission = nativeEffectAdmission(
+    deps,
+    decision.classification.actionClass,
+    request,
+    signal,
+  );
+  return admission.ok
+    ? { outcome, authority: { charge: admission.charge } }
+    : { outcome: "authority-refused", authority: { reason: admission.reason } };
 }
 
-function nativeEffectAdmitted(
+interface NativePolicySettlement {
+  readonly outcome: OpenCodeNativePolicyOutcome;
+  readonly authority?: OpenCodeNativeAuthorityEvidence;
+}
+
+function nativeEffectAdmission(
   deps: ToolBridgeExecutionDeps,
   actionClass: CodingWorkbenchActionClass,
+  request: OpenCodeNativePolicyRequest,
   signal: AbortSignal | undefined,
-): boolean {
-  if (signal?.aborted === true) return false;
-  const admission = deps.facade.nativeEffect?.admit({
-    capability: deps.capability,
-    delegationId: `native-${randomBytes(12).toString("hex")}`,
-    actionClass,
-  });
-  return admission?.ok === true;
+): CodingToolNativeEffectAdmission {
+  if (signal?.aborted === true) return { ok: false, reason: "unavailable" };
+  const { source } = request;
+  return (
+    deps.facade.nativeEffect?.admit({
+      capability: deps.capability,
+      actionClass,
+      ...(source === undefined
+        ? {}
+        : {
+            invocation: {
+              sessionId: request.sessionID,
+              messageId: source.messageID,
+              callId: source.id,
+            },
+          }),
+    }) ?? { ok: false, reason: "unavailable" }
+  );
 }
 
 /**

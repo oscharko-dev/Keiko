@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   isAdmissibleOpenCodeToolName,
   isAdmittedOpenCodeNativeToolContract,
+  isOpenCodeCodeModeExecutionFailure,
   isOpenCodeNativeToolName,
   openCodeNativeToolSetDigest,
   openCodeToolLogLabel,
@@ -68,6 +69,45 @@ describe("native tool inventory", () => {
     expect(isAdmissibleOpenCodeToolName("x".repeat(65))).toBe(false);
     expect(openCodeToolLogLabel("shell")).toBe("shell");
     expect(openCodeToolLogLabel("github_create_issue")).toBe("extension");
+  });
+});
+
+// OpenCode 2.1.4 Code Mode returns a program's uncaught exception, including one thrown by a nested
+// `tools.opencode.*` call, as a COMPLETED `execute` part whose `metadata.error` is `true` (#3897).
+describe("Code Mode execution failure predicate", () => {
+  const completed = (metadata?: unknown): Record<string, unknown> => ({
+    status: "completed",
+    ...(metadata === undefined ? {} : { metadata }),
+  });
+
+  it("marks only a completed execute part with the boolean metadata.error true", () => {
+    expect(isOpenCodeCodeModeExecutionFailure("execute", completed({ error: true }))).toBe(true);
+    expect(isOpenCodeCodeModeExecutionFailure("execute", completed({ error: false }))).toBe(false);
+    expect(isOpenCodeCodeModeExecutionFailure("execute", completed({}))).toBe(false);
+    expect(isOpenCodeCodeModeExecutionFailure("execute", completed())).toBe(false);
+  });
+
+  it.each(["true", 1, {}, [true], null, undefined, "PRIVATE"])(
+    "ignores a non-boolean error value %j",
+    (error) => {
+      expect(isOpenCodeCodeModeExecutionFailure("execute", completed({ error }))).toBe(false);
+    },
+  );
+
+  it("ignores another tool, another status and a malformed state or metadata", () => {
+    expect(isOpenCodeCodeModeExecutionFailure("read", completed({ error: true }))).toBe(false);
+    expect(isOpenCodeCodeModeExecutionFailure(undefined, completed({ error: true }))).toBe(false);
+    for (const status of ["running", "error", "streaming", undefined, true]) {
+      expect(
+        isOpenCodeCodeModeExecutionFailure("execute", { status, metadata: { error: true } }),
+      ).toBe(false);
+    }
+    for (const state of [undefined, null, "completed", [], 7]) {
+      expect(isOpenCodeCodeModeExecutionFailure("execute", state)).toBe(false);
+    }
+    for (const metadata of [true, "error", [{ error: true }], null]) {
+      expect(isOpenCodeCodeModeExecutionFailure("execute", completed(metadata))).toBe(false);
+    }
   });
 });
 

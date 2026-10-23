@@ -15,8 +15,9 @@ export const OPENCODE_NATIVE_POLICY_WAIT_MS =
 
 /**
  * Code Mode's management tools that change state but assert no OpenCode permission (2.1.4, measured
- * with the real runtime): the policy decides them through the tool hook instead. Every other Code
- * Mode tool either asserts a permission the evaluate hook sees or only reads.
+ * with the real runtime): the policy decides them through the tool hook instead, as it decides the
+ * Code Mode program itself (`execute`, which asserts none either). Every other Code Mode tool either
+ * asserts a permission the evaluate hook sees or only reads.
  */
 export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
   "opencode_session_move",
@@ -132,10 +133,11 @@ function pluginBodySource(): readonly string[] {
     "      // The runtime's own package manager stays offline; at Full access a shell may reach registries.",
     "      if (fullAccess && event.env) delete event.env.npm_config_offline;",
     "    });",
-    "    // Code Mode stays available; a nested management tool that asserts no permission is decided",
-    "    // by the same policy, and a refusal blocks the nested call with the policy's message.",
+    "    // Code Mode stays available. The producer asserts no permission for a Code Mode program",
+    "    // (`execute`) nor for the nested management tools that change state, so the same policy",
+    "    // decides them here; a refusal blocks the call with the policy's message.",
     '    await ctx.tool.hook("execute.before", async (event) => {',
-    "      if (!CODE_MODE_GOVERNED.has(event.tool)) return;",
+    '      if (event.tool !== "execute" && !CODE_MODE_GOVERNED.has(event.tool)) return;',
     '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources: [], effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
     '      if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
     "    });",

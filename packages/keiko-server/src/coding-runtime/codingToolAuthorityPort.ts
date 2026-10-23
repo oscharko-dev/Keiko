@@ -44,10 +44,12 @@ import type {
   CodingToolMutationGuard,
   CodingToolProducerBinding,
   MaterializedPatchCharge,
-  CodingToolNativeEffectAdmission,
-  CodingToolNativeEffectFacet,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import {
+  createCodingToolNativeEffectFacet,
+  createCodingToolNativeSettlementFacet,
+} from "./codingToolNativeEffect.js";
 import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
 import {
   createCodingToolGovernedDelegate,
@@ -597,13 +599,7 @@ export function createRuntimeCodingToolFacade(
 ): CodingToolFacade {
   const configuration = { ...options };
   const activityLog = configuration.catalogActivityLog ?? processServerLogSink();
-  const nativeOptions = {
-    ...configuration,
-    invocationContext: context,
-    invocationRegistry:
-      configuration.invocationRegistry ??
-      createCodingToolInvocationRegistry({ now: lazyContextClock(context) }),
-  };
+  const nativeOptions = withInvocationContext(configuration, context);
   const authorityPort = createCodingToolAuthorityPort(authority, context, {
     approvalProofVerifier: configuration.approvalProofVerifier,
     activityLog,
@@ -631,52 +627,39 @@ export function createRuntimeCodingToolFacade(
     nativeOptions,
     activityLog,
   );
-  const nativeEffect = nativeEffectFacet(authority, context);
-  return nativeTextRead === undefined
-    ? { ...facade, nativeEffect }
-    : { ...facade, nativeTextRead, nativeEffect };
+  return {
+    ...facade,
+    ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
+    ...nativeExecutionFacets(authority, context, configuration.onToolSettled),
+  };
 }
 
-/**
- * Native OpenCode effects (#3897 review) take the same delegation path as a governed tool call:
- * the capability is authenticated, the run must be running on its tree binding, the envelope must
- * allow the action class, and one tool call is reserved against the run's budget under the
- * decision's replay identity. Nothing is executed here; the runtime performs the effect itself.
- */
-function nativeEffectFacet(
+function withInvocationContext(
+  configuration: RuntimeCodingToolFacadeOptions,
+  context: CodingToolAuthorityContextProvider,
+): NativeReadFacadeOptions {
+  return {
+    ...configuration,
+    invocationContext: context,
+    invocationRegistry:
+      configuration.invocationRegistry ??
+      createCodingToolInvocationRegistry({ now: lazyContextClock(context) }),
+  };
+}
+
+// Native OpenCode calls execute outside `execute()`: the same live authority and budget owner admits
+// their permission checks, and the same run-effort owner counts their terminal calls.
+function nativeExecutionFacets(
   authority: Pick<
     CodingRuntimeAuthorityService,
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
   >,
   context: CodingToolAuthorityContextProvider,
-): CodingToolNativeEffectFacet {
+  onToolSettled: CodingToolFacadeOptions["onToolSettled"],
+): Pick<CodingToolFacade, "nativeEffect" | "nativeSettlement"> {
   return {
-    admit: (input): CodingToolNativeEffectAdmission => {
-      const current = context();
-      const live = {
-        capability: input.capability,
-        adapterKind: current.adapterKind,
-        liveFacts: current.liveFacts,
-        workspaceRoot: current.workspaceRoot,
-        deploymentCeiling: current.deploymentCeiling,
-        nowIso: current.nowIso,
-      };
-      // Reads and planning are revalidated against live authority but reserve no tool call: a
-      // large task reads far more files than it changes, and reads have no effect to budget.
-      const resolved =
-        input.actionClass === "workspace-read"
-          ? authority.revalidateCapabilityForMutation(live)
-          : authority.resolveCapabilityForDelegation({
-              ...live,
-              delegationId: input.delegationId,
-              idempotencyKey: input.delegationId,
-              usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
-            });
-      if (!resolved.ok) return { ok: false, reason: resolved.reason };
-      return hasClasses(resolved.envelope.authority.actionClasses, [input.actionClass])
-        ? { ok: true }
-        : { ok: false, reason: "action-not-authorized" };
-    },
+    nativeEffect: createCodingToolNativeEffectFacet(authority, context),
+    nativeSettlement: createCodingToolNativeSettlementFacet(onToolSettled),
   };
 }
 

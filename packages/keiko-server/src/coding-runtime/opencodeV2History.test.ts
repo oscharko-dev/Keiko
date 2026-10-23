@@ -1894,3 +1894,221 @@ describe("OpenCode V2 assistant text over the part bound (#3897)", () => {
     );
   });
 });
+
+// OpenCode 2.1.4 Code Mode (#3897): the producer catches a JavaScript exception thrown inside the
+// `execute` program, or by a nested `tools.opencode.*` call the program did not catch, and returns a
+// COMPLETED tool part whose `state.metadata.error` is `true` (the thrown message is the part's
+// content). The part's `status` alone says only that the tool returned. These are the shapes the
+// reviewers reproduced against the pinned executable (PR #4064): a program that throws, and the
+// arithmetic control `return 1 + 1`, which completes with `metadata.error` false.
+describe("OpenCode 2.1.4 Code Mode execute outcome (#3897)", () => {
+  const THROWN = "PRIVATE_THROWN_MESSAGE";
+
+  function executePart(
+    callId: string,
+    status: string,
+    metadata: unknown,
+    code = "return 1 + 1;",
+  ): Record<string, unknown> {
+    return {
+      type: "tool",
+      id: callId,
+      name: "execute",
+      executed: true,
+      native: {},
+      time: { created: 5, ran: 6, completed: 7 },
+      state: {
+        status,
+        input: { code },
+        content: [{ type: "text", text: THROWN }],
+        ...(metadata === undefined ? {} : { metadata }),
+      },
+    };
+  }
+
+  function codeModeHistory(
+    parts: readonly Record<string, unknown>[],
+  ): readonly Record<string, unknown>[] {
+    return [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Run the program." },
+      { id: "msg_assistant", type: "assistant", time: { created: 2 }, content: parts },
+    ];
+  }
+
+  function createProjection(
+    activityLog?: ReturnType<typeof createBufferedServerLogSink>,
+  ): ReturnType<typeof createOpenCodeV2HistoryProjection> {
+    return createOpenCodeV2HistoryProjection({
+      runId: "code-mode-outcome",
+      activityLog,
+      toolProfile: "native",
+    });
+  }
+
+  function toolStates(
+    projection: ReturnType<typeof createOpenCodeV2HistoryProjection>,
+    messages: readonly Record<string, unknown>[],
+    checkpoint?: number,
+  ): {
+    readonly states: readonly (readonly [string, string])[];
+    readonly last: number | undefined;
+  } {
+    const events = projection.project("ses_execute", messages, checkpoint);
+    const states = events.flatMap((event) => {
+      const signal = projection.takeSignal(event);
+      return signal?.kind === "tool" ? [[signal.callId, signal.state] as const] : [];
+    });
+    return { states, last: events.at(-1)?.sequence ?? checkpoint };
+  }
+
+  it("projects a completed execute part with metadata.error true as a failed tool without its body", () => {
+    const projection = createProjection();
+    const messages = codeModeHistory([
+      executePart("call_throw", "completed", { error: true }, `throw new Error("${THROWN}");`),
+    ]);
+    const events = projection.project("ses_execute", messages, undefined);
+    const signals = events.map((event) => projection.takeSignal(event));
+    expect(signals).toContainEqual({
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_throw",
+      tool: "execute",
+      state: "failed",
+      occurredAt: "1970-01-01T00:00:00.005Z",
+    });
+    expect(JSON.stringify({ events, signals })).not.toContain("PRIVATE_");
+  });
+
+  it("projects a nested tools.opencode.* call that failed inside the program as a failed execute", () => {
+    // A hook or the tool itself throws inside `tools.opencode.worktree_create`; the program does not
+    // catch it, so the outer execute part completes with the error flag and the thrown message as
+    // its result. The nested call is not a part of its own: it reuses the outer call's id.
+    const states = toolStates(
+      createProjection(),
+      codeModeHistory([
+        executePart(
+          "call_nested",
+          "completed",
+          { error: true },
+          'return await tools.opencode.worktree_create({ name: "wt" });',
+        ),
+      ]),
+    ).states;
+    expect(states).toEqual([["call_nested", "failed"]]);
+  });
+
+  it.each([
+    ["metadata.error is false", { error: false }],
+    ["metadata has no error", {}],
+    ["the part has no metadata", undefined],
+  ])("keeps a completed execute part succeeded when %s (positive control)", (_label, metadata) => {
+    const { states } = toolStates(
+      createProjection(),
+      codeModeHistory([executePart("call_sum", "completed", metadata)]),
+    );
+    expect(states).toEqual([["call_sum", "succeeded"]]);
+  });
+
+  it.each([
+    ["the string true", "true"],
+    ["the number 1", 1],
+    ["an object", { message: THROWN }],
+    ["an array", [true]],
+    ["null", null],
+    ["a string", THROWN],
+  ])(
+    "treats metadata.error that is %s as no failure (only the boolean true marks one)",
+    (_l, v) => {
+      const { states } = toolStates(
+        createProjection(),
+        codeModeHistory([executePart("call_loose", "completed", { error: v })]),
+      );
+      expect(states).toEqual([["call_loose", "succeeded"]]);
+    },
+  );
+
+  it("does not read metadata that is not an object or belongs to another tool or status", () => {
+    const read = { ...executePart("call_read", "completed", { error: true }), name: "read" };
+    const states = toolStates(
+      createProjection(),
+      codeModeHistory([
+        executePart("call_scalar", "completed", true),
+        executePart("call_list", "completed", [{ error: true }]),
+        read,
+        executePart("call_running", "running", { error: true }),
+        executePart("call_status_error", "error", { error: false }),
+      ]),
+    ).states;
+    expect(states).toEqual([
+      ["call_scalar", "succeeded"],
+      ["call_list", "succeeded"],
+      ["call_read", "succeeded"],
+      ["call_running", "running"],
+      ["call_status_error", "failed"],
+    ]);
+  });
+
+  it("shows a failed execution and a valid recovery as separate outcomes", () => {
+    const { states } = toolStates(
+      createProjection(),
+      codeModeHistory([
+        executePart("call_failed", "completed", { error: true }, 'throw new Error("x");'),
+        executePart("call_recovered", "completed", { error: false }, "return 1 + 1;"),
+      ]),
+    );
+    expect(states).toEqual([
+      ["call_failed", "failed"],
+      ["call_recovered", "succeeded"],
+    ]);
+  });
+
+  it("settles a running execute as failed on the next live read of the same part", () => {
+    // The live timeline is the history read the runtime's event stream triggers: the first read
+    // sees the program running, the next one the part settled with the error flag.
+    const projection = createProjection();
+    const first = toolStates(
+      projection,
+      codeModeHistory([executePart("call_live", "running", undefined)]),
+    );
+    projection.observeLiveEvent("ses_execute", {
+      id: "evt_execution_finished",
+      type: "session.execution.succeeded",
+      data: { sessionID: "ses_execute" },
+    });
+    const second = toolStates(
+      projection,
+      codeModeHistory([executePart("call_live", "completed", { error: true })]),
+      first.last,
+    );
+    expect([first.states, second.states]).toEqual([
+      [["call_live", "running"]],
+      [["call_live", "failed"]],
+    ]);
+  });
+
+  it("keeps the history-projection line body-free for a failed execution", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createProjection(sink);
+    const events = projection.project(
+      "ses_execute",
+      codeModeHistory([executePart("call_throw", "completed", { error: true })]),
+      undefined,
+    );
+    const signals = events.flatMap((event) => projection.takeSignal(event) ?? []);
+    expect(signals).toContainEqual(expect.objectContaining({ kind: "tool", state: "failed" }));
+    const lines = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(lines).toHaveLength(1);
+    const [line] = lines;
+    if (line === undefined) throw new TypeError("expected one history-projection line");
+    const record = expectActivityLogProof(
+      "coding-runtime.history-projection.emitted-line",
+      formatActivityLogProofLine(line),
+    );
+    expect(record).toMatchObject({
+      correlationId: "code-mode-outcome",
+      eventCount: events.length,
+      signalCount: signals.length,
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_");
+  });
+});

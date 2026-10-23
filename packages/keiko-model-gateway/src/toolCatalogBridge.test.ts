@@ -15,12 +15,26 @@ import {
 } from "./__fixtures__/toolCatalog.js";
 import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
-import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import { GATEWAY_NATIVE_EXACT_CONTENT_TOOLS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import type {
+  GatewayNativeToolAdvertisement,
+  GatewayToolCatalogAdvertisement,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { withCorrelationId } from "./observability.js";
-import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+import {
+  createGatewayToolCatalogBridge,
+  GatewayToolCatalogError,
+  type GatewayToolCatalogBridge,
+} from "./toolCatalogBridge.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  ModelProviderConfig,
+  NormalizedResponse,
+  NormalizedToolCall,
+} from "./types.js";
 import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   expectActivityLogProof,
@@ -1032,5 +1046,502 @@ describe("inactive Code Mode profile substitution", () => {
         createGatewayToolCatalogBridge({ ...request(), toolCatalog: value }, () => NOW),
       ).toThrow(GatewayToolCatalogError);
     }
+  });
+});
+
+// ─── Native OpenCode tool advertisement (#3897) ──────────────────────────────────────────────
+// The pinned runtime's own definitions are forwarded to the provider as data and every returned call
+// is handed back by name only: no Keiko handler is bound, OpenCode executes under its policy.
+
+const NATIVE_OFFER_MS = 30_000;
+const NATIVE_DIGEST = sha256Hex("native-tool-set-fixture");
+const NATIVE_CANARY = "private-native-argument-canary";
+const NATIVE_TOOL_NAMES = ["read", "edit", "write", "patch", "shell"] as const;
+
+function nativeAdvertisement(now = NOW): GatewayNativeToolAdvertisement {
+  return {
+    kind: "native",
+    runtime: { id: "opencode", version: "2.1.4" },
+    tools: NATIVE_TOOL_NAMES.map((name) => ({
+      name,
+      description: `The ${name} tool of the fixture runtime.`,
+      parameters: {
+        type: "object",
+        properties: { target: { type: "string" } },
+        required: ["target"],
+      },
+    })),
+    toolSetDigest: NATIVE_DIGEST,
+    offered: {
+      offerId: "opencode-native-1",
+      expiresAt: new Date(now + NATIVE_OFFER_MS).toISOString(),
+    },
+  };
+}
+
+function looseNativeAdvertisement(overrides: Record<string, unknown>): Record<string, unknown> {
+  return { ...nativeAdvertisement(), ...overrides };
+}
+
+function nativeBridge(
+  toolCatalog: unknown = nativeAdvertisement(),
+  now: () => number = (): number => NOW,
+  recordProjection = true,
+): { readonly bridge: GatewayToolCatalogBridge; readonly events: ModelGatewayLogEvent[] } {
+  const events: ModelGatewayLogEvent[] = [];
+  const bridge = createGatewayToolCatalogBridge(
+    { ...request(), toolCatalog } as GatewayRequest,
+    now,
+    {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+    recordProjection,
+  );
+  return { bridge, events };
+}
+
+function nativeCall(
+  name = "read",
+  id = "call-1",
+  args: Record<string, unknown> = { target: "src/a.ts" },
+): NormalizedToolCall {
+  return { id, name, arguments: args };
+}
+
+function textResponse(
+  content: string,
+  toolCalls: readonly NormalizedToolCall[] = [],
+): NormalizedResponse {
+  return {
+    modelId: CONFIG.modelId,
+    content,
+    finishReason: "stop",
+    toolCalls,
+    structuredOutput: null,
+    usage: {
+      requestId: "request-1",
+      promptTokens: 1,
+      completionTokens: 1,
+      latencyMs: 1,
+      costClass: "low",
+    },
+  };
+}
+
+function opsOf(events: readonly ModelGatewayLogEvent[]): string[] {
+  return events.map((event) => event.op);
+}
+
+describe("native tool advertisement bridge: projection", () => {
+  it("offers the advertised definitions verbatim and in order, as frozen data", () => {
+    const advertisement = nativeAdvertisement();
+    const { bridge } = nativeBridge(advertisement);
+    expect(bridge.tools).toEqual(advertisement.tools);
+    expect(Object.isFrozen(bridge.tools)).toBe(true);
+    expect(bridge.tools.every((tool) => Object.isFrozen(tool))).toBe(true);
+  });
+
+  it("logs one body-free projection line naming the native compatibility and the digest", () => {
+    const advertisement = nativeAdvertisement();
+    const { events } = nativeBridge(advertisement);
+    expect(opsOf(events)).toEqual(["gateway.tool-catalog.projected"]);
+    expect(events[0]).toMatchObject({
+      extra: {
+        projectionDigest: NATIVE_DIGEST,
+        toolCount: advertisement.tools.length,
+        compatibility: "native",
+        offerRemainingMs: NATIVE_OFFER_MS,
+      },
+    });
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("fixture runtime");
+    expect(serialized).not.toContain("properties");
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.projected.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ compatibility: "native", offerRemainingMs: NATIVE_OFFER_MS });
+  });
+
+  it("records the projection once only when the caller asks for it", () => {
+    const { bridge, events } = nativeBridge(nativeAdvertisement(), () => NOW, false);
+    expect(events).toEqual([]);
+    expect(bridge.tools).toHaveLength(NATIVE_TOOL_NAMES.length);
+  });
+
+  it("reports no remaining offer time once the offer has run out, and still projects it", () => {
+    const { bridge, events } = nativeBridge(nativeAdvertisement(), () => NOW + NATIVE_OFFER_MS + 1);
+    expect(bridge.tools).toHaveLength(NATIVE_TOOL_NAMES.length);
+    expect(events[0]).toMatchObject({ extra: { offerRemainingMs: 0 } });
+  });
+
+  it("treats exactly the workspace-content tools as exact-content tools", () => {
+    const { bridge } = nativeBridge();
+    for (const name of GATEWAY_NATIVE_EXACT_CONTENT_TOOLS)
+      expect(bridge.isExactContentTool(name)).toBe(true);
+    const exact = new Set<string>(GATEWAY_NATIVE_EXACT_CONTENT_TOOLS);
+    for (const tool of bridge.tools.filter((entry) => !exact.has(entry.name)))
+      expect(bridge.isExactContentTool(tool.name)).toBe(false);
+  });
+
+  it("carries the advertisement to the provider and returns a native call unbound", async () => {
+    let body: unknown;
+    const fetchImpl: typeof fetch = (_url, init) => {
+      if (typeof init?.body !== "string") throw new TypeError("Expected serialized request");
+      body = JSON.parse(init.body) as unknown;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "call-1",
+                      type: "function",
+                      function: { name: "read", arguments: JSON.stringify({ target: "src/a.ts" }) },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    const advertisement = nativeAdvertisement();
+    const result = await adapter(fetchImpl).call(
+      { ...request(), toolCatalog: advertisement },
+      CONFIG,
+    );
+    expect(requiredRecord(body, "provider request").tools).toEqual(
+      advertisement.tools.map(({ name, description, parameters }) => ({
+        type: "function",
+        function: { name, description, parameters },
+      })),
+    );
+    expect(result.toolCalls).toEqual([nativeCall()]);
+    expect(result.toolCalls[0]).not.toHaveProperty("invocation");
+  });
+});
+
+describe("native tool advertisement bridge: admission", () => {
+  it.each([
+    ["no tools", looseNativeAdvertisement({ tools: [] })],
+    ["a malformed tool-set digest", looseNativeAdvertisement({ toolSetDigest: "not-a-digest" })],
+    ["an unknown extra key", looseNativeAdvertisement({ extra: true })],
+    [
+      "an unsupported runtime",
+      looseNativeAdvertisement({ runtime: { id: "other", version: "1.0.0" } }),
+    ],
+    [
+      "a malformed runtime version",
+      looseNativeAdvertisement({ runtime: { id: "opencode", version: "latest" } }),
+    ],
+    [
+      "a repeated tool name",
+      looseNativeAdvertisement({
+        tools: nativeAdvertisement().tools.concat(nativeAdvertisement().tools.slice(0, 1)),
+      }),
+    ],
+    [
+      "an unparsable expiry",
+      looseNativeAdvertisement({ offered: { offerId: "o", expiresAt: "soon" } }),
+    ],
+    [
+      "an empty offer id",
+      looseNativeAdvertisement({ offered: { offerId: "", expiresAt: "2030-01-01T00:00:00Z" } }),
+    ],
+  ])("refuses a native advertisement with %s before any transport", (_label, toolCatalog) => {
+    const events: ModelGatewayLogEvent[] = [];
+    expect(() =>
+      createGatewayToolCatalogBridge(
+        { ...request(), toolCatalog } as unknown as GatewayRequest,
+        () => NOW,
+        {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      ),
+    ).toThrow(expect.objectContaining({ reason: "projection-mismatch" }));
+    expect(opsOf(events)).toEqual(["gateway.tool-catalog.rejected"]);
+    expect(events[0]).toMatchObject({
+      errorKind: "validation-failed",
+      extra: { phase: "projection", status: "invalid", reason: "projection-mismatch" },
+    });
+  });
+
+  it("refuses a native advertisement beside handwritten provider tools", () => {
+    const toolCatalog = nativeAdvertisement();
+    const tools = [{ name: "read", description: "read", parameters: {} }];
+    expect(() =>
+      createGatewayToolCatalogBridge(
+        { ...request(), toolCatalog, tools } as GatewayRequest,
+        () => NOW,
+      ),
+    ).toThrow(expect.objectContaining({ reason: "projection-mismatch" }));
+  });
+
+  it("never executes an accessor while inspecting a native advertisement", () => {
+    let reads = 0;
+    const hostile = looseNativeAdvertisement({});
+    Object.defineProperty(hostile, "tools", {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return nativeAdvertisement().tools;
+      },
+    });
+    expect(() => nativeBridge(hostile)).toThrow(GatewayToolCatalogError);
+    expect(reads).toBe(0);
+  });
+
+  it("refuses a native advertisement carrying an unsafe prototype key", () => {
+    const hostile = JSON.parse(
+      JSON.stringify(nativeAdvertisement()).replace('"required"', '"__proto__"'),
+    ) as unknown;
+    expect(() => nativeBridge(hostile)).toThrow(
+      expect.objectContaining({ reason: "projection-mismatch" }),
+    );
+  });
+
+  it("fails closed on a shape-valid advertisement beyond the catalog capture budget", () => {
+    const description = "d".repeat(16_384);
+    const advertisementOf = (count: number): Record<string, unknown> =>
+      looseNativeAdvertisement({
+        tools: Array.from({ length: count }, (_unused, index) => ({
+          name: `tool_${String(index)}`,
+          description,
+          parameters: { type: "object" },
+        })),
+      });
+    const fits = Math.floor(TOOL_CATALOG_LIMITS.maxArgumentBytes / description.length) - 1;
+    expect(nativeBridge(advertisementOf(fits)).bridge.tools).toHaveLength(fits);
+    expect(() => nativeBridge(advertisementOf(fits + 3))).toThrow(
+      expect.objectContaining({ reason: "projection-mismatch" }),
+    );
+  });
+});
+
+describe("native tool advertisement bridge: call binding", () => {
+  it("hands an offered call back by name, untouched and without a Keiko invocation", () => {
+    const { bridge } = nativeBridge();
+    // The runtime validates arguments against its own schema; the bridge does not.
+    const call = nativeCall("shell", "call-shell", { anything: [1, { nested: true }], target: 7 });
+    const bound = bridge.bind(call);
+    expect(bound).toEqual(call);
+    expect(bound).not.toHaveProperty("invocation");
+  });
+
+  it("logs a body-free passthrough line under the tool-set digest and the caller's correlation", () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: nativeAdvertisement() },
+      () => NOW,
+      withCorrelationId(
+        {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        "correlation-native",
+      ),
+    );
+    bridge.bind(nativeCall("read", "call-1", { target: NATIVE_CANARY }));
+    expect(opsOf(events)).toEqual([
+      "gateway.tool-catalog.projected",
+      "gateway.tool-catalog.native-passthrough",
+    ]);
+    expect(events[1]).toMatchObject({
+      correlationId: "correlation-native",
+      extra: { projectionDigest: NATIVE_DIGEST, toolCount: 1 },
+    });
+    expect(JSON.stringify(events)).not.toContain(NATIVE_CANARY);
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.native-passthrough.emitted-line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(persisted).toMatchObject({ projectionDigest: NATIVE_DIGEST, toolCount: 1 });
+  });
+
+  // #3897 (resilience, parity): the native producer owns its tools and binding grants nothing, so a
+  // name the request did not offer reaches OpenCode, which answers the model with its own
+  // unavailable-tool result and continues the turn (pinned against the real 2.1.4 binary in
+  // opencodeNativeProjectBoundary.real.test.ts). Refusing it here ended the whole turn.
+  it.each(["not_advertised", "Read", "read ", "execute", "keiko_workspace_read"])(
+    "passes the unadvertised tool name %j to the producer and counts it unoffered",
+    (name) => {
+      const { bridge, events } = nativeBridge();
+      const bound = bridge.bind(nativeCall(name, "call-1", { target: NATIVE_CANARY }));
+      expect(bound).toMatchObject({ id: "call-1", name });
+      expect(bound).not.toHaveProperty("invocation");
+      expect(opsOf(events)).toEqual([
+        "gateway.tool-catalog.projected",
+        "gateway.tool-catalog.native-passthrough",
+      ]);
+      expect(events[1]).toMatchObject({
+        extra: { projectionDigest: NATIVE_DIGEST, toolCount: 1, unofferedCount: 1 },
+      });
+      expect(JSON.stringify(events)).not.toContain(NATIVE_CANARY);
+      expectActivityLogProof(
+        "gateway.tool-catalog.native-passthrough.emitted-line",
+        formatActivityLogProofLine(events[1] ?? {}),
+      );
+    },
+  );
+
+  it("binds until the offer expires: one millisecond before expiry binds, the expiry itself does not", () => {
+    let time = NOW + NATIVE_OFFER_MS - 1;
+    const { bridge, events } = nativeBridge(nativeAdvertisement(), () => time);
+    expect(bridge.bind(nativeCall())).toEqual(nativeCall());
+    time = NOW + NATIVE_OFFER_MS;
+    expect(() => bridge.bind(nativeCall())).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments", retryable: false }),
+    );
+    time = NOW + NATIVE_OFFER_MS + 60_000;
+    expect(() => bridge.bind(nativeCall())).toThrow(GatewayToolCatalogError);
+    expect(events.filter((event) => event.op === "gateway.tool-catalog.rejected")).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({
+      extra: {
+        phase: "response",
+        reason: "invalid-arguments",
+        catalogReason: "expired-compatibility",
+      },
+    });
+    expect(
+      events.filter((event) => event.op === "gateway.tool-catalog.native-passthrough"),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ["an extra key", { id: "call-1", name: "read", arguments: {}, extra: true }],
+    ["no arguments", { id: "call-1", name: "read" }],
+    ["an empty call id", { id: "", name: "read", arguments: {} }],
+    ["a call id with a space", { id: "call 1", name: "read", arguments: {} }],
+    ["an over-long call id", { id: "c".repeat(129), name: "read", arguments: {} }],
+    ["a non-string tool name", { id: "call-1", name: 7, arguments: {} }],
+    [
+      "an oversized string argument",
+      {
+        id: "call-1",
+        name: "read",
+        arguments: { target: "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1) },
+      },
+    ],
+    [
+      "an unsafe prototype key",
+      {
+        id: "call-1",
+        name: "read",
+        arguments: JSON.parse('{"__proto__":{"injected":true}}') as unknown,
+      },
+    ],
+  ])("rejects a call with %s as an invalid argument payload", (_label, call) => {
+    const { bridge, events } = nativeBridge();
+    expect(() => bridge.bind(call as unknown as NormalizedToolCall)).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+    expect(opsOf(events)).not.toContain("gateway.tool-catalog.native-passthrough");
+  });
+});
+
+describe("native tool advertisement bridge: call batches", () => {
+  it("binds every offered call of a batch in order and logs each passthrough", () => {
+    const { bridge, events } = nativeBridge();
+    const calls = [nativeCall("read", "call-1"), nativeCall("shell", "call-2", { target: "ls" })];
+    const bound = bridge.bindCalls(calls);
+    expect(bound).toEqual(calls);
+    expect(Object.isFrozen(bound)).toBe(true);
+    expect(bound.every((call) => !("invocation" in call))).toBe(true);
+    expect(
+      events.filter((event) => event.op === "gateway.tool-catalog.native-passthrough"),
+    ).toHaveLength(2);
+  });
+
+  it("binds an empty batch to an empty frozen list", () => {
+    const { bridge, events } = nativeBridge();
+    const bound = bridge.bindCalls([]);
+    expect(bound).toEqual([]);
+    expect(Object.isFrozen(bound)).toBe(true);
+    expect(opsOf(events)).toEqual(["gateway.tool-catalog.projected"]);
+  });
+
+  it("passes a batch through when one call names an unadvertised tool", () => {
+    const { bridge, events } = nativeBridge();
+    const bound = bridge.bindCalls([
+      nativeCall("read", "call-1"),
+      nativeCall("not_advertised", "call-2"),
+    ]);
+    expect(bound.map((call) => call.name)).toEqual(["read", "not_advertised"]);
+    const unoffered = events
+      .filter((event) => event.op === "gateway.tool-catalog.native-passthrough")
+      .map((event) => (event.extra as { unofferedCount?: number } | undefined)?.unofferedCount);
+    expect(unoffered).toEqual([undefined, 1]);
+  });
+
+  it("refuses repeated call ids, a non-array batch and an over-long batch", () => {
+    const { bridge, events } = nativeBridge();
+    expect(() =>
+      bridge.bindCalls([nativeCall("read", "same"), nativeCall("edit", "same")]),
+    ).toThrow(expect.objectContaining({ reason: "invalid-arguments" }));
+    expect(() => bridge.bindCalls("read" as unknown as readonly NormalizedToolCall[])).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+    const tooMany = Array.from(
+      { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
+      (_unused, index) => nativeCall("read", `call-${String(index)}`),
+    );
+    expect(() => bridge.bindCalls(tooMany)).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+    expect(opsOf(events)).not.toContain("gateway.tool-catalog.native-passthrough");
+  });
+});
+
+describe("native tool advertisement bridge: assistant-text tool calls", () => {
+  const MARKER = (alias: string): string =>
+    `<|tool_call>call:${alias}{target:<|"|>${NATIVE_CANARY}<|"|>}<tool_call|>`;
+
+  it("refuses prose that spells a call to an advertised tool and names it for one repair", () => {
+    const { bridge, events } = nativeBridge();
+    let thrown: unknown;
+    try {
+      bridge.assertNativeTransport(textResponse(MARKER("read")));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(GatewayToolCatalogError);
+    expect(thrown).toMatchObject({
+      reason: "invalid-arguments",
+      retryable: true,
+      repair: {
+        toolCallId: "assistant-text-call",
+        offeredAlias: "read",
+        transport: "assistant-text",
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      extra: { phase: "response", reason: "invalid-arguments", transport: "assistant-text" },
+    });
+    expect(JSON.stringify(events)).not.toContain(NATIVE_CANARY);
+  });
+
+  it.each([
+    ["a spelled call to an unadvertised tool", textResponse(MARKER("not_advertised"))],
+    ["a spelled call inside a code fence", textResponse(`\`\`\`\n${MARKER("read")}\n\`\`\``)],
+    ["ordinary prose", textResponse("I will read the file next.")],
+    ["a structured call beside the spelled one", textResponse(MARKER("read"), [nativeCall()])],
+  ])("lets %s through", (_label, response) => {
+    const { bridge, events } = nativeBridge();
+    expect(() => {
+      bridge.assertNativeTransport(response);
+    }).not.toThrow();
+    expect(opsOf(events)).toEqual(["gateway.tool-catalog.projected"]);
   });
 });

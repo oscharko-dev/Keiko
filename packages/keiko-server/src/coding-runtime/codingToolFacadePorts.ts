@@ -384,28 +384,83 @@ export interface CodingAcceptedInitializationFacet {
 }
 
 /**
- * One native OpenCode effect the server-owned policy is about to allow (#3897 review): admitted
- * through the same live authority owner as a governed tool call, so a revoked or expired envelope,
- * a paused run, an action class outside the envelope or an exhausted tool-call budget refuses it
- * before the runtime proceeds. `delegationId` is the decision's replay identity.
+ * The original runtime's own identity of one native tool call: the session that ran it, the
+ * assistant message it belongs to and its tool call id (the permission request's `source`). One
+ * invocation may be asked about several times (an edit and the directory it touches, a repeated
+ * evaluation), so this identity is what budget and run evidence are counted by (#3897 review).
+ */
+export interface CodingToolNativeInvocation {
+  readonly sessionId: string;
+  readonly messageId: string;
+  readonly callId: string;
+}
+
+/**
+ * One permission check of a native OpenCode action the server-owned policy is about to allow
+ * (#3897 review). Every check revalidates live authority: a revoked or expired envelope, a paused
+ * run or an action class outside the envelope refuses it before the runtime proceeds. The budget is
+ * charged once per `invocation`, whatever its action class, so reads count like every other tool
+ * call; a check without a tool invocation (a non-tool evaluation) cannot be recognised again and
+ * is charged on its own.
  */
 export interface CodingToolNativeEffectInput {
   readonly capability: string;
-  readonly delegationId: string;
   readonly actionClass: CodingWorkbenchActionClass;
+  readonly invocation?: CodingToolNativeInvocation | undefined;
 }
 
+/**
+ * How the admitted check was accounted: `charged` reserved the invocation's tool call,
+ * `already-charged` found it reserved by an earlier check of the same invocation, `per-check`
+ * reserved one for a check that names no invocation.
+ */
+export type CodingToolNativeCharge = "charged" | "already-charged" | "per-check";
+
 export type CodingToolNativeEffectAdmission =
-  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+  | { readonly ok: true; readonly charge: CodingToolNativeCharge }
+  | { readonly ok: false; readonly reason: string };
 
 export interface CodingToolNativeEffectFacet {
   readonly admit: (input: CodingToolNativeEffectInput) => CodingToolNativeEffectAdmission;
+}
+
+/** The message and call id a native tool call is known by in the runtime's own history. */
+export interface CodingToolNativeCall {
+  readonly messageId: string;
+  readonly callId: string;
+}
+
+/**
+ * One native tool call the original runtime reported terminal (`succeeded` or `failed`). `tool` is
+ * the runtime's own tool id, absent when it named none; approval, a pending or a running call is
+ * never reported here: only execution settles a call.
+ */
+export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
+  readonly tool?: string | undefined;
+  readonly state: "succeeded" | "failed";
+}
+
+/** `counted` reached the run's effort roll-up; `duplicate` was the same call seen again. */
+export type CodingToolNativeSettlement = "counted" | "duplicate";
+
+/**
+ * The run evidence of native tool calls, which execute outside `execute()` and so never reach the
+ * facade's own settlement (#3873, #3897 review). Fed from the runtime's validated history, it
+ * reports each call to the run's effort roll-up exactly once, by call identity, so a repeated
+ * history read or a reconnect never counts a call twice.
+ */
+export interface CodingToolNativeSettlementFacet {
+  /** The policy refused or a human denied this call: its terminal failure is a refusal. */
+  readonly refused: (call: CodingToolNativeCall) => void;
+  readonly settled: (input: CodingToolNativeSettlementInput) => CodingToolNativeSettlement;
 }
 
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
   /** Live authority and budget admission for native OpenCode effects; absent wirings refuse them. */
   readonly nativeEffect?: CodingToolNativeEffectFacet | undefined;
+  /** Run evidence for native tool calls that executed outside `execute()`; absent counts nothing. */
+  readonly nativeSettlement?: CodingToolNativeSettlementFacet | undefined;
   /** Inactive accepted initial acquisition; no model/HTTP dispatch surface. */
   readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */

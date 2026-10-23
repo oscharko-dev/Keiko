@@ -145,6 +145,8 @@ const TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION = defineActivityLogOperation({
   fields: {
     projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 128 },
     toolCount: { type: "integer", dataClass: "count", required: true },
+    // A native call naming a tool the request did not offer (#3897): the producer answers it.
+    unofferedCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "none",
   lifecycle: "state",
@@ -514,14 +516,15 @@ function bindNativeCall(
 ): NormalizedToolCall {
   if (Date.parse(advertisement.offered.expiresAt) <= now())
     throw new ToolCatalogError("expired-compatibility");
-  requireBridge(
-    advertisement.tools.some((tool) => tool.name === call.name),
-    "unoffered-tool",
-  );
+  // Binding is by name only and grants nothing (ADR-0175 D2): the producer owns its tools. A name
+  // the request did not offer goes to it as in standalone OpenCode, which answers the model with
+  // its own unavailable-tool result and continues the turn; refusing it here ended the whole turn.
+  const offered = advertisement.tools.some((tool) => tool.name === call.name);
   log.write(
     activityLogEvent(TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION, toolCatalogEnvelope(log, "info"), {
       projectionDigest: advertisement.toolSetDigest,
       toolCount: 1,
+      ...(offered ? {} : { unofferedCount: 1 }),
     }),
   );
   return call;

@@ -20,6 +20,7 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
+import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import {
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
@@ -856,6 +857,32 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
     resourceCount: { type: "integer", dataClass: "count", required: true },
     resourceDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // Why the live authority refused an allowed effect (outcome `authority-refused`): the budget,
+    // an expired or revoked envelope, a class outside it, a drifted binding, or no owner at all.
+    authorityReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "authority-budget-exceeded",
+        "authority-expired",
+        "revoked",
+        "authority-resolution-failed",
+        "action-not-authorized",
+        "drift",
+        "unavailable",
+        "other",
+      ],
+    },
+    // How an admitted check was accounted against the run's tool-call budget: the invocation's
+    // call reserved now, found reserved by an earlier check of the same invocation, or a check
+    // that names no tool invocation and was charged on its own.
+    invocationCharge: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["charged", "already-charged", "per-check"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -878,6 +905,49 @@ export type OpenCodeNativePolicyOutcome =
 /** The native session that asked: the run's own session or an admitted child session (#3897). */
 export type OpenCodeNativeSessionRelation = "primary" | "child";
 
+/** The live authority's answer to an allowed effect: how it was charged, or why it was refused. */
+export interface OpenCodeNativeAuthorityEvidence {
+  readonly charge?: CodingToolNativeCharge | undefined;
+  readonly reason?: string | undefined;
+}
+
+type NativeAuthorityReasonLog =
+  | "authority-budget-exceeded"
+  | "authority-expired"
+  | "revoked"
+  | "authority-resolution-failed"
+  | "action-not-authorized"
+  | "drift"
+  | "unavailable"
+  | "other";
+
+/** The closed log word of a refusal reason; every binding drift is one word, anything else `other`. */
+export function nativeAuthorityReasonLogValue(reason: string): NativeAuthorityReasonLog {
+  switch (reason) {
+    case "authority-budget-exceeded":
+    case "authority-expired":
+    case "revoked":
+    case "authority-resolution-failed":
+    case "action-not-authorized":
+    case "unavailable":
+      return reason;
+    default:
+      return reason.endsWith("-drift") ? "drift" : "other";
+  }
+}
+
+function authorityEvidenceFields(authority: OpenCodeNativeAuthorityEvidence | undefined): {
+  readonly invocationCharge?: CodingToolNativeCharge;
+  readonly authorityReason?: NativeAuthorityReasonLog;
+} {
+  return {
+    ...(authority?.charge === undefined ? {} : { invocationCharge: authority.charge }),
+    ...(authority?.reason === undefined
+      ? {}
+      : { authorityReason: nativeAuthorityReasonLogValue(authority.reason) }),
+  };
+}
+
 export function recordOpenCodeNativePolicyDecision(
   sink: ServerLogSink,
   runId: string,
@@ -887,6 +957,7 @@ export function recordOpenCodeNativePolicyDecision(
     readonly decision: OpenCodeNativePolicyDecision;
     readonly outcome: OpenCodeNativePolicyOutcome;
     readonly sessionRelation?: OpenCodeNativeSessionRelation | undefined;
+    readonly authority?: OpenCodeNativeAuthorityEvidence | undefined;
   },
 ): void {
   const { request, decision } = input;
@@ -908,6 +979,7 @@ export function recordOpenCodeNativePolicyDecision(
           .update(JSON.stringify(request.resources), "utf8")
           .digest("hex"),
         ...(requestId === undefined ? {} : { requestId }),
+        ...authorityEvidenceFields(input.authority),
       },
     ),
   );

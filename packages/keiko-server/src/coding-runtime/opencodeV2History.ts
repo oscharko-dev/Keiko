@@ -31,7 +31,10 @@ import {
   openCodeVisibleToolNames,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./opencodeToolSchemas.js";
-import { isAdmissibleOpenCodeToolName } from "./opencodeNativeTools.js";
+import {
+  isAdmissibleOpenCodeToolName,
+  isOpenCodeCodeModeExecutionFailure,
+} from "./opencodeNativeTools.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
@@ -511,12 +514,11 @@ function toolState(
   profile: OpenCodeToolProfile,
 ): CodingSafeActivitySignal & { kind: "tool" } {
   const state = record(part.state);
-  const status = state?.status;
   if (state === undefined) throw new Error("opencode-v2-tool-state-invalid");
   const { id, name } = toolIdentity(part);
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
-  const mapped = displayToolState(status);
+  const mapped = displayToolState(name, state);
   return {
     kind: "tool",
     messageId,
@@ -527,9 +529,16 @@ function toolState(
   };
 }
 
-function displayToolState(status: unknown): "pending" | "running" | "succeeded" | "failed" {
+// A completed part is a succeeded tool, except a Code Mode `execute` whose program failed: the
+// producer returns that as a completed part carrying its own `metadata.error` flag (#3897).
+function displayToolState(
+  name: string,
+  state: Readonly<Record<string, unknown>>,
+): "pending" | "running" | "succeeded" | "failed" {
+  const status = state.status;
   if (status === "streaming") return "pending";
-  if (status === "completed") return "succeeded";
+  if (status === "completed")
+    return isOpenCodeCodeModeExecutionFailure(name, state) ? "failed" : "succeeded";
   if (status === "error") return "failed";
   if (status === "running") return "running";
   throw new Error("opencode-v2-tool-state-invalid");

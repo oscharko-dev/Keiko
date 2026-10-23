@@ -2223,6 +2223,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-runtime-ripgrep-unavailable",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.ripgrep.resolved"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.ripgrep.resolved"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.ripgrep.resolved"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.ripgrep.resolved"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "loss-state",
+      "safe-platform-class",
+      "safe-version",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-runtime-run-settlement",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
@@ -2428,16 +2455,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["coding-runtime.native-policy.decided"],
+      state: ["coding-runtime.native-narrowing.refused", "coding-runtime.native-policy.decided"],
       end: [],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["coding-runtime.native-policy.decided"],
+    requiredCausalOperations: [
+      "coding-runtime.native-narrowing.refused",
+      "coding-runtime.native-policy.decided",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["coding-runtime.native-policy.decided"],
+    requiredProofOperations: [
+      "coding-runtime.native-narrowing.refused",
+      "coding-runtime.native-policy.decided",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["coding-runtime.native-policy.decided"],
+    requiredResourceOperations: [
+      "coding-runtime.native-narrowing.refused",
+      "coding-runtime.native-policy.decided",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

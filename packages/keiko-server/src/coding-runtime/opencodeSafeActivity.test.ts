@@ -291,6 +291,62 @@ describe("OpenCode safe-activity normalization", () => {
     expect(serialized).not.toContain("answered");
   });
 
+  // #3897: OpenCode 2.1.4 Code Mode catches a JavaScript exception thrown inside the `execute`
+  // program (or by a nested `tools.opencode.*` call it did not catch) and returns a COMPLETED part
+  // with `metadata.error: true`. This projection must agree with the history projection
+  // (opencodeV2History.ts): both use `isOpenCodeCodeModeExecutionFailure`.
+  describe("a Code Mode execute part (#3897)", () => {
+    const thrown = "PRIVATE_THROWN_MESSAGE";
+
+    function executeRow(sequence: number, metadata: unknown, tool = "execute"): unknown {
+      return row(sequence, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: `prt_execute_${String(sequence)}`,
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "tool",
+          callID: `call_execute_${String(sequence)}`,
+          tool,
+          state: {
+            status: "completed",
+            input: { code: "return 1 + 1;" },
+            output: thrown,
+            title: "execute",
+            metadata,
+            time: { start: 1_788_611_600_000, end: 1_788_611_600_001 },
+          },
+        },
+        time: 1_788_611_600_001,
+      });
+    }
+
+    function states(rows: readonly unknown[]): readonly string[] {
+      const normalized = normalizeOpenCodeSafeActivityHistory(rows);
+      expect(normalized.dropped).toBe(0);
+      expect(JSON.stringify(normalized)).not.toContain("PRIVATE_");
+      return normalized.signals.map(({ signal }) => (signal.kind === "tool" ? signal.state : "?"));
+    }
+
+    it("projects the completed part carrying metadata.error true as failed, without its body", () => {
+      expect(states([executeRow(1, { error: true })])).toEqual(["failed"]);
+    });
+
+    it.each([
+      ["false", { error: false }],
+      ["absent", {}],
+      ["the string true", { error: "true" }],
+      ["the number 1", { error: 1 }],
+      ["an object", { error: { message: thrown } }],
+    ])("keeps the part succeeded when metadata.error is %s", (_label, metadata) => {
+      expect(states([executeRow(1, metadata)])).toEqual(["succeeded"]);
+    });
+
+    it("does not read the flag of another tool", () => {
+      expect(states([executeRow(1, { error: true }, "question")])).toEqual(["succeeded"]);
+    });
+  });
+
   it("keeps a facade-dispatched (keiko_*) tool's completed part a silent no-op (#3390)", () => {
     // The Keiko tool facade supplies "succeeded" once its own closed result is known
     // (opencodeRuntimeComposition.ts settleTool). Projecting a second "succeeded" signal here

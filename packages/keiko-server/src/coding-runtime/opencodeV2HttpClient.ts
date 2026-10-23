@@ -64,6 +64,8 @@ export interface OpenCodeV2HttpClient {
   switchAgent(sessionId: string, agent: CodingWorkbenchAgent, signal?: AbortSignal): Promise<void>;
   active(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
+  /** The producer's plugins and their load state (`GET /api/plugin`, operation `plugin.list`). */
+  plugins(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   forms(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   replyForm(
     sessionId: string,
@@ -388,6 +390,8 @@ export function createOpenCodeV2HttpClient(
       objectEnvelope(await request("GET", "/api/session/active", undefined, signal)),
     permissions: async (signal) =>
       arrayEnvelope(await request("GET", "/api/permission/request", undefined, signal)),
+    plugins: async (signal) =>
+      arrayEnvelope(await request("GET", "/api/plugin", undefined, signal)),
     forms: async (signal) => arrayEnvelope(await request("GET", "/api/form", undefined, signal)),
     replyForm: async (sessionId, formId, answer, signal): Promise<void> => {
       await request(

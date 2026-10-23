@@ -175,13 +175,11 @@ describe("OpenCode launch profile", () => {
     });
     expect(config).not.toHaveProperty("tools");
     expect(Object.keys(record(config.providers))).toEqual(["keiko-runtime"]);
-    // The baseline is `ask`, never `allow`: a policy plugin that fails to load must leave every
-    // action waiting for a human, not silently allowed. The loaded hook sets the final effect of
-    // each evaluated action. Code Mode stays available (owner decision, 2026-10-23), so no rule
-    // names the `execute` action: it is governed by the same baseline and the policy plugin.
-    // Every external directory stays denied except the run's own plan directory (last match wins).
+    // #3897 review (P1): no global rule names an ordinary action, because the producer appends
+    // configured rules after each built-in agent's own and the last match wins; Plan's edit denial,
+    // Explore's read-only floor and General's subagent restriction stay the producer's. Every
+    // external directory stays denied except the run's own plan directory (last match wins).
     expect(config.permissions).toEqual([
-      { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
       {
         action: "external_directory",
@@ -189,19 +187,13 @@ describe("OpenCode launch profile", () => {
         effect: "allow",
       },
     ]);
-    for (const tool of [
-      "read",
-      "edit",
-      "shell",
-      "webfetch",
-      "subagent",
-      "todo",
-      "execute",
-      "future_action",
-    ]) {
-      expect(finalPermissionAction(config.permissions, tool)).toBe("ask");
+    for (const tool of ["read", "edit", "shell", "webfetch", "subagent", "execute", "future"]) {
+      expect(finalPermissionAction(config.permissions, tool)).toBeUndefined();
     }
     expect(finalPermissionAction(config.permissions, "external_directory")).toBe("deny");
+    // Keiko configures no agent: the producer's built-in agents keep their own rules, and the
+    // fail-closed property lives in readiness (an inactive policy plugin never becomes ready).
+    expect(config).not.toHaveProperty("agents");
     expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
     // The one definition of the directory: the kernel boundary protects exactly what OpenCode loads.
@@ -268,15 +260,17 @@ describe("OpenCode launch profile", () => {
       expect(content.model).toBe("keiko-runtime/coding");
     });
 
-    it("re-asserts the ask baseline on the highest layer", () => {
+    it("re-asserts only Keiko's own permission rules on the highest layer", () => {
       const content = JSON.parse(nativeProfile().env.OPENCODE_CONFIG_CONTENT ?? "null") as {
         readonly permissions: readonly { readonly action: string; readonly effect: string }[];
       };
-      expect(finalPermissionAction(content.permissions, "shell")).toBe("ask");
-      expect(finalPermissionAction(content.permissions, "execute")).toBe("ask");
+      // No rule names an ordinary action: the highest layer cannot replace an agent's own denial.
+      for (const action of ["edit", "shell", "execute", "read"])
+        expect(finalPermissionAction(content.permissions, action)).toBeUndefined();
+      expect(content).not.toHaveProperty("agents");
       // The generic external directory stays denied on the highest layer; the one allow names
       // exactly the run's plan directory.
-      expect(content.permissions.filter((rule) => rule.action === "external_directory")).toEqual([
+      expect(content.permissions).toEqual([
         { action: "external_directory", resource: "*", effect: "deny" },
         {
           action: "external_directory",
@@ -631,7 +625,6 @@ describe("plan agent directory (#3897)", () => {
     const fixed = createFixedOpenCodeV2Config;
     const config = fixed(CONTEXT_GEOMETRY, undefined, "native", "/state/run-1");
     expect(config.permissions).toEqual([
-      { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
       {
         action: "external_directory",
@@ -640,6 +633,6 @@ describe("plan agent directory (#3897)", () => {
       },
     ]);
     expect(openCodePlanDirectory("/state/run-1")).toBe("/state/run-1/home/.opencode/plan");
-    expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(2);
+    expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(1);
   });
 });

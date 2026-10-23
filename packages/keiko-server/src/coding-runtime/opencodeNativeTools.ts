@@ -99,6 +99,26 @@ export function isOpenCodeNativeToolName(value: unknown): value is string {
   return typeof value === "string" && NATIVE_TOOL_NAME_SET.has(value);
 }
 
+/**
+ * True when a tool part's own state records a failed Code Mode program (#3897). OpenCode 2.1.4
+ * catches a JavaScript exception thrown inside the `execute` program, including one raised by a
+ * nested `tools.opencode.*` call the program did not catch, and returns a COMPLETED part whose
+ * `state.metadata.error` is `true`: the part's status says only that the tool returned. The
+ * producer's explicit flag is the whole predicate. Only the boolean `true` of a completed `execute`
+ * part qualifies, so no output text is scanned and no body is read; the thrown message stays in the
+ * part and never reaches the timeline or the Activity Log. The history projection
+ * (`opencodeV2History.ts`) and the event-part projection (`opencodeSafeActivity.ts`) both call
+ * this, so the two cannot disagree on a tool's outcome.
+ */
+export function isOpenCodeCodeModeExecutionFailure(tool: unknown, state: unknown): boolean {
+  if (tool !== "execute" || !isPlainRecord(state) || state.status !== "completed") return false;
+  return isPlainRecord(state.metadata) && state.metadata.error === true;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** A tool name OpenCode may advertise or report: native, MCP-namespaced or plugin-registered. */
 export function isAdmissibleOpenCodeToolName(value: unknown): value is string {
   return typeof value === "string" && NATIVE_TOOL_NAME.test(value);

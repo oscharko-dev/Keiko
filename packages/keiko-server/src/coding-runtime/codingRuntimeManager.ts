@@ -2609,6 +2609,7 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
   "authenticated-health-version",
   "unauthenticated-health",
   "openapi-digest",
+  "policy-plugin",
   "gateway-challenge",
   "tool-facade-challenge",
   "sse-history-reconciliation",
@@ -2624,6 +2625,8 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {
   if (reason === "authenticated-health-version") return "runtime-version-mismatch";
+  // The governing plugin is not active: the runtime would run ungoverned, so it never readies.
+  if (reason === "policy-plugin") return "runtime-profile-open";
   return reason === "gateway-challenge" ? "gateway-challenge-failed" : "protocol-schema-mismatch";
 }
 
