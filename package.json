@@ -289,7 +289,7 @@
     "eslint-plugin-react@7.37.5": {
       "eslint": "^10.0.0"
     },
-    "@napi-rs/canvas": "1.0.9",
+    "@napi-rs/canvas": "1.0.11",
     "lodash": "4.18.1",
     "lodash-es": "4.18.1"
   },

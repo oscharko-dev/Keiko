@@ -250,7 +250,7 @@ or peer graph).
 | `knip`                        | root                  | 6.41.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                                                       |
 | `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.                                                                                                                                                                                                                                                       |
-| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.9   | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
+| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.11  | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.30  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                                                         |
 | `smol-toml`                   | root                  | 1.9.1   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
@@ -610,6 +610,12 @@ or change the Stryker mutation lane. The existing qualification reporter suite p
 
 `http-cache-semantics` now resolves to 4.3.0 through #4052. The earlier 4.2.0 observation above
 is historical. The current npm audit no longer reports that package; the remaining five high
-entries are the existing development-only `braces` chain. Advisory-specific OSV disposition is
-verified separately before retiring any waiver. Consolidation does not claim the full release
-qualification or the actual SSD updater acceptance has passed.
+entries are the existing development-only `braces` chain. OSV Scanner 2.7.0 reports the
+`http-cache-semantics` exception as unused and no unsuppressed findings. Its obsolete
+`GHSA-ch52-4w7c-c8xp` waiver is removed; the existing development-only `braces` exception remains.
+Consolidation does not claim the full release qualification or the actual SSD updater acceptance
+has passed.
+
+The root `@napi-rs/canvas` override now matches #4062's workspace requirement at 1.0.11. Keeping
+the earlier 1.0.9 override would prevent the requested update and leave no root runtime version
+for publish staging; the resulting lockfile contains one deduplicated 1.0.11 runtime node.
