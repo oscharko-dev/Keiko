@@ -665,6 +665,74 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // #3897 lab (T7): a native run forwards OpenCode's own tool definitions; the mapped handler
+  // coverage neither applies nor is advertised, so its availability line (which named `keiko_*`
+  // tools the run never offered) must not be written. `gateway.tool-catalog.projected` records the
+  // native contract instead.
+  it("forwards native tool definitions without a mapped tool-availability line", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-native" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-native" }),
+        unavailableOptionalTools: () => new Set(["keiko_research_fetch"]),
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry("native"),
+    } as unknown as UiHandlerDeps;
+    const nativeTools = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+      type: "function" as const,
+      function: { name, description: "", parameters: { type: "object", properties: {} } },
+    }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "continue" }],
+            tools: nativeTools,
+          }),
+          correlationId: "correlation-native-tools",
+        },
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect((requestBody?.tools ?? []).map((tool) => tool.function.name)).toEqual([
+        "read",
+        "glob",
+        "grep",
+        "edit",
+        "shell",
+        "todo",
+      ]);
+      expect(
+        sink.events.filter((event) => event.op === "coding-sidecar.gateway.tool-availability"),
+      ).toEqual([]);
+      const projected = sink.events.find((event) => event.op === "gateway.tool-catalog.projected");
+      expect(projected?.extra).toMatchObject({ compatibility: "native", toolCount: 6 });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): a tool whose real handler binding is
   // reported unavailable for this run must be ABSENT from the advertised (and therefore forwarded)
   // tool set, not merely denied if the model ever tries to call it (#3413-AC1/#3414-AC4/AC9).
@@ -4013,7 +4081,7 @@ describe("coding-sidecar gateway", () => {
     );
     expect(validated?.correlationId).toEqual(expect.any(String));
     expect(validated?.extra).toMatchObject({
-      maxRequestBytes: 1_048_576,
+      maxRequestBytes: 4_194_304,
       inputMessageCount: 1,
       offeredToolCount: 0,
       completeness: "complete",
@@ -4030,7 +4098,7 @@ describe("coding-sidecar gateway", () => {
       "coding-sidecar.gateway.request-validated.line",
       formatActivityLogProofLine(validated ?? {}),
     );
-    expect(persistedValidated).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(persistedValidated).toMatchObject({ maxRequestBytes: 4_194_304, inputMessageCount: 1 });
   });
 
   it("rejects an over-limit assistant tool-call continuation before provider dispatch or spend", async () => {
@@ -4106,7 +4174,7 @@ describe("coding-sidecar gateway", () => {
       } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
     } as UiHandlerDeps;
     const result = await handleCodingSidecarGatewayChatCompletions(
-      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(100_000) }] }),
+      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(300_000) }] }),
       deps,
     );
     assertRouteResult(result);

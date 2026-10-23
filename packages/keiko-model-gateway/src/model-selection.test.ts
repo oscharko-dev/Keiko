@@ -733,7 +733,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         maxPromptTokens: 128_000,
         maxOutputTokens: 4_096,
         maxInputMessages: 512,
-        maxRequestBytes: 1_048_576,
+        maxRequestBytes: 4_194_304,
       },
     });
     expect(JSON.stringify(result)).not.toContain("baseUrl");

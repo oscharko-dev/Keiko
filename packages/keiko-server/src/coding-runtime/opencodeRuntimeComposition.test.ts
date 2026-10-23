@@ -247,6 +247,7 @@ interface OpenCodeRuntimeCompositionModule {
     readonly activityLog?: ServerLogSink;
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
     readonly toolProfile?: "direct" | "code-mode" | undefined;
+    readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
@@ -877,6 +878,9 @@ async function startBridgeFixture(
     get toolProfile(): "direct" | "code-mode" | undefined {
       return control?.readToolProfile?.();
     },
+    // #3897: the host environment is offered to every profile; only the native profile's
+    // allowlist copies anything from it, so a mapped launch must still carry no PATH.
+    processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
     contextGeometry: {
@@ -1380,6 +1384,8 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0"]);
     const runRoot = join(stateBaseRoot, "run-1");
     expect(launch?.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+    expect(launch?.env.PATH).toBeUndefined();
+    expect(launch?.env.HOME).not.toBe("/host/home");
     expect(launch?.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, "config", "opencode"));
     expect(
       fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/openapi.json"),

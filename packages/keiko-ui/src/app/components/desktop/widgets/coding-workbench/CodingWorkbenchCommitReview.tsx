@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
@@ -35,7 +36,7 @@ export function StageReviewDiagnostic({
 export function isNativeActionPermission(
   request: CodingWorkbenchRuntimePendingPermission | undefined,
 ): boolean {
-  return request?.actionKind === undefined && request?.commandLabel?.startsWith("native-") === true;
+  return isNativeActionPermissionRequest(request);
 }
 
 export function approvalReviewRequestId(

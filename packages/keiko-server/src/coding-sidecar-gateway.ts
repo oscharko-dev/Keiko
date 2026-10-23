@@ -4702,11 +4702,14 @@ function executeBudgetedGatewayChat(
     ...profile,
     promptTokenReservation,
     toolProfile: gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
-    toolCatalogCoverage: resolveToolCatalogHandlerCoverage(
-      deps,
-      authentication.runId,
-      ctx.correlationId,
-    ),
+    // The native profile (#3897) forwards OpenCode's own tool definitions: the mapped handler
+    // coverage neither applies nor is advertised, and its availability line would name `keiko_*`
+    // tools the run never offers (#3897 lab, T7). `gateway.tool-catalog.projected` records the
+    // native contract instead.
+    toolCatalogCoverage:
+      gatewayReadinessRegistry(deps)?.toolProfile === "native"
+        ? undefined
+        : resolveToolCatalogHandlerCoverage(deps, authentication.runId, ctx.correlationId),
     offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
       codingSidecarGatewayRequestDeadlineMs(binding.config, profile.modelAlias),
     ),

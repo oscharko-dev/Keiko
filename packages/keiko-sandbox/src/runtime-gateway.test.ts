@@ -392,14 +392,18 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
     "native profile: writes the workspace, denies credential roots and lets toolchains run",
     () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-rw-proof-")));
-      const workspaceRoot = join(root, "workspace");
+      // The managed task workspace lives INSIDE Keiko's (denied) state directory, as in the
+      // packaged product (#3897 lab: OpenCode could not realpath its workspace); so does the run's
+      // private state.
+      const workspaceRoot = join(root, "keiko-state", "task-workspaces", "ws-1");
       const privateStateRoot = join(root, "keiko-state", "coding-runtime", "run-1");
       const deniedRoot = join(root, "secrets");
-      mkdirSync(workspaceRoot);
+      mkdirSync(workspaceRoot, { recursive: true });
       mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
       mkdirSync(deniedRoot);
       writeFileSync(join(deniedRoot, "id_rsa"), "synthetic");
       writeFileSync(join(root, "keiko-state", "vault.db"), "synthetic");
+      writeFileSync(join(root, "keiko-state", "task-workspaces", "sibling.txt"), "synthetic");
       // The per-user temp tree is writable on purpose (toolchains write TMPDIR), so the external
       // probe targets the home directory, which no native rule opens; it is removed in `finally`.
       const externalPath = join(homedir(), `.keiko-native-proof-${basename(root)}`);
@@ -407,11 +411,18 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         "require 'json'",
         "r = {}",
         `begin; File.write(${JSON.stringify(join(workspaceRoot, "edited.txt"))}, 'x'); r['workspaceWrite'] = true; rescue; r['workspaceWrite'] = false; end`,
+        `begin; File.realpath(${JSON.stringify(workspaceRoot)}); Dir.children(${JSON.stringify(workspaceRoot)}); r['workspaceRead'] = true; rescue; r['workspaceRead'] = false; end`,
         `begin; File.read(${JSON.stringify(join(deniedRoot, "id_rsa"))}); r['secretRead'] = true; rescue; r['secretRead'] = false; end`,
         `begin; File.read(${JSON.stringify(join(root, "keiko-state", "vault.db"))}); r['stateRead'] = true; rescue; r['stateRead'] = false; end`,
         `begin; File.write(${JSON.stringify(join(privateStateRoot, "state.txt"))}, 'x'); r['privateStateWrite'] = true; rescue; r['privateStateWrite'] = false; end`,
         `begin; File.write(${JSON.stringify(externalPath)}, 'x'); r['externalWrite'] = true; rescue; r['externalWrite'] = false; end`,
         `begin; File.write(${JSON.stringify(join(root, "keiko-state", "other.db"))}, 'x'); r['stateWrite'] = true; rescue; r['stateWrite'] = false; end`,
+        `begin; File.stat(${JSON.stringify(join(root, "keiko-state"))}); r['stateAncestorStat'] = true; rescue; r['stateAncestorStat'] = false; end`,
+        `begin; Dir.children(${JSON.stringify(join(root, "keiko-state"))}); r['stateAncestorList'] = true; rescue; r['stateAncestorList'] = false; end`,
+        `begin; File.open(${JSON.stringify(join(root, "keiko-state", "task-workspaces"))}) { |d| d.close }; File.realpath(${JSON.stringify(join(root, "keiko-state", "task-workspaces"))}); r['workspaceParentOpen'] = true; rescue; r['workspaceParentOpen'] = false; end`,
+        `begin; Dir.children(${JSON.stringify(join(root, "keiko-state", "coding-runtime"))}); r['stateSiblingList'] = true; rescue; r['stateSiblingList'] = false; end`,
+        `begin; File.read(${JSON.stringify(join(root, "keiko-state", "task-workspaces", "sibling.txt"))}); r['siblingRead'] = true; rescue; r['siblingRead'] = false; end`,
+        `r['snapshotInit'] = system('/usr/bin/git', '--git-dir', ${JSON.stringify(join(privateStateRoot, "snapshot"))}, '--work-tree', ${JSON.stringify(workspaceRoot)}, 'init', '-q') == true`,
         "r['childExec'] = system('/bin/echo', 'child', out: File::NULL) == true",
         "print JSON.generate(r)",
       ].join("\n");
@@ -437,11 +448,20 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
           status: 0,
           stdout: JSON.stringify({
             workspaceWrite: true,
+            workspaceRead: true,
             secretRead: false,
             stateRead: false,
             privateStateWrite: true,
             externalWrite: false,
             stateWrite: false,
+            // Ancestor directory NODES are readable (entry names) so the runtime can canonicalize
+            // its workspace; files beside the workspace and sibling subtrees stay denied.
+            stateAncestorStat: true,
+            stateAncestorList: true,
+            workspaceParentOpen: true,
+            stateSiblingList: true,
+            siblingRead: false,
+            snapshotInit: true,
             childExec: true,
           }),
         });

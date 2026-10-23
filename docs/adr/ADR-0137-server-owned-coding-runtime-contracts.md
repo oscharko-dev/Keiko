@@ -1044,12 +1044,30 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   run state and the user's temporary directories are writable; everything else stays read-only;
   credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.azure`, `~/.docker`, `~/.netrc`,
   `~/.pgpass`, `~/.git-credentials`, `~/.config/gh`, `~/.config/gcloud`, keychains) and Keiko's own
-  state directory are unreadable even for a shell. Executable transitions and egress are inherited;
-  egress is governed per action by the policy (internet asks below Full access), not by the process
-  wrapper. On macOS this is the real Seatbelt profile proven by `runtime-gateway.test.ts`; on Linux
-  the namespace wrapper keeps the tree bound to the parent without a network namespace; Windows
-  keeps its Job Object supervision. The spawned-confinement line records `keiko-native`,
-  `native-workspace-rw-v1`, `read-write` and `toolchain-inherited`.
+  state directory are unreadable even for a shell. The task workspace and the run's private state
+  are re-allowed after those denials, because the packaged product keeps its managed task
+  workspaces inside its own state directory, and the ancestor directory nodes of both are
+  readable (their entry names, never their files or sibling subtrees) because the runtime opens
+  the workspace's parent to canonicalize it (the 2026-10-23 customer-shape qualification found
+  OpenCode 2.0.10 unable to `realpath` its workspace otherwise). Executable transitions
+  and egress are inherited; egress is governed per action by the policy (internet asks below Full
+  access), not by the process wrapper. The child inherits the launcher's allowlisted environment
+  (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the agent's
+  shell finds the project's toolchains the way it does standalone; the mapped profiles still
+  inherit nothing. On macOS this is the real Seatbelt profile proven by `runtime-gateway.test.ts`
+  (with the workspace nested inside the denied state root); on Linux the namespace wrapper keeps
+  the tree bound to the parent without a network namespace; Windows keeps its Job Object
+  supervision. The spawned-confinement line records `keiko-native`, `native-workspace-rw-v1`,
+  `read-write` and `toolchain-inherited`.
+- **Native asks ride the approval lane without a Keiko action kind.** A policy `ask` reaches the
+  orchestrator as a `permission-requested` event whose request names no supervised action kind and
+  carries the closed `native-*` command label (`isNativeActionPermissionRequest`); the run pauses
+  for the human like any ask, and approve or deny settle through the permission port alone, with
+  no Keiko authority minted or declined. An ask the orchestrator cannot challenge is recorded as
+  `coding-runtime.event.dropped` with `challenge-invalid` instead of vanishing.
+- **The request envelope follows the model window.** The coding run's raw request ceiling is 4 MiB
+  (`CODING_SIDECAR_MAX_REQUEST_BYTES`), so the model's declared window, not the wire estimate,
+  bounds the context OpenCode plans and compacts against.
 - **Projections admit OpenCode's own tool ids.** History, safe-activity and protocol projections
   accept any admissible tool id (native, MCP-namespaced or plugin-registered, shape-bounded); logs
   carry a native id as itself and any extension tool as `extension`.

@@ -2074,6 +2074,115 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
   });
 
+  // #3897: a native OpenCode action ask names no supervised action kind; the closed `native-*`
+  // label marks it. The run pauses for the human like any ask, and the verdict travels through the
+  // permission port alone: no Keiko authority is minted or declined for a native action.
+  it("pauses for a native action ask and settles it through the permission port only", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    const nativeAsk = (requestId: string, eventId: string) => ({
+      schemaVersion: "1" as const,
+      eventId,
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested" as const,
+      permissionRequest: {
+        requestId,
+        kind: "command-execution" as const,
+        actionClass: "command-execution" as const,
+        reasonCode: "approval-required",
+        scopeLabel: "workspace-scope",
+        risk: "high" as const,
+        policyReason: "approval-required" as const,
+        commandLabel: "native-shell",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    const waiting = await f.orchestrator.ingest(nativeAsk("permission-91", "event-native-1"));
+    expect(successfulSnapshot(waiting).state).toBe("awaiting-approval");
+    expect(successfulSnapshot(waiting).pendingPermission).toMatchObject({
+      requestId: "permission-91",
+      commandLabel: "native-shell",
+    });
+    expect(successfulSnapshot(waiting).pendingPermission?.actionKind).toBeUndefined();
+    const approved = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-91",
+      decision: "approved",
+      expectedRevision: 5,
+    });
+    expect(approved.ok).toBe(true);
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "permission-91",
+      decision: "approved",
+    });
+    expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+
+    const second = await f.orchestrator.ingest(nativeAsk("permission-92", "event-native-2"));
+    const denied = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-92",
+      decision: "denied",
+      expectedRevision: successfulSnapshot(second).revision,
+    });
+    expect(denied.ok).toBe(true);
+    expect(f.permissionPort.resolve).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      requestId: "permission-92",
+      decision: "denied",
+    });
+    expect(f.manager.declineApproval).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    expect(linesWithOp(captured, "coding-runtime.event.dropped")).toEqual([]);
+    expect(
+      captured.records.filter((record) => record.op === "coding-runtime.approval.waiting"),
+    ).toHaveLength(2);
+  });
+
+  // #3897 lab (T7): an ask with neither an action kind nor the native label could not be
+  // challenged and vanished, while the asking tool waited out its whole decision window. The
+  // refusal now leaves the same dropped line as a foreign-run event, with its own reason.
+  it("records an ask it cannot challenge instead of dropping it silently", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    const refused = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-unchallengeable",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-9",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        commandLabel: "typecheck",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    expect(refused).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    const dropped = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.event.dropped",
+    );
+    if (dropped === undefined) throw new Error("expected event.dropped line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.event.dropped.emitted-line",
+        formatActivityLogProofLine(dropped),
+      ),
+    ).toMatchObject({
+      eventKind: "permission-requested",
+      eventRunId: "run-1",
+      liveRunId: "run-1",
+      reason: "challenge-invalid",
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+  });
+
   // A settle that does not match the decision the run is actually waiting on must not release it:
   // the wait belongs to one tool call, and releasing it on a foreign settle would resume a run whose
   // blocker is still in place. Recorded rather than silently dropped, so the log shows the mismatch.

@@ -21,6 +21,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
+import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -537,7 +538,7 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["no-live-run", "run-mismatch"],
+      values: ["no-live-run", "run-mismatch", "challenge-invalid"],
     },
     liveRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
   },
@@ -1417,6 +1418,7 @@ function recordRuntimeEventDropped(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
   current: CodingRuntimeSnapshot | undefined,
+  reason?: "challenge-invalid",
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1429,7 +1431,7 @@ function recordRuntimeEventDropped(
       {
         eventKind: event.kind,
         eventRunId: event.runId,
-        reason: current === undefined ? "no-live-run" : "run-mismatch",
+        reason: reason ?? (current === undefined ? "no-live-run" : "run-mismatch"),
         ...(current === undefined ? {} : { liveRunId: current.runId }),
       },
     ),
@@ -2310,7 +2312,11 @@ export class CodingRuntimeOrchestrator {
       if (admitted === undefined) return this.fail("invalid-intent");
       const { decision, current, challenge, actionKind, request } = admitted;
       challenge.used = true;
-      if (decision === "approved") {
+      // A native action (#3897) mints no Keiko authority: the permission port carries the human's
+      // verdict back to the runtime's own permission evaluation, and that is the whole grant.
+      if (actionKind === undefined) {
+        // nothing to issue or decline on the server side
+      } else if (decision === "approved") {
         const rejection = await this.issueApprovedAuthority(
           current,
           challenge,
@@ -2386,7 +2392,8 @@ export class CodingRuntimeOrchestrator {
         readonly decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"];
         readonly current: CodingRuntimeSnapshot;
         readonly challenge: ApprovalChallenge;
-        readonly actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>;
+        /** Absent for a native action ask, which mints no authority. */
+        readonly actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"];
         readonly request: CodingWorkbenchRuntimeApprovalDecisionRequest;
       }
     | undefined {
@@ -2398,7 +2405,7 @@ export class CodingRuntimeOrchestrator {
       current?.runId !== runId ||
       current.state !== "awaiting-approval" ||
       !this.approvalChallengeMatches(challenge, parsed.value) ||
-      !challenge.permission.actionKind
+      (!challenge.permission.actionKind && !isNativeActionPermissionRequest(challenge.permission))
     )
       return undefined;
     return {
@@ -2567,7 +2574,10 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "permission-requested") {
       const challenge = this.approvalChallenge(current, event);
-      if (challenge === undefined) return this.fail("invalid-intent");
+      if (challenge === undefined) {
+        recordRuntimeEventDropped(this.deps.activityLog, event, current, "challenge-invalid");
+        return this.fail("invalid-intent");
+      }
       if (this.approvals.has(current.runId)) return await this.queueApproval(current, challenge);
       this.approvals.set(current.runId, challenge);
     }
@@ -2708,7 +2718,12 @@ export class CodingRuntimeOrchestrator {
     // behind an approval nobody can decide any more (1.1.9 lab).
     const live = this.retireExpiredApproval(current, true);
     const challenge = this.approvalChallenge(live, event);
-    if (challenge === undefined) return this.fail("invalid-intent");
+    if (challenge === undefined) {
+      // An ask nobody could decide (no action kind and not a native action, or already expired)
+      // used to vanish here while the asking tool waited for its whole decision window (#3897).
+      recordRuntimeEventDropped(this.deps.activityLog, event, live, "challenge-invalid");
+      return this.fail("invalid-intent");
+    }
     if (live.state === "awaiting-approval") {
       return await this.queueApproval(live, challenge);
     }
@@ -2810,8 +2825,10 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
   ): ApprovalChallenge | undefined {
-    if (!event.permissionRequest?.actionKind) return undefined;
-    const requested = Date.parse(event.permissionRequest.expiresAt);
+    const permission = event.permissionRequest;
+    if (permission === undefined) return undefined;
+    if (!permission.actionKind && !isNativeActionPermissionRequest(permission)) return undefined;
+    const requested = Date.parse(permission.expiresAt);
     const nowMs = this.now().getTime();
     if (!Number.isFinite(requested) || requested <= nowMs) return undefined;
     // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
@@ -2821,7 +2838,7 @@ export class CodingRuntimeOrchestrator {
     return {
       revision: current.revision + 1,
       expiresAt,
-      permission: { ...event.permissionRequest, expiresAt: new Date(expiresAt).toISOString() },
+      permission: { ...permission, expiresAt: new Date(expiresAt).toISOString() },
       used: false,
     };
   }

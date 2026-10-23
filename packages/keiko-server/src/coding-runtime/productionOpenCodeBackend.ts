@@ -128,6 +128,8 @@ export interface ProductionOpenCodeBackendInput {
     "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
+  /** The host environment the native profile inherits its allowlisted names from (#3897). */
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
@@ -220,6 +222,17 @@ function createOpenCodeRun(
   }
 }
 
+function compositionPortableInput(
+  input: ProductionOpenCodeBackendInput,
+): OpenCodeRuntimeCompositionInput["portable"] {
+  return {
+    verification: input.portable.sidecar,
+    resourceRoot: input.portable.installRoot,
+    target: input.portable.target,
+    admission: admissionPolicy(input.portable),
+  };
+}
+
 function composeOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -229,12 +242,8 @@ function composeOpenCodeRun(
 ): ReturnType<typeof createOpenCodeRuntimeComposition> {
   return createOpenCodeRuntimeComposition({
     toolProfile,
-    portable: {
-      verification: input.portable.sidecar,
-      resourceRoot: input.portable.installRoot,
-      target: input.portable.target,
-      admission: admissionPolicy(input.portable),
-    },
+    ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
+    portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
     capabilities: {

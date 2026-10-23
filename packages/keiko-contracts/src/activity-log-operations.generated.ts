@@ -7101,7 +7101,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["no-live-run", "run-mismatch"],
+        values: ["no-live-run", "run-mismatch", "challenge-invalid"],
       },
       liveRunId: {
         type: "string",

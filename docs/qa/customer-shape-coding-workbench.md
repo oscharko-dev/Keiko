@@ -24,9 +24,11 @@ the body-free `stream` compatibility retry line. A separate local control uses t
 field reinsertion and the adapter's buffered fallback. The release lane itself stays hermetic and
 uses the twin, so it does not require installing Python or LiteLLM on a runner.
 The sidecar may request a buffered answer even when the provider supports
-streaming, so both delivery paths must settle usage. A separate installed run proves that a
-governed `keiko_workspace_discover` call completes and its result reaches a visible follow-up
-answer. Another run closes the accepted stream after partial text without a finish reason or
+streaming, so both delivery paths must settle usage. A separate installed run proves that the
+model's discovery call completes and its result reaches a visible follow-up answer: the shipped
+Workbench offers OpenCode's own tools (#3897), so the twin asks for `README.md` through the native
+`glob` tool and recognises the runtime's plain-text result; a run that still offers the mapped
+`keiko_workspace_discover` tool gets that call instead. Another run closes the accepted stream after partial text without a finish reason or
 `[DONE]`; the browser must show `stream-incomplete` rather than a successful partial reply. A
 final run rejects both stream shapes and must show the typed provider failure in the Workbench.
 Each failed run must also have an

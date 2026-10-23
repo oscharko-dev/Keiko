@@ -642,6 +642,23 @@ export interface CodingWorkbenchPermissionRequest {
   readonly expiresAt: string;
 }
 
+/**
+ * A native OpenCode policy ask (#3897) is the one permission request that names no supervised
+ * action kind: the runtime's own action is evaluated by the server-owned native policy, and the
+ * closed `native-*` command label says so. The orchestrator pauses the run for it and settles it
+ * through the permission port alone; no Keiko authority is minted for it.
+ */
+export const CODING_WORKBENCH_NATIVE_ACTION_LABEL_PREFIX = "native-";
+
+export function isNativeActionPermissionRequest(
+  request: Pick<CodingWorkbenchPermissionRequest, "actionKind" | "commandLabel"> | undefined,
+): boolean {
+  return (
+    request?.actionKind === undefined &&
+    request?.commandLabel?.startsWith(CODING_WORKBENCH_NATIVE_ACTION_LABEL_PREFIX) === true
+  );
+}
+
 /** Body-free verifier step outcomes, never test or assertion counts. */
 export interface CodingWorkbenchVerificationSummary {
   readonly verifierId: VerificationKind;

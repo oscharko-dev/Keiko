@@ -204,6 +204,7 @@ function activatedPorts(
       historyCapture: input.historyCapture,
       portable,
       runtimeStateRoot: input.runtimeStateDir,
+      processEnv: input.env,
       gatewayUrl: endpoints.gatewayUrl,
       resolveGatewayRunMetadata:
         input.resolveGatewayRunMetadata ??

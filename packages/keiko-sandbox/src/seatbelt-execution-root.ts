@@ -184,7 +184,18 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     "(deny file-write*)" +
     `(allow file-write* ${pathFilters("subpath", writable)} (literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr"))` +
     (denied.length === 0 ? "" : `(deny file-read* file-write* ${pathFilters("subpath", denied)})`) +
-    `(allow file-read* file-write* (subpath ${JSON.stringify(closed.privateStateRoot)}))`
+    // Keiko's managed task workspaces live inside its own state directory, which is a denied
+    // root; the workspace is re-allowed after the denial like the private state (#3897 lab:
+    // OpenCode 2.0.10 could not even realpath its workspace in the customer shape).
+    `(allow file-read* file-write* ${pathFilters("subpath", [closed.workspaceRoot, closed.privateStateRoot])})` +
+    // A denied root may be an ancestor of the workspace and of the private state (Keiko's own
+    // state directory holds both). Path resolution stats every ancestor, Git refuses a snapshot
+    // `--git-dir` whose parent it cannot stat, and the runtime opens the workspace's parent to
+    // canonicalize it (#3897 lab: "Invalid path ... Operation not permitted", then
+    // "FileSystem.realPath" on the parent). The ancestor directory NODES are therefore readable
+    // (their entry names), never their files or sibling subtrees: `literal` matches the directory
+    // itself, and every denied subtree stays denied.
+    `(allow file-read* ${pathFilters("literal", [closed.privateStateRoot, closed.workspaceRoot].flatMap(ancestors))})`
   );
 }
 

@@ -18,6 +18,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   decideCodingWorkbenchActionForMode,
+  isNativeActionPermissionRequest,
   permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
   supervisedCodingActionRequiresApproval,
@@ -646,6 +647,22 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
         "governed-assist",
       );
     }
+  });
+});
+
+describe("isNativeActionPermissionRequest", () => {
+  it("recognizes only an ask without action kind that carries the native label (#3897)", () => {
+    expect(isNativeActionPermissionRequest({ commandLabel: "native-shell" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ commandLabel: "native-egress" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ commandLabel: "typecheck" })).toBe(false);
+    expect(
+      isNativeActionPermissionRequest({
+        actionKind: "verification-command",
+        commandLabel: "native-shell",
+      }),
+    ).toBe(false);
+    expect(isNativeActionPermissionRequest({})).toBe(false);
+    expect(isNativeActionPermissionRequest(undefined)).toBe(false);
   });
 });
 

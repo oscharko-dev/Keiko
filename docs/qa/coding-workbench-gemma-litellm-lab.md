@@ -1887,3 +1887,36 @@ skips), followed by all 56 native tests with zero skips. Measured boundary cover
 lines; all 21 changed boundary lines/conditions are covered. Native host modules executed from
 materialized fixtures remain functional evidence; their temporary copies are not relabeled as
 source coverage. Final Windows success still requires the native CI result.
+
+### Epic #3897: native OpenCode profile, live qualification increment (2026-10-23)
+
+The Workbench now runs the pinned OpenCode 2.1.4 service with its own tools under Keiko's mode
+policy (`keiko.native-policy` hook, server-owned `opencodeNativePolicy.ts`). Three T7 runs
+(Supervised workspace, ledger-lab head, `wb-ui.mjs --approve all`, Gemma 4 31B behind LiteLLM
+v1.104.0 on this Mac, dev lane on port 1984) exercised the native path and forced four repairs,
+each pinned by a failing-first test:
+
+- A native policy ask (risky shell command) reached the orchestrator without a supervised action
+  kind and was refused as `invalid-intent` with no evidence; the run showed `running` with no
+  pending permission until stopped. The orchestrator now admits the `native-*` labelled ask,
+  settles approve/deny through the permission port only, and records an unchallengeable ask as
+  `coding-runtime.event.dropped` with `challenge-invalid`. The third run approved three native asks
+  (`coding-runtime.approval.waiting` / `.decided`, `native-policy.decided outcome=approved`).
+- Every native shell call answered `command not found: npm`: the composition handed the runtime
+  manager an empty host environment, so the native allowlist copied nothing and the child saw the
+  attested Git directory alone. The activation now passes the server's effective environment
+  through the backend; the fourth run's `npm run lint` returned the thirteen findings.
+- OpenCode snapshots failed under the native Seatbelt because Git stats every ancestor of its
+  snapshot `--git-dir`; ancestor directory nodes are readable (names only). The same rule, plus the
+  workspace re-allowed after the denied roots, repaired the customer-shape qualification on
+  macOS, where the managed task workspace lives inside Keiko's own state directory and the
+  OpenCode 2.0.10 payload of the npm lane could not `realpath` it.
+- The 1 MiB request ceiling bound OpenCode's planned window to 57k tokens against the 131k model;
+  the coding run envelope is 4 MiB.
+
+Observations: the fourth run spent 99% of its wall clock in the model (12 turns, 2,576 reasoning
+tokens in the longest), read nine files before its first edit and was stopped before editing;
+the model misused the native code-mode `execute` tool once (`tools.read` is not a code-mode
+function) exactly as standalone OpenCode would. The lab is shared: a second model was loaded and
+LiteLLM restarted mid-run, which opened the gateway circuit for about a minute and recovered.
+Not qualified here: Ask-for-approval and Full-access tasks, a completed T7, Azure.

@@ -200,6 +200,13 @@ import {
 export interface OpenCodeRuntimeCompositionInput {
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
+  /**
+   * The host environment the manager may copy the launch's allowlisted names from (#3897). The
+   * mapped profiles allowlist nothing, so they keep launching with an empty inheritance; the native
+   * profile inherits the launcher's PATH and locale so the agent's shell finds the project's
+   * toolchains the way it does standalone. Absent keeps the empty environment.
+   */
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -430,7 +437,7 @@ export function createOpenCodeRuntimeComposition(
   const lifecycle = lifecycleAdapter(input, bridge, runs);
   const manager = createCodingRuntimeManager({
     supervisor: input.supervisor,
-    processEnv: {},
+    processEnv: input.processEnv ?? {},
     diagnostics: input.diagnostics,
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,

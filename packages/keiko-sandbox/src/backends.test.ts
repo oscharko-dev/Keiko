@@ -390,10 +390,13 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).toContain("(deny file-write*)");
     expect(profile).toContain('(subpath "/accepted/workspace")');
     expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/owner/.ssh")');
-    // The private state root is re-allowed after the denied roots, so Keiko's own state directory
-    // may contain it while every other file of that directory stays unreadable.
+    // The workspace and the private state root are re-allowed after the denied roots, so Keiko's
+    // own state directory may contain both (managed task workspaces do live there) while every
+    // other file of that directory stays unreadable (#3897).
     expect(
-      profile.lastIndexOf('(allow file-read* file-write* (subpath "/private/state"))'),
+      profile.lastIndexOf(
+        '(allow file-read* file-write* (subpath "/accepted/workspace") (subpath "/private/state"))',
+      ),
     ).toBeGreaterThan(profile.lastIndexOf("(deny file-read* file-write*"));
     expect(() =>
       buildGatewaySeatbeltCommand(
