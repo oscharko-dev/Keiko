@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2b44b9ff246f662867207fe0006cdb5949f25e1d4a01c1892e030a4b02f6d663",
+    "catalogDigest": "273492d6d07ff21f7c9691131146839e42cc2cbaff7df0fda36c49d90f71f228",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6763,7 +6763,7 @@
         "failureClasses": ["coding-runtime-compaction"],
         "proofIds": ["coding-runtime.compaction.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:170",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:942"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:953"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8772,7 +8772,7 @@
         "failureClasses": ["coding-runtime-readiness"],
         "proofIds": ["coding-runtime.readiness.failed.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:121",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:775"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:761"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8873,7 +8873,7 @@
         "failureClasses": ["coding-runtime-readiness"],
         "proofIds": ["coding-runtime.readiness.phase.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:136",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:794"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:805"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19162,8 +19162,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.call-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:159",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:563"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:160",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:570"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19206,10 +19206,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.native-passthrough.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:138",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:139",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:524",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:549"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:531",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:556"
         ]
       },
       {
@@ -19259,10 +19259,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.projected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:178",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:179",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:717",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:730"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:724",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:737"
         ]
       },
       {
@@ -19394,8 +19394,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.rejected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:37",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:465"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:38",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:472"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -93179,25 +93179,25 @@
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:162",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:163",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:141",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:142",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:181",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:182",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:40",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:41",
       "package": "keiko-model-gateway"
     },
     {
