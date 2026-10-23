@@ -86,13 +86,29 @@ function runtimePreferenceOptions(
   ];
 }
 
-function autonomyOptions(
-  t: CodingWorkbenchTranslate,
-): readonly { readonly value: CodingWorkbenchMode; readonly label: string }[] {
+// Each mode names what the native OpenCode profile does in it; the menu shows the one-line summary
+// and the control's tooltip carries the whole text, including what no mode ever allows.
+function autonomyOptions(t: CodingWorkbenchTranslate): readonly {
+  readonly value: CodingWorkbenchMode;
+  readonly label: string;
+  readonly description: string;
+}[] {
   return [
-    { value: "governed-assist", label: t("codingWorkbench.mode.governed-assist.label") },
-    { value: "supervised-coding", label: t("codingWorkbench.mode.supervised-coding.label") },
-    { value: "autonomous-delivery", label: t("codingWorkbench.mode.autonomous-delivery.label") },
+    {
+      value: "governed-assist",
+      label: t("codingWorkbench.mode.governed-assist.label"),
+      description: t("codingWorkbench.mode.governed-assist.short"),
+    },
+    {
+      value: "supervised-coding",
+      label: t("codingWorkbench.mode.supervised-coding.label"),
+      description: t("codingWorkbench.mode.supervised-coding.short"),
+    },
+    {
+      value: "autonomous-delivery",
+      label: t("codingWorkbench.mode.autonomous-delivery.label"),
+      description: t("codingWorkbench.mode.autonomous-delivery.short"),
+    },
   ];
 }
 
@@ -502,12 +518,14 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         value={input.requestedMode}
         ariaLabel={t("codingWorkbench.composer.authority.label")}
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}
+        triggerTitle={t(`codingWorkbench.mode.${input.requestedMode}.description`)}
         menuTitle={t("codingWorkbench.composer.authority.menu")}
         menuMinWidth={180}
-        menuPopoverMinWidth={224}
+        menuPopoverMinWidth={296}
         menuPlacement="up"
         attached={false}
         showMenuHeader={false}
+        showTriggerDescription={false}
         disabled={input.configurationLocked}
         leadingVisual={<CodingWorkbenchIcon size={14} />}
         sections={[{ options: autonomyOptions(t) }]}

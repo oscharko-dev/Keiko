@@ -78,6 +78,7 @@ import {
 import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
+  nativeActionNamesResource,
 } from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
@@ -143,12 +144,13 @@ import {
   type CodingWorkbenchSetupRuntimePosture,
 } from "./CodingWorkbenchSetup";
 import {
-  CodingWorkbenchChanges,
+  CodingWorkbenchChangesView,
   diffLabels,
   RetryMessage,
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
+import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
   useCodingWorkbenchRunWorkspace,
@@ -248,15 +250,7 @@ const NEUTRAL_RUNTIME_ASSURANCE_POSTURES: ReadonlySet<CodingWorkbenchSetupRuntim
   ["pending", "verified"],
 );
 
-function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
-  }
-  return null;
-}
-
-/** Joins `CodingWorkbenchChanges`' own live file list to a bounded count + truncation flag (AC2) —
+/** Joins the run's live changed-file list to a bounded count + truncation flag (AC2) —
  * never a path, a diff or the underlying provider error detail. */
 function changedFilesSummary(
   changes: ReturnType<typeof useCodingWorkbenchChanges>,
@@ -1527,7 +1521,7 @@ function WorkbenchColumns({
     runtimeEventSignal,
   });
   // The active workspace's live root, and whether that binding is still resolving — shared by the
-  // headless editor bridge and `CodingWorkbenchChanges` below so a workspace switch mid-run is
+  // headless editor bridge and the Changes hook below so a workspace switch mid-run is
   // handled identically by both (workbench audit, 2026-09-03). Each also receives the run's
   // SUBMISSION-time root: the server bound the run to the pointer it read when Start arrived, so a
   // Start whose response lands after a switch must still bind this run to the workspace it was
@@ -1569,10 +1563,13 @@ function WorkbenchColumns({
   const journey = useCodingWorkbenchJourney(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
+  // ONE read of the run's changes serves the journey summary and the Changes list below, and it
+  // refreshes when a status event, a diff summary or a settled workspace-changing tool says the
+  // worktree may have moved (native edits emit no runtime event of their own, #3897).
   const journeyChanges = useCodingWorkbenchChanges({
     root: liveWorkspaceRoot,
     runId: state.run.value?.runId,
-    changeSignal: latestChangesSignal(state.events),
+    changeSignal: changesRefreshSignal(state.events, activity.feed),
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
@@ -1728,7 +1725,14 @@ function WorkbenchColumns({
             tabIndex={0}
           >
             <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
-            <PermissionPrompt state={state} research={research} onDecision={onDecision} />
+            <PermissionPrompt
+              // A new request is a new decision: remount so the previous request's focused Approve
+              // (and its review state) can never be reused to decide it.
+              key={pendingPermissionKey(state)}
+              state={state}
+              research={research}
+              onDecision={onDecision}
+            />
             <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
             <CodingWorkbenchDraftDelivery
               snapshot={state.run.value ?? undefined}
@@ -1785,14 +1789,7 @@ function WorkbenchColumns({
               questions={questions}
               focusRef={focusRef}
             />
-            <CodingWorkbenchChanges
-              root={liveWorkspaceRoot}
-              runId={state.run.value?.runId}
-              changeSignal={latestChangesSignal(state.events)}
-              bindingPending={workspaceBindingPending}
-              submittedRoot={runBoundRoot}
-              pairing={state.pairing}
-            />
+            <CodingWorkbenchChangesView changes={journeyChanges} pairing={state.pairing} />
           </div>
         )}
       </div>
@@ -2130,6 +2127,18 @@ function RuntimeControls({
   );
 }
 
+/** The authenticated review channel's half of {@link approvalEvidenceBound}. */
+function approvalReviewBound(
+  request: CodingWorkbenchRuntimePendingPermission,
+  approvalReview: UseCodingWorkbenchApprovalReviewResult,
+): boolean {
+  if (approvalReviewRequestId(request) === undefined) return true;
+  const review = approvalReview.status === "ready" ? approvalReview.review : null;
+  if (review?.requestId !== request.requestId) return false;
+  // A native ask that names no command, path or address gives the human nothing to decide on.
+  return !isNativeActionPermission(request) || nativeActionNamesResource(review.nativeAction);
+}
+
 /**
  * Whether the evidence THIS request is decided on is loaded and belongs to it (#3381 review).
  *
@@ -2140,21 +2149,34 @@ function RuntimeControls({
  * channel and the human-control invariant (ADR-0129 D1), so Approve fails closed until the evidence
  * is READY and its `requestId` binds it to the request on screen. Deny and the channel's own retry
  * stay available — the recovery path is to see the evidence or refuse, never to wave it through.
+ * A native OpenCode ask whose review names no command, path or address stays unapprovable too:
+ * there is nothing to decide about.
  */
 function approvalEvidenceBound(
   request: CodingWorkbenchRuntimePendingPermission,
   approvalReview: UseCodingWorkbenchApprovalReviewResult,
   research: UseCodingWorkbenchResearchResult,
 ): boolean {
-  if (approvalReviewRequestId(request) !== undefined) {
-    const review = approvalReview.status === "ready" ? approvalReview.review : null;
-    if (review?.requestId !== request.requestId) return false;
-  }
+  if (!approvalReviewBound(request, approvalReview)) return false;
   if (request.kind === "network-egress") {
     const ask = research.status === "ready" ? research.ask : null;
     if (ask?.requestId !== request.requestId) return false;
   }
   return true;
+}
+
+/** A loaded native review that names nothing says so; any other unbound ask is still loading. */
+function unboundNoteKey(
+  native: boolean,
+  approvalReview: UseCodingWorkbenchApprovalReviewResult,
+): CodingWorkbenchMessageKey {
+  return native && approvalReview.review?.nativeAction !== undefined
+    ? "codingWorkbench.approval.native.nothingNamed"
+    : "codingWorkbench.approval.evidenceRequired";
+}
+
+function pendingPermissionKey(state: CodingWorkbenchRuntimeState): string {
+  return state.run.value?.pendingPermission?.requestId ?? "no-permission";
 }
 
 function PermissionPrompt({
@@ -2180,6 +2202,7 @@ function PermissionPrompt({
     state.run.value ?? undefined,
   );
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
+  const native = isNativeActionPermission(request);
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
       <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title" focusable>
@@ -2188,15 +2211,16 @@ function PermissionPrompt({
       <ApprovalFacts request={request} t={t} />
       <ApprovalReviewContent
         kind={request.actionKind}
-        native={isNativeActionPermission(request)}
+        native={native}
         review={approvalReview}
         t={t}
       />
       {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
-      <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>
+      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
       <ApprovalDecisionControls
         busy={state.mutation.status === "pending"}
         evidenceBound={evidenceBound}
+        unboundNoteKey={unboundNoteKey(native, approvalReview)}
         onDecision={onDecision}
         t={t}
       />
@@ -2258,11 +2282,14 @@ const APPROVAL_EVIDENCE_NOTE_ID = "coding-workbench-approval-evidence-note";
 function ApprovalDecisionControls({
   busy,
   evidenceBound,
+  unboundNoteKey,
   onDecision,
   t,
 }: {
   readonly busy: boolean;
   readonly evidenceBound: boolean;
+  /** Why Approve is unavailable: the evidence has not loaded, or it names nothing to approve. */
+  readonly unboundNoteKey: CodingWorkbenchMessageKey;
   readonly onDecision: (decision: CodingWorkbenchRuntimeApprovalDecision) => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
@@ -2270,7 +2297,7 @@ function ApprovalDecisionControls({
     <>
       {evidenceBound ? null : (
         <output className={styles.helpText} id={APPROVAL_EVIDENCE_NOTE_ID}>
-          {t("codingWorkbench.approval.evidenceRequired")}
+          {t(unboundNoteKey)}
         </output>
       )}
       <div className={styles.controls}>

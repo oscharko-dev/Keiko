@@ -6,7 +6,12 @@ import type {
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
-import { I18N_STORAGE_KEY, resetLoadedMessageCatalogs } from "@/lib/i18n";
+import {
+  I18nProvider,
+  I18N_STORAGE_KEY,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
@@ -51,6 +56,13 @@ const ALTERNATE_MODEL: ModelCapability = {
   id: "gpt-5.5",
   reasoningEfforts: ["medium"],
 };
+
+// The visible label and one-line description of each run authority option, in menu order.
+const RUN_AUTHORITY_OPTIONS_EN = [
+  ["Ask for approval", "Reads freely; asks before every file change and command"],
+  ["Supervised workspace", "Routine edits and vetted project commands run; other commands ask"],
+  ["Full access", "Works without asking within the task's authority; internet only here"],
+] as const;
 
 const GEMMA_MODEL: ModelCapability = {
   ...CODING_MODEL,
@@ -300,7 +312,7 @@ describe("Coding Workbench composer", () => {
     await user.click(screen.getByRole("combobox", { name: "Coding model: gpt-5.4" }));
     await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
-    await user.click(screen.getByRole("option", { name: "Full access" }));
+    await user.click(screen.getByRole("option", { name: /^Full access/u }));
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
@@ -324,10 +336,66 @@ describe("Coding Workbench composer", () => {
     await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
-    for (const label of ["Ask for approval", "Supervised workspace", "Full access"]) {
-      expect(screen.getByRole("option", { name: label })).toHaveAttribute("aria-label", label);
+    // Each mode option names itself with exactly its visible text: the label, then its description.
+    for (const [label, description] of RUN_AUTHORITY_OPTIONS_EN) {
+      const option = screen.getByRole("option", { name: `${label}, ${description}` });
+      expect(option).toHaveAttribute("aria-label", `${label}, ${description}`);
+      expect(option).toHaveTextContent(label);
+      expect(option).toHaveTextContent(description);
     }
     expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  // #3897 review: the mode.*.short texts existed but no option carried them, so the three modes were
+  // three bare names. Each option now says, in one line, what the native profile does in that mode.
+  it("describes what each run authority does, in English and in German", async () => {
+    const user = userEvent.setup();
+    renderComposerWithOverrides({});
+    await user.click(screen.getByRole("combobox", { name: "Run authority" }));
+    const [ask, supervised, full] = screen.getAllByRole("option");
+    expect(ask).toHaveTextContent("Reads freely; asks before every file change and command");
+    expect(supervised).toHaveTextContent(
+      "Routine edits and vetted project commands run; other commands ask",
+    );
+    expect(full).toHaveTextContent(
+      "Works without asking within the task's authority; internet only here",
+    );
+    cleanup();
+
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <TaskStartSection {...composerProps("idle", composerActions())} />
+      </I18nProvider>,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Rechte für diesen Lauf" }));
+    const [askDe, supervisedDe, fullDe] = screen.getAllByRole("option");
+    expect(askDe).toHaveTextContent("Liest frei; fragt vor jeder Dateiänderung und jedem Befehl");
+    expect(supervisedDe).toHaveTextContent(
+      "Routinemäßige Änderungen und geprüfte Projektbefehle laufen; andere Befehle fragen",
+    );
+    expect(fullDe).toHaveTextContent(
+      "Arbeitet ohne Rückfrage im Rahmen der Aufgabenbefugnis; Internet nur hier",
+    );
+  });
+
+  // The descriptions live in the menu; the compact chip keeps its single line of label.
+  it("keeps the run authority chip to the mode name while the menu carries the descriptions", () => {
+    renderComposerWithOverrides({ requestedMode: "supervised-coding" });
+
+    const chip = screen.getByRole("combobox", { name: "Run authority" });
+    expect(chip).toHaveTextContent("Supervised workspace");
+    expect(chip).not.toHaveTextContent("vetted project commands");
+  });
+
+  it("explains the whole mode in the control's tooltip, including what no mode ever allows", () => {
+    renderComposerWithOverrides({ requestedMode: "supervised-coding" });
+
+    const title = screen.getByRole("combobox", { name: "Run authority" }).getAttribute("title");
+    expect(title).toContain("vetted project commands");
+    expect(title).toContain("never by the agent's shell");
+    expect(title).toContain("Files outside the workspace and secret files such as .env and keys");
   });
 
   // #3873 live review: the chip showed "gemma-4-…", and neither a tooltip nor the accessible name

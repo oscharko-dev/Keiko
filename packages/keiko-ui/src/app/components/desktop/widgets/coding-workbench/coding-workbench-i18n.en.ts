@@ -251,17 +251,20 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
-  "codingWorkbench.mode.governed-assist.short": "Approve every workspace change",
+  "codingWorkbench.mode.governed-assist.short":
+    "Reads freely; asks before every file change and command",
   "codingWorkbench.mode.governed-assist.description":
-    "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",
+    "Reads and searches run freely; every file change and every command asks for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
   "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
-  "codingWorkbench.mode.supervised-coding.short": "Routine edits proceed; risky asks",
+  "codingWorkbench.mode.supervised-coding.short":
+    "Routine edits and vetted project commands run; other commands ask",
   "codingWorkbench.mode.supervised-coding.description":
-    "Routine low- and medium-risk workspace edits, vetted commands, and verification proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
+    "Routine workspace edits and vetted project commands run; other commands ask for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
   "codingWorkbench.mode.autonomous-delivery.label": "Full access",
-  "codingWorkbench.mode.autonomous-delivery.short": "Runs without per-action approval",
+  "codingWorkbench.mode.autonomous-delivery.short":
+    "Works without asking within the task's authority; internet only here",
   "codingWorkbench.mode.autonomous-delivery.description":
-    "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
+    "Files, commands, and the internet work without asking within the task's authority. Accepted Code-task commit, push, and draft pull request operations are done by Keiko within the validated Authority Envelope, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible. Merge remains separately approval-gated.",
   "codingWorkbench.task.eyebrow": "Task",
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",
@@ -455,6 +458,20 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.repository_search": "Repository search",
   "codingWorkbench.timeline.tool.workspace_discover": "Workspace discovery",
   "codingWorkbench.timeline.tool.workspace_read": "Workspace read",
+  "codingWorkbench.timeline.tool.read": "Read file",
+  "codingWorkbench.timeline.tool.glob": "Find files",
+  "codingWorkbench.timeline.tool.grep": "Search in files",
+  "codingWorkbench.timeline.tool.list": "List folder",
+  "codingWorkbench.timeline.tool.edit": "Edit file",
+  "codingWorkbench.timeline.tool.write": "Write file",
+  "codingWorkbench.timeline.tool.patch": "Apply patch",
+  "codingWorkbench.timeline.tool.shell": "Shell command",
+  "codingWorkbench.timeline.tool.webfetch": "Web fetch",
+  "codingWorkbench.timeline.tool.websearch": "Web search",
+  "codingWorkbench.timeline.tool.skill": "Skill",
+  "codingWorkbench.timeline.tool.subagent": "Subagent",
+  "codingWorkbench.timeline.tool.todo": "Task list",
+  "codingWorkbench.timeline.tool.question": "Question",
   "codingWorkbench.changes.title": "Changes",
   "codingWorkbench.changes.idle": "Start a run to inspect its workspace changes.",
   "codingWorkbench.changes.loading": "Loading the latest bounded changes…",
@@ -532,6 +549,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",
   "codingWorkbench.activity.plan.truncated": "Part of this plan was omitted.",
+  "codingWorkbench.activity.plan.progress": "{completed}/{total} completed",
   "codingWorkbench.activity.planState.pending": "Pending",
   "codingWorkbench.activity.planState.active": "In progress",
   "codingWorkbench.activity.planState.completed": "Completed",
@@ -887,8 +905,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.native.title": "What the agent wants to do",
   "codingWorkbench.approval.native.help":
-    "Approve runs exactly this action once inside the task workspace; deny tells the agent to continue without it.",
+    "Approve allows exactly this action once; deny tells the agent to continue without it.",
+  "codingWorkbench.approval.native.help.shell":
+    "Approve runs this command once in the task workspace; deny tells the agent to continue without it.",
+  "codingWorkbench.approval.native.help.edit":
+    "Approve applies this change to the listed files once; deny tells the agent to continue without it.",
+  "codingWorkbench.approval.native.help.internet":
+    "Approve lets the agent use the internet once for this request; deny tells the agent to continue without it. Internet access is only available in Full access.",
+  "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
   "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
+  "codingWorkbench.approval.native.nothingNamed":
+    "Approval is unavailable because this request names no command, path, or address. Deny it so the agent can continue.",
   "codingWorkbench.approval.native.loading": "Loading the requested action…",
   "codingWorkbench.approval.native.unavailable":
     "The requested action is unavailable. Re-pair this window to see it before deciding.",

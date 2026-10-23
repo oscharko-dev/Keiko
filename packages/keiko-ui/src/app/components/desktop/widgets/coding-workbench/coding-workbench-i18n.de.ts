@@ -270,17 +270,20 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.eyebrow": "Autonomie",
   "codingWorkbench.mode.unconfirmed": "Warten auf Serverbestätigung",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
-  "codingWorkbench.mode.governed-assist.short": "Jede Änderung freigeben",
+  "codingWorkbench.mode.governed-assist.short":
+    "Liest frei; fragt vor jeder Dateiänderung und jedem Befehl",
   "codingWorkbench.mode.governed-assist.description":
-    "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
+    "Lesen und Suchen laufen ohne Rückfrage; jede Dateiänderung und jeder Befehl erfordern eine Genehmigung, Internetzugriff gibt es nicht. Git-Commit, -Push und Pull Request übernimmt Keiko nach separater Genehmigung, nie die Shell des Agenten. Dateien außerhalb des Arbeitsbereichs und geheime Dateien wie .env und Schlüssel sind nie zugänglich.",
   "codingWorkbench.mode.supervised-coding.label": "Überwachter Workspace",
-  "codingWorkbench.mode.supervised-coding.short": "Routine läuft, Riskantes fragt",
+  "codingWorkbench.mode.supervised-coding.short":
+    "Routinemäßige Änderungen und geprüfte Projektbefehle laufen; andere Befehle fragen",
   "codingWorkbench.mode.supervised-coding.description":
-    "Routinemäßige Bearbeitungen im Arbeitsbereich mit niedrigem und mittlerem Risiko, geprüfte Befehle und Verifizierungen werden ausgeführt; der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
+    "Routinemäßige Änderungen im Arbeitsbereich und geprüfte Projektbefehle laufen; andere Befehle erfordern eine Genehmigung, Internetzugriff gibt es nicht. Git-Commit, -Push und Pull Request übernimmt Keiko nach separater Genehmigung, nie die Shell des Agenten. Dateien außerhalb des Arbeitsbereichs und geheime Dateien wie .env und Schlüssel sind nie zugänglich.",
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
-  "codingWorkbench.mode.autonomous-delivery.short": "Läuft ohne Freigabe pro Aktion",
+  "codingWorkbench.mode.autonomous-delivery.short":
+    "Arbeitet ohne Rückfrage im Rahmen der Aufgabenbefugnis; Internet nur hier",
   "codingWorkbench.mode.autonomous-delivery.description":
-    "Datei- und Internetvorgänge sowie akzeptierte Code-Task-Operationen zum Committen, Pushen und Erstellen eines Draft-Pull-Requests werden innerhalb des validierten Authority Envelope ohne Genehmigung pro Aktion ausgeführt. Merge bleibt separat genehmigungspflichtig.",
+    "Dateien, Befehle und Internet funktionieren ohne Rückfrage im Rahmen der Aufgabenbefugnis. Akzeptierte Code-Task-Vorgänge zum Committen, Pushen und Erstellen eines Draft-Pull-Requests übernimmt Keiko innerhalb des validierten Authority Envelope, nie die Shell des Agenten. Dateien außerhalb des Arbeitsbereichs und geheime Dateien wie .env und Schlüssel sind nie zugänglich. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.task.eyebrow": "Aufgabe",
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
@@ -477,6 +480,20 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.repository_search": "Repository-Suche",
   "codingWorkbench.timeline.tool.workspace_discover": "Workspace-Erkennung",
   "codingWorkbench.timeline.tool.workspace_read": "Workspace-Zugriff",
+  "codingWorkbench.timeline.tool.read": "Datei lesen",
+  "codingWorkbench.timeline.tool.glob": "Dateien suchen",
+  "codingWorkbench.timeline.tool.grep": "In Dateien suchen",
+  "codingWorkbench.timeline.tool.list": "Ordner auflisten",
+  "codingWorkbench.timeline.tool.edit": "Datei bearbeiten",
+  "codingWorkbench.timeline.tool.write": "Datei schreiben",
+  "codingWorkbench.timeline.tool.patch": "Patch anwenden",
+  "codingWorkbench.timeline.tool.shell": "Shell-Befehl",
+  "codingWorkbench.timeline.tool.webfetch": "Webabruf",
+  "codingWorkbench.timeline.tool.websearch": "Websuche",
+  "codingWorkbench.timeline.tool.skill": "Skill",
+  "codingWorkbench.timeline.tool.subagent": "Subagent",
+  "codingWorkbench.timeline.tool.todo": "Aufgabenliste",
+  "codingWorkbench.timeline.tool.question": "Rückfrage",
   "codingWorkbench.changes.title": "Änderungen",
   "codingWorkbench.changes.idle": "Starte einen Lauf, um seine Workspace-Änderungen zu prüfen.",
   "codingWorkbench.changes.loading": "Neueste begrenzte Änderungen werden geladen…",
@@ -556,6 +573,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
   "codingWorkbench.activity.plan.title": "Aktueller Plan",
   "codingWorkbench.activity.plan.truncated": "Ein Teil dieses Plans wurde ausgelassen.",
+  "codingWorkbench.activity.plan.progress": "{completed}/{total} abgeschlossen",
   "codingWorkbench.activity.planState.pending": "Ausstehend",
   "codingWorkbench.activity.planState.active": "In Bearbeitung",
   "codingWorkbench.activity.planState.completed": "Abgeschlossen",
@@ -917,12 +935,21 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.native.title": "Was der Agent ausführen möchte",
   "codingWorkbench.approval.native.help":
-    "Genehmigen führt genau diese Aktion einmal im Aufgaben-Workspace aus; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
+    "Genehmigen erlaubt genau diese Aktion einmal; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
+  "codingWorkbench.approval.native.help.shell":
+    "Genehmigen führt diesen Befehl einmal im Aufgaben-Workspace aus; Ablehnen lässt den Agenten ohne ihn weiterarbeiten.",
+  "codingWorkbench.approval.native.help.edit":
+    "Genehmigen wendet diese Änderung einmal auf die aufgeführten Dateien an; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
+  "codingWorkbench.approval.native.help.internet":
+    "Genehmigen erlaubt dem Agenten für diese Anfrage einmal den Zugriff auf das Internet; Ablehnen lässt den Agenten ohne ihn weiterarbeiten. Internetzugriff gibt es nur im Modus Vollzugriff.",
+  "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
   "codingWorkbench.approval.native.noResources":
-    "Kein Befehl, Pfad oder keine Adresse wurde genannt.",
+    "Weder Befehl noch Pfad noch Adresse wurde genannt.",
+  "codingWorkbench.approval.native.nothingNamed":
+    "Die Genehmigung ist gesperrt, weil diese Anfrage weder Befehl noch Pfad noch Adresse nennt. Ablehnen lässt den Agenten weiterarbeiten.",
   "codingWorkbench.approval.native.loading": "Angeforderte Aktion wird geladen…",
   "codingWorkbench.approval.native.unavailable":
-    "Die angeforderte Aktion ist nicht verfügbar. Koppeln Sie dieses Fenster erneut, um sie vor der Entscheidung zu sehen.",
+    "Die angeforderte Aktion ist nicht abrufbar. Fenster erneut koppeln, um sie vor der Entscheidung zu sehen.",
   "codingWorkbench.approval.native.retry": "Angeforderte Aktion erneut laden",
   "codingWorkbench.approval.native.permission.shell": "Shell-Befehl",
   "codingWorkbench.approval.native.permission.edit": "Dateiänderung",

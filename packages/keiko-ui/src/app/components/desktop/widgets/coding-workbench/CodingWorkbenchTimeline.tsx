@@ -38,12 +38,26 @@ const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
 // Known tool identifiers map to Coding Workbench catalog message keys, not to English strings —
 // otherwise a German session would render English labels in the localized timeline. The keys are
-// resolved through `t(...)` inside `ToolRow`.
+// resolved through `t(...)` inside `ToolRow`. The native OpenCode tools (#3897) keep their own ids.
 const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
   keiko_git_status: "codingWorkbench.timeline.tool.git_status",
   keiko_repository_search: "codingWorkbench.timeline.tool.repository_search",
   keiko_workspace_discover: "codingWorkbench.timeline.tool.workspace_discover",
   keiko_workspace_read: "codingWorkbench.timeline.tool.workspace_read",
+  read: "codingWorkbench.timeline.tool.read",
+  glob: "codingWorkbench.timeline.tool.glob",
+  grep: "codingWorkbench.timeline.tool.grep",
+  list: "codingWorkbench.timeline.tool.list",
+  edit: "codingWorkbench.timeline.tool.edit",
+  write: "codingWorkbench.timeline.tool.write",
+  patch: "codingWorkbench.timeline.tool.patch",
+  shell: "codingWorkbench.timeline.tool.shell",
+  webfetch: "codingWorkbench.timeline.tool.webfetch",
+  websearch: "codingWorkbench.timeline.tool.websearch",
+  skill: "codingWorkbench.timeline.tool.skill",
+  subagent: "codingWorkbench.timeline.tool.subagent",
+  todo: "codingWorkbench.timeline.tool.todo",
+  question: "codingWorkbench.timeline.tool.question",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -96,6 +110,8 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly plan: CodingSafeActivityPlan;
+      /** The run is active: its plan card stays open so the reader follows the steps live. */
+      readonly open: boolean;
     }
   | {
       readonly kind: "event";
@@ -346,7 +362,9 @@ function timelineItems(
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
   const compacted = compactToolItems(orderedItems);
-  return feed?.plan === undefined ? compacted : insertPlan(compacted, feed.plan, order);
+  return feed?.plan === undefined
+    ? compacted
+    : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
 }
 
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
@@ -366,13 +384,18 @@ function insertPlan(
   items: readonly TimelineItem[],
   plan: CodingSafeActivityPlan,
   order: number,
+  open: boolean,
 ): readonly TimelineItem[] {
+  // The row identity is the message that anchors the plan, not its revision: every todo update
+  // bumps the revision, and a row keyed by it would remount the card (and close what the reader
+  // had open) on each update.
   const planItem: TimelineItem = {
     kind: "plan",
-    id: `plan:${String(plan.revision)}`,
+    id: `plan:${plan.anchorMessageId}`,
     occurredAt: plan.updatedAt,
     order,
     plan,
+    open,
   };
   const anchor = items.findIndex(
     (item) => item.kind === "message" && item.message.messageId === plan.anchorMessageId,
@@ -1023,7 +1046,10 @@ function ToolGroupRow({
 }
 
 function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
-  const knownKey = KNOWN_TOOL_LABEL_KEYS[tool];
+  // The id is runtime text: `constructor` must not resolve to a member inherited from Object.
+  const knownKey = Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool)
+    ? KNOWN_TOOL_LABEL_KEYS[tool]
+    : undefined;
   if (knownKey !== undefined) return t(knownKey);
   return tool
     .replace(/^keiko[_-]/u, "")
@@ -1052,10 +1078,12 @@ function PlanRow({
     >
       <details
         className={styles.planCard}
+        open={item.open}
         onToggle={() => reportClientDiagnostic("[keiko] coding workbench plan details toggled")}
       >
         <summary className={styles.cmpActivitySummary}>
           <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
+          <PlanProgress steps={item.plan.steps} t={t} />
         </summary>
         <ol className={styles.planSteps}>
           {item.plan.steps.map((step, index) => (
@@ -1071,6 +1099,26 @@ function PlanRow({
         {item.plan.truncated ? <p>{t("codingWorkbench.activity.plan.truncated")}</p> : null}
       </details>
     </li>
+  );
+}
+
+/** "2/5 completed" beside the plan title, so the closed card still shows how far the run is. */
+function PlanProgress({
+  steps,
+  t,
+}: {
+  readonly steps: CodingSafeActivityPlan["steps"];
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (steps.length === 0) return null;
+  const completed = steps.filter((step) => step.state === "completed").length;
+  return (
+    <span
+      className={styles.activityBadge}
+      data-state={completed === steps.length ? "completed" : undefined}
+    >
+      {t("codingWorkbench.activity.plan.progress", { completed, total: steps.length })}
+    </span>
   );
 }
 

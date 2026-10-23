@@ -13,6 +13,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
@@ -39,6 +40,7 @@ import type {
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
 import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
@@ -115,11 +117,20 @@ const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
 // dedicated paused-state suite can opt into the exact branch it needs without reaching the network.
 const trustStatusMock = vi.hoisted(() => vi.fn());
 const trustMutateMock = vi.hoisted(() => vi.fn());
+// #3897 review: the Changes list and the journey summary read one git status through one hook. The
+// default rejects exactly like the unreachable network these suites ran against before, so only the
+// suites that count or answer the read opt into a response.
+const gitStatusMock = vi.hoisted(() => vi.fn());
+const gitHistoryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    fetchGitStatus: (...args: Parameters<typeof actual.fetchGitStatus>): unknown =>
+      gitStatusMock(...args),
+    fetchGitHistory: (...args: Parameters<typeof actual.fetchGitHistory>): unknown =>
+      gitHistoryMock(...args),
     fetchCodingWorkbenchJourneyRefresh: journeyRefreshMock,
     fetchGitDeliveryMergeExecute: mergeExecuteMock,
     fetchGitDeliveryPrExecute: prUpdateExecuteMock,
@@ -491,6 +502,10 @@ beforeEach(() => {
   prUpdateExecuteMock.mockReset();
   trustStatusMock.mockReset().mockResolvedValue(trustStatus("unused", "trusted"));
   trustMutateMock.mockReset();
+  gitStatusMock.mockReset().mockRejectedValue(new Error("git status not available in this suite"));
+  gitHistoryMock
+    .mockReset()
+    .mockRejectedValue(new Error("git history not available in this suite"));
   questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
@@ -1429,7 +1444,7 @@ describe("CodingWorkbenchWindow", () => {
     const liveActions = renderWorkbench(liveState({ requestedMode: "governed-assist" }));
 
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
-    await user.click(screen.getByRole("option", { name: "Full access" }));
+    await user.click(screen.getByRole("option", { name: /^Full access/u }));
 
     expect(liveActions.setRequestedMode).toHaveBeenCalledWith("autonomous-delivery");
     expect(change).toHaveBeenCalledWith("autonomous-delivery");
@@ -2434,6 +2449,168 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
   });
 
+  function nativeAskState(
+    nativePermission: string,
+    requestId = "permission-native-1",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId,
+            kind: "workspace-write",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            scopeLabel: "workspace-scope",
+            risk: "high",
+            commandLabel: "native-shell",
+            nativePermission,
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function nativeReview(
+    permission: string,
+    resources: readonly string[],
+    requestId = "permission-native-1",
+  ): UseCodingWorkbenchApprovalReviewResult {
+    return {
+      status: "ready",
+      review: {
+        requestId,
+        nativeAction: { permission, resources },
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult;
+  }
+
+  // #3897 review: the generic "Raw commands, prompts, diffs, and file contents remain hidden." sat
+  // directly under the visible command. A native ask says what Approve does for ITS permission.
+  it("#3897: a native shell ask states what Approve runs instead of claiming the command is hidden", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["npm run build\n  && npm test"]));
+    renderWorkbench(nativeAskState("shell"));
+
+    const review = screen.getByRole("group", { name: "What the agent wants to do" });
+    expect(review).toHaveTextContent("Approve runs this command once in the task workspace");
+    expect(screen.queryByText(/remain hidden/u)).toBeNull();
+    // One help line per ask, never the generic one beside the native one.
+    expect(screen.getAllByText(/Approve .* once/u)).toHaveLength(1);
+    // The command keeps its line breaks (the block is pre-wrapped), not a whitespace-collapsed line.
+    expect(
+      screen.getByRole("list", { name: "Requested command, paths, or addresses" }).textContent,
+    ).toBe("npm run build\n  && npm test");
+  });
+
+  it("#3897: a native web ask names the internet and Full access, never the task workspace", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("webfetch", ["https://example.test/doc"]));
+    renderWorkbench(nativeAskState("webfetch"));
+
+    const review = screen.getByRole("group", { name: "What the agent wants to do" });
+    expect(review).toHaveTextContent("Internet access is only available in Full access.");
+    expect(review).not.toHaveTextContent("task workspace");
+  });
+
+  it("#3897: Approve stays disabled for a native ask whose review names no resource, Deny stays", () => {
+    for (const review of [
+      nativeReview("shell", []),
+      nativeReview("shell", ["", "   "]),
+      {
+        status: "ready",
+        review: {
+          requestId: "permission-native-1",
+          paths: [],
+          pathsTruncated: false,
+          fileCount: 0,
+          addedLines: 0,
+          deletedLines: 0,
+        },
+        retry: vi.fn(),
+      } as UseCodingWorkbenchApprovalReviewResult,
+    ]) {
+      approvalReviewHookMock.mockReturnValue(review);
+      renderWorkbench(nativeAskState("shell"));
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+      cleanup();
+    }
+  });
+
+  it("#3897: explains why Approve is unavailable for an ask that names nothing", async () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", []));
+    renderWorkbench(nativeAskState("shell"));
+
+    const approve = screen.getByRole("button", { name: "Approve once" });
+    expect(screen.getByText("No command, path, or address was named.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Approval is unavailable because this request names no command, path, or address. Deny it so the agent can continue.",
+      ),
+    ).toBeInTheDocument();
+    expect(approve).toHaveAccessibleDescription(/names no command, path, or address/u);
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("#3897: a native ask with a named resource keeps Approve enabled and the note absent", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["ls -la"]));
+    renderWorkbench(nativeAskState("shell"));
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    expect(screen.queryByText(/Approval is unavailable|Approval stays unavailable/u)).toBeNull();
+  });
+
+  // #3897 review: request A -> B left the same Approve button mounted, so a keyboard user focused on
+  // A's Approve and pressing Enter after B arrived decided B without ever seeing it.
+  it("#3897: a new approval request mounts a fresh prompt instead of reusing a focused Approve", () => {
+    approvalReviewHookMock.mockImplementation((input: { readonly permissionRequestId?: string }) =>
+      nativeReview("shell", ["echo hello"], input.permissionRequestId),
+    );
+    runtimeHookMock.mockReturnValue({
+      state: nativeAskState("shell", "permission-a"),
+      actions: actions(),
+    });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    const approveA = screen.getByRole("button", { name: "Approve once" });
+    approveA.focus();
+    expect(approveA).toHaveFocus();
+
+    runtimeHookMock.mockReturnValue({
+      state: nativeAskState("shell", "permission-b"),
+      actions: actions(),
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    const approveB = screen.getByRole("button", { name: "Approve once" });
+    expect(approveB).not.toBe(approveA);
+    expect(approveA).not.toBeInTheDocument();
+    expect(approveB).not.toHaveFocus();
+  });
+
+  it("#3897: the same approval request keeps its prompt across unrelated re-renders", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["echo hello"]));
+    runtimeHookMock.mockReturnValue({ state: nativeAskState("shell"), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    const approve = screen.getByRole("button", { name: "Approve once" });
+    approve.focus();
+
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBe(approve);
+    expect(approve).toHaveFocus();
+  });
+
   // Workbench audit, 2026-09-03: on the governance-critical permission-approval screen, `request.kind`,
   // `request.actionClass`, and `request.risk` used to render as raw, untranslated kebab-case slugs
   // — the only three facts on this fully-localized screen left unlocalized.
@@ -3433,6 +3610,86 @@ describe("CodingWorkbenchWindow", () => {
         active: true,
         bindingPending: false,
       }),
+    );
+  });
+
+  // #3897 review: native OpenCode edits emit neither a status nor a diff-summarized event, so the
+  // Changes list stayed stale for a whole Supervised or Full access run. A settled tool row of the
+  // safe-activity feed is the signal, and the journey summary and the list share ONE read of it.
+  describe("the Changes list during a native run", () => {
+    function runningState(): CodingWorkbenchRuntimeState {
+      return liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+      });
+    }
+
+    function feedWithTools(
+      tools: readonly { readonly tool: string; readonly state: "running" | "succeeded" }[],
+    ): AvailableCodingSafeActivityFeed {
+      const feed = activityFeed();
+      const [turn] = feed.turns;
+      if (turn === undefined) throw new Error("expected a turn");
+      return {
+        ...feed,
+        turns: [
+          {
+            ...turn,
+            tools: tools.map((tool, index) => ({
+              callId: `call-${String(index)}`,
+              occurredAt: AT,
+              ...tool,
+            })),
+          },
+        ],
+      };
+    }
+
+    function mountRun(feed: AvailableCodingSafeActivityFeed): {
+      readonly rerenderWith: (next: AvailableCodingSafeActivityFeed) => void;
+    } {
+      gitStatusMock.mockResolvedValue({ available: false });
+      gitHistoryMock.mockResolvedValue({ available: false, entries: [] });
+      const binding = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task");
+      runtimeHookMock.mockReturnValue({ state: runningState(), actions: actions() });
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
+      const ui = (): ReactElement => (
+        <ActiveWorkspaceProvider value={binding}>
+          <CodingWorkbenchWindow />
+        </ActiveWorkspaceProvider>
+      );
+      const view = render(ui());
+      return {
+        rerenderWith: (next): void => {
+          activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed: next });
+          view.rerender(ui());
+        },
+      };
+    }
+
+    it("reads the git status once for the journey summary and the Changes list together", async () => {
+      mountRun(feedWithTools([]));
+
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalled());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(gitStatusMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["edit", "write", "patch", "shell"])(
+      "refreshes the Changes list when a native %s tool settles",
+      async (tool) => {
+        const run = mountRun(feedWithTools([{ tool, state: "running" }]));
+        await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(1));
+
+        run.rerenderWith(feedWithTools([{ tool, state: "succeeded" }]));
+
+        await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+      },
     );
   });
 

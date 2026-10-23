@@ -119,9 +119,15 @@ async function reopenWorkbench(page) {
   return waitForWorkbench(page);
 }
 
+// An option's accessible name is its label, optionally followed by its description (the autonomy
+// options describe each mode), so the label must start the name rather than equal it.
 async function chooseOption(page, comboName, optionName) {
   await page.getByRole("combobox", { name: comboName }).click();
-  await page.getByRole("option", { name: optionName, exact: true }).click();
+  const label = optionName.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  await page
+    .getByRole("option", { name: new RegExp(`^${label}(?:\\s|$)`, "u") })
+    .first()
+    .click();
 }
 
 async function startRun(page, workbench, { model, mode, text }) {
