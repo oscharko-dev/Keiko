@@ -20,44 +20,46 @@ import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 import type { CodingWorkbenchRuntimeStateName } from "./coding-workbench-runtime.js";
 import { CODING_WORKBENCH_RUNTIME_STATE_NAMES } from "./coding-workbench-runtime.js";
 
+import type {
+  CodeTaskGrantId,
+  CodeTaskPolicyVersion,
+  CodeTaskQuestionId,
+  CodeTaskRunId,
+  CodeTaskTaskId,
+  CodeTaskWorkspaceId,
+} from "./code-task-target-validation.js";
+import {
+  codeTaskParentTargetErrors,
+  isCodeTaskGrantId,
+  isCodeTaskRunId,
+  isCodeTaskTaskId,
+  isCodeTaskWorkspaceId,
+} from "./code-task-target-validation.js";
+export type {
+  CodeTaskGovernanceBranded,
+  CodeTaskGrantId,
+  CodeTaskIdempotencyKey,
+  CodeTaskPolicyVersion,
+  CodeTaskQuestionId,
+  CodeTaskRunId,
+  CodeTaskTaskId,
+  CodeTaskWorkspaceId,
+} from "./code-task-target-validation.js";
+export {
+  isCodeTaskGrantId,
+  isCodeTaskIdempotencyKey,
+  isCodeTaskRunId,
+  isCodeTaskTaskId,
+  isCodeTaskWorkspaceId,
+} from "./code-task-target-validation.js";
+
 export const CODE_TASK_GOVERNANCE_SCHEMA_VERSION = 1;
 
-declare const codeTaskGovernanceBrand: unique symbol;
-
-/** Type-level brand; branded values stay JSON-serializable primitive strings at runtime. */
-export type CodeTaskGovernanceBranded<Name extends string> = string & {
-  readonly [codeTaskGovernanceBrand]: Name;
-};
-
-export type CodeTaskTaskId = CodeTaskGovernanceBranded<"CodeTaskTaskId">;
-export type CodeTaskRunId = CodeTaskGovernanceBranded<"CodeTaskRunId">;
-export type CodeTaskWorkspaceId = CodeTaskGovernanceBranded<"CodeTaskWorkspaceId">;
-export type CodeTaskGrantId = CodeTaskGovernanceBranded<"CodeTaskGrantId">;
-export type CodeTaskQuestionId = CodeTaskGovernanceBranded<"CodeTaskQuestionId">;
-export type CodeTaskIdempotencyKey = CodeTaskGovernanceBranded<"CodeTaskIdempotencyKey">;
-export type CodeTaskPolicyVersion = CodeTaskGovernanceBranded<"CodeTaskPolicyVersion">;
-
-const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const QUESTION_ID_PATTERN = /^que_[A-Za-z0-9_-]{1,251}$/u;
 const POLICY_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u;
 
-export function isCodeTaskTaskId(value: unknown): value is CodeTaskTaskId {
-  return typeof value === "string" && OPAQUE_ID_PATTERN.test(value);
-}
-export function isCodeTaskRunId(value: unknown): value is CodeTaskRunId {
-  return typeof value === "string" && OPAQUE_ID_PATTERN.test(value);
-}
-export function isCodeTaskWorkspaceId(value: unknown): value is CodeTaskWorkspaceId {
-  return typeof value === "string" && OPAQUE_ID_PATTERN.test(value);
-}
-export function isCodeTaskGrantId(value: unknown): value is CodeTaskGrantId {
-  return typeof value === "string" && OPAQUE_ID_PATTERN.test(value);
-}
 export function isCodeTaskQuestionId(value: unknown): value is CodeTaskQuestionId {
   return typeof value === "string" && QUESTION_ID_PATTERN.test(value);
-}
-export function isCodeTaskIdempotencyKey(value: unknown): value is CodeTaskIdempotencyKey {
-  return typeof value === "string" && OPAQUE_ID_PATTERN.test(value);
 }
 export function isCodeTaskPolicyVersion(value: unknown): value is CodeTaskPolicyVersion {
   return typeof value === "string" && POLICY_VERSION_PATTERN.test(value);
@@ -260,15 +262,7 @@ function envelopeFieldsAreValid(errors: string[], value: Record<string, unknown>
   if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     valid = addValidationError(errors, "schemaVersion must be the literal 1");
   }
-  if (!isCodeTaskTaskId(ownField(value, "taskId")))
-    valid = addValidationError(errors, "taskId is invalid");
-  if (!isCodeTaskRunId(ownField(value, "runId")))
-    valid = addValidationError(errors, "runId is invalid");
-  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId")))
-    valid = addValidationError(errors, "workspaceId is invalid");
-  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
-    valid = addValidationError(errors, "stateRevision must be a non-negative integer");
-  }
+  valid = appendValidationErrors(errors, codeTaskParentTargetErrors(value)) && valid;
   if (!isOneOf(ownField(value, "actionKind"), GOVERNED_ACTION_ACTION_KINDS)) {
     valid = addValidationError(errors, "actionKind is invalid");
   }

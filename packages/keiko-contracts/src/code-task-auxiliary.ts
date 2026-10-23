@@ -1,3 +1,4 @@
+import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
 // Cross-child auxiliary-capability contract for Epic #2384 Code tasks (Issue #2387, produced for
 // #2388). `AuxiliaryCapabilityPortV1` is the acceptance boundary through which a Code task requests
 // exactly one bounded, read-only auxiliary capability — public research, an approved skill, or a
@@ -26,9 +27,6 @@ import type {
 import {
   isCodeTaskGrantId,
   isCodeTaskIdempotencyKey,
-  isCodeTaskRunId,
-  isCodeTaskTaskId,
-  isCodeTaskWorkspaceId,
   isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import { CODING_WORKBENCH_AUXILIARY_STATUSES } from "./coding-workbench.js";
@@ -184,15 +182,7 @@ const AUXILIARY_TARGET_KEYS = ["taskId", "runId", "workspaceId", "stateRevision"
 function targetFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
   let valid = true;
 
-  if (!isCodeTaskTaskId(ownField(value, "taskId")))
-    valid = addValidationError(errors, "taskId is invalid");
-  if (!isCodeTaskRunId(ownField(value, "runId")))
-    valid = addValidationError(errors, "runId is invalid");
-  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId")))
-    valid = addValidationError(errors, "workspaceId is invalid");
-  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
-    valid = addValidationError(errors, "stateRevision must be a non-negative integer");
-  }
+  valid = appendValidationErrors(errors, codeTaskParentTargetErrors(value)) && valid;
   if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
     valid = addValidationError(errors, "idempotencyKey is invalid");
   }

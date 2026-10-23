@@ -1,3 +1,4 @@
+import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
 import {
@@ -1253,5 +1254,34 @@ describe("code task execution public parser (#3918)", () => {
     >();
     type Failure = Extract<ReturnType<typeof publicCodeTaskExecution>, { readonly ok: false }>;
     expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("codeTaskParentTargetErrors", () => {
+  it("accepts a complete parent target", () => {
+    expect(
+      codeTaskParentTargetErrors({
+        taskId: "task-1",
+        runId: "run-1",
+        workspaceId: "workspace-1",
+        stateRevision: 0,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps malformed parent-field errors ordered", () => {
+    expect(
+      codeTaskParentTargetErrors({
+        taskId: "",
+        runId: null,
+        workspaceId: false,
+        stateRevision: -1,
+      }),
+    ).toEqual([
+      "taskId is invalid",
+      "runId is invalid",
+      "workspaceId is invalid",
+      "stateRevision must be a non-negative integer",
+    ]);
   });
 });

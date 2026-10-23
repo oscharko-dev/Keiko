@@ -1,3 +1,4 @@
+import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
 // Cross-child run-control contracts for Epic #2384 Code-task children (Issue #2386). Same type
 // rule as ./code-task-governance.ts: readonly, JSON-serializable, discriminated unions, literal
 // `schemaVersion: 1`, branded ids, explicit tagged-absent facts, content-free payloads.
@@ -29,7 +30,6 @@ import {
   isCodeTaskQuestionId,
   isCodeTaskRunId,
   isCodeTaskTaskId,
-  isCodeTaskWorkspaceId,
   isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
@@ -391,15 +391,7 @@ export interface RuntimeGovernancePortV1 {
 function targetFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
   let valid = true;
 
-  if (!isCodeTaskTaskId(ownField(value, "taskId")))
-    valid = addValidationError(errors, "taskId is invalid");
-  if (!isCodeTaskRunId(ownField(value, "runId")))
-    valid = addValidationError(errors, "runId is invalid");
-  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId")))
-    valid = addValidationError(errors, "workspaceId is invalid");
-  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
-    valid = addValidationError(errors, "stateRevision must be a non-negative integer");
-  }
+  valid = appendValidationErrors(errors, codeTaskParentTargetErrors(value)) && valid;
   if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
     valid = addValidationError(errors, "idempotencyKey is invalid");
   }
