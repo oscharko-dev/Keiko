@@ -111,6 +111,23 @@ manifest-size and sensitive-path checks. The patched recursive OSV scan and prod
 audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
 to accommodate this update.
 
+On 2026-10-23 the required recursive OSV scan and production npm audits identified new
+advisories in DOMPurify, Next.js and `ip-address`. This repair moves the existing DOMPurify
+override to 3.4.17 for
+[GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7),
+[GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) and
+[GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f).
+Next.js and its ESLint configuration move together to 16.4.2; the patched minimum is 16.4.1 for
+[GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw),
+[GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) and
+[GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr).
+Both root and native-host lockfiles resolve `ip-address` 10.7.4 for
+[GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5), within their
+existing `socks` dependency range. No new override or waiver is added. The DOMPurify npm
+resolution does not replace Monaco's separately vendored sanitizer; its existing disabled-markdown
+and inert-markup controls remain independently verified. The two earlier build-time advisory
+waivers retain their existing scope, expiry and revisit conditions.
+
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query
@@ -205,8 +222,8 @@ or peer graph).
 | `oxlint`                      | root                  | 1.78.0  | current        | Development-only syntax runner qualified for #3915; supplements typed ESLint and Sonar. Exact MIT pin, native parser visitation and conformance proofs; no product runtime dependency.                                                                                                                       |
 | `@oxlint/plugins`             | root                  | 1.78.0  | current        | Exact MIT plugin bridge of the pinned anti-slop dependency; native compatibility is qualified, not used as an ESLint replacement.                                                                                                                                                                            |
 | `oxlint-plugin-anti-slop`     | root                  | 0.1.2   | current        | MIT, Dillon Mulroy (2026). Immutable HTTPS archive at c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b with lockfile SRI and complete source hashes; #3915 qualifies all 21 noncosmetic fixture suites.                                                                                                              |
-| `next`                        | keiko-ui              | 16.3.8  | current        | Security patch on the 16.3 line taken 2026-10-08 for the reviewed Next advisories fixed in 16.3.8 (PR #3895), retaining the prior critical 16.3.6 repair from #3678; moved together with `eslint-config-next`.                                                                                               |
-| `eslint-config-next`          | keiko-ui              | 16.3.8  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
+| `next`                        | keiko-ui              | 16.4.2  | current        | Security update taken 2026-10-23 for the three reviewed Next advisories fixed from 16.4.1; moved together with `eslint-config-next`, retaining the earlier security repairs.                                                                                                                                 |
+| `eslint-config-next`          | keiko-ui              | 16.4.2  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
 | `react`                       | keiko-ui              | 19.3.0  | current        | React and its declarations move together across the UI and editor test/runtime surfaces; the UI, editor, static export, accessibility, and E2E lanes are authoritative.                                                                                                                                      |
 | `react-dom`                   | keiko-ui              | 19.3.0  | current        | Matches `react` across the UI and editor surfaces.                                                                                                                                                                                                                                                           |
 | `prosemirror-commands`        | keiko-ui              | 1.7.2   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
