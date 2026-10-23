@@ -42,7 +42,7 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "2.0.10" } as const;
+const OPENCODE_RUNTIME = { id: "opencode", version: "2.1.4" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
   readonly alias: "question" | "execute";

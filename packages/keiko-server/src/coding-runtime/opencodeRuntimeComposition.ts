@@ -169,7 +169,7 @@ function v2Record(value: unknown): Readonly<Record<string, unknown>> | undefined
     : undefined;
 }
 
-const PINNED_RAW_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+const PINNED_RAW_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;

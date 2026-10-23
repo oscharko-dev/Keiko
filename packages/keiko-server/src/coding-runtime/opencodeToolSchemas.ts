@@ -29,7 +29,7 @@ import {
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
 
-export const OPENCODE_PINNED_VERSION = "2.0.10";
+export const OPENCODE_PINNED_VERSION = "2.1.4";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 /**

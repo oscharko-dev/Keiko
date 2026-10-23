@@ -125,8 +125,8 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const OPENCODE_COMMIT = "b8cedc1a7a5e2916bbb65dc1d4b620729c261638";
-const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+const OPENCODE_COMMIT = "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824";
+const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
 const SIGNING_KEYS = [
   "notarizationRequired",
   "notarizationVerified",
