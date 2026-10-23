@@ -940,6 +940,39 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(result)).not.toContain(unmanaged);
   });
 
+  it("launches a Full-access run whose mode value the host also carries under a non-secret name (#3897)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin", KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
+    });
+
+    const result = await manager.start(
+      autonomousDeliveryRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(harness.captures[0]?.env).toMatchObject({ KEIKO_CODING_MODE: "autonomous-delivery" });
+    expect(harness.captures[0]?.env).not.toHaveProperty("KEIKO_CODING_DEPLOYMENT_CEILING");
+  });
+
+  it("refuses a child env value that equals a credential-named host value (#3897)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin", PROFILE_ACCESS_TOKEN: "coding-safe-openai-compatible" },
+    });
+
+    expect(
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: false, failureCode: "env-secret-denied", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
   it("fails closed when OpenCode is paired with a Codex subscription profile", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

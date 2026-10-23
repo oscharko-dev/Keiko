@@ -3043,13 +3043,26 @@ function runtimeProjectionEnv(request: CodingRuntimeLaunchRequest): Record<strin
   };
 }
 
+// The child env is the allowlisted names (none of them secret-named, checked above) plus Keiko's
+// own run projection. A denial therefore compares those values against the host values whose NAME
+// says they carry a credential: the broad every-host-value set is right for scrubbing captured
+// output, but as a launch gate it refused every Full-access run on a host that also exports
+// `KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery` — the projected mode equalled it (#3897).
 function envContainsDeniedSecret(
   env: Record<string, string>,
   processEnv: NodeJS.ProcessEnv,
   allowlist: readonly string[],
 ): boolean {
-  const deniedValues = new Set(collectSensitiveEnvValues(processEnv, allowlist));
+  const deniedValues = new Set(
+    collectSensitiveEnvValues(secretNamedEntries(processEnv), allowlist),
+  );
   return Object.values(env).some((value) => deniedValues.has(value));
+}
+
+function secretNamedEntries(processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(processEnv).filter(([name]) => SECRET_ENV_NAME.test(name)),
+  );
 }
 
 function isLoopbackUrl(raw: string): boolean {
