@@ -988,7 +988,7 @@ describe("run control public parser obligations (#3918)", () => {
 });
 
 describe("acceptance and auxiliary public parser obligations (#3918)", () => {
-  it("pins five exact public parameter-zero roots without optional grants", () => {
+  it("pins five exact public parameter-zero roots with dictionary-only declarations", () => {
     const records = policy.responsibilities.slice(54, 59);
     expect(records).toHaveLength(5);
     expect(records.map(({ id }) => id)).toEqual([
@@ -1002,6 +1002,8 @@ describe("acceptance and auxiliary public parser obligations (#3918)", () => {
       "code-task-acceptance-contribution-public-parser",
       "code-task-qualification-flow-public-parser",
       "code-task-qualification-manifest-public-parser",
+      "auxiliary-capability-request-public-parser",
+      "auxiliary-capability-outcome-public-parser",
     ]);
     expect(records.map(({ input }) => input.exportName)).toEqual([
       "validateCodeTaskAcceptanceContribution",

@@ -1529,3 +1529,20 @@ their separate obligations.
 
 This activates only the object-input rule. Runtime-typeof, unknown-input, unsafe-dictionary and
 known-value-widening migration scopes, the remaining accepted owners and whole #3918 are incomplete.
+
+### Auxiliary request and outcome raw dictionary checks
+
+The existing `auxiliary-capability-request-public-parser` and
+`auxiliary-capability-outcome-public-parser` also declare the dictionary rule for their
+unchanged private, same-owner raw `Record<string, unknown>` boolean checks. The existing
+bounded helper/reference/currentness machinery and current semantic qualification decide each
+actual slot; this grants neither a trusted dictionary result nor admission authority to a helper.
+All fifteen existing selectors remain, including changing-discriminator, exact diagnostic,
+identity and checked-return controls. The selected source/public request proof additionally
+refuses an absent task identifier and an invalid parent state revision; those authority fields
+remain checked before any consumer can receive the original validated request.
+
+No root, record, runtime-typeof rule, call-result origin, shared scalar helper, factory binding,
+public API, runtime body, authority, rule scope or capacity limit is added. Real skill, facade
+and child-orchestrator consumers retain their separate physical proof obligations. Declaration
+alone is not qualification or evidence of a native-slot delta.

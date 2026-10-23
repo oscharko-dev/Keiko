@@ -3212,7 +3212,7 @@
       "id": "auxiliary-capability-request-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
@@ -3272,7 +3272,7 @@
       "id": "auxiliary-capability-outcome-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",

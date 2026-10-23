@@ -707,6 +707,15 @@ describe("C1A auxiliary concrete admission", () => {
       expect(
         result.ok && result.value === request && result.value.research === request.research,
       ).toBe(true);
+      // Parent authority fields stay checked through both the source and real public boundary.
+      expect(validate({ ...researchRequest(), taskId: undefined })).toEqual({
+        ok: false,
+        errors: ["taskId is invalid"],
+      });
+      expect(validate({ ...researchRequest(), stateRevision: -1 })).toEqual({
+        ok: false,
+        errors: ["stateRevision must be a non-negative integer"],
+      });
     },
   );
 
