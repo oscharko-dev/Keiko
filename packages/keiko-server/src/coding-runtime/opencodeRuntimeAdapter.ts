@@ -723,49 +723,35 @@ async function startAdapter(
   }>,
 ): Promise<OpenCodeAdapterReady | OpenCodeAdapterFailure> {
   const { readiness } = ports;
-  let phase = recordReadinessPhase(ports, "target-attestation");
+  const tracker = { phase: recordReadinessPhase(ports, "target-attestation") };
   try {
     if (!validTarget(readiness) || !(await readiness.verifyTargetAttestation())) {
       return fail("target-attestation");
     }
-    phase = recordReadinessPhase(ports, "config-materialization");
+    tracker.phase = recordReadinessPhase(ports, "config-materialization");
     if (!(await readiness.materialize())) {
       return fail("config-materialization");
     }
-    phase = recordReadinessPhase(ports, "endpoint");
+    tracker.phase = recordReadinessPhase(ports, "endpoint");
     const endpoint = parseStartupEndpoint(await readiness.startupLine());
     if (endpoint === undefined) return fail("endpoint");
-    phase = recordReadinessPhase(ports, "authenticated-health");
-    const authenticated = await readiness.health("basic");
-    if (authenticated.status !== 200) return fail("authenticated-health");
-    if (authenticated.version !== readiness.verifiedTarget.version)
-      return fail("authenticated-health-version");
-    phase = recordReadinessPhase(ports, "unauthenticated-health");
-    const unauthenticated = await readiness.health("none");
-    if (unauthenticated.status !== 401) return fail("unauthenticated-health");
-    phase = recordReadinessPhase(ports, "openapi-digest");
-    if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest) {
-      return fail("openapi-digest");
-    }
-    if (readiness.policyPluginActive !== undefined) {
-      phase = recordReadinessPhase(ports, "policy-plugin");
-      if (!(await readiness.policyPluginActive())) return fail("policy-plugin");
-    }
-    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
+    const protocolFailure = await verifyServiceProtocol(ports, tracker);
+    if (protocolFailure !== undefined) return fail(protocolFailure);
+    tracker.phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     const firstHint = await openSubscription();
-    phase = recordReadinessPhase(ports, "session-echo");
+    tracker.phase = recordReadinessPhase(ports, "session-echo");
     const sessionId = await readiness.sessionEcho();
     if (!SESSION_ID.test(sessionId)) return fail("session-echo");
-    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
+    tracker.phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHint(ports, state, firstHint.hint, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     if (!state.checkpoints.has(sessionId)) return fail("session-echo");
-    phase = recordReadinessPhase(ports, "gateway-challenge");
+    tracker.phase = recordReadinessPhase(ports, "gateway-challenge");
     if (!(await readiness.gatewayChallenge())) return fail("gateway-challenge");
-    phase = recordReadinessPhase(ports, "tool-facade-challenge");
+    tracker.phase = recordReadinessPhase(ports, "tool-facade-challenge");
     if (!(await readiness.toolFacadeChallenge())) return fail("tool-facade-challenge");
-    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
+    tracker.phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHistory(ports, state, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
@@ -779,11 +765,36 @@ async function startAdapter(
           correlationId: correlationIdOrUnknown(ports.correlationId),
           errorKind: "internal",
         },
-        { phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+        { phase: tracker.phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
       ),
     );
-    return fail(phase);
+    return fail(tracker.phase);
   }
+}
+
+/**
+ * The attested service's protocol identity, in order: authenticated health at the verified
+ * version, the unauthenticated refusal, the projected protocol digest and, where the profile depends
+ * on them, the governing plugins. Returns the failing phase, or undefined when all hold.
+ */
+async function verifyServiceProtocol(
+  ports: OpenCodeRuntimeAdapterPorts,
+  tracker: { phase: OpenCodeReadinessPhase },
+): Promise<OpenCodeReadinessPhase | undefined> {
+  const { readiness } = ports;
+  tracker.phase = recordReadinessPhase(ports, "authenticated-health");
+  const authenticated = await readiness.health("basic");
+  if (authenticated.status !== 200) return "authenticated-health";
+  if (authenticated.version !== readiness.verifiedTarget.version)
+    return "authenticated-health-version";
+  tracker.phase = recordReadinessPhase(ports, "unauthenticated-health");
+  if ((await readiness.health("none")).status !== 401) return "unauthenticated-health";
+  tracker.phase = recordReadinessPhase(ports, "openapi-digest");
+  if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest)
+    return "openapi-digest";
+  if (readiness.policyPluginActive === undefined) return undefined;
+  tracker.phase = recordReadinessPhase(ports, "policy-plugin");
+  return (await readiness.policyPluginActive()) ? undefined : "policy-plugin";
 }
 
 function recordReadinessPhase(

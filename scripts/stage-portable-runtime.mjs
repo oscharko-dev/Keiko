@@ -1615,7 +1615,9 @@ function provenanceStatementFor(
         unsignedSha256: addon.unsignedSha256,
         version: addon.version,
       })),
-      ...(nativeTools.length > 0 ? { nativeTools: nativeTools.map(nativeToolProvenance) } : {}),
+      ...(nativeTools.length > 0
+        ? { nativeTools: nativeTools.map((tool) => nativeToolProvenance(tool)) }
+        : {}),
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
       subjectDigest: digests.assetSha256,
       target: target.platformTarget,

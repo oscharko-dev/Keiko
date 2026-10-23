@@ -1137,7 +1137,7 @@ describe("pinned native OpenCode built-in agent restrictions", () => {
         expect(result.length).toBeGreaterThan(0);
         expect(result).toMatch(/bash/u);
         expect(existsSync(join(run.fixture.workspace, "HALLUCINATED"))).toBe(false);
-        expect(run.facade.requests.length).toBe(before);
+        expect(run.facade.requests).toHaveLength(before);
         expect(await run.service.client.permissions()).toEqual([]);
       });
     },

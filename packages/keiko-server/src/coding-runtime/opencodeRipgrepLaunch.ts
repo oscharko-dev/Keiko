@@ -316,7 +316,7 @@ export function ripgrepLaunchEnvironment(
   const path = native
     ? prependDirectory(resolution.directory, processEnv?.PATH)
     : resolution.directory;
-  return { ...(processEnv ?? {}), PATH: path };
+  return { ...processEnv, PATH: path };
 }
 
 /** The mapped profiles inherit no names; they inherit PATH only to carry the verified directory. */
