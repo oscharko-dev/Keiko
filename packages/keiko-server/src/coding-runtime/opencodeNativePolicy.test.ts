@@ -134,7 +134,34 @@ describe("native policy effects per autonomy mode", () => {
       );
       expect(effectOf(mode, "shell", ["gh pr create --fill"])).toBe("deny:delivery-reserved");
       expect(effectOf(mode, "teleport", [])).toBe("deny:unsupported-action");
+      // Wrappers, options, paths and quoted sub-shells reach the same reserved effect (#3897).
+      for (const wrapped of [
+        "env git push origin HEAD",
+        "env -i GIT_TRACE=1 git push origin HEAD",
+        "GIT_SSH_COMMAND=ssh git push",
+        "git -C . push origin HEAD",
+        "git -c user.name=x commit -m done",
+        "git --git-dir .git --work-tree . push",
+        "/usr/bin/git push origin HEAD",
+        "exec git commit -am done",
+        "nohup git push &",
+        'sh -c "git push origin HEAD"',
+        "bash -lc 'cd app && git -C .. push'",
+        "node -e \"require('child_process').execSync('git push')\"",
+        "env gh pr merge 42",
+        "/opt/homebrew/bin/gh api repos/x/y/merges",
+      ]) {
+        expect(effectOf(mode, "shell", [wrapped]), wrapped).toBe("deny:delivery-reserved");
+      }
     }
+    // Ordinary read-only Git stays usable through the same wrappers and paths.
+    expect(effectOf("supervised-coding", "shell", ["env git status"])).toBe("allow");
+    expect(effectOf("supervised-coding", "shell", ["/usr/bin/git -C . diff --stat"])).toBe("allow");
+    expect(effectOf("supervised-coding", "shell", ["git -c color.ui=never log -3"])).toBe("allow");
+    expect(effectOf("supervised-coding", "shell", ["echo git push"])).toBe("allow");
+    expect(effectOf("supervised-coding", "shell", ["git -C . status && git -C . diff"])).toBe(
+      "allow",
+    );
     expect(effectOf("unknown-mode", "read", ["src/a.ts"])).toBe("deny:mode-denied");
   });
 

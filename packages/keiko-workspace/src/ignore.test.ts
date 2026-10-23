@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
+import {
+  CREDENTIAL_PATH_DENY_PATTERNS,
+  TOOL_STATE_PATH_DENY_PATTERNS,
+} from "@oscharko-dev/keiko-contracts/sensitive-path-patterns";
 import { compileIgnore, DEFAULT_DENY_PATTERNS, isDenied, isIgnored } from "./ignore.js";
 
 describe("DEFAULT_DENY_PATTERNS", () => {
   it("is a frozen, non-empty list", () => {
     expect(Object.isFrozen(DEFAULT_DENY_PATTERNS)).toBe(true);
     expect(DEFAULT_DENY_PATTERNS.length).toBeGreaterThan(0);
+  });
+});
+
+describe("DEFAULT_DENY_PATTERNS source of truth (#3897)", () => {
+  it("is exactly the credential subset the native sandbox enforces plus the tool state", () => {
+    expect([...DEFAULT_DENY_PATTERNS].sort()).toEqual(
+      [...CREDENTIAL_PATH_DENY_PATTERNS, ...TOOL_STATE_PATH_DENY_PATTERNS].sort(),
+    );
+  });
+
+  it("denies every kernel-enforced credential pattern", () => {
+    for (const pattern of CREDENTIAL_PATH_DENY_PATTERNS)
+      expect(isDenied(`work/${pattern.replaceAll("*", "x")}`)).toBe(true);
   });
 });
 

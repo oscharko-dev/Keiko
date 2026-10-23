@@ -227,3 +227,68 @@ describe("planIsolatedRun", () => {
     expect(decision.attestation.filesystemEnforced).toBe(false);
   });
 });
+
+describe("planIsolatedRun native profile (#3897)", () => {
+  const filesystem = {
+    workspaceRoot: "/work/ws",
+    workspaceAccess: "read-write" as const,
+    privateStateRoot: "/state/run-1",
+    runtimeReadRoot: "/opt/keiko/runtime",
+  };
+  const nativePlan: IsolatedRunPlan = {
+    command: "/opt/keiko/runtime/opencode",
+    args: ["serve"],
+    cwd: "/work/ws",
+    network: { mode: "gateway", host: "127.0.0.1", port: 1983 },
+    gatewayProfile: "keiko-native",
+    gatewayFilesystem: filesystem,
+  };
+
+  it("refuses a native run that carries no accepted filesystem on every platform", () => {
+    const { gatewayFilesystem: _omitted, ...withoutFilesystem } = nativePlan;
+    for (const platform of ["linux", "darwin"] as const) {
+      const decision = planIsolatedRun(
+        withoutFilesystem,
+        { ...NONE, bubblewrap: true, unshare: true, seatbelt: true },
+        platform,
+      );
+      expect(decision.kind).toBe("fail-closed");
+      expect(decision.attestation.filesystemEnforced).toBe(false);
+    }
+  });
+
+  it("wraps a Linux native run with bubblewrap only and refuses the unshare fallback", () => {
+    const wrapped = planIsolatedRun(nativePlan, { ...NONE, bubblewrap: true }, "linux");
+    expect(wrapped.kind).toBe("wrapped");
+    expect(wrapped.attestation).toEqual({
+      backend: "bubblewrap",
+      networkEnforced: true,
+      filesystemEnforced: true,
+      platform: "linux",
+    });
+    const unqualified = planIsolatedRun(nativePlan, { ...NONE, unshare: true }, "linux");
+    expect(unqualified.kind).toBe("fail-closed");
+    expect(unqualified.attestation.filesystemEnforced).toBe(false);
+  });
+
+  it("attests network enforcement only below Full access", () => {
+    const below = planIsolatedRun(nativePlan, { ...NONE, seatbelt: true }, "darwin");
+    const full = planIsolatedRun(
+      { ...nativePlan, gatewayEgress: "inherited" },
+      { ...NONE, seatbelt: true },
+      "darwin",
+    );
+    expect(below.attestation.networkEnforced).toBe(true);
+    expect(full.attestation.networkEnforced).toBe(false);
+    expect(full.attestation.filesystemEnforced).toBe(true);
+  });
+
+  it("keeps the Linux gateway profile out of the filesystem confinement", () => {
+    const decision = planIsolatedRun(
+      { ...nativePlan, gatewayProfile: "keiko-gateway" },
+      { ...NONE, bubblewrap: true },
+      "linux",
+    );
+    expect(decision.kind).toBe("fail-closed");
+  });
+});

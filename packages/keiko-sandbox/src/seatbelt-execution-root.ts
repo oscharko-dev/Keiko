@@ -1,4 +1,5 @@
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { CREDENTIAL_PATH_SEATBELT_RULE } from "./seatbelt-credential-paths.js";
 import type { IsolatedRunPlan, RuntimeGatewayFilesystem } from "./types.js";
 
 const MACOS_RUNTIME_READ_ROOTS = [
@@ -61,13 +62,45 @@ function installedLibraryReads(systemReadRoots: readonly string[]): string {
     .join("");
 }
 
+// What the native profile's read boundary admits besides the workspace, the private state and the
+// server-named toolchain roots (#3897): the system software every shell, interpreter and Git needs
+// to start. `/System/Volumes/Data` and the user's home are deliberately absent, so a path spelled
+// through the data-volume alias is as unreadable as the home-relative one.
+const NATIVE_SYSTEM_READ_ROOTS = [
+  ...MACOS_RUNTIME_READ_ROOTS,
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/Library/Developer",
+  "/Library/Frameworks",
+  "/Library/Java",
+  "/Library/Python",
+  "/Library/Ruby",
+  "/Applications/Xcode.app",
+  "/private/etc",
+  "/private/var/db/timezone",
+  "/private/var/db/xcode_select_link",
+  "/private/var/select",
+] as const;
+// `/etc`, `/var` and `/tmp` are symlinks into `/private`; resolving a path through them (the
+// resolver reads `/etc/hosts`) needs the link itself, and nothing beneath it.
+const NATIVE_SYMLINK_READS = ["/etc", "/var", "/tmp"] as const;
+const NATIVE_DEVICE_READS = [
+  "/dev/null",
+  "/dev/zero",
+  "/dev/random",
+  "/dev/urandom",
+  "/dev/tty",
+] as const;
+const NATIVE_TOOLCHAIN_ROOTS_MAX = 64;
+
 const GATEWAY_FILESYSTEM_KEYS = new Set([
   "workspaceRoot",
   "workspaceAccess",
   "privateStateRoot",
   "runtimeReadRoot",
 ]);
-const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set(["deniedReadRoots"]);
+const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set(["deniedReadRoots", "toolchainReadRoots"]);
 
 function validRoot(value: unknown): value is string {
   return (
@@ -115,7 +148,8 @@ function validGatewayFilesystem(
     !validRoot(value.workspaceRoot) ||
     !validRoot(value.privateStateRoot) ||
     !validRoot(value.runtimeReadRoot) ||
-    !validDeniedReadRoots(value.deniedReadRoots)
+    !validDeniedReadRoots(value.deniedReadRoots) ||
+    !validToolchainReadRoots(value.toolchainReadRoots)
   )
     return false;
   // The normal <workspace>/.keiko private metadata subtree remains writable. It must never
@@ -133,6 +167,17 @@ function validDeniedReadRoots(value: unknown): boolean {
     Array.isArray(value) &&
     value.length <= 64 &&
     value.every((root) => typeof root === "string" && validRoot(root))
+  );
+}
+
+function validToolchainReadRoots(value: unknown): boolean {
+  if (value === undefined) return true;
+  // A toolchain root is an install prefix (`/opt/homebrew`, `~/.nvm/versions/node/v24`), never a
+  // top-level directory such as `/Users` or `/opt` that would open everything beneath it.
+  return (
+    Array.isArray(value) &&
+    value.length <= NATIVE_TOOLCHAIN_ROOTS_MAX &&
+    value.every((root) => typeof root === "string" && validRoot(root) && root.split("/").length > 2)
   );
 }
 
@@ -162,32 +207,50 @@ export function gatewayFilesystemSeatbeltRules(
   );
 }
 
+function nativeReadRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
+  return [
+    ...NATIVE_SYSTEM_READ_ROOTS,
+    ...(closed.toolchainReadRoots ?? []),
+    closed.runtimeReadRoot,
+  ];
+}
+
 /**
- * The native profile's filesystem rules (#3897): the workspace and the private run state are
- * writable, the user's temporary directories stay usable for toolchains, everything else is
- * read-only, and the denied roots (credential stores, Keiko's own state) are unreadable even
- * inside an otherwise allowed tree. Rule order matters: the last matching Seatbelt rule wins, so
- * the private state root is re-allowed after the denied roots that may contain it.
+ * The native profile's filesystem rules (#3897). The boundary is a kernel READ allowlist, not only
+ * a write restriction: the process and every descendant (shells, interpreters, Git, npm) read the
+ * workspace, the run-private state (whose `tmp` is the runtime's TMPDIR), the runtime's own payload,
+ * the system software and the server-named toolchain roots, and nothing else: the shared system
+ * temporary directories are NOT admitted, because another process's files there are as unrelated
+ * to the task as any other file outside the workspace. Writes are limited to the workspace and the
+ * private state. The denied roots (credential stores, Keiko's own state) are unreadable even inside
+ * an otherwise allowed tree, and credential-named files (`.env`, keys, tokens, the shared list in
+ * keiko-contracts) are unreadable and unwritable wherever they sit, including inside the workspace.
+ * Rule order matters: the last matching Seatbelt rule wins, so the workspace and private state are
+ * re-allowed after the denied roots that may contain them, and the credential names are denied last
+ * of all.
  */
 export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesystem): string {
   const closed = copyRuntimeGatewayFilesystem(filesystem);
   if (closed?.workspaceAccess !== "read-write")
     throw new TypeError("native-seatbelt-filesystem-invalid");
-  const writable = [
-    closed.workspaceRoot,
-    closed.privateStateRoot,
-    "/private/tmp",
-    "/private/var/folders",
-  ];
+  const reads = nativeReadRoots(closed);
+  const own = [closed.workspaceRoot, closed.privateStateRoot];
   const denied = closed.deniedReadRoots ?? [];
   return (
-    "(deny file-write*)" +
-    `(allow file-write* ${pathFilters("subpath", writable)} (literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr"))` +
+    "(deny file-read* file-write*)" +
+    `(allow file-read* ${pathFilters("subpath", [...reads, ...own])} ` +
+    `${pathFilters("literal", [...READ_LITERALS, ...NATIVE_SYMLINK_READS, ...NATIVE_DEVICE_READS])} ` +
+    '(regex #"^/dev/(ttys[0-9]+|fd/[0-9]+)$"))' +
+    // Path resolution stats every ancestor of every admitted root (realpath, Git's repository
+    // discovery); the ancestors expose their metadata only, never their entries or siblings.
+    `(allow file-read-metadata ${pathFilters("literal", [...reads, ...own, "/System/Volumes/Data"].flatMap(ancestors))})` +
+    `(allow file-write* ${pathFilters("subpath", own)} ` +
+    '(literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr"))' +
     (denied.length === 0 ? "" : `(deny file-read* file-write* ${pathFilters("subpath", denied)})`) +
     // Keiko's managed task workspaces live inside its own state directory, which is a denied
     // root; the workspace is re-allowed after the denial like the private state (#3897 lab:
     // OpenCode 2.0.10 could not even realpath its workspace in the customer shape).
-    `(allow file-read* file-write* ${pathFilters("subpath", [closed.workspaceRoot, closed.privateStateRoot])})` +
+    `(allow file-read* file-write* ${pathFilters("subpath", own)})` +
     // A denied root may be an ancestor of the workspace and of the private state (Keiko's own
     // state directory holds both). Path resolution stats every ancestor, Git refuses a snapshot
     // `--git-dir` whose parent it cannot stat, and the runtime opens the workspace's parent to
@@ -195,7 +258,8 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     // "FileSystem.realPath" on the parent). The ancestor directory NODES are therefore readable
     // (their entry names), never their files or sibling subtrees: `literal` matches the directory
     // itself, and every denied subtree stays denied.
-    `(allow file-read* ${pathFilters("literal", [closed.privateStateRoot, closed.workspaceRoot].flatMap(ancestors))})`
+    `(allow file-read* ${pathFilters("literal", own.flatMap(ancestors))})` +
+    CREDENTIAL_PATH_SEATBELT_RULE
   );
 }
 

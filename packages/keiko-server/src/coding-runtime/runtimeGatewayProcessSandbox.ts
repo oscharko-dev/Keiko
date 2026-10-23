@@ -42,6 +42,7 @@ export function prepareRuntimeGatewayProcessSandbox(
       ...(gitExecutable === undefined ? {} : { gatewayChildExecutable: gitExecutable.path }),
       ...(policy.filesystem === undefined ? {} : { gatewayFilesystem: policy.filesystem }),
       gatewayProfile: policy.profile,
+      ...(policy.egress === undefined ? {} : { gatewayEgress: policy.egress }),
     },
     input.availability,
     input.platform,
@@ -80,6 +81,9 @@ export function recordRuntimeGatewayConfinementSpawned(
         profile: policy.profile,
         ...(parentLifetime === undefined ? {} : { parentLifetime }),
         childExecutablePolicy: childExecutablePolicy(policy.profile, git),
+        // Recorded for the native profile only: the kernel-enforced network disposition the run's
+        // mode selected (loopback-only below Full access, inherited at Full access).
+        ...(policy.egress === undefined ? {} : { egressDisposition: policy.egress }),
         ...(git === undefined ? {} : { childExecutableDigest: git.sha256 }),
         ...(git?.source === undefined ? {} : { childExecutableSource: git.source }),
         ...(policy.filesystem === undefined

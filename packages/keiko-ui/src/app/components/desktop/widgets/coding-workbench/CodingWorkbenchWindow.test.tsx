@@ -2374,6 +2374,66 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
   });
 
+  // #3897 review: a native OpenCode edit ask names no supervised action kind and no command label;
+  // its explicit `nativePermission` must still bind Approve to the authenticated review facts.
+  function nativeEditApprovalState(): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "permission-native-edit-1",
+            kind: "workspace-write",
+            actionClass: "workspace-write",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            scopeLabel: "workspace-scope",
+            risk: "medium",
+            nativePermission: "edit",
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  it("#3897: a native edit ask keeps Approve disabled until its review facts show the paths", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+    renderWorkbench(nativeEditApprovalState());
+    expect(screen.getByText("Loading the requested action…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    cleanup();
+
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null, retry: vi.fn() });
+    renderWorkbench(nativeEditApprovalState());
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    cleanup();
+
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-native-edit-1",
+        nativeAction: { permission: "edit", resources: ["src/app.ts", "src/app.test.ts"] },
+        paths: ["src/app.ts", "src/app.test.ts"],
+        pathsTruncated: false,
+        fileCount: 2,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(nativeEditApprovalState());
+    const review = screen.getByRole("group", { name: "What the agent wants to do" });
+    expect(review).toHaveTextContent("File change");
+    expect(review).toHaveTextContent("src/app.ts");
+    expect(review).toHaveTextContent("src/app.test.ts");
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+  });
+
   // Workbench audit, 2026-09-03: on the governance-critical permission-approval screen, `request.kind`,
   // `request.actionClass`, and `request.risk` used to render as raw, untranslated kebab-case slugs
   // — the only three facts on this fully-localized screen left unlocalized.

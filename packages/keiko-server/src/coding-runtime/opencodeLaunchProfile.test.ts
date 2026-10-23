@@ -137,8 +137,9 @@ describe("OpenCode launch profile", () => {
 
   // #3897: the native profile is standalone OpenCode under Keiko's policy hook. Nothing is
   // denied statically except the mode-independent external-directory escape; every other action
-  // is decided per call by the server-owned policy, and the repository's own configuration loads.
-  it("emits the standalone-equivalent native configuration and keeps the project layer on", () => {
+  // is decided per call by the server-owned policy. Repository configuration is data until the
+  // operator admits its executable effects (#3903), so the project layer stays switched off.
+  it("emits the standalone-equivalent native configuration with the project layer off", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
@@ -173,7 +174,7 @@ describe("OpenCode launch profile", () => {
       expect(finalPermissionAction(config.permissions, tool)).toBe("allow");
     }
     expect(finalPermissionAction(config.permissions, "external_directory")).toBe("deny");
-    expect(profile.env).not.toHaveProperty("OPENCODE_DISABLE_PROJECT_CONFIG");
+    expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
     expect(profile.env.npm_config_offline).toBe("true");
     const mapped = buildOpenCodeLaunchProfile({
@@ -185,6 +186,81 @@ describe("OpenCode launch profile", () => {
     if (!mapped.ok) throw new Error("expected mapped launch profile");
     expect(mapped.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(mapped.config).not.toBe(profile.config);
+  });
+
+  // #3897 review (P1): the repository must not be able to execute plugin modules or select a
+  // different model route. The producer has no per-plugin admission, so the whole project layer
+  // (opencode.json, .opencode/ agents, commands, skills and plugins) is off until #3903 admits
+  // individual items, and the server-owned binding rides the highest layer a repository cannot
+  // reach: OPENCODE_CONFIG_CONTENT is merged after every discovered project document.
+  describe("native repository-configuration boundary", () => {
+    function nativeProfile(): Extract<ReturnType<typeof buildOpenCodeLaunchProfile>, { ok: true }> {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        ...CONTEXT_INPUT,
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      return profile;
+    }
+
+    it("switches the repository's executable configuration layer off", () => {
+      const { env } = nativeProfile();
+      expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+      // Only the private discovery directory feeds plugins and agents; no second file layer.
+      expect(env).not.toHaveProperty("OPENCODE_CONFIG");
+      expect(env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+    });
+
+    it("re-asserts the server-owned binding on the highest layer", () => {
+      const profile = nativeProfile();
+      const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as Record<
+        string,
+        unknown
+      >;
+      const file = JSON.parse(profile.config) as Record<string, unknown>;
+      expect(Object.keys(content).sort()).toEqual([
+        "default_agent",
+        "model",
+        "permissions",
+        "providers",
+        "share",
+        "update",
+      ]);
+      for (const key of Object.keys(content)) expect(content[key]).toEqual(file[key]);
+      const provider = record(record(content.providers)["keiko-runtime"]);
+      expect(record(provider.settings).baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
+      expect(provider.headers).toEqual({
+        Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}",
+      });
+      expect(content.model).toBe("keiko-runtime/coding");
+    });
+
+    it("keeps credentials and repository text out of the highest layer", () => {
+      const { env } = nativeProfile();
+      const content = env.OPENCODE_CONFIG_CONTENT ?? "";
+      expect(content).not.toContain(env.OPENCODE_SERVER_PASSWORD ?? "unset");
+      expect(content).not.toMatch(/https?:\/\//u);
+      expect(content).not.toContain("plugin");
+      expect(content).not.toContain("instructions");
+    });
+
+    it("leaves the mapped profiles without a configuration-content layer", () => {
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        const mapped = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile,
+          ...CONTEXT_INPUT,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!mapped.ok) throw new Error("expected mapped launch profile");
+        expect(mapped.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+        expect(mapped.env).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
+      }
+    });
   });
 
   it("preserves the V1 compatibility prompt's digest-bound edit and instruction guidance", () => {

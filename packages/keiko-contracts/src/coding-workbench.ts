@@ -639,23 +639,33 @@ export interface CodingWorkbenchPermissionRequest {
   readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  /**
+   * The OpenCode permission a native policy ask waits on (`edit`, `shell`, `webfetch`, …): the
+   * explicit discriminator of a native ask, present for every native action, not only commands.
+   */
+  readonly nativePermission?: string | undefined;
   readonly expiresAt: string;
 }
 
 /**
  * A native OpenCode policy ask (#3897) is the one permission request that names no supervised
  * action kind: the runtime's own action is evaluated by the server-owned native policy, and the
- * closed `native-*` command label says so. The orchestrator pauses the run for it and settles it
- * through the permission port alone; no Keiko authority is minted for it.
+ * ask carries that action's OpenCode permission name. Commands additionally carry the closed
+ * `native-*` command label. The orchestrator pauses the run for it and settles it through the
+ * permission port alone; no Keiko authority is minted for it, and the Workbench enables Approve
+ * only once the authenticated review channel shows the action's own resources.
  */
 export const CODING_WORKBENCH_NATIVE_ACTION_LABEL_PREFIX = "native-";
 
 export function isNativeActionPermissionRequest(
-  request: Pick<CodingWorkbenchPermissionRequest, "actionKind" | "commandLabel"> | undefined,
+  request:
+    | Pick<CodingWorkbenchPermissionRequest, "actionKind" | "nativePermission" | "commandLabel">
+    | undefined,
 ): boolean {
   return (
     request?.actionKind === undefined &&
-    request?.commandLabel?.startsWith(CODING_WORKBENCH_NATIVE_ACTION_LABEL_PREFIX) === true
+    typeof request?.nativePermission === "string" &&
+    request.nativePermission.length > 0
   );
 }
 

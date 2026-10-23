@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
-import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { createOpenCodeReconciler } from "./opencodeReconciler.js";
 import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
 import {
@@ -62,6 +62,72 @@ function toolHistory(name: string, status = "completed"): readonly Record<string
     },
   ];
 }
+
+function failedIdleHistory(error: unknown): readonly Record<string, unknown>[] {
+  return [
+    { id: "msg_user", type: "user", time: { created: 1 }, text: "Run the failing turn." },
+    {
+      id: "msg_idle",
+      type: "idle",
+      time: { created: 3 },
+      outcome: "failed",
+      ...(error === undefined ? {} : { error }),
+    },
+  ];
+}
+
+describe("OpenCode 2.1.4 idle structured error (#3897)", () => {
+  const structuredError = {
+    type: "ProviderError",
+    message: "PRIVATE_PROVIDER_MESSAGE",
+    status: 502,
+    response: { body: "PRIVATE_BODY" },
+    retryAfterMs: 1_500,
+  };
+
+  it("projects a failed idle message carrying the producer's structured error as a body-free terminal failure", () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "idle-history-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const events = projection.project("ses_idle", failedIdleHistory(structuredError), undefined);
+    const terminal = events.find((event) => event.kind === "terminal-failure");
+    expect(terminal).toBeDefined();
+    expect(JSON.stringify(events)).not.toMatch(
+      /PRIVATE_PROVIDER_MESSAGE|PRIVATE_BODY|ProviderError/u,
+    );
+  });
+
+  it("still rejects an unknown idle field and a malformed structured error", () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "idle-history-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const safeCode = (messages: readonly Record<string, unknown>[]): string | undefined => {
+      try {
+        projection.project("ses_idle", messages, undefined);
+        return undefined;
+      } catch (error) {
+        return error instanceof OpenCodeV2HistoryError ? error.safeCode : "unexpected";
+      }
+    };
+    expect(safeCode([{ ...failedIdleHistory(undefined)[1], unexpected: true }])).toMatch(
+      /role=idle:extraCount=1/u,
+    );
+    for (const malformed of [
+      "PRIVATE_STRING",
+      { type: "ProviderError" },
+      { ...structuredError, extra: 1 },
+      { ...structuredError, status: 42 },
+      { ...structuredError, retryAfterMs: -1 },
+      { ...structuredError, response: { body: "x", headers: {} } },
+    ]) {
+      expect(safeCode(failedIdleHistory(malformed))).toMatch(/error-shape=unsupported/u);
+    }
+  });
+});
 
 describe("OpenCode V2 native tool history", () => {
   it("retries durable capture until accepted and skips unchanged acknowledged content", () => {

@@ -534,6 +534,63 @@ describe("production OpenCode backend composition", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  // #3897: the native profile's kernel network disposition follows the run's EFFECTIVE mode, and
+  // the Linux native run receives the same accepted filesystem the macOS run does.
+  it.each([
+    ["governed-assist", "loopback-only"],
+    ["supervised-coding", "loopback-only"],
+    ["autonomous-delivery", "inherited"],
+  ] as const)(
+    "composes a native %s run with %s egress and a read-write filesystem on Linux",
+    (mode, egress) => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-composition-")));
+      mkdirSync(join(root, "toolchain", "bin"), { recursive: true });
+      vi.stubEnv("PATH", join(root, "toolchain", "bin"));
+      try {
+        const portable = releaseQualifiedLinuxRuntime(root);
+        const request = runInput(root);
+        const gatewayFactory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
+        createProductionOpenCodeBackend({
+          ...backendInput(root, portable),
+          gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        }).createRun({ ...request, minted: { ...request.minted, effectiveMode: mode } });
+        const confinement = gatewayFactory.mock.calls[0]?.[0].gatewayConfinement;
+        expect(confinement).toMatchObject({
+          profile: "keiko-native",
+          egress,
+          filesystem: {
+            workspaceRoot: request.context.workspaceRoot,
+            workspaceAccess: "read-write",
+            toolchainReadRoots: [join(root, "toolchain")],
+          },
+        });
+        expect(confinement?.filesystem?.deniedReadRoots).toContain(realpathSync(root));
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("binds the mode-derived egress into the policy digest so a different mode cannot replay it", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-digest-")));
+    try {
+      const digests = (["governed-assist", "autonomous-delivery"] as const).map((mode) => {
+        const factory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
+        const request = runInput(root);
+        createProductionOpenCodeBackend({
+          ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+          gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        }).createRun({ ...request, minted: { ...request.minted, effectiveMode: mode } });
+        return factory.mock.calls.at(-1)?.[0].gatewayConfinement?.policyDigest;
+      });
+      expect(digests[0]).toBeDefined();
+      expect(digests[0]).not.toBe(digests[1]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });
 
 function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeRuntime {

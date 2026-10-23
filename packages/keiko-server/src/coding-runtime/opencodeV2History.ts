@@ -173,7 +173,7 @@ const MESSAGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "error",
     "retry",
   ],
-  idle: ["id", "metadata", "time", "type", "outcome"],
+  idle: ["id", "metadata", "time", "type", "outcome", "error"],
   system: ["id", "metadata", "time", "type", "text", "description"],
   synthetic: ["id", "metadata", "time", "type", "text", "description"],
   shell: ["id", "metadata", "time", "type", "shellID", "command", "status", "exit", "output"],
@@ -207,6 +207,55 @@ const MESSAGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "error",
   ],
 };
+
+const IDLE_ERROR_FIELDS: readonly string[] = [
+  "type",
+  "message",
+  "status",
+  "response",
+  "retryAfterMs",
+];
+
+/**
+ * OpenCode 2.1.4 ends a failed turn with an idle message carrying `Session.StructuredError`
+ * (`type`, `message`, optional HTTP `status`, `response.body`, `retryAfterMs`); 2.0.10 had no such
+ * field. The shape is checked strictly, and nothing of it is projected: the terminal failure stays
+ * body-free (#3897 review).
+ */
+function assertIdleErrorShape(value: unknown): void {
+  if (value === undefined) return;
+  const error = record(value);
+  if (error === undefined || !isIdleErrorIdentity(error) || !isIdleErrorResponse(error.response))
+    throw new OpenCodeV2HistoryError("reason=event-unknown:role=idle:error-shape=unsupported");
+}
+
+function isIdleErrorIdentity(error: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Object.keys(error).every((key) => IDLE_ERROR_FIELDS.includes(key)) &&
+    typeof error.type === "string" &&
+    typeof error.message === "string" &&
+    (error.status === undefined || isHttpStatus(error.status)) &&
+    (error.retryAfterMs === undefined || isNonNegativeInteger(error.retryAfterMs))
+  );
+}
+
+function isIdleErrorResponse(value: unknown): boolean {
+  if (value === undefined) return true;
+  const response = record(value);
+  return (
+    response !== undefined &&
+    typeof response.body === "string" &&
+    Object.keys(response).every((key) => key === "body")
+  );
+}
+
+function isHttpStatus(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 100 && (value as number) <= 599;
+}
+
+function isNonNegativeInteger(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
 
 export interface OpenCodeV2HistoryProjection {
   project(
@@ -247,7 +296,10 @@ function assertMessageShape(message: Readonly<Record<string, unknown>>): void {
   if (allowed === undefined)
     throw new OpenCodeV2HistoryError("reason=event-unknown:type=unsupported");
   const extra = Object.keys(message).filter((key) => !allowed.includes(key));
-  if (extra.length === 0) return;
+  if (extra.length === 0) {
+    if (role === "idle") assertIdleErrorShape(message.error);
+    return;
+  }
   throw new OpenCodeV2HistoryError(
     `reason=event-unknown:eventSha256=${digest(message).slice(0, 16)}:role=${role}:extraCount=${String(extra.length)}:extraKeySha256=${digest(
       extra.slice().sort((left, right) => {

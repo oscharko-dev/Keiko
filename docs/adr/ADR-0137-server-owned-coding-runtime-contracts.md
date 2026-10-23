@@ -1011,10 +1011,42 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) allows every native action by rule, denies only the
   mode-independent `external_directory` escape, keeps `update` and `share` off, keeps the single
-  `keiko-runtime` provider behind the Model Gateway, enables native snapshots, and loads the
-  repository's own instructions and `opencode.json`/`.opencode` configuration like standalone.
-  Repository text decides nothing about authority: the policy hook runs after OpenCode's own rule
-  evaluation and can only narrow the result.
+  `keiko-runtime` provider behind the Model Gateway, and enables native snapshots. Repository text
+  decides nothing about authority: the policy hook runs after OpenCode's own rule evaluation and
+  can only narrow the result.
+- **Repository configuration is data until the operator admits its executable effects (#3903).**
+  A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
+  standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
+  `.opencode/` agents, commands, skills and `plugins/` modules (and any module an `opencode.json`
+  `plugins` entry names) as one layer, imports a plugin module's top-level code and `setup` before
+  any permission is evaluated, and merges a project `providers`/`model` entry above the private
+  discovery file. A permission hook cannot govern a module's load, and a repository could move
+  `providers.keiko-runtime.settings.baseURL` off the Model Gateway. The producer offers no
+  per-item admission and its plugin API has no late `config` hook, so the native launch profile
+  sets `OPENCODE_DISABLE_PROJECT_CONFIG=true` for every tool profile: nothing under the workspace
+  is a configuration layer, runs as a plugin, or selects a provider, model, credential or
+  permission. The restriction is explicit and documented: project `opencode.json`, `.opencode/`
+  agents, commands, skills and plugins, nested `AGENTS.md` discovery, `.claude/` and `.agents/`
+  do not load until #3903 admits individual items through the existing workspace trust and
+  authority admission (an accepted plugin must then stay inside the live Authority Envelope and
+  must not be able to replace the governing `keiko.native-policy` hook). The workspace-root
+  `AGENTS.md` still reaches the model as Keiko's own bounded, nonce-framed, untrusted initial
+  context (ADR-0137 D1). Keiko's generated plugins load from the private discovery directory,
+  which the switch does not touch.
+- **The server-owned binding rides the highest layer.** The profile also passes the single
+  provider, model, `default_agent`, `update`/`share` switches and the mode-independent permission
+  floor as `OPENCODE_CONFIG_CONTENT`, a secret-free subset of the private file that holds only
+  `{env:…}` placeholders (the gateway address and capability stay in the child environment). The
+  producer merges that virtual document after the private file and after every discovered project
+  document, so it stays the last word if a project layer is ever admitted, including across a
+  configuration reload. Model egress below the process boundary remains the Seatbelt/namespace
+  profile's concern (D4); this binding is the configuration-level enforcement. Both properties are
+  proven against the staged original executable under the real native Seatbelt wrapper
+  (`opencodeNativeProjectBoundary.real.test.ts`): a repository that writes a canary from a file
+  plugin, a directory plugin and a configured plugin at module load, and that points the provider
+  at a separate loopback listener, produces no canary and no request to that listener, the Model
+  Gateway receives every model request with its own credential and model, and a control with the
+  project layer switched on shows the same plugins executing yet the route still bound.
 - **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
   plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
   (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`
@@ -1039,36 +1071,101 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   name only. Nothing in it registers a handler, effect or authority in Keiko (ADR-0175 D2). The
   edit, write and patch tools are exact-content tools: their arguments reach the runtime byte for
   byte (#4009).
-- **Process confinement becomes the `keiko-native` profile.** The sandbox keeps what the agent's
-  own toolchains need and what standalone never guards against: the task workspace, the private
-  run state and the user's temporary directories are writable; everything else stays read-only;
-  credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.azure`, `~/.docker`, `~/.netrc`,
-  `~/.pgpass`, `~/.git-credentials`, `~/.config/gh`, `~/.config/gcloud`, keychains) and Keiko's own
-  state directory are unreadable even for a shell. The task workspace and the run's private state
-  are re-allowed after those denials, because the packaged product keeps its managed task
-  workspaces inside its own state directory, and the ancestor directory nodes of both are
-  readable (their entry names, never their files or sibling subtrees) because the runtime opens
-  the workspace's parent to canonicalize it (the 2026-10-23 customer-shape qualification found
-  OpenCode 2.0.10 unable to `realpath` its workspace otherwise). Executable transitions
-  and egress are inherited; egress is governed per action by the policy (internet asks below Full
-  access), not by the process wrapper. The child inherits the launcher's allowlisted environment
-  (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the agent's
-  shell finds the project's toolchains the way it does standalone; the mapped profiles still
-  inherit nothing. The launch gate that keeps a host secret out of the child compares the child
-  env (allowlisted non-secret names plus Keiko's own run projection) against the host values
+- **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
+  every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
+  working directory and the command as a whole and never routes each file operand through the
+  native read guard. The sandbox keeps what the agent's own toolchains need and what standalone
+  never guards against, and the kernel boundary is a READ allowlist, not only a write restriction:
+  the process reads the task workspace, the run's private state (its `tmp` is the runtime's
+  `TMPDIR`), the runtime's own payload, the system software roots and the server-named toolchain
+  roots (the launcher's `PATH` directories reduced to install prefixes by
+  `nativeToolchainReadRoots`; never the home directory or an ancestor of it), and nothing else. The
+  shared system temporary directories are not admitted: another process's file there is as
+  unrelated to the task as any file outside the workspace. Writes are limited to the workspace and
+  the private state. Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.azure`,
+  `~/.docker`, `~/.netrc`, `~/.pgpass`, `~/.git-credentials`, `~/.config/gh`, `~/.config/gcloud`,
+  keychains) and Keiko's own state directory are unreadable and unwritable even for a shell, and so
+  is every credential-named path inside the allowed trees: `CREDENTIAL_PATH_DENY_PATTERNS` in
+  `keiko-contracts` (`.env`, `.env.*` except `.env.example`, keys, certificates, token and history
+  files, `.npmrc`, ...) is the single list that the native read tool's `isDenied` and the kernel
+  rule both read, and the kernel translates it into the last Seatbelt rule, after every re-allow.
+  The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
+  stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
+  workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are
+  denied at the resolved path. The task workspace and the run's private state are re-allowed after
+  the credential-root denials, because the packaged product keeps its managed task workspaces
+  inside its own state directory, and the ancestor directory nodes of both are readable (their
+  entry names, never their files or sibling subtrees) because the runtime opens the workspace's
+  parent to canonicalize it (the 2026-10-23 customer-shape qualification found OpenCode 2.0.10
+  unable to `realpath` its workspace otherwise). The runtime's `HOME` is its private state, so no
+  user-home dotfile is needed. Executable transitions are inherited. **Egress follows the run's
+  effective mode and is enforced by the kernel, not only by the per-action policy:** below Full
+  access (`governed-assist`, `supervised-coding`) the Seatbelt profile denies all network except
+  loopback (the attested Model Gateway, the tool facade and local dev servers), including unix
+  sockets and the resolver, so a workspace-approved `npm exec`, `node script.js` or test cannot
+  reach a second destination or reuse an ssh-agent or container socket; at Full access
+  (`autonomous-delivery`) egress is inherited and stays bounded by the accepted Authority Envelope
+  and the per-action policy. An absent disposition means loopback-only (fail closed); the
+  disposition is part of the policy digest. The child inherits the launcher's allowlisted
+  environment (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the
+  agent's shell finds the project's toolchains the way it does standalone; the mapped profiles
+  still inherit nothing. The launch gate that keeps a host secret out of the child compares the
+  child env (allowlisted non-secret names plus Keiko's own run projection) against the host values
   whose name says they carry a credential; comparing against every host value refused each
   Full-access run on a host that also exports the deployment ceiling, because the projected mode
   equalled it. On macOS this is the real Seatbelt profile proven by `runtime-gateway.test.ts`
-  (with the workspace nested inside the denied state root); on Linux the namespace wrapper keeps
-  the tree bound to the parent without a network namespace; Windows keeps its Job Object
-  supervision. The spawned-confinement line records `keiko-native`, `native-workspace-rw-v1`,
-  `read-write` and `toolchain-inherited`.
+  against the actual kernel (workspace `.env`, an external canary, a symlink to it and the data
+  volume alias are refused for a shell child, an interpreter and a descendant; loopback works in
+  every mode; a non-loopback destination is refused before traffic below Full access; Git, node
+  and npm still run from the workspace; the nested workspace inside the denied state root still
+  works). On Linux the profile is a bubblewrap mount allowlist: read-only system and toolchain
+  roots, the runtime payload read-only, a private `/tmp`, writable workspace and private state,
+  an empty `tmpfs` over any denied root inside a mounted tree, a private PID namespace,
+  `--die-with-parent`, and a fresh network namespace below Full access; the home directory and
+  Keiko's state directory are simply not mounted. The `unshare` fallback and a run without an
+  accepted filesystem are refused rather than launched with the host mounts. Those Linux
+  guarantees are pinned as argv plans (`backends.test.ts`, `plan.test.ts`); they have not been
+  executed against a Linux kernel, and two limits are explicit: credential-NAMED files inside the
+  workspace cannot be named in a mount namespace without enumerating the tree, so on Linux they
+  remain the native read tool's guard, and a fresh network namespace cannot reach the host
+  loopback Model Gateway until the namespace relay launcher learns the native mounts, so Linux
+  native runs below Full access fail at their first model call instead of running unconfined.
+  Windows keeps its Job Object supervision. The spawned-confinement line records `keiko-native`,
+  `native-workspace-rw-v1`, `read-write`, `toolchain-inherited` and the `egressDisposition`
+  (`loopback-only` or `inherited`).
 - **Native asks ride the approval lane without a Keiko action kind.** A policy `ask` reaches the
   orchestrator as a `permission-requested` event whose request names no supervised action kind and
-  carries the closed `native-*` command label (`isNativeActionPermissionRequest`); the run pauses
-  for the human like any ask, and approve or deny settle through the permission port alone, with
-  no Keiko authority minted or declined. An ask the orchestrator cannot challenge is recorded as
+  carries the OpenCode permission it waits on as `nativePermission` (`edit`, `shell`, `webfetch`,
+  …), the explicit discriminator `isNativeActionPermissionRequest` reads; commands additionally
+  carry a closed `native-*` command label. The run pauses for the human like any ask, and approve
+  or deny settle through the permission port alone, with no Keiko authority minted or declined.
+  The Workbench enables Approve only once the authenticated review channel shows the action's own
+  command, paths or address. An ask the orchestrator cannot challenge is recorded as
   `coding-runtime.event.dropped` with `challenge-invalid` instead of vanishing.
+- **The policy hook never clips authority input.** A permission request whose resource list
+  exceeds the bounds (64 resources, 2,048 characters each) or holds a non-string is denied in the
+  generated plugin without asking policy, because OpenCode would execute the complete original
+  action. Reserved Git and `gh` delivery commands are recognised through the effective invocation:
+  assignments, transparent wrappers (`env`, `exec`, `nohup`, …), program paths, Git's
+  value-taking global options and quoted sub-shells. A repository script that delivers internally
+  is outside text classification.
+- **Every released native effect is revalidated against live authority.** After the policy (and
+  any human decision) allows an effect, the bridge admits it through the tool facade's
+  native-effect owner, which takes the same delegation path as a governed tool call: the
+  capability is authenticated, the run must be running on its tree binding, the envelope's action
+  classes must include the effect's class, and one tool call of the run's cumulative budget is
+  reserved under a fresh replay identity. A refused, revoked, expired, exhausted or aborted effect
+  is denied and recorded as `authority-refused` or `cancelled`; a wiring without the owner refuses
+  every effect.
+- **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
+  `parentID` chain, read from the runtime's own session list, reaches the run's session within
+  eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's
+  mode, policy, approval lane and budget; any other session is refused. The decision line records
+  the closed `sessionRelation` (`primary`, `child`).
+- **Version-specific history fields are decoded strictly.** OpenCode 2.1.4's failed idle message
+  carries `Session.StructuredError`; the history decoder validates its exact producer shape and
+  projects only the body-free terminal failure. Readiness evidence hashes the context guidance of
+  the profile actually materialized.
 - **The request envelope follows the model window.** The coding run's raw request ceiling is 4 MiB
   (`CODING_SIDECAR_MAX_REQUEST_BYTES`), so the model's declared window, not the wire estimate,
   bounds the context OpenCode plans and compacts against.
@@ -1077,8 +1174,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   carry a native id as itself and any extension tool as `extension`.
 - **Evidence.** `coding-runtime.native-policy.decided` records, per evaluated action, the mode, the
   closed action name, the effect (`allow`, `deny`, `ask`), the closed outcome (allowed, a hard
-  denial reason, or the human's approved/denied/expired/cancelled/unavailable), the risk, the
-  resource count and a digest of the resources, never a path, command or URL.
+  denial reason, the human's approved/denied/expired/cancelled/unavailable, or
+  `authority-refused`), the session relation, the risk, the resource count and a digest of the
+  resources, never a path, command or URL.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation

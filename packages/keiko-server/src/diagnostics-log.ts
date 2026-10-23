@@ -708,6 +708,9 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "tool-result-render-log-failed",
   // The sidecar tool bridge's own request deadline stopped a call (PR #3452, F44).
   "tool-bridge-deadline",
+  // A native OpenCode child session's ancestry could not be read from the runtime's session list;
+  // the child's permission ask is refused because nothing proves it belongs to the run (#3897).
+  "native-session-ancestry-failed",
   // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
   // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
   // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's

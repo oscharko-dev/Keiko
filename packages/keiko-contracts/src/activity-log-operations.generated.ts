@@ -7632,7 +7632,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "expired",
           "cancelled",
           "unavailable",
+          "authority-refused",
         ],
+      },
+      sessionRelation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["primary", "child"],
       },
       risk: {
         type: "string",
@@ -27662,6 +27669,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["namespace-inherited", "runtime-and-attested-git-only", "toolchain-inherited"],
+      },
+      egressDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["inherited", "loopback-only"],
       },
       parentLifetime: {
         type: "string",

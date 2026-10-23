@@ -19,7 +19,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createRuntimeGatewayConfinement,
+  nativeToolchainReadRoots,
   type LongLivedRuntimeSandboxAttestation,
+  type RuntimeGatewayEgress,
+  type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
@@ -885,6 +888,47 @@ function nativeDeniedReadRoots(runtimeStateRoot: string): readonly string[] {
   ];
 }
 
+/**
+ * The native profile's kernel network disposition follows the run's EFFECTIVE mode (#3897): only
+ * Full access keeps inherited egress, bounded by its Authority Envelope and the per-action
+ * policy; Ask for approval and Supervised workspace reach loopback only (the attested Model
+ * Gateway, the tool facade, local dev servers). The mapped profile has no network of its own.
+ */
+function nativeEgress(mode: string): RuntimeGatewayEgress {
+  return mode === "autonomous-delivery" ? "inherited" : "loopback-only";
+}
+
+function gatewayFilesystem(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+  native: boolean,
+): { readonly filesystem?: RuntimeGatewayFilesystem } {
+  const macos = portable.target === "macos-arm64" || portable.target === "macos-x64";
+  // Linux confines only the native profile, with a bubblewrap mount allowlist; the gateway profile
+  // keeps its namespace bridge launcher there.
+  if (!macos && !(native && portable.target === "linux-x64")) return {};
+  return {
+    filesystem: {
+      workspaceRoot: run.context.workspaceRoot,
+      workspaceAccess: native ? "read-write" : "read-only",
+      privateStateRoot: join(
+        realpathSync(input.runtimeStateRoot),
+        "coding-runtime",
+        "opencode",
+        run.minted.authorityRef.runId,
+      ),
+      runtimeReadRoot: realpathSync(join(portable.installRoot, portable.sidecar.payloadRootPath)),
+      ...(native
+        ? {
+            deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
+            toolchainReadRoots: nativeToolchainReadRoots(process.env.PATH, homedir()),
+          }
+        : {}),
+    },
+  };
+}
+
 function runtimeGatewayConfinement(
   portable: ResolvedPortableOpenCodeRuntime,
   input: ProductionOpenCodeBackendInput,
@@ -900,24 +944,8 @@ function runtimeGatewayConfinement(
     runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
     modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
     profile: native ? "keiko-native" : "keiko-gateway",
-    ...(portable.target === "macos-arm64" || portable.target === "macos-x64"
-      ? {
-          filesystem: {
-            workspaceRoot: run.context.workspaceRoot,
-            workspaceAccess: native ? ("read-write" as const) : ("read-only" as const),
-            privateStateRoot: join(
-              realpathSync(input.runtimeStateRoot),
-              "coding-runtime",
-              "opencode",
-              run.minted.authorityRef.runId,
-            ),
-            runtimeReadRoot: realpathSync(
-              join(portable.installRoot, portable.sidecar.payloadRootPath),
-            ),
-            ...(native ? { deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot) } : {}),
-          },
-        }
-      : {}),
+    ...(native ? { egress: nativeEgress(run.minted.effectiveMode) } : {}),
+    ...gatewayFilesystem(portable, input, run, native),
   });
 }
 

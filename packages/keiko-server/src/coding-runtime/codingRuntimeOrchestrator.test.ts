@@ -2097,6 +2097,7 @@ describe("CodingRuntimeOrchestrator", () => {
         risk: "high" as const,
         policyReason: "approval-required" as const,
         commandLabel: "native-shell",
+        nativePermission: "shell",
         expiresAt: "2026-01-01T00:01:00.000Z",
       },
     });

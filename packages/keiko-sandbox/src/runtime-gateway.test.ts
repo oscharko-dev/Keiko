@@ -1,8 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand as buildRuntimeGatewaySeatbeltCommandCore,
@@ -12,6 +20,7 @@ import {
   type RuntimeGatewayConfinementInput,
 } from "./runtime-gateway.js";
 import { resolveDarwinGitExecutable } from "./darwin-git.js";
+import { nativeToolchainReadRoots } from "./native-toolchain-roots.js";
 import { currentPlatform, probeBackends } from "./probe.js";
 import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
 
@@ -101,6 +110,58 @@ describe("long-lived gateway network confinement", () => {
       ).toBe(false);
     },
   );
+
+  it("records the native egress disposition, fails closed without one and refuses it elsewhere", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    const native = { ...input, profile: "keiko-native" as const, filesystem };
+    const absent = createRuntimeGatewayConfinement(native);
+    const below = createRuntimeGatewayConfinement({ ...native, egress: "loopback-only" });
+    const full = createRuntimeGatewayConfinement({ ...native, egress: "inherited" });
+    expect(absent.egress).toBe("loopback-only");
+    expect(absent).toEqual(below);
+    expect(full.egress).toBe("inherited");
+    expect(full.policyDigest).not.toBe(below.policyDigest);
+    expect(isRuntimeGatewayConfinement(full)).toBe(true);
+    // A tampered disposition, or one grafted onto another profile, no longer verifies.
+    expect(isRuntimeGatewayConfinement({ ...below, egress: "inherited" })).toBe(false);
+    expect(isRuntimeGatewayConfinement({ ...below, egress: "open" })).toBe(false);
+    const { egress: _removed, ...withoutEgress } = below;
+    expect(isRuntimeGatewayConfinement(withoutEgress)).toBe(false);
+    expect(() => createRuntimeGatewayConfinement({ ...native, egress: "open" as never })).toThrow(
+      "runtime-gateway-policy-invalid",
+    );
+    expect(() => createRuntimeGatewayConfinement({ ...input, egress: "inherited" })).toThrow(
+      "runtime-gateway-policy-invalid",
+    );
+    expect(createRuntimeGatewayConfinement(input)).not.toHaveProperty("egress");
+  });
+
+  it("binds the toolchain read roots into the policy digest", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    const native = { ...input, profile: "keiko-native" as const };
+    const plain = createRuntimeGatewayConfinement({ ...native, filesystem });
+    const withRoots = createRuntimeGatewayConfinement({
+      ...native,
+      filesystem: { ...filesystem, toolchainReadRoots: ["/opt/homebrew"] },
+    });
+    expect(withRoots.policyDigest).not.toBe(plain.policyDigest);
+    expect(
+      isRuntimeGatewayConfinement({
+        ...withRoots,
+        filesystem: { ...filesystem, toolchainReadRoots: ["/opt/other"] },
+      }),
+    ).toBe(false);
+  });
 
   it("refuses prototype-bearing filesystem input and a writable ancestor with a dot-prefix child", () => {
     const filesystem = {
@@ -249,8 +310,17 @@ interface ChildRun {
   readonly stdout: string;
 }
 
-function run(command: string, args: readonly string[]): ChildRun {
-  const result = spawnSync(command, [...args], { timeout: 10_000 });
+function run(
+  command: string,
+  args: readonly string[],
+  env?: Readonly<Record<string, string>>,
+  cwd?: string,
+): ChildRun {
+  const result = spawnSync(command, [...args], {
+    timeout: 10_000,
+    ...(env === undefined ? {} : { env }),
+    ...(cwd === undefined ? {} : { cwd }),
+  });
   if (result.error !== undefined) return { status: null, stdout: "" };
   return { status: result.status, stdout: result.stdout.toString("utf8").trim() };
 }
@@ -322,6 +392,208 @@ async function listenEphemeral(): Promise<{ server: Server; port: number }> {
       resolve({ server, port: address.port });
     });
   });
+}
+
+// ---- #3897: real-Seatbelt proofs for the native read boundary and the mode-aware egress ----
+
+type NativeEgress = "inherited" | "loopback-only";
+
+interface NativeProofTree {
+  readonly root: string;
+  readonly workspaceRoot: string;
+  readonly privateStateRoot: string;
+  readonly canary: string;
+  readonly sibling: string;
+  readonly temporaryCanary: string;
+  readonly cleanup: () => void;
+}
+
+// The tree lives under the HOME directory on purpose: no native rule opens it, whereas the
+// per-user temp tree is readable and writable for toolchains. A canary there is the "unrelated
+// file outside the task workspace" of the finding, and it is removed in `cleanup`.
+function createNativeProofTree(): NativeProofTree {
+  const root = realpathSync(mkdtempSync(join(homedir(), ".keiko-native-proof-")));
+  const workspaceRoot = join(root, "workspace");
+  const privateStateRoot = join(root, "state", "run-1");
+  const canaryDirectory = join(root, "outside");
+  const canary = join(canaryDirectory, "canary.txt");
+  const sibling = join(root, "sibling.txt");
+  // The system temporary directories are shared scratch that belongs to other processes too: a
+  // file there is as unrelated to the task as any file outside the workspace.
+  const temporaryRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-proof-tmp-")));
+  const temporaryCanary = join(temporaryRoot, "canary.txt");
+  writeFileSync(temporaryCanary, "synthetic-temporary-canary");
+  mkdirSync(join(workspaceRoot, "src"), { recursive: true });
+  mkdirSync(join(workspaceRoot, "config"));
+  mkdirSync(join(workspaceRoot, ".aws"));
+  mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+  mkdirSync(canaryDirectory);
+  writeFileSync(canary, "synthetic-canary");
+  writeFileSync(sibling, "synthetic-sibling");
+  writeFileSync(join(workspaceRoot, "src", "app.js"), "module.exports = 1;\n");
+  writeFileSync(join(workspaceRoot, ".env"), "SYNTHETIC_ENV=1\n");
+  writeFileSync(join(workspaceRoot, ".env.example"), "SYNTHETIC_ENV=\n");
+  writeFileSync(join(workspaceRoot, "config", ".env.local"), "SYNTHETIC_ENV=2\n");
+  writeFileSync(join(workspaceRoot, ".aws", "credentials"), "synthetic\n");
+  writeFileSync(join(workspaceRoot, "package.json"), '{"name":"proof","version":"1.0.0"}');
+  symlinkSync(canary, join(workspaceRoot, "escape.txt"));
+  symlinkSync(canaryDirectory, join(workspaceRoot, "escape-dir"));
+  spawnSync(gitExecutable, ["init", "-q", workspaceRoot], {
+    env: { HOME: privateStateRoot, PATH: dirname(gitExecutable), GIT_CONFIG_GLOBAL: "/dev/null" },
+  });
+  return {
+    root,
+    workspaceRoot,
+    privateStateRoot,
+    canary,
+    sibling,
+    temporaryCanary,
+    cleanup: (): void => {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function nativeToolchainRoots(): readonly string[] {
+  return nativeToolchainReadRoots(
+    [dirname(process.execPath), process.env.PATH ?? ""].join(delimiter),
+    homedir(),
+  );
+}
+
+function nativeConfinement(
+  tree: NativeProofTree,
+  egress: NativeEgress | undefined,
+  gatewayPort = 1983,
+): RuntimeGatewayConfinement {
+  return createRuntimeGatewayConfinement({
+    ...input,
+    gatewayUrl: `http://127.0.0.1:${String(gatewayPort)}/api/coding-sidecar/gateway`,
+    profile: "keiko-native",
+    ...(egress === undefined ? {} : { egress }),
+    filesystem: {
+      workspaceRoot: tree.workspaceRoot,
+      workspaceAccess: "read-write",
+      privateStateRoot: tree.privateStateRoot,
+      runtimeReadRoot: dirname(process.execPath),
+      toolchainReadRoots: nativeToolchainRoots(),
+    },
+  });
+}
+
+function runNative(
+  tree: NativeProofTree,
+  policy: RuntimeGatewayConfinement,
+  script: string,
+): ChildRun {
+  const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, ["-e", script]);
+  return run(
+    wrapped.command,
+    wrapped.args,
+    {
+      HOME: tree.privateStateRoot,
+      PATH: [dirname(process.execPath), dirname(gitExecutable), "/usr/bin", "/bin"].join(delimiter),
+    },
+    tree.workspaceRoot,
+  );
+}
+
+// One probe per line: `fact name -> expression that throws when the operation is refused`.
+function factScript(facts: Readonly<Record<string, string>>): string {
+  const body = Object.entries(facts)
+    .map(
+      ([name, expression]) =>
+        `try { ${expression}; facts[${JSON.stringify(name)}] = true; } catch { facts[${JSON.stringify(name)}] = false; }`,
+    )
+    .join("\n");
+  return [
+    "const fs = require('node:fs'); const cp = require('node:child_process'); const facts = {};",
+    body,
+    "process.stdout.write(JSON.stringify(facts));",
+  ].join("\n");
+}
+
+function readFact(path: string): string {
+  return `fs.readFileSync(${JSON.stringify(path)})`;
+}
+
+function shellFact(command: string, cwd: string): string {
+  return `cp.execFileSync('/bin/sh', ['-c', ${JSON.stringify(command)}], { cwd: ${JSON.stringify(cwd)}, stdio: 'ignore' })`;
+}
+
+function nativeReadProbes(tree: NativeProofTree): Readonly<Record<string, string>> {
+  const { workspaceRoot: ws } = tree;
+  const alias = `/System/Volumes/Data${tree.canary}`;
+  return {
+    sourceRead: readFact(join(ws, "src", "app.js")),
+    sourceWrite: `fs.writeFileSync(${JSON.stringify(join(ws, "src", "edited.js"))}, 'x')`,
+    envExampleRead: readFact(join(ws, ".env.example")),
+    envRead: readFact(join(ws, ".env")),
+    envLocalRead: readFact(join(ws, "config", ".env.local")),
+    credentialDirectoryRead: readFact(join(ws, ".aws", "credentials")),
+    envWrite: `fs.writeFileSync(${JSON.stringify(join(ws, ".env"))}, 'x')`,
+    externalCanaryRead: readFact(tree.canary),
+    externalSiblingRead: readFact(tree.sibling),
+    temporaryCanaryRead: readFact(tree.temporaryCanary),
+    temporaryWrite: `fs.writeFileSync(${JSON.stringify(join(dirname(tree.temporaryCanary), "written.txt"))}, 'x')`,
+    symlinkToCanaryRead: readFact(join(ws, "escape.txt")),
+    symlinkedDirectoryRead: readFact(join(ws, "escape-dir", "canary.txt")),
+    dataVolumeAliasRead: readFact(alias),
+    externalDirectoryListing: `fs.readdirSync(${JSON.stringify(dirname(tree.canary))})`,
+    shellCatEnv: shellFact("cat .env", ws),
+    shellCatCanary: shellFact(`cat ${JSON.stringify(tree.canary)}`, ws),
+    shellCatSymlink: shellFact("cat escape.txt", ws),
+    shellCatSource: shellFact("cat src/app.js", ws),
+    nodeChild: `cp.execFileSync(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })`,
+    gitStatus: `cp.execFileSync(${JSON.stringify(gitExecutable)}, ['status', '--short'], { cwd: ${JSON.stringify(ws)}, stdio: 'ignore' })`,
+  };
+}
+
+const NATIVE_READ_FACTS = {
+  sourceRead: true,
+  sourceWrite: true,
+  envExampleRead: true,
+  envRead: false,
+  envLocalRead: false,
+  credentialDirectoryRead: false,
+  envWrite: false,
+  externalCanaryRead: false,
+  externalSiblingRead: false,
+  temporaryCanaryRead: false,
+  temporaryWrite: false,
+  symlinkToCanaryRead: false,
+  symlinkedDirectoryRead: false,
+  dataVolumeAliasRead: false,
+  externalDirectoryListing: false,
+  shellCatEnv: false,
+  shellCatCanary: false,
+  shellCatSymlink: false,
+  shellCatSource: true,
+  nodeChild: true,
+  gitStatus: true,
+} as const;
+
+function connectProbe(host: string, port: number): string {
+  return [
+    "const net = require('node:net');",
+    `const s = net.connect({ host: ${JSON.stringify(host)}, port: ${String(port)} });`,
+    "s.setTimeout(2500);",
+    "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); });",
+    "s.on('error', (e) => { process.stdout.write('BLOCKED:' + e.code); });",
+    "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); });",
+  ].join("");
+}
+
+function connectUnixProbe(path: string): string {
+  return [
+    "const net = require('node:net');",
+    `const s = net.connect({ path: ${JSON.stringify(path)} });`,
+    "s.setTimeout(2500);",
+    "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); });",
+    "s.on('error', (e) => { process.stdout.write('BLOCKED:' + e.code); });",
+    "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); });",
+  ].join("");
 }
 
 describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
@@ -404,8 +676,8 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
       writeFileSync(join(deniedRoot, "id_rsa"), "synthetic");
       writeFileSync(join(root, "keiko-state", "vault.db"), "synthetic");
       writeFileSync(join(root, "keiko-state", "task-workspaces", "sibling.txt"), "synthetic");
-      // The per-user temp tree is writable on purpose (toolchains write TMPDIR), so the external
-      // probe targets the home directory, which no native rule opens; it is removed in `finally`.
+      // The external probe targets the home directory, which no native rule opens; it is removed
+      // in `finally`.
       const externalPath = join(homedir(), `.keiko-native-proof-${basename(root)}`);
       const script = [
         "require 'json'",
@@ -444,7 +716,12 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
           "-e",
           script,
         ]);
-        expect(run(wrapped.command, wrapped.args)).toEqual({
+        // The launcher gives the runtime a private HOME (`opencodeLaunchProfile`); the read
+        // boundary admits no user-home dotfile, so the probe runs the way the product does.
+        // ...and from the workspace, which is the runtime's working directory.
+        expect(
+          run(wrapped.command, wrapped.args, { HOME: privateStateRoot }, workspaceRoot),
+        ).toEqual({
           status: 0,
           stdout: JSON.stringify({
             workspaceWrite: true,
@@ -470,6 +747,162 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         rmSync(root, { recursive: true, force: true });
       }
     },
+  );
+
+  // Finding A (#3897): the native profile is a kernel READ allowlist. The probes run as a shell
+  // child, an interpreter and a descendant, because the product's permission policy vets
+  // `cat .env` and never routes a shell operand through the native read tool.
+  it.skipIf(!canProveOnThisHost).each(["loopback-only", "inherited"] as const)(
+    "native profile (%s): denies a workspace .env, an external canary and a symlink to it",
+    (egress) => {
+      const tree = createNativeProofTree();
+      try {
+        const script = factScript(nativeReadProbes(tree));
+        // Failing-before control: without the wrapper every probe the boundary must refuse
+        // succeeds, so the confined result below is the boundary's doing and not the fixture's.
+        const control = run(
+          process.execPath,
+          ["-e", script],
+          { HOME: tree.privateStateRoot, PATH: "/usr/bin:/bin" },
+          tree.workspaceRoot,
+        );
+        expect(JSON.parse(control.stdout)).toMatchObject({
+          envRead: true,
+          envLocalRead: true,
+          credentialDirectoryRead: true,
+          externalCanaryRead: true,
+          externalSiblingRead: true,
+          temporaryCanaryRead: true,
+          temporaryWrite: true,
+          externalDirectoryListing: true,
+          symlinkToCanaryRead: true,
+          symlinkedDirectoryRead: true,
+          dataVolumeAliasRead: true,
+          shellCatEnv: true,
+          shellCatCanary: true,
+        });
+        const confined = runNative(tree, nativeConfinement(tree, egress), script);
+        expect(confined.status).toBe(0);
+        expect(JSON.parse(confined.stdout)).toEqual(NATIVE_READ_FACTS);
+      } finally {
+        tree.cleanup();
+      }
+    },
+    20_000,
+  );
+
+  it.skipIf(!canProveOnThisHost || !existsSync(join(dirname(process.execPath), "npm")))(
+    "native profile: npm and node still run from the workspace under the read boundary",
+    () => {
+      const tree = createNativeProofTree();
+      try {
+        const script = [
+          "const cp = require('node:child_process'); const path = require('node:path');",
+          `const npm = path.join(path.dirname(process.execPath), 'npm');`,
+          `const out = cp.execFileSync(npm, ['--version'], { cwd: ${JSON.stringify(tree.workspaceRoot)}, encoding: 'utf8' });`,
+          "process.stdout.write(/^\\d+[.]\\d+[.]\\d+/.test(out.trim()) ? 'NPM_OK' : 'NPM_BAD');",
+        ].join("");
+        const result = runNative(tree, nativeConfinement(tree, "loopback-only"), script);
+        expect(result.stdout).toBe("NPM_OK");
+      } finally {
+        tree.cleanup();
+      }
+    },
+    20_000,
+  );
+
+  // Finding B (#3897), kernel half: below Full access a workspace-approved command cannot reach a
+  // second destination, whatever it runs (npm exec, a node script, a forked grandchild); Full
+  // access keeps the inherited egress. Loopback, where the attested Model Gateway and the tool
+  // facade live, works in every mode.
+  it.skipIf(!canProveOnThisHost).each(["loopback-only", "inherited"] as const)(
+    "native profile (%s): reaches loopback, including from a forked grandchild",
+    async (egress) => {
+      const loopback = await listenEphemeral();
+      const tree = createNativeProofTree();
+      try {
+        const policy = nativeConfinement(tree, egress, loopback.port);
+        const direct = runNative(tree, policy, connectProbe("127.0.0.1", loopback.port));
+        expect(direct.stdout).toBe("CONNECTED");
+        const byName = runNative(tree, policy, connectProbe("localhost", loopback.port));
+        expect(byName.stdout).toBe("CONNECTED");
+        const forked = runNative(
+          tree,
+          policy,
+          [
+            "const { spawnSync } = require('node:child_process');",
+            `const r = spawnSync(process.execPath, ['-e', ${JSON.stringify(connectProbe("127.0.0.1", loopback.port))}], { encoding: 'utf8' });`,
+            "process.stdout.write(r.stdout);",
+          ].join(""),
+        );
+        expect(forked.stdout).toBe("CONNECTED");
+      } finally {
+        loopback.server.close();
+        tree.cleanup();
+      }
+    },
+    20_000,
+  );
+
+  // The destination is 192.0.2.1 (RFC 5737 TEST-NET-1): routable in form, answered by nobody. The
+  // kernel denial returns EPERM before any packet is sent; an open network ends in a timeout or
+  // an unreachable error. The machine's own addresses are not a valid second destination: the
+  // kernel treats them as local and Seatbelt's `localhost` filter admits them.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: a second destination is denied before traffic below Full access and open at Full access",
+    () => {
+      const tree = createNativeProofTree();
+      try {
+        const probe = connectProbe("192.0.2.1", 80);
+        const network = join(tree.workspaceRoot, "network.cjs");
+        writeFileSync(network, probe);
+        const denial = /^BLOCKED:(EPERM|EACCES)$/u;
+        const control = run(process.execPath, ["-e", probe]).stdout;
+        expect(control).not.toMatch(denial);
+        for (const egress of ["loopback-only", undefined] as const) {
+          const policy = nativeConfinement(tree, egress);
+          // `node network.cjs` and `npm exec` are one process tree under one kernel profile; a
+          // shell child and a forked grandchild stand for both.
+          const viaShell = `process.stdout.write(require('node:child_process').spawnSync('/bin/sh', ['-c', ${JSON.stringify(`${JSON.stringify(process.execPath)} ${JSON.stringify(network)}`)}], { encoding: 'utf8' }).stdout)`;
+          for (const script of [probe, viaShell])
+            expect(runNative(tree, policy, script).stdout).toMatch(denial);
+        }
+        const full = runNative(tree, nativeConfinement(tree, "inherited"), probe);
+        expect(full.stdout).not.toMatch(denial);
+        expect(full.stdout).toMatch(/^(TIMEOUT|BLOCKED:E[A-Z]+)$/u);
+      } finally {
+        tree.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: unix-socket peers and DNS are denied below Full access",
+    async () => {
+      const tree = createNativeProofTree();
+      const socketDirectory = mkdtempSync(join(tmpdir(), "keiko-sock-"));
+      const socketPath = join(socketDirectory, "agent.sock");
+      const server = createServer((socket) => socket.end());
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const connect = connectUnixProbe(socketPath);
+        expect(run(process.execPath, ["-e", connect]).stdout).toBe("CONNECTED");
+        const denied = runNative(tree, nativeConfinement(tree, "loopback-only"), connect);
+        expect(denied.stdout).toMatch(/^BLOCKED:/u);
+        const resolver = runNative(
+          tree,
+          nativeConfinement(tree, "loopback-only"),
+          "require('node:dns').lookup('example.com', (e) => process.stdout.write(e ? 'DNS_DENIED' : 'DNS_OPEN'));",
+        );
+        expect(resolver.stdout).toBe("DNS_DENIED");
+      } finally {
+        server.close();
+        tree.cleanup();
+        rmSync(socketDirectory, { recursive: true, force: true });
+      }
+    },
+    20_000,
   );
 
   it("refuses a native profile whose filesystem is not writable, and the reverse", () => {

@@ -4018,6 +4018,9 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.policyReason === undefined ? {} : { policyReason: event.policyReason }),
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
+    ...(event.nativeAction === undefined
+      ? {}
+      : { nativePermission: event.nativeAction.permission }),
   };
 }
 

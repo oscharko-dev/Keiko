@@ -20,7 +20,8 @@ import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { GOVERNED_TOOL_MODEL_CONTENT_SOURCE } from "./governedToolModelContent.js";
 import {
   createGeneratedOpenCodeNativeContextPlugin,
-  OPENCODE_NATIVE_CONTEXT_FACTS,
+  openCodeNativeContextFacts,
+  type OpenCodeNativeContextProfile,
 } from "./opencodeNativeContext.js";
 import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
 import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
@@ -291,7 +292,8 @@ export interface OpenCodeRuntimeAdapterPorts {
       readonly version: string;
     };
     readonly configDigest: string;
-    readonly nativeContextConfigured?: true | undefined;
+    /** The guidance profile the composition materialized; its facts enter readiness evidence. */
+    readonly nativeContextProfile?: OpenCodeNativeContextProfile | undefined;
     readonly verifyTargetAttestation: () => Promise<boolean>;
     readonly materialize: () => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
@@ -789,9 +791,9 @@ function recordReadinessPhase(
               dependencyInstallPolicy: "offline",
               planningMode: "conversation-text",
               configDigest: ports.readiness.configDigest,
-              ...(ports.readiness.nativeContextConfigured === true
-                ? OPENCODE_NATIVE_CONTEXT_FACTS
-                : {}),
+              ...(ports.readiness.nativeContextProfile === undefined
+                ? {}
+                : openCodeNativeContextFacts(ports.readiness.nativeContextProfile)),
               ...(ports.contextGeometry === undefined
                 ? {}
                 : {

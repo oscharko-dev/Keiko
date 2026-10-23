@@ -124,10 +124,17 @@ export function buildOpenCodeLaunchProfile(
       TEMP: join(input.stateRoot, "tmp"),
       TMP: join(input.stateRoot, "tmp"),
       OPENCODE_CONFIG_DIR: join(input.stateRoot, "config", "opencode"),
-      // The native profile loads the repository's own OpenCode configuration (AGENTS.md,
-      // opencode.json, .opencode/) exactly like standalone; the mode policy hook keeps repository
-      // text from widening authority. The mapped profiles keep the project layer switched off.
-      ...(input.toolProfile === "native" ? {} : { OPENCODE_DISABLE_PROJECT_CONFIG: "true" }),
+      // Repository configuration is data until the operator admits its executable effects
+      // (#3903). The pinned runtime offers no per-item admission: its project layer discovers
+      // `opencode.json`, `.opencode/` agents, commands, skills and `plugins/` modules together,
+      // imports a plugin's top-level code before any permission is evaluated, and merges a
+      // project `providers` entry above Keiko's private file. Every profile therefore keeps the
+      // whole layer off. The native profile still reads the workspace-root AGENTS.md, which Keiko
+      // attaches to the first message through its own bounded loader.
+      OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+      ...(input.toolProfile === "native"
+        ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
+        : {}),
       // The pinned runtime checks plugin dependencies before loading even dependency-free custom
       // tools. Registry retries cannot succeed inside the gateway-only network boundary. Keep its
       // package manager offline so absent optional packages fail promptly, without registry egress.
@@ -366,6 +373,29 @@ function createNativeOpenCodeV2Config(
       { action: "external_directory", resource: "*", effect: "deny" },
     ],
   };
+}
+
+/**
+ * The fields no layer below Keiko may change: the single gateway-bound provider and model, the
+ * mode-independent permission floor, and the self-update and sharing switches. The pinned runtime
+ * merges `OPENCODE_CONFIG_CONTENT` after the private file and after every discovered project
+ * document, so this subset is the last word if a project layer is ever admitted (#3903). Only
+ * `{env:…}` placeholders appear in it; the gateway address and capability stay in the child
+ * environment.
+ */
+const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
+  "update",
+  "share",
+  "model",
+  "default_agent",
+  "providers",
+  "permissions",
+] as const;
+
+function nativeServerOwnedBinding(
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(OPENCODE_NATIVE_SERVER_OWNED_KEYS.map((key) => [key, config[key]]));
 }
 
 function fixedOpenCodeV2Provider(

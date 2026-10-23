@@ -50,10 +50,17 @@ function gatewayFilesystemIsAdmissible(
   gateway: NetworkGatewayPolicy | undefined,
   platform: NodeJS.Platform,
 ): boolean {
+  // The native profile is only ever confined by an accepted filesystem: no filesystem means the
+  // host would be exposed, so it is refused on every platform (#3897).
+  if (plan.gatewayProfile === "keiko-native" && plan.gatewayFilesystem === undefined) return false;
   if (plan.gatewayFilesystem === undefined) return true;
+  // macOS confines any gateway profile with Seatbelt; Linux confines only the native profile, with
+  // a bubblewrap mount namespace (the gateway profile's Linux bridge launcher has no filesystem).
+  const platformConfines =
+    platform === "darwin" || (platform === "linux" && plan.gatewayProfile === "keiko-native");
   return (
     gateway !== undefined &&
-    platform === "darwin" &&
+    platformConfines &&
     copyRuntimeGatewayFilesystem(plan.gatewayFilesystem) !== undefined
   );
 }
@@ -142,7 +149,13 @@ function planGatewayRun(
   platform: NodeJS.Platform,
 ): IsolatedRunDecision {
   const backend = selectGatewayBackend(platform, availability);
-  const wrapped = buildWrappedCommand(backend, plan);
+  // Only bubblewrap can mount the native Linux allowlist; `unshare` would keep the host mounts.
+  const qualified = !(
+    plan.gatewayProfile === "keiko-native" &&
+    platform === "linux" &&
+    backend !== "bubblewrap"
+  );
+  const wrapped = qualified ? buildWrappedCommand(backend, plan) : undefined;
   if (backend === "none" || wrapped === undefined) {
     return {
       kind: "fail-closed",
@@ -156,8 +169,11 @@ function planGatewayRun(
     args: wrapped.args,
     attestation: {
       backend,
-      // The native profile (#3897) governs egress per action, not by the process wrapper.
-      networkEnforced: plan.gatewayProfile !== "keiko-native",
+      // The native profile (#3897) enforces loopback-only egress below Full access; at Full access
+      // egress is inherited and governed per action, not by the process wrapper.
+      networkEnforced:
+        plan.gatewayProfile !== "keiko-native" ||
+        (plan.gatewayEgress ?? "loopback-only") === "loopback-only",
       filesystemEnforced: plan.gatewayFilesystem !== undefined,
       platform,
     },

@@ -557,8 +557,29 @@ function validatePermissionRequestOptionalFields(
   if (value.commandLabel !== undefined && !exactVerifier) {
     validateSafeEvidenceText(value.commandLabel, `${path}.commandLabel`, errors);
   }
+  validateNativePermission(value, path, errors);
   if (!isIsoInstant(value.expiresAt)) {
     errors.push(`${path}.expiresAt must be an ISO-8601 UTC instant`);
+  }
+}
+
+/**
+ * A native OpenCode ask's permission name (#3897): a short lowercase OpenCode identifier, never
+ * combined with a supervised Keiko action kind.
+ */
+function validateNativePermission(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (value.nativePermission === undefined) return;
+  if (
+    typeof value.nativePermission !== "string" ||
+    !/^[a-z][a-z_]{0,31}$/u.test(value.nativePermission)
+  ) {
+    errors.push(`${path}.nativePermission is invalid`);
+  } else if (value.actionKind !== undefined) {
+    errors.push(`${path}.nativePermission cannot accompany an actionKind`);
   }
 }
 
@@ -605,6 +626,7 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
       "policyReason",
       "connectorScopes",
       "commandLabel",
+      "nativePermission",
       "expiresAt",
     ],
     path,

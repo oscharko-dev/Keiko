@@ -2,6 +2,7 @@ import type {
   ActivityLogErrorKind,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchActionClass,
 } from "@oscharko-dev/keiko-contracts";
 
 import type {
@@ -382,8 +383,29 @@ export interface CodingAcceptedInitializationFacet {
   ) => Promise<CodingAcceptedInitializationResult<T>>;
 }
 
+/**
+ * One native OpenCode effect the server-owned policy is about to allow (#3897 review): admitted
+ * through the same live authority owner as a governed tool call, so a revoked or expired envelope,
+ * a paused run, an action class outside the envelope or an exhausted tool-call budget refuses it
+ * before the runtime proceeds. `delegationId` is the decision's replay identity.
+ */
+export interface CodingToolNativeEffectInput {
+  readonly capability: string;
+  readonly delegationId: string;
+  readonly actionClass: CodingWorkbenchActionClass;
+}
+
+export type CodingToolNativeEffectAdmission =
+  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+export interface CodingToolNativeEffectFacet {
+  readonly admit: (input: CodingToolNativeEffectInput) => CodingToolNativeEffectAdmission;
+}
+
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /** Live authority and budget admission for native OpenCode effects; absent wirings refuse them. */
+  readonly nativeEffect?: CodingToolNativeEffectFacet | undefined;
   /** Inactive accepted initial acquisition; no model/HTTP dispatch surface. */
   readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */

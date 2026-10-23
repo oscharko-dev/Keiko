@@ -25,6 +25,14 @@ export type IsolatedRunNetworkPolicy = NetworkPolicy | NetworkGatewayPolicy;
 export type RuntimeGatewayProfile = "keiko-gateway" | "keiko-native";
 
 /**
+ * The native profile's network disposition (#3897). `loopback-only` is the kernel-enforced floor
+ * below Full access: the attested Model Gateway, the tool facade and local dev servers are loopback,
+ * every other destination is denied before traffic. `inherited` is Full access, whose egress stays
+ * bounded by the accepted Authority Envelope and the per-action permission policy.
+ */
+export type RuntimeGatewayEgress = "inherited" | "loopback-only";
+
+/**
  * Transient, server-owned native service roots; model-visible access needs its own authority hook.
  * `read-write` is the native profile (#3897): the workspace is the agent's working tree, writes
  * stay inside it and the private state, and `deniedReadRoots` keeps credential stores and Keiko's
@@ -36,6 +44,12 @@ export interface RuntimeGatewayFilesystem {
   readonly privateStateRoot: string;
   readonly runtimeReadRoot: string;
   readonly deniedReadRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute read-only support roots of the project's toolchains (the
+   * directories the launcher's `PATH` names, or their install prefixes). Everything else outside
+   * the workspace, the private state and the system roots stays unreadable (#3897).
+   */
+  readonly toolchainReadRoots?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
@@ -62,6 +76,8 @@ export interface IsolatedRunPlan {
   readonly gatewayFilesystem?: RuntimeGatewayFilesystem | undefined;
   /** Absent means the loopback-gateway-only profile; `keiko-native` opens toolchains and egress. */
   readonly gatewayProfile?: RuntimeGatewayProfile | undefined;
+  /** Native profile only; absent fails closed to `loopback-only`. */
+  readonly gatewayEgress?: RuntimeGatewayEgress | undefined;
 }
 
 // The decision for a single run:

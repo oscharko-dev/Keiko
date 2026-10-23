@@ -202,6 +202,7 @@ export type CodingWorkbenchRuntimePendingPermission = Pick<
   | "policyReason"
   | "connectorScopes"
   | "commandLabel"
+  | "nativePermission"
   | "expiresAt"
 >;
 

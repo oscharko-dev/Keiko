@@ -42,7 +42,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 245,
+      "files": 246,
       "uncoveredFiles": 5,
       "uncoveredLines": 1100,
       "totalLines": 15445,
@@ -210,7 +210,7 @@
       }
     },
     "keiko-sandbox": {
-      "files": 14,
+      "files": 16,
       "uncoveredFiles": 0,
       "uncoveredLines": 45,
       "totalLines": 472,

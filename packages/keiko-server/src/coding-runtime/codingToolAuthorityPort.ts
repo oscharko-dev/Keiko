@@ -44,6 +44,8 @@ import type {
   CodingToolMutationGuard,
   CodingToolProducerBinding,
   MaterializedPatchCharge,
+  CodingToolNativeEffectAdmission,
+  CodingToolNativeEffectFacet,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
@@ -629,7 +631,42 @@ export function createRuntimeCodingToolFacade(
     nativeOptions,
     activityLog,
   );
-  return nativeTextRead === undefined ? facade : { ...facade, nativeTextRead };
+  const nativeEffect = nativeEffectFacet(authority, context);
+  return nativeTextRead === undefined
+    ? { ...facade, nativeEffect }
+    : { ...facade, nativeTextRead, nativeEffect };
+}
+
+/**
+ * Native OpenCode effects (#3897 review) take the same delegation path as a governed tool call:
+ * the capability is authenticated, the run must be running on its tree binding, the envelope must
+ * allow the action class, and one tool call is reserved against the run's budget under the
+ * decision's replay identity. Nothing is executed here; the runtime performs the effect itself.
+ */
+function nativeEffectFacet(
+  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  context: CodingToolAuthorityContextProvider,
+): CodingToolNativeEffectFacet {
+  return {
+    admit: (input): CodingToolNativeEffectAdmission => {
+      const current = context();
+      const resolved = authority.resolveCapabilityForDelegation({
+        capability: input.capability,
+        adapterKind: current.adapterKind,
+        liveFacts: current.liveFacts,
+        delegationId: input.delegationId,
+        idempotencyKey: input.delegationId,
+        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        workspaceRoot: current.workspaceRoot,
+        deploymentCeiling: current.deploymentCeiling,
+        nowIso: current.nowIso,
+      });
+      if (!resolved.ok) return { ok: false, reason: resolved.reason };
+      return hasClasses(resolved.envelope.authority.actionClasses, [input.actionClass])
+        ? { ok: true }
+        : { ok: false, reason: "action-not-authorized" };
+    },
+  };
 }
 
 /** F8 (#3413): the production CatalogToolBinder-backed bridge for the facade's covered actions

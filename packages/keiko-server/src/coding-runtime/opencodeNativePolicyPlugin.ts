@@ -32,7 +32,9 @@ const DENY_MESSAGE =
  * Dependency-free V2 plugin source (#3897): the one place Keiko's autonomy mode touches the native
  * agent loop. OpenCode evaluates its own permission rules first; this hook asks the server-owned
  * policy for the final effect of every evaluated action and can only narrow the result. A missing,
- * failed or oversized answer denies the action (fail closed). The shell hook strips Keiko's
+ * failed or oversized answer denies the action (fail closed), and so does a request whose resource
+ * list exceeds the accepted bounds: the hook never clips authority-bearing input, because OpenCode
+ * would still execute the complete original action (#3897 review). The shell hook strips Keiko's
  * bindings and the server password from every shell the agent starts, so no tool output can
  * carry them.
  */
@@ -56,8 +58,10 @@ function pluginConstantsSource(): readonly string[] {
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
     "function boundedResources(resources) {",
-    "  if (!Array.isArray(resources)) return [];",
-    "  return resources.slice(0, MAX_RESOURCES).map((value) => String(value).slice(0, MAX_RESOURCE_CHARS));",
+    "  if (resources === undefined || resources === null) return [];",
+    "  if (!Array.isArray(resources) || resources.length > MAX_RESOURCES) return null;",
+    '  if (resources.some((value) => typeof value !== "string" || value.length > MAX_RESOURCE_CHARS)) return null;',
+    "  return resources;",
     "}",
     "function source(value) {",
     '  if (!value || typeof value !== "object" || value.type !== "tool") return null;',
@@ -71,8 +75,10 @@ function policyEvaluationSource(): readonly string[] {
     "async function evaluate(event) {",
     '  const refusal = { effect: "deny", message: DENY_MESSAGE };',
     "  if (!endpoint || !capability || !runId) return refusal;",
+    "  const resources = boundedResources(event.resources);",
+    "  if (resources === null) return refusal;",
     "  try {",
-    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources: boundedResources(event.resources), source: source(event.source), configured: event.effect });',
+    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), configured: event.effect });',
     '    const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(WAIT_MS), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
     '    if (!response.ok || response.type === "opaqueredirect") return refusal;',
     "    const text = await response.text();",

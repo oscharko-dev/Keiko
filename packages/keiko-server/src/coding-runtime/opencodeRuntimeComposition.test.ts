@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
@@ -239,6 +239,12 @@ interface TestQuestionRequest {
 }
 
 interface OpenCodeRuntimeCompositionModule {
+  readonly nativeSessionDescendsFromRun: (
+    sessions: readonly Readonly<Record<string, unknown>>[],
+    sessionID: string,
+    primaryId: string,
+    workspaceRoot: string,
+  ) => boolean;
   readonly toolBridgeRequestDeadlineMs: (
     configuredDeadlineMs: number,
     body: string | undefined,
@@ -478,6 +484,8 @@ type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+  /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
+  readonly childSessions?: readonly Record<string, unknown>[];
   readonly workspaceRoot?: string;
   readonly gatewayUrl?: string;
   readonly signal?: AbortSignal;
@@ -646,9 +654,11 @@ function fixtureToolCapability(control: StartBridgeControl | undefined): string 
 function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   const nativeTextRead = facade.nativeTextRead;
   const acceptedInitialization = facade.acceptedInitialization;
+  const nativeEffect = facade.nativeEffect;
   return {
     ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
+    ...(nativeEffect === undefined ? {} : { nativeEffect }),
     execute: (input) =>
       input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
         ? Promise.resolve({ status: "observed", evidence: [] })
@@ -870,6 +880,7 @@ async function startBridgeFixture(
       return Promise.resolve(
         v2Envelope([
           fixtureNativeSession("ses_tool", capturedLaunch?.cwd ?? "", "echoed", control),
+          ...(control?.childSessions ?? []),
         ]),
       );
     return Promise.resolve(new Response("", { status: 404 }));
@@ -2488,6 +2499,198 @@ describe("private OpenCode run control", () => {
     } finally {
       await fixture.stop();
     }
+  });
+});
+
+describe("native policy asks on the tool bridge (#3897 review)", () => {
+  const completed = {
+    status: "completed" as const,
+    evidence: [],
+    read: { text: "fixture", byteCount: 7, digest: "f".repeat(64) },
+  };
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const nativeAsk = (sessionID: string, permission = "read"): string =>
+    JSON.stringify({
+      action: "native-policy",
+      runId: FIXTURE_RUN_ID,
+      sessionID,
+      permission,
+      resources: ["src/index.ts"],
+      configured: "allow",
+    });
+  type NativeAdmit = NonNullable<CodingToolFacade["nativeEffect"]>["admit"];
+  const admitWith = (result: ReturnType<NativeAdmit>): Mock<NativeAdmit> =>
+    vi.fn<NativeAdmit>(() => result);
+  const facadeWith = (admit: NativeAdmit | undefined): CodingToolFacade => ({
+    execute: vi.fn(() => Promise.resolve(completed)),
+    ...(admit === undefined ? {} : { nativeEffect: { admit } }),
+  });
+
+  it("releases an allowed effect only after the facade's live authority owner admits it", async () => {
+    const admit = admitWith({ ok: true });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "supervised-coding",
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+      });
+      expect(response).toMatchObject({ status: 200, body: '{"effect":"allow"}' });
+      expect(admit).toHaveBeenCalledOnce();
+      const admitted = admit.mock.calls[0]?.[0];
+      expect(admitted).toMatchObject({
+        actionClass: "workspace-read",
+        capability: TOOL_CAPABILITY,
+      });
+      expect(admitted?.delegationId).toMatch(/^native-[a-f0-9]{24}$/u);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses the effect when the authority owner refuses it or is absent from the wiring", async () => {
+    const admit = admitWith({ ok: false, reason: "authority-budget-exceeded" });
+    const refused = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "supervised-coding",
+    });
+    try {
+      const response = await refused.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
+      expect(JSON.stringify(response)).not.toContain("src/index.ts");
+    } finally {
+      await refused.stop();
+    }
+    const unwired = await startBridgeFixture(facadeWith(undefined), undefined, {
+      mode: "autonomous-delivery",
+    });
+    try {
+      const response = await unwired.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+      });
+      expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
+    } finally {
+      await unwired.stop();
+    }
+  });
+
+  it("cancels an already-aborted ask without consulting authority", async () => {
+    const admit = admitWith({ ok: true });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+        signal: AbortSignal.abort(),
+      });
+      expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
+      expect(admit).not.toHaveBeenCalled();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("binds a native child session to its parent run and refuses a foreign session", async () => {
+    const admit = admitWith({ ok: true });
+    const childSessions: Record<string, unknown>[] = [];
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+      childSessions,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    expect(workspaceRoot).not.toBe("");
+    childSessions.push(
+      { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+      { id: "ses_grandchild", parentID: "ses_child", location: { directory: workspaceRoot } },
+      { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+      { id: "ses_foreign", location: { directory: workspaceRoot } },
+    );
+    try {
+      for (const [sessionID, status] of [
+        ["ses_grandchild", 200],
+        ["ses_child", 200],
+        ["ses_elsewhere", 403],
+        ["ses_foreign", 403],
+        ["ses_unknown", 403],
+      ] as const) {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: nativeAsk(sessionID),
+        });
+        expect(response.status, sessionID).toBe(status);
+      }
+      expect(admit).toHaveBeenCalledTimes(2);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a child session whose ancestry cannot be read and records a correlated diagnostic", async () => {
+    const diagnostics = persistedDiagnostics();
+    const admit = admitWith({ ok: true });
+    let failList = false;
+    const childSessions = new Proxy<Record<string, unknown>[]>([], {
+      get(target, property, receiver): unknown {
+        if (failList && property === Symbol.iterator) throw new TypeError("PRIVATE_list_failure");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+      childSessions,
+      diagnostics: diagnostics.sink,
+    });
+    try {
+      failList = true;
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_child"),
+      });
+      expect(response.status).toBe(403);
+      expect(admit).not.toHaveBeenCalled();
+      const record = expectPersistedDiagnostic(
+        diagnostics.read(),
+        "opencode-runtime-composition.native-session-ancestry",
+      );
+      expect(record).toMatchObject({ diagnosticSummary: "native-session-ancestry-failed" });
+      expect(JSON.stringify(record)).not.toContain("PRIVATE_list_failure");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("proves ancestry only through a bounded parent chain inside the workspace", async () => {
+    const { nativeSessionDescendsFromRun } = await compositionModule();
+    const ws = "/ws";
+    const at = (id: string, parentID?: string, directory = ws): Record<string, unknown> => ({
+      id,
+      ...(parentID === undefined ? {} : { parentID }),
+      location: { directory },
+    });
+    expect(nativeSessionDescendsFromRun([at("c", "p")], "c", "p", ws)).toBe(true);
+    expect(nativeSessionDescendsFromRun([at("c", "p"), at("g", "c")], "g", "p", ws)).toBe(true);
+    expect(nativeSessionDescendsFromRun([at("c", "p", "/other")], "c", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun([at("c")], "c", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun([at("c", "c")], "c", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun([at("a", "b"), at("b", "a")], "a", "p", ws)).toBe(false);
+    const deep = Array.from({ length: 10 }, (_, i) =>
+      at(`s${String(i)}`, i === 0 ? "p" : `s${String(i - 1)}`),
+    );
+    expect(nativeSessionDescendsFromRun(deep, "s9", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun(deep, "s6", "p", ws)).toBe(true);
   });
 });
 

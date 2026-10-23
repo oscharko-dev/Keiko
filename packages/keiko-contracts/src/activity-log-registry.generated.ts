@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "26010db08a4d0a0d2a8a8daf4a30ba08b0f920d6670c32fa2510d6edda604a7d" as const;
+  "cc70070d4bfd9fb5420ed3a33edd916ac43fdbb30f16b4254c58a4d2f0861807" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8501,6 +8501,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "risk",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "sessionRelation",
               type: "string",
               dataClass: "closed-enum",
               required: false,
@@ -34216,6 +34222,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "childExecutableSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "egressDisposition",
               type: "string",
               dataClass: "closed-enum",
               required: false,

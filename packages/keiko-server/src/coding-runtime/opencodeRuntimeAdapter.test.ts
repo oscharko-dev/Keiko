@@ -23,7 +23,10 @@ import {
 } from "./productionRuntimeWorkspaceAuthority.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import { ScriptedGovernedTools } from "./opencodeFunctionalHarness/_governedTools.js";
-import { OPENCODE_NATIVE_CONTEXT_FACTS } from "./opencodeNativeContext.js";
+import {
+  OPENCODE_NATIVE_CONTEXT_FACTS,
+  openCodeNativeContextFacts,
+} from "./opencodeNativeContext.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
@@ -125,7 +128,7 @@ interface OpenCodeRuntimeAdapterPorts {
       readonly version: string;
     };
     readonly configDigest: string;
-    readonly nativeContextConfigured?: true;
+    readonly nativeContextProfile?: "mapped" | "native";
     readonly verifyTargetAttestation: () => Promise<boolean>;
     readonly materialize: () => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
@@ -556,7 +559,7 @@ describe("OpenCode runtime adapter readiness", () => {
         },
       },
       correlationId: "run-native-context",
-      readiness: { ...harness.ports.readiness, nativeContextConfigured: true as const },
+      readiness: { ...harness.ports.readiness, nativeContextProfile: "native" as const },
     };
     const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(ports);
     try {
@@ -570,7 +573,8 @@ describe("OpenCode runtime adapter readiness", () => {
         "coding-runtime.readiness.phase.emitted-line",
         formatActivityLogProofLine(event ?? {}),
       );
-      expect(proof).toMatchObject(OPENCODE_NATIVE_CONTEXT_FACTS);
+      expect(proof).toMatchObject(openCodeNativeContextFacts("native"));
+      expect(proof.nativeContextSha256).not.toBe(OPENCODE_NATIVE_CONTEXT_FACTS.nativeContextSha256);
       expect(proof.configDigest).toBe(DIGEST);
       expect(JSON.stringify(proof)).not.toMatch(/repository-instructions|Keiko interface/);
     } finally {

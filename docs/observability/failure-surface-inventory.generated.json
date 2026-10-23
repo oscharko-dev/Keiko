@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "26010db08a4d0a0d2a8a8daf4a30ba08b0f920d6670c32fa2510d6edda604a7d"
+    "catalogDigest": "cc70070d4bfd9fb5420ed3a33edd916ac43fdbb30f16b4254c58a4d2f0861807"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2305,7 +2305,8 @@
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],
     "runtime.confinement.spawned.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
+      "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts",
+      "packages/keiko-server/src/coding-runtime/runtimeGatewayProcessSandbox.egress.test.ts"
     ],
     "runtime.confinement.unavailable.emitted-line": [
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"

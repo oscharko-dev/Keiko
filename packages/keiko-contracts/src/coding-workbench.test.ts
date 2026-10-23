@@ -651,14 +651,17 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
 });
 
 describe("isNativeActionPermissionRequest", () => {
-  it("recognizes only an ask without action kind that carries the native label (#3897)", () => {
-    expect(isNativeActionPermissionRequest({ commandLabel: "native-shell" })).toBe(true);
-    expect(isNativeActionPermissionRequest({ commandLabel: "native-egress" })).toBe(true);
-    expect(isNativeActionPermissionRequest({ commandLabel: "typecheck" })).toBe(false);
+  it("recognizes a native ask by its OpenCode permission, for edits as well as commands", () => {
+    expect(isNativeActionPermissionRequest({ nativePermission: "shell" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "edit" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "webfetch" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "" })).toBe(false);
+    // A command label alone is not the discriminator (#3897 review: edits carry none).
+    expect(isNativeActionPermissionRequest({ commandLabel: "native-shell" })).toBe(false);
     expect(
       isNativeActionPermissionRequest({
         actionKind: "verification-command",
-        commandLabel: "native-shell",
+        nativePermission: "shell",
       }),
     ).toBe(false);
     expect(isNativeActionPermissionRequest({})).toBe(false);

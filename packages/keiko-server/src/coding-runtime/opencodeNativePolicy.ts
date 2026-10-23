@@ -240,14 +240,71 @@ function commandSegments(command: string): readonly string[] {
     .filter((segment) => segment.length > 0);
 }
 
-/** Whitespace tokens of one segment; quoting is not interpreted, so a token is at most a hint. */
+/**
+ * Whitespace tokens of one segment, reduced to the effective invocation: leading `NAME=value`
+ * assignments and transparent wrappers (`env`, `command`, `exec`, `nice`, `nohup`, `time`) are
+ * dropped with their own options, and a program given by path is read by its basename, so
+ * `env git push`, `/usr/bin/git push` and `exec git push` all read as `git push`. Quoting is not
+ * interpreted, so a token is at most a hint (#3897 review).
+ */
 function commandTokens(segment: string): readonly string[] {
-  return segment.split(/\s+/u).filter((token) => token.length > 0);
+  let tokens: readonly string[] = segment.split(/\s+/u).filter((token) => token.length > 0);
+  for (let guard = 0; guard < 8; guard += 1) {
+    const stripped = stripInvocationPrefix(tokens);
+    if (stripped === tokens) break;
+    tokens = stripped;
+  }
+  const [program, ...rest] = tokens;
+  return program === undefined ? [] : [program.slice(program.lastIndexOf("/") + 1), ...rest];
 }
+
+const WRAPPER_PROGRAMS = new Set(["env", "command", "exec", "nice", "nohup", "time"]);
+/** Wrapper options that take a separate argument (`env -u NAME`, `nice -n 10`). */
+const WRAPPER_OPTIONS_WITH_VALUE = new Set([
+  "-u",
+  "--unset",
+  "-n",
+  "--adjustment",
+  "-C",
+  "--chdir",
+]);
+
+function stripInvocationPrefix(tokens: readonly string[]): readonly string[] {
+  const [first] = tokens;
+  if (first === undefined) return tokens;
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(first)) return tokens.slice(1);
+  const program = first.slice(first.lastIndexOf("/") + 1);
+  if (!WRAPPER_PROGRAMS.has(program)) return tokens;
+  let index = 1;
+  while (index < tokens.length && tokens[index]?.startsWith("-") === true) {
+    const option = tokens[index] ?? "";
+    index += WRAPPER_OPTIONS_WITH_VALUE.has(option) ? 2 : 1;
+    if (option === "--") break;
+  }
+  return tokens.slice(index);
+}
+
+/** Git global options that consume the next token (`git -C <path> push`, `git -c k=v push`). */
+const GIT_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+  "--super-prefix",
+  "--config-env",
+]);
 
 /** The first non-option token after `program`, as `git <subcommand>` would read it. */
 function subcommandOf(tokens: readonly string[]): string | undefined {
-  return tokens.slice(1).find((token) => !token.startsWith("-"));
+  let index = 1;
+  while (index < tokens.length) {
+    const token = tokens[index] ?? "";
+    if (!token.startsWith("-")) return token;
+    index += tokens[0] === "git" && GIT_OPTIONS_WITH_VALUE.has(token) ? 2 : 1;
+  }
+  return undefined;
 }
 
 function isVettedSegment(segment: string): boolean {
@@ -483,10 +540,29 @@ export function workspaceRelative(resource: string, workspaceRoot: string): stri
   return posix;
 }
 
+/**
+ * A reserved Git or gh invocation at a command position anywhere in the text: the start, after a
+ * list operator or `(`, or opening a quoted sub-shell (`sh -c "git push"`, `execSync('git push')`),
+ * behind `-C`/`-c`/`--git-dir` options. A mention inside a word list (`echo git push`) is not one.
+ */
+const RESERVED_INVOCATION =
+  /(?:^|[;&|(`'"])\s*(?:\S*\/)?(git|gh)(?:\s+(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path)\s+\S+|\s+--?[\w-]+(?:=\S*)?)*\s+([a-z-]+)/gu;
+
+function reservedInvocationInText(command: string): boolean {
+  for (const match of command.matchAll(RESERVED_INVOCATION)) {
+    const [, program, subcommand] = match;
+    if (program === "git" && subcommand !== undefined && RESERVED_GIT_SUBCOMMANDS.has(subcommand))
+      return true;
+    if (program === "gh" && subcommand !== undefined && RESERVED_GH_SUBCOMMANDS.has(subcommand))
+      return true;
+  }
+  return false;
+}
+
 function classifyShell(resources: readonly string[]): Classified {
   const command = resources.join(" ").trim();
   if (command.length === 0) return SHELL_UNVETTED;
-  if (isReservedCommand(command))
+  if (isReservedCommand(command) || reservedInvocationInText(command))
     return {
       reason: "delivery-reserved",
       message:
@@ -607,7 +683,14 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "expired",
         "cancelled",
         "unavailable",
+        "authority-refused",
       ],
+    },
+    sessionRelation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["primary", "child"],
     },
     risk: {
       type: "string",
@@ -634,7 +717,11 @@ export type OpenCodeNativePolicyOutcome =
   | "denied"
   | "expired"
   | "cancelled"
-  | "unavailable";
+  | "unavailable"
+  | "authority-refused";
+
+/** The native session that asked: the run's own session or an admitted child session (#3897). */
+export type OpenCodeNativeSessionRelation = "primary" | "child";
 
 export function recordOpenCodeNativePolicyDecision(
   sink: ServerLogSink,
@@ -644,6 +731,7 @@ export function recordOpenCodeNativePolicyDecision(
     readonly request: OpenCodeNativePolicyRequest;
     readonly decision: OpenCodeNativePolicyDecision;
     readonly outcome: OpenCodeNativePolicyOutcome;
+    readonly sessionRelation?: OpenCodeNativeSessionRelation | undefined;
   },
 ): void {
   const { request, decision } = input;
@@ -658,6 +746,7 @@ export function recordOpenCodeNativePolicyDecision(
         permission: permissionLogValue(request.permission),
         effect: decision.effect,
         outcome: input.outcome,
+        ...(input.sessionRelation === undefined ? {} : { sessionRelation: input.sessionRelation }),
         ...(risk === undefined ? {} : { risk }),
         resourceCount: request.resources.length,
         resourceDigest: createHash("sha256")

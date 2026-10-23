@@ -31,6 +31,10 @@
       "types": "./dist/context-observations.d.ts",
       "import": "./dist/context-observations.js"
     },
+    "./sensitive-path-patterns": {
+      "types": "./dist/sensitive-path-patterns.d.ts",
+      "import": "./dist/sensitive-path-patterns.js"
+    },
     "./text-safety": {
       "types": "./dist/text-safety.d.ts",
       "import": "./dist/text-safety.js"

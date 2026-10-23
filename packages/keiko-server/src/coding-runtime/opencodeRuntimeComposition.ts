@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -13,12 +13,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
+  CodingWorkbenchActionClass,
 } from "@oscharko-dev/keiko-contracts";
 import {
   encodeSecureWorkspaceNativeResponse,
@@ -103,6 +104,7 @@ import {
   recordOpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyOutcome,
+  type OpenCodeNativeSessionRelation,
   type OpenCodeNativePolicyRequest,
 } from "./opencodeNativePolicy.js";
 import { OPENCODE_NATIVE_POLICY_ACTION } from "./opencodeNativePolicyPlugin.js";
@@ -391,6 +393,8 @@ interface PreparedRun {
   runtimeAdapter?: OpenCodeRuntimeAdapter | undefined;
   client?: OpenCodeV2HttpClient | undefined;
   sessionId?: string | undefined;
+  /** Native child sessions (subagents) proven to descend from the run's session (#3897). */
+  childSessionIds?: Set<string> | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
 }
@@ -1143,7 +1147,7 @@ function readinessV2Ports(
       version: run.verification.summary.upstreamVersion,
     },
     configDigest: run.configDigest,
-    nativeContextConfigured: true,
+    nativeContextProfile: input.toolProfile === "native" ? "native" : "mapped",
     verifyTargetAttestation: (): Promise<boolean> => Promise.resolve(true),
     materialize: (): Promise<boolean> => Promise.resolve(configMaterialized(run.runRoot)),
     startupLine: (): Promise<string> => {
@@ -2237,7 +2241,11 @@ async function handleNativePolicyRequest(
   runs: ReadonlyMap<string, PreparedRun>,
 ): Promise<OpenCodeToolBridgeResponse> {
   const run = runs.get(request.runId);
-  if (run?.ready !== true || run.sessionId !== request.sessionID) {
+  const sessionRelation =
+    run?.ready === true
+      ? await nativeSessionRelation(run, request.sessionID, signal, deps.diagnostics)
+      : undefined;
+  if (run?.ready !== true || sessionRelation === undefined) {
     return { status: 403, body: "", rejection: "approval-unavailable" };
   }
   const decision = decideOpenCodeNativePolicy({
@@ -2246,24 +2254,150 @@ async function handleNativePolicyRequest(
     request,
     nowMs: Date.now(),
   });
-  let outcome: OpenCodeNativePolicyOutcome;
-  if (decision.effect === "ask") {
-    outcome = await nativePolicyHumanDecision(run, decision, signal, deps, approvals);
-  } else {
-    outcome = decision.effect === "allow" ? "allowed" : decision.reason;
-  }
+  const outcome = await settleNativePolicyOutcome(run, decision, signal, deps, approvals);
   recordOpenCodeNativePolicyDecision(deps.activityLog, run.runId, {
     mode: run.mode,
     request,
     decision,
     outcome,
+    sessionRelation,
   });
+  return nativePolicyResult(outcome, decision);
+}
+
+function nativePolicyResult(
+  outcome: OpenCodeNativePolicyOutcome,
+  decision: OpenCodeNativePolicyDecision,
+): OpenCodeToolBridgeResponse {
   if (outcome === "allowed" || outcome === "approved") return nativePolicyResponse("allow");
+  if (outcome === "authority-refused" || outcome === "cancelled")
+    return nativePolicyResponse("deny", NATIVE_AUTHORITY_REFUSED_MESSAGE);
   if (decision.effect === "deny") return nativePolicyResponse("deny", decision.message);
   return nativePolicyResponse(
     "deny",
     humanDecisionFeedback(outcome === "denied" ? "denied" : "expired"),
   );
+}
+
+const NATIVE_AUTHORITY_REFUSED_MESSAGE =
+  "Keiko refused this action: the run's authority is no longer valid or its budget is exhausted.";
+const NATIVE_CHILD_SESSION_MAX = 64;
+const NATIVE_SESSION_ANCESTRY_MAX_DEPTH = 8;
+
+/**
+ * The policy's answer, revalidated against live authority before an effect is released (#3897
+ * review): an already-aborted ask is cancelled, and an allowed or human-approved effect is
+ * admitted through the facade's native-effect owner, which authenticates the capability, requires
+ * the run to be running on its tree binding, checks the envelope's action classes and reserves
+ * one tool call of the run's budget. A wiring without that owner refuses every effect.
+ */
+async function settleNativePolicyOutcome(
+  run: PreparedRun,
+  decision: OpenCodeNativePolicyDecision,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+): Promise<OpenCodeNativePolicyOutcome> {
+  if (signal?.aborted === true) return "cancelled";
+  if (decision.effect === "deny") return decision.reason;
+  const outcome: OpenCodeNativePolicyOutcome =
+    decision.effect === "ask"
+      ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
+      : "allowed";
+  if (outcome !== "allowed" && outcome !== "approved") return outcome;
+  return nativeEffectAdmitted(deps, decision.classification.actionClass, signal)
+    ? outcome
+    : "authority-refused";
+}
+
+function nativeEffectAdmitted(
+  deps: ToolBridgeExecutionDeps,
+  actionClass: CodingWorkbenchActionClass,
+  signal: AbortSignal | undefined,
+): boolean {
+  if (signal?.aborted === true) return false;
+  const admission = deps.facade.nativeEffect?.admit({
+    capability: deps.capability,
+    delegationId: `native-${randomBytes(12).toString("hex")}`,
+    actionClass,
+  });
+  return admission?.ok === true;
+}
+
+/**
+ * Which native session asked: the run's own session, or a child session the original runtime
+ * created under it (a subagent, #3897 review). A child is admitted once its `parentID` chain
+ * reaches the run's session within a bounded depth and every session on the chain is located in
+ * the run's workspace; the proof is read from the runtime's own session list and cached. Any
+ * other session, a failed read or a full cache refuses the ask.
+ */
+async function nativeSessionRelation(
+  run: PreparedRun,
+  sessionID: string,
+  signal: AbortSignal | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<OpenCodeNativeSessionRelation | undefined> {
+  if (run.sessionId === undefined || run.client === undefined) return undefined;
+  if (sessionID === run.sessionId) return "primary";
+  const children = (run.childSessionIds ??= new Set());
+  if (children.has(sessionID)) return "child";
+  if (children.size >= NATIVE_CHILD_SESSION_MAX) return undefined;
+  const sessions = await nativeSessionList(run, signal, diagnostics);
+  if (!nativeSessionDescendsFromRun(sessions, sessionID, run.sessionId, run.workspaceRoot))
+    return undefined;
+  children.add(sessionID);
+  return "child";
+}
+
+// A failed read proves no ancestry, so the ask is refused; the failure itself is recorded body-free
+// under the run's correlation.
+async function nativeSessionList(
+  run: Pick<PreparedRun, "runId" | "client">,
+  signal: AbortSignal | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<readonly Readonly<Record<string, unknown>>[]> {
+  if (run.client === undefined) return [];
+  try {
+    return await run.client.sessions(signal);
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId: run.runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.tool-bridge",
+      source: "opencode-runtime-composition.native-session-ancestry",
+      errorClass: contentFreeErrorClass(error),
+      message: "native-session-ancestry-failed",
+    });
+    return [];
+  }
+}
+
+/** True when `sessionID`'s parent chain reaches `primaryId` inside the workspace (pure, bounded). */
+export function nativeSessionDescendsFromRun(
+  sessions: readonly Readonly<Record<string, unknown>>[],
+  sessionID: string,
+  primaryId: string,
+  workspaceRoot: string,
+): boolean {
+  const byId = new Map(sessions.map((session) => [session.id, session] as const));
+  let current = sessionID;
+  for (let depth = 0; depth < NATIVE_SESSION_ANCESTRY_MAX_DEPTH; depth += 1) {
+    const session = byId.get(current);
+    if (session === undefined || !nativeSessionInWorkspace(session, workspaceRoot)) return false;
+    const parent = session.parentID;
+    if (typeof parent !== "string" || parent.length === 0 || parent === current) return false;
+    if (parent === primaryId) return true;
+    current = parent;
+  }
+  return false;
+}
+
+function nativeSessionInWorkspace(
+  session: Readonly<Record<string, unknown>>,
+  workspaceRoot: string,
+): boolean {
+  const directory = v2Record(session.location)?.directory;
+  return typeof directory === "string" && resolve(directory) === resolve(workspaceRoot);
 }
 
 // The ask goes to the human through the run's existing approval lane; the tool call it ends is

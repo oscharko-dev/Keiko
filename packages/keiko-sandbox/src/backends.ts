@@ -2,10 +2,11 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { linuxGatewayLauncherPath } from "./runtime.js";
 import {
+  copyRuntimeGatewayFilesystem,
   executionRootSeatbeltProfile,
   gatewayFilesystemSeatbeltRules,
   nativeWorkspaceSeatbeltRules,
@@ -13,6 +14,7 @@ import {
 import type {
   IsolatedRunPlan,
   NetworkGatewayPolicy,
+  RuntimeGatewayEgress,
   RuntimeGatewayFilesystem,
   RuntimeGatewayProfile,
   SandboxBackend,
@@ -155,18 +157,70 @@ function buildLinuxGatewayCommand(
   };
 }
 
+// The Linux native profile mounts only what the work needs (#3897). Unlike the execution-root
+// profile it keeps the host PID namespace's usual `/etc` (resolver, certificates, `passwd`) and
+// `/sbin`, and it adds the server-named toolchain roots.
+const NATIVE_LINUX_READONLY_BINDS: readonly string[] = Object.freeze([
+  ...EXECUTION_ROOT_READONLY_BINDS,
+  "/sbin",
+  "/etc",
+]);
+
+function insideOrEqual(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === "" || (path !== ".." && !path.startsWith("../") && !isAbsolute(path));
+}
+
 /**
- * Linux native profile (#3897): the agent's toolchains and egress stay available (no network
- * namespace); the sandbox keeps the process tree bound to the parent and the working directory.
+ * Linux native profile (#3897): a mount-namespace allowlist, not the host filesystem. Only the
+ * read-only system and toolchain roots, the runtime's own payload, a private `/tmp`, and the
+ * writable workspace and run-private state exist inside the sandbox; the user's home, other
+ * workspaces and Keiko's state directory are not mounted at all. A denied root that lies inside a
+ * mounted tree (a credential directory in a toolchain prefix or in the workspace) is masked with an
+ * empty `tmpfs` after that tree is mounted. Below Full access the sandbox also gets a fresh network
+ * namespace. Credential-NAMED files inside the workspace (`.env`) cannot be named in a mount
+ * namespace without enumerating the tree, so on Linux they remain the native read tool's guard.
  */
-function nativeBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
+function nativeBubblewrapArgs(
+  plan: IsolatedRunPlan,
+  filesystem: RuntimeGatewayFilesystem,
+  egress: RuntimeGatewayEgress,
+): readonly string[] {
   if (!isAbsolute(plan.command) || !isAbsolute(plan.cwd))
     throw new TypeError("linux-gateway-launch-input-invalid");
+  const mounted = [
+    ...NATIVE_LINUX_READONLY_BINDS,
+    ...(filesystem.toolchainReadRoots ?? []),
+    filesystem.runtimeReadRoot,
+    filesystem.workspaceRoot,
+    filesystem.privateStateRoot,
+  ];
+  const masked = (filesystem.deniedReadRoots ?? []).filter((denied) =>
+    mounted.some((root) => insideOrEqual(root, denied)),
+  );
   return [
+    ...(egress === "inherited" ? [] : ["--unshare-net"]),
     "--die-with-parent",
-    "--dev-bind",
-    "/",
-    "/",
+    "--new-session",
+    "--unshare-pid",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    ...roBindTryArgs(NATIVE_LINUX_READONLY_BINDS),
+    ...roBindTryArgs(filesystem.toolchainReadRoots ?? []),
+    "--ro-bind",
+    filesystem.runtimeReadRoot,
+    filesystem.runtimeReadRoot,
+    "--tmpfs",
+    "/tmp",
+    "--bind",
+    filesystem.workspaceRoot,
+    filesystem.workspaceRoot,
+    "--bind",
+    filesystem.privateStateRoot,
+    filesystem.privateStateRoot,
+    ...masked.flatMap((denied) => ["--tmpfs", denied]),
     "--chdir",
     plan.cwd,
     "--",
@@ -177,8 +231,16 @@ function nativeBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
 
 function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
   const gateway = copyNetworkGatewayPolicy(plan.network);
-  if (gateway !== undefined && plan.gatewayProfile === "keiko-native")
-    return { command: "bwrap", args: nativeBubblewrapArgs(plan) };
+  if (gateway !== undefined && plan.gatewayProfile === "keiko-native") {
+    const filesystem = copyRuntimeGatewayFilesystem(plan.gatewayFilesystem);
+    // Without an accepted filesystem the sandbox would have to expose the host: refuse instead.
+    if (filesystem?.workspaceAccess !== "read-write")
+      throw new TypeError("native-linux-filesystem-invalid");
+    return {
+      command: "bwrap",
+      args: nativeBubblewrapArgs(plan, filesystem, plan.gatewayEgress ?? "loopback-only"),
+    };
+  }
   if (gateway !== undefined) return buildLinuxGatewayCommand("bubblewrap", plan, gateway);
   if (
     plan.network !== "none" &&
@@ -191,13 +253,10 @@ function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
 
 function buildUnshareCommand(plan: IsolatedRunPlan): WrappedCommand {
   const gateway = copyNetworkGatewayPolicy(plan.network);
-  if (gateway !== undefined && plan.gatewayProfile === "keiko-native") {
-    if (!isAbsolute(plan.command)) throw new TypeError("linux-gateway-launch-input-invalid");
-    return {
-      command: "unshare",
-      args: ["--map-root-user", "--fork", "--pid", "--mount-proc", plan.command, ...plan.args],
-    };
-  }
+  // `unshare` cannot mount a filesystem allowlist: it would launch the native runtime with the
+  // host mounts. An unqualified native backend is refused, never launched unconfined (#3897).
+  if (gateway !== undefined && plan.gatewayProfile === "keiko-native")
+    throw new TypeError("native-linux-backend-unqualified");
   if (gateway !== undefined) return buildLinuxGatewayCommand("unshare", plan, gateway);
   if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
   return { command: "unshare", args: unshareArgs(plan) };
@@ -248,11 +307,12 @@ export function buildGatewaySeatbeltCommand(
   childExecutable: string,
   filesystem?: RuntimeGatewayFilesystem,
   gatewayProfile: RuntimeGatewayProfile = "keiko-gateway",
+  egress: RuntimeGatewayEgress = "loopback-only",
 ): WrappedCommand {
   const closedGateway = copyNetworkGatewayPolicy(gateway);
   if (closedGateway === undefined) throw new TypeError("gateway-network-policy-invalid");
   if (gatewayProfile === "keiko-native") {
-    return buildNativeSeatbeltCommand(command, args, filesystem);
+    return buildNativeSeatbeltCommand(command, args, filesystem, egress);
   }
   const family = closedGateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
   const profile =
@@ -265,24 +325,38 @@ export function buildGatewaySeatbeltCommand(
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 
+// Below Full access the native process tree reaches loopback only (#3897): the attested Model
+// Gateway and tool facade are loopback, and so are the dev servers a test starts. Every other
+// destination, unix-socket peer included (ssh-agent, container daemons, the resolver), is denied
+// by the kernel before any traffic. `inherited` (Full access) adds no network rule at all.
+const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
+  "(deny network*)" +
+  '(allow network-outbound (remote ip "localhost:*"))' +
+  '(allow network-inbound (local ip "localhost:*"))' +
+  '(allow network-bind (local ip "localhost:*"))';
+
 /**
- * The native profile (#3897): the agent runs its own shell, toolchains and network like
- * standalone OpenCode. What stays enforced is the filesystem boundary (writes only inside the
- * workspace, the private run state and the temporary directories; credential stores and Keiko's
- * state unreadable) and the service escape surfaces. Egress is governed per action by the
- * server-owned permission policy, not by the process profile.
+ * The native profile (#3897): the agent runs its own shell and toolchains like standalone
+ * OpenCode. What the kernel enforces for the whole process tree is the filesystem boundary (a read
+ * allowlist of the workspace, the private state, the system and toolchain roots; writes only inside
+ * the workspace and the private state, whose `tmp` is the runtime's TMPDIR; credential stores,
+ * credential files and Keiko's state unreadable) and the service escape surfaces. Network follows the run's
+ * mode: loopback only below Full access; inherited at Full access, where the per-action permission
+ * policy and the accepted Authority Envelope bound it.
  */
 function buildNativeSeatbeltCommand(
   command: string,
   args: readonly string[],
   filesystem: RuntimeGatewayFilesystem | undefined,
+  egress: RuntimeGatewayEgress,
 ): WrappedCommand {
   if (!isAbsolute(command) || command.includes("\0"))
     throw new TypeError("gateway-seatbelt-command-not-absolute");
   if (filesystem === undefined) throw new TypeError("native-seatbelt-filesystem-invalid");
   const profile =
     "(version 1)(allow default)(deny appleevent-send)(deny lsopen)" +
-    nativeWorkspaceSeatbeltRules(filesystem);
+    nativeWorkspaceSeatbeltRules(filesystem) +
+    (egress === "inherited" ? "" : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 
@@ -296,6 +370,7 @@ function buildSeatbeltCommand(plan: IsolatedRunPlan): WrappedCommand {
       plan.gatewayChildExecutable ?? "",
       plan.gatewayFilesystem,
       plan.gatewayProfile,
+      plan.gatewayEgress,
     );
   }
   if (

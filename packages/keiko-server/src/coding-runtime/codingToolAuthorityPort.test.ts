@@ -3066,3 +3066,84 @@ it.each(["context", "producer"] as const)(
     }
   },
 );
+
+describe("native effect admission (#3897 review)", () => {
+  const nativeContext = (): ReturnType<Parameters<typeof createRuntimeCodingToolFacade>[1]> => ({
+    adapterKind: "model-gateway-sidecar",
+    liveFacts,
+    workspaceRoot: "/managed/workspace",
+    deploymentCeiling: "autonomous-delivery",
+    nowIso: "2026-07-12T09:00:00.000Z",
+    runId: "run-native-effect",
+    envelopeDigest: DIGEST,
+    authorityExpiresAt: "2026-07-12T12:00:00.000Z",
+  });
+
+  it("admits an effect through the delegation path, reserving one tool call under its own identity", () => {
+    const envelope = fullyAuthorizedEnvelope as CodingWorkbenchRuntimeAuthorityEnvelope;
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
+    expect(facade.nativeEffect).toBeDefined();
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        delegationId: "native-decision-1",
+        actionClass: "command-execution",
+      }),
+    ).toEqual({ ok: true });
+    expect(authority.resolveCapabilityForDelegation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "runtime-capability-secret",
+        delegationId: "native-decision-1",
+        idempotencyKey: "native-decision-1",
+        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        workspaceRoot: "/managed/workspace",
+        deploymentCeiling: "autonomous-delivery",
+      }),
+    );
+  });
+
+  it("refuses when the live authority refuses (revoked, paused, exhausted) and when the envelope lacks the class", () => {
+    const refused = {
+      revalidateCapabilityForMutation: vi.fn(() => ({
+        ok: false as const,
+        reason: "authority-budget-exceeded" as const,
+      })),
+      resolveCapabilityForDelegation: vi.fn(() => ({
+        ok: false as const,
+        reason: "authority-budget-exceeded" as const,
+      })),
+    };
+    expect(
+      createRuntimeCodingToolFacade(refused, nativeContext, governedPorts()).nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        delegationId: "native-decision-2",
+        actionClass: "workspace-read",
+      }),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+
+    const envelope = restrictedEnvelope({ actionClasses: ["workspace-read"] });
+    const narrow = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const facade = createRuntimeCodingToolFacade(narrow, nativeContext, governedPorts());
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        delegationId: "native-decision-3",
+        actionClass: "command-execution",
+      }),
+    ).toEqual({ ok: false, reason: "action-not-authorized" });
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        delegationId: "native-decision-4",
+        actionClass: "workspace-read",
+      }),
+    ).toEqual({ ok: true });
+  });
+});
