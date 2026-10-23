@@ -263,15 +263,33 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     await expect(
       refused.toolBefore({ ...nested("execute"), input: { code: "return 1 + 1;" } }),
     ).rejects.toThrow("needs approval");
+    // The human reviews the program itself: its text is the ask's resource (never logged).
     expect(refused.requests[0]).toMatchObject({
       permission: "execute",
-      resources: [],
+      resources: ["return 1 + 1;"],
       source: { type: "tool", messageID: "msg_code_mode", id: "call_execute" },
     });
-    expect(JSON.stringify(refused.requests)).not.toContain("return 1 + 1");
     const allowed = await pluginHarness("autonomous-delivery", { effect: "allow" });
     await expect(allowed.toolBefore(nested("execute"))).resolves.toBeUndefined();
     expect(allowed.requests).toHaveLength(1);
+  });
+
+  it("splits a long program at line breaks into bounded review resources", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "allow" });
+    const line = "x".repeat(1_500);
+    const code = [line, line, "return 1;"].join("\n");
+    await harness.toolBefore({ ...nested("execute"), input: { code } });
+    const resources = (harness.requests[0] as { readonly resources?: readonly string[] }).resources;
+    expect(resources).toEqual([line, `${line}\nreturn 1;`]);
+    expect(resources?.join("\n")).toBe(code);
+  });
+
+  it("refuses a program with a line too long to review without asking policy", async () => {
+    const harness = await pluginHarness("autonomous-delivery", { effect: "allow" });
+    await expect(
+      harness.toolBefore({ ...nested("execute"), input: { code: "y".repeat(2_049) } }),
+    ).rejects.toThrow(/too large to review/u);
+    expect(harness.requests).toHaveLength(0);
   });
 
   it("leaves Code Mode's read-only or self-asserting tools to the runtime", async () => {

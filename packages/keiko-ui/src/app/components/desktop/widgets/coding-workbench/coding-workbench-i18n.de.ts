@@ -950,6 +950,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Genehmigen wendet diese Änderung einmal auf die aufgeführten Dateien an; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
   "codingWorkbench.approval.native.help.internet":
     "Genehmigen erlaubt dem Agenten für diese Anfrage einmal den Zugriff auf das Internet; Ablehnen lässt den Agenten ohne ihn weiterarbeiten. Internetzugriff gibt es nur im Modus Vollzugriff.",
+  "codingWorkbench.approval.native.help.execute":
+    "Genehmigen führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus: Es kann die Verwaltungswerkzeuge von OpenCode aufrufen und unterhalb von Vollzugriff nur lokale Adressen erreichen. Ablehnen lässt den Agenten ohne es weiterarbeiten.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
   "codingWorkbench.approval.native.noResources":
     "Weder Befehl noch Pfad noch Adresse wurde genannt.",

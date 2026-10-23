@@ -920,6 +920,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Approve applies this change to the listed files once; deny tells the agent to continue without it.",
   "codingWorkbench.approval.native.help.internet":
     "Approve lets the agent use the internet once for this request; deny tells the agent to continue without it. Internet access is only available in Full access.",
+  "codingWorkbench.approval.native.help.execute":
+    "Approve runs this Code Mode program once in OpenCode's script sandbox: it can call OpenCode's management tools and, below Full access, reach only local addresses. Deny tells the agent to continue without it.",
   "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
   "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
   "codingWorkbench.approval.native.nothingNamed":

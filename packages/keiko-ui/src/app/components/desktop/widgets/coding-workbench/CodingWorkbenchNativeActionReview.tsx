@@ -19,8 +19,9 @@ const PERMISSION_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey
 };
 
 // What Approve does depends on the permission: a command runs in the task workspace, an edit
-// changes the listed files, and web access leaves the machine (Full access only). Every other
-// permission keeps the generic wording.
+// changes the listed files, web access leaves the machine (Full access only), and a Code Mode
+// program (its text is the resource) runs in OpenCode's script sandbox. Every other permission
+// keeps the generic wording.
 const HELP_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
   shell: "codingWorkbench.approval.native.help.shell",
   edit: "codingWorkbench.approval.native.help.edit",
@@ -28,6 +29,7 @@ const HELP_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
   patch: "codingWorkbench.approval.native.help.edit",
   webfetch: "codingWorkbench.approval.native.help.internet",
   websearch: "codingWorkbench.approval.native.help.internet",
+  execute: "codingWorkbench.approval.native.help.execute",
 };
 
 const NATIVE_LABEL_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {

@@ -124,8 +124,10 @@ async function reopenWorkbench(page) {
 async function chooseOption(page, comboName, optionName) {
   await page.getByRole("combobox", { name: comboName }).click();
   const label = optionName.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  // An option's accessible name is its label followed directly by its description, so the
+  // label is matched as a prefix; the offered labels are distinct.
   await page
-    .getByRole("option", { name: new RegExp(`^${label}(?:\\s|$)`, "u") })
+    .getByRole("option", { name: new RegExp(`^${label}`, "u") })
     .first()
     .click();
 }

@@ -1053,8 +1053,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   moves and renames, model search and the worktree listing assert nothing, and the `execute` call
   itself evaluates no permission. The generated plugin therefore decides the Code Mode program
   itself through `tool.hook("execute.before")`: the policy classifies `execute` as command
-  execution, so Ask for approval asks before a program starts and a refusal blocks it before it
-  runs (the program text is never sent to the policy). `fetch` is a Code Mode primitive that
+  execution, so Ask for approval and Supervised workspace ask before a program starts and a
+  refusal blocks it before it runs. The human reviews the program itself: its text, split at line
+  breaks into the bounded review resources (64 × 2,048 characters; a longer line is refused as too
+  large to review), is the ask's resource and is never logged. `fetch` is a Code Mode primitive that
   neither hook sees inside an admitted program: the kernel egress rule governs it (loopback below
   Full access).
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call

@@ -1111,12 +1111,12 @@ describe("pinned native OpenCode built-in agent restrictions", () => {
         const result = await scriptedTurn(run, executeCall("return 6 * 7;"), "Run the program.");
         expect(result).toBe("42");
         const asked = run.facade.requests.map((recorded) => object(recorded.body));
+        // The human reviews the program itself: its text is the ask's resource.
         expect(asked).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ permission: "execute", resources: [] }),
+            expect.objectContaining({ permission: "execute", resources: ["return 6 * 7;"] }),
           ]),
         );
-        expect(JSON.stringify(asked)).not.toContain("6 * 7");
       });
     },
     120_000,

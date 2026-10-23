@@ -49,7 +49,7 @@ describe("CodingWorkbenchNativeActionReview", () => {
     ["patch", "Approve applies this change to the listed files once"],
     ["webfetch", "Internet access is only available in Full access."],
     ["websearch", "Internet access is only available in Full access."],
-    ["execute", "Approve allows exactly this action once"],
+    ["execute", "Approve runs this Code Mode program once"],
     ["external_directory", "Approve allows exactly this action once"],
   ])("states what approving a %s ask does, per permission", (permission, expected) => {
     render(review({ permission, resources: ["x"] }));
@@ -59,6 +59,20 @@ describe("CodingWorkbenchNativeActionReview", () => {
     // A native ask must never claim its command, prompt or file contents are hidden: the command
     // is the visible subject of the card.
     expect(screen.queryByText(/remain hidden/u)).toBeNull();
+  });
+
+  // #3897 review: a Code Mode program asks before it runs; the human reviews its own text, and the
+  // help says what approving it can do (script sandbox, loopback only below Full access).
+  it("shows a Code Mode program as the reviewed resource with its own help", () => {
+    const program = "const files = await tools.opencode.worktree_list({});\nreturn files;";
+    const { unmount } = render(review({ permission: "execute", resources: [program] }));
+    const block = screen.getByRole("list", { name: "Requested command, paths, or addresses" });
+    expect(within(block).getByRole("listitem").textContent).toBe(program);
+    expect(screen.getByText(/Code Mode program once in OpenCode's script sandbox/u)).toBeVisible();
+    expect(screen.queryByText(/task workspace/u)).toBeNull();
+    unmount();
+    render(review({ permission: "execute", resources: [program] }, de));
+    expect(screen.getByText(/Code-Mode-Programm einmal/u)).toBeVisible();
   });
 
   it("claims the task workspace only for the shell command, never for web access", () => {
