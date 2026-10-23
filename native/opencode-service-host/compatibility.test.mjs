@@ -44,7 +44,7 @@ test("the original GitLab provider validates header records with the patched Zod
   const client = new GitLabDirectAccessClient({
     instanceUrl: "https://gitlab.example.test",
     getHeaders: () => ({}),
-    fetch: async () => Response.json(response),
+    fetch: () => Promise.resolve(Response.json(response)),
   });
   assert.deepEqual(await client.getDirectAccessToken(), valid);
   response = { token: "fixture-token", headers: { Authorization: 123 } };
