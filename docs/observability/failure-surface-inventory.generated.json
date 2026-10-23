@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7142e77ff99c38c1881e65b389d0741a39b013d3486f2696d5a67a6618055ed6"
+    "catalogDigest": "2b44b9ff246f662867207fe0006cdb5949f25e1d4a01c1892e030a4b02f6d663"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -36,6 +36,10 @@
         "field": "mode"
       },
       {
+        "op": "coding-runtime.native-narrowing.refused",
+        "field": "requestedMode"
+      },
+      {
         "op": "coding-runtime.run.settled",
         "field": "requestedMode"
       },
@@ -55,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 554,
-    "proofCount": 567,
-    "resolvedProofCount": 567,
-    "failureClassCount": 352,
+    "operationCount": 556,
+    "proofCount": 569,
+    "resolvedProofCount": 569,
+    "failureClassCount": 353,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -327,6 +331,7 @@
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
         "coding-runtime.initialization-transport",
+        "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-question.observed",
         "coding-runtime.operation.refused",
@@ -341,6 +346,7 @@
         "coding-runtime.readiness.phase",
         "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-rerank",
+        "coding-runtime.ripgrep.resolved",
         "coding-runtime.run.delivery-continuation-refused",
         "coding-runtime.run.delivery-continued",
         "coding-runtime.run.delivery-evidence-unreadable",
@@ -807,6 +813,7 @@
     "coding-runtime-readiness": ["tools-workflows.dependency-failure"],
     "coding-runtime-recovery-acknowledgement": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
+    "coding-runtime-ripgrep-unavailable": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-settlement": ["tools-workflows.rejection"],
     "coding-runtime-run-start": ["tools-workflows.dependency-failure"],
     "coding-runtime-session-continuity": ["tools-workflows.dependency-failure"],
@@ -814,7 +821,7 @@
     "coding-runtime-skill-discovery": ["tools-workflows.dependency-failure"],
     "coding-runtime-task-replacement": ["tools-workflows.dependency-failure"],
     "coding-runtime-tool-availability": ["tools-workflows.dependency-failure"],
-    "coding-runtime-native-policy": ["tools-workflows.dependency-failure"],
+    "coding-runtime-native-policy": ["tools-workflows.rejection"],
     "coding-runtime-tool-result": ["tools-workflows.dependency-failure"],
     "coding-runtime-verification": ["tools-workflows.dependency-failure"],
     "coding-safe-activity-projection": ["tools-workflows.loss"],
@@ -1421,6 +1428,9 @@
     "coding-runtime.initialization-transport.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
+    "coding-runtime.native-narrowing.refused.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
     "coding-runtime.native-policy.decided.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.test.ts"
     ],
@@ -1462,6 +1472,9 @@
     ],
     "coding-runtime.repository-rerank.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
+    ],
+    "coding-runtime.ripgrep.resolved.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.test.ts"
     ],
     "coding-runtime.run.delivery-continuation-refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"

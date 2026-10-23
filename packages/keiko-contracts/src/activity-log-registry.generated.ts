@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7142e77ff99c38c1881e65b389d0741a39b013d3486f2696d5a67a6618055ed6" as const;
+  "2b44b9ff246f662867207fe0006cdb5949f25e1d4a01c1892e030a4b02f6d663" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 352,
-  completeClassCount: 352,
+  supportedClassCount: 353,
+  completeClassCount: 353,
   completeness: "complete",
   classes: [
     {
@@ -8496,21 +8496,64 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.native-policy.decided"],
+        state: ["coding-runtime.native-narrowing.refused", "coding-runtime.native-policy.decided"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "coding-runtime.native-narrowing.refused",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.native-policy.decided",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.native-policy.decided"],
+      resourceSignals: [
+        "coding-runtime.native-narrowing.refused",
+        "coding-runtime.native-policy.decided",
+      ],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.native-narrowing.refused",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "launchMode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "requestedMode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.native-narrowing.refused.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.native-policy.decided",
           owner: "keiko-server",
@@ -8520,10 +8563,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "authorityReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "effect",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "invocationCharge",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "mode",
@@ -9506,6 +9561,104 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.repository-rerank.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-ripgrep-unavailable",
+      requirementContract: "coding-runtime-ripgrep-unavailable",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.ripgrep.resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.ripgrep.resolved",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.ripgrep.resolved"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.ripgrep.resolved",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "digestSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "layout",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "overrideReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "targetKey",
+              type: "string",
+              dataClass: "safe-platform-class",
+              required: true,
+            },
+            {
+              name: "toolProfile",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "version",
+              type: "string",
+              dataClass: "safe-version",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "loss-state",
+            "safe-platform-class",
+            "safe-version",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.ripgrep.resolved.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -22829,6 +22982,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "unofferedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
           ],
           evidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
@@ -42695,6 +42854,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.initialization-transport": "tools-workflows",
+    "coding-runtime.native-narrowing.refused": "tools-workflows",
     "coding-runtime.native-policy.decided": "tools-workflows",
     "coding-runtime.native-question.observed": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",
@@ -42709,6 +42869,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.readiness.phase": "tools-workflows",
     "coding-runtime.repository-instructions.context": "tools-workflows",
     "coding-runtime.repository-rerank": "tools-workflows",
+    "coding-runtime.ripgrep.resolved": "tools-workflows",
     "coding-runtime.run.delivery-continuation-refused": "tools-workflows",
     "coding-runtime.run.delivery-continued": "tools-workflows",
     "coding-runtime.run.delivery-evidence-unreadable": "tools-workflows",
