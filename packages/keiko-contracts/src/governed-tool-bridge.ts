@@ -90,6 +90,12 @@ export interface GatewayNativeToolAdvertisement {
   readonly offered: { readonly offerId: string; readonly expiresAt: string };
 }
 
+/**
+ * One byte contract for the native advertisement, shared by the server's admission, this validator
+ * and the gateway's capture (#3897 review): `maxSchemaBytes` bounds one tool's parameter schema and
+ * `maxTotalBytes` all complete tool definitions (name, description and schema), both as UTF-8 JSON
+ * (`gatewayNativeToolDefinitionBytes`).
+ */
 export const GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS = Object.freeze({
   maxTools: 128,
   maxToolNameChars: 64,
@@ -98,11 +104,43 @@ export const GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS = Object.freeze({
   maxTotalBytes: 512 * 1024,
 });
 
-/** Native tools whose arguments are workspace file content, consumed byte for byte (#4009). */
+/** The capture budget of a whole advertisement: its tools plus the bounded envelope fields. */
+export const GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES =
+  GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTotalBytes + 16 * 1024;
+
+const UTF8 = new TextEncoder();
+
+function utf8JsonBytes(value: unknown): number {
+  return UTF8.encode(JSON.stringify(value)).length;
+}
+
+/** The UTF-8 JSON bytes one complete tool definition counts against `maxTotalBytes`. */
+export function gatewayNativeToolDefinitionBytes(tool: GatewayNativeToolDefinition): number {
+  return utf8JsonBytes({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  });
+}
+
+/** The UTF-8 JSON bytes of one tool's parameter schema, bounded by `maxSchemaBytes`. */
+export function gatewayNativeToolSchemaBytes(
+  parameters: Readonly<Record<string, unknown>>,
+): number {
+  return utf8JsonBytes(parameters);
+}
+
+/**
+ * Native tools whose arguments are consumed byte for byte: workspace file content (#4009) and
+ * executable source, a Code Mode program or a shell command line, whose meaning a heuristic rewrite
+ * would change (#3897 review). Configured provider literals are still removed from them.
+ */
 export const GATEWAY_NATIVE_EXACT_CONTENT_TOOLS: readonly string[] = Object.freeze([
   "edit",
   "write",
   "patch",
+  "execute",
+  "shell",
 ]);
 
 const NATIVE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
@@ -113,9 +151,13 @@ function nativeToolDefinitionBytes(value: unknown): number | undefined {
   if (record === undefined || Object.keys(record).length !== 3) return undefined;
   const { name, description, parameters } = record;
   if (typeof name !== "string" || !NATIVE_TOOL_NAME.test(name)) return undefined;
-  if (!boundedDescription(description) || plainRecord(parameters) === undefined) return undefined;
-  const bytes = JSON.stringify(parameters).length;
-  return bytes > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxSchemaBytes ? undefined : bytes;
+  const schema = plainRecord(parameters);
+  if (!boundedDescription(description) || schema === undefined) return undefined;
+  if (
+    gatewayNativeToolSchemaBytes(schema) > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxSchemaBytes
+  )
+    return undefined;
+  return gatewayNativeToolDefinitionBytes({ name, description, parameters: schema });
 }
 
 function plainRecord(value: unknown): Record<string, unknown> | undefined {

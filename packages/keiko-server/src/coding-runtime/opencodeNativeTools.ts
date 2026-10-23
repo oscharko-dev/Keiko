@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 
+import {
+  GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS,
+  gatewayNativeToolDefinitionBytes,
+  gatewayNativeToolSchemaBytes,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+
 /**
  * The native tool inventory of the pinned OpenCode producer (#3897, #3908). It is captured from the
  * real binary, never hand-maintained: a routine upgrade regenerates the fixture and the
@@ -24,9 +30,13 @@ export interface OpenCodeNativeToolDefinition {
 
 const NATIVE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 /** A provider request may carry MCP and plugin tools beside the native ones; bound, not enumerated. */
-export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOOLS = 128;
-export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES = 64 * 1024;
-export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES = 512 * 1024;
+/** The native advertisement's one byte contract, owned by the gateway contract (#3897 review). */
+export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOOLS =
+  GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTools;
+export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES =
+  GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxSchemaBytes;
+export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES =
+  GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTotalBytes;
 
 /**
  * Captured from `ctx.tool.list()` of a plugin loaded by `opencode serve` 2.1.4 (commit 68bc26b7);
@@ -134,6 +144,8 @@ export function openCodeToolLogLabel(tool: string): string {
 
 interface AdvertisedTool {
   readonly name: string;
+  /** Absent counts as empty; the gateway counts the description the advertisement forwards. */
+  readonly description?: string | undefined;
   readonly parameters: Readonly<Record<string, unknown>>;
 }
 
@@ -153,12 +165,22 @@ export function isAdmittedOpenCodeNativeToolContract(
   for (const tool of tools) {
     if (!isAdmissibleOpenCodeToolName(tool.name) || names.has(tool.name)) return false;
     names.add(tool.name);
-    const bytes = Buffer.byteLength(JSON.stringify(tool.parameters), "utf8");
-    if (bytes > OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES) return false;
+    const bytes = admittedDefinitionBytes(tool);
+    if (bytes === undefined) return false;
     total += bytes;
     if (total > OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES) return false;
   }
   return true;
+}
+
+/** One tool's complete definition bytes under the gateway contract, or undefined when unbounded. */
+function admittedDefinitionBytes(tool: AdvertisedTool): number | undefined {
+  const description = tool.description ?? "";
+  if (description.length > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxDescriptionChars)
+    return undefined;
+  const schemaBytes = gatewayNativeToolSchemaBytes(tool.parameters);
+  if (schemaBytes > OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES) return undefined;
+  return gatewayNativeToolDefinitionBytes({ ...tool, description });
 }
 
 /** Stable digest of the advertised tool-name set, for body-free gateway evidence. */

@@ -38,6 +38,7 @@ import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js"
 import { OPENCODE_GOVERNED_SYSTEM_PROMPT } from "./opencodeLaunchProfile.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import { gatewayNativeToolDefinitionBytes } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 
 const projectionCompilations = vi.hoisted(() => ({ count: 0, utf8Bytes: 0 }));
 
@@ -995,26 +996,29 @@ describe("hasExactOpenCodeVisibleToolContract for the native profile (#3897)", (
     );
   });
 
-  it("admits the total schema budget exactly and refuses one byte over it", () => {
-    const full = MAX_TOTAL_BYTES / MAX_SCHEMA_BYTES;
-    expect(Number.isInteger(full)).toBe(true);
-    const atBudget = Array.from({ length: full }, (_unused, index) => ({
-      name: `full_${String(index)}`,
-      parameters: parametersOfUtf8Bytes(MAX_SCHEMA_BYTES),
-    }));
+  // #3897 review: admission counts every complete definition (name, description, schema) as UTF-8
+  // JSON with the gateway contract's own formula, so what it admits the gateway also captures.
+  it("admits complete definitions up to the total budget exactly and refuses one byte over it", () => {
+    const toolOf = (name: string, bytes: number): NativeAdvertisedTool => {
+      const empty = gatewayNativeToolDefinitionBytes({
+        name,
+        description: "",
+        parameters: { p: "" },
+      });
+      return { name, description: "", parameters: { p: "x".repeat(bytes - empty) } };
+    };
+    const count = MAX_TOTAL_BYTES / MAX_SCHEMA_BYTES;
+    const atBudget = Array.from({ length: count }, (_unused, index) =>
+      toolOf(`full_${String(index)}`, MAX_SCHEMA_BYTES),
+    );
     expect(hasExactOpenCodeVisibleToolContract(atBudget, "native")).toBe(true);
     const overByOne = [
-      ...atBudget.slice(1),
-      { name: "almost_full", parameters: parametersOfUtf8Bytes(MAX_SCHEMA_BYTES - 1) },
-      { name: "tiny", parameters: {} },
+      ...atBudget.slice(0, -1),
+      toolOf(`full_${String(count - 1)}`, MAX_SCHEMA_BYTES + 1),
     ];
     expect(hasExactOpenCodeVisibleToolContract(overByOne, "native")).toBe(false);
-    expect(
-      hasExactOpenCodeVisibleToolContract(
-        [...atBudget, { name: "extra", parameters: {} }],
-        "native",
-      ),
-    ).toBe(false);
+    const longDescription = { ...nativeTool("read"), description: "d".repeat(16_385) };
+    expect(hasExactOpenCodeVisibleToolContract([longDescription], "native")).toBe(false);
   });
 });
 

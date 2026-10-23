@@ -3,6 +3,9 @@ import {
   boundGatewayToolCatalog,
   GATEWAY_NATIVE_EXACT_CONTENT_TOOLS,
   GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS,
+  gatewayNativeToolDefinitionBytes,
+  gatewayNativeToolSchemaBytes,
+  type GatewayNativeToolDefinition,
   isGatewayNativeToolAdvertisement,
 } from "./governed-tool-bridge.js";
 import type {
@@ -70,8 +73,14 @@ describe("native tool advertisement limits and exact-content tools (#3897, #4009
     expect(LIMITS.maxSchemaBytes).toBeLessThanOrEqual(LIMITS.maxTotalBytes);
   });
 
-  it("names the three workspace-content tools and cannot be altered", () => {
-    expect([...GATEWAY_NATIVE_EXACT_CONTENT_TOOLS].sort()).toEqual(["edit", "patch", "write"]);
+  it("names the workspace-content and executable-source tools and cannot be altered", () => {
+    expect([...GATEWAY_NATIVE_EXACT_CONTENT_TOOLS].sort()).toEqual([
+      "edit",
+      "execute",
+      "patch",
+      "shell",
+      "write",
+    ]);
     expect(Object.isFrozen(GATEWAY_NATIVE_EXACT_CONTENT_TOOLS)).toBe(true);
   });
 
@@ -233,25 +242,29 @@ describe("native advertisement tool list", () => {
     expect(admits(advertisement({ tools }))).toBe(false);
   });
 
-  it("admits the total schema budget exactly and rejects one unit over it", () => {
-    const full = Math.floor(LIMITS.maxTotalBytes / LIMITS.maxSchemaBytes);
-    const atBudget = Array.from({ length: full }, (_unused, index) =>
-      nativeTool(`full_${String(index)}`, {
-        parameters: parametersOfLength(LIMITS.maxSchemaBytes),
-      }),
-    );
-    expect(LIMITS.maxTotalBytes).toBe(full * LIMITS.maxSchemaBytes);
+  // #3897 review: one byte contract counts every complete tool definition as UTF-8 JSON.
+  it("admits complete definitions up to the total budget exactly and rejects one byte over it", () => {
+    const { atBudget, overByOne } = budgetEdge();
+    const sum = (tools: readonly GatewayNativeToolDefinition[]): number =>
+      tools.reduce((total, tool) => total + gatewayNativeToolDefinitionBytes(tool), 0);
+    expect(sum(atBudget)).toBe(LIMITS.maxTotalBytes);
+    expect(sum(overByOne)).toBe(LIMITS.maxTotalBytes + 1);
+    for (const tool of overByOne)
+      expect(gatewayNativeToolSchemaBytes(tool.parameters)).toBeLessThanOrEqual(
+        LIMITS.maxSchemaBytes,
+      );
     expect(admits(advertisement({ tools: atBudget }))).toBe(true);
-
-    const overByOne = [
-      ...atBudget.slice(1),
-      nativeTool("almost_full", { parameters: parametersOfLength(LIMITS.maxSchemaBytes - 1) }),
-      nativeTool("tiny", { parameters: {} }),
-    ];
     expect(admits(advertisement({ tools: overByOne }))).toBe(false);
-    expect(
-      admits(advertisement({ tools: [...atBudget, nativeTool("extra", { parameters: {} })] })),
-    ).toBe(false);
+  });
+
+  it("counts a schema in UTF-8 bytes, not UTF-16 code units", () => {
+    const characters = Math.floor(LIMITS.maxSchemaBytes / 2);
+    const parameters = { p: "\u00e9".repeat(characters) };
+    expect(JSON.stringify(parameters).length).toBeLessThan(LIMITS.maxSchemaBytes);
+    expect(gatewayNativeToolSchemaBytes(parameters)).toBeGreaterThan(LIMITS.maxSchemaBytes);
+    expect(admits(advertisement({ tools: [{ name: "read", description: "", parameters }] }))).toBe(
+      false,
+    );
   });
 });
 
@@ -367,3 +380,26 @@ describe("boundGatewayToolCatalog", () => {
     expect(boundGatewayToolCatalog(nativeAdvertisement())).toBeUndefined();
   });
 });
+
+/** A native tool whose complete UTF-8 JSON definition is exactly `bytes` (production formula). */
+function toolOfDefinitionBytes(name: string, bytes: number): GatewayNativeToolDefinition {
+  const empty = gatewayNativeToolDefinitionBytes({ name, description: "", parameters: { p: "" } });
+  return { name, description: "", parameters: { p: "x".repeat(bytes - empty) } };
+}
+
+/** Definitions that fill the total budget exactly, and the same set one byte over it. */
+function budgetEdge(): {
+  readonly atBudget: GatewayNativeToolDefinition[];
+  readonly overByOne: GatewayNativeToolDefinition[];
+} {
+  const { maxSchemaBytes, maxTotalBytes } = GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS;
+  const count = maxTotalBytes / maxSchemaBytes;
+  const atBudget = Array.from({ length: count }, (_unused, index) =>
+    toolOfDefinitionBytes(`full_${String(index)}`, maxSchemaBytes),
+  );
+  const last = `full_${String(count - 1)}`;
+  return {
+    atBudget,
+    overByOne: [...atBudget.slice(0, -1), toolOfDefinitionBytes(last, maxSchemaBytes + 1)],
+  };
+}

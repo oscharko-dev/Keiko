@@ -1,4 +1,5 @@
 import {
+  GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES,
   GATEWAY_NATIVE_EXACT_CONTENT_TOOLS,
   isGatewayNativeToolAdvertisement,
   type GatewayNativeToolAdvertisement,
@@ -289,7 +290,13 @@ function dataField(source: object, key: string): unknown {
   return descriptor.value as unknown;
 }
 function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
-  const value = captureCatalogJson(input);
+  // A native advertisement carries the runtime's whole tool set under its own byte contract; a
+  // bound catalog keeps the per-call budget (#3897 review).
+  const native =
+    typeof input === "object" && input !== null && dataField(input, "kind") === "native";
+  const value = native
+    ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
+    : captureCatalogJson(input);
   requireBridge(
     typeof value === "object" && value !== null && !Array.isArray(value),
     "projection-mismatch",

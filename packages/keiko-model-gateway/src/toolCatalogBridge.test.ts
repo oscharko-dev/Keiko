@@ -40,6 +40,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import {
+  GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS,
+  gatewayNativeToolDefinitionBytes,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const CONFIG: ModelProviderConfig = {
@@ -1311,19 +1315,31 @@ describe("native tool advertisement bridge: admission", () => {
     );
   });
 
-  it("fails closed on a shape-valid advertisement beyond the catalog capture budget", () => {
-    const description = "d".repeat(16_384);
-    const advertisementOf = (count: number): Record<string, unknown> =>
-      looseNativeAdvertisement({
-        tools: Array.from({ length: count }, (_unused, index) => ({
-          name: `tool_${String(index)}`,
-          description,
-          parameters: { type: "object" },
-        })),
+  // #3897 review: a whole native advertisement is captured under its own byte contract, not one
+  // call's 256 KiB budget, so every advertisement the server admits reaches the provider.
+  it("captures an admitted native advertisement above one call's budget and refuses one byte over", () => {
+    const { maxSchemaBytes, maxTotalBytes } = GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS;
+    const toolOf = (name: string, bytes: number): Record<string, unknown> => {
+      const empty = gatewayNativeToolDefinitionBytes({
+        name,
+        description: "",
+        parameters: { p: "" },
       });
-    const fits = Math.floor(TOOL_CATALOG_LIMITS.maxArgumentBytes / description.length) - 1;
-    expect(nativeBridge(advertisementOf(fits)).bridge.tools).toHaveLength(fits);
-    expect(() => nativeBridge(advertisementOf(fits + 3))).toThrow(
+      return { name, description: "", parameters: { p: "x".repeat(bytes - empty) } };
+    };
+    const count = maxTotalBytes / maxSchemaBytes;
+    const atBudget = Array.from({ length: count }, (_unused, index) =>
+      toolOf(`full_${String(index)}`, maxSchemaBytes),
+    );
+    expect(maxTotalBytes).toBeGreaterThan(TOOL_CATALOG_LIMITS.maxArgumentBytes);
+    expect(nativeBridge(looseNativeAdvertisement({ tools: atBudget })).bridge.tools).toHaveLength(
+      count,
+    );
+    const overByOne = [
+      ...atBudget.slice(0, -1),
+      toolOf(`full_${String(count - 1)}`, maxSchemaBytes + 1),
+    ];
+    expect(() => nativeBridge(looseNativeAdvertisement({ tools: overByOne }))).toThrow(
       expect.objectContaining({ reason: "projection-mismatch" }),
     );
   });
