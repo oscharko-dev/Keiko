@@ -3764,6 +3764,7 @@ function resolveTrustAndManagedLspControl(args: BuildPeripheralsArgs): {
 
 function adoptPortableRecoveryOwnership(
   args: BuildPeripheralsArgs,
+  updateStateDir: string,
 ): UpdateSessionRecoveryOwnership | undefined {
   const encoded = args.options.env[PORTABLE_RECOVERED_LAUNCH_ENV];
   const recovered = readPortableRecoveredLaunchDescriptor(encoded);
@@ -3779,7 +3780,7 @@ function adoptPortableRecoveryOwnership(
   const ownership =
     recovered === undefined
       ? undefined
-      : adoptStateDirUpdateSessionLockForRecovery(args.runtimeStateDir, recovered);
+      : adoptStateDirUpdateSessionLockForRecovery(updateStateDir, recovered);
   if (recovered !== undefined && ownership === undefined) {
     throw new TypeError("portable recovered launch ownership could not be adopted");
   }
@@ -3825,6 +3826,7 @@ function resolvedUpdatePreflight(
 
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
+  const updateStateDir = resolveRuntimeStateDir(args.options.env);
   const updateCandidateAuthority = createUpdateCandidateAuthority({
     activityLog: processServerLogSink(),
     diagnostics: args.options.diagnostics,
@@ -3851,14 +3853,14 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
   const debugActivationControl = buildDebugActivationControl(args);
-  const updateSessionLock = createStateDirUpdateSessionLock(args.runtimeStateDir, {
+  const updateSessionLock = createStateDirUpdateSessionLock(updateStateDir, {
     diagnostics: args.options.diagnostics,
     securityLogSink: processServerLogSink(),
   });
-  const recoveryOwnership = adoptPortableRecoveryOwnership(args);
+  const recoveryOwnership = adoptPortableRecoveryOwnership(args, updateStateDir);
   const portableHandoffRuntime = createProductionPortableHandoffRuntime({
     env: args.options.env,
-    stateDir: args.runtimeStateDir,
+    stateDir: updateStateDir,
     currentVersion: KEIKO_PRODUCT_VERSION,
     localState: updateLocalState,
     sessionLock: updateSessionLock,

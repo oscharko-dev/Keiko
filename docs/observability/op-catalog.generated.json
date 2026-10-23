@@ -96545,7 +96545,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4598",
+      "site": "packages/keiko-server/src/deps.ts:4600",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

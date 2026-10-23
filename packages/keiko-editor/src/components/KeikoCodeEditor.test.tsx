@@ -1225,10 +1225,11 @@ describe("KeikoCodeEditor — diagnostic overview markers", () => {
     expect(marker).toHaveStyle({
       width: "100%",
       height: "4px",
-      borderRadius: "999px",
-      background: "var(--ed-error, var(--feedback-danger, var(--danger)))",
-      pointerEvents: "auto",
+      "border-radius": "999px",
+      "pointer-events": "auto",
     });
+    // The DOM fixture has no theme variables; inspect the authored token instead of a computed color.
+    expect(marker.style.background).toBe("var(--ed-error, var(--feedback-danger, var(--danger)))");
     expect(screen.getByText("Type error")).toHaveClass("keiko-editor-diagnostic-tooltip-message");
     expect(screen.getByText("Line 2 · typescript(2322)")).toHaveClass(
       "keiko-editor-diagnostic-tooltip-meta",

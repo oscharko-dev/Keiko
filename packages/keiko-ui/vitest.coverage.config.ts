@@ -43,6 +43,7 @@ export default defineConfig({
       exclude: [
         "**/*.test.*",
         "**/__tests__/**",
+        "**/*.d.ts",
         "**/_support.ts",
         "**/test-support.ts",
         "**/test-fixtures.ts",

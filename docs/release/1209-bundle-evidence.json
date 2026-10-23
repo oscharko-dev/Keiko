@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 991197,
-    "loadedTotalBytes": 991197,
+    "shipsTotalBytes": 1026604,
+    "loadedTotalBytes": 1026604,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 109989,
+    "largestWorkerBytes": 110896,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 109989,
+    "largestLoadedWorkerBytes": 110896,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,8 +30,8 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 109989,
-      "path": "dist/ui/static/_next/static/chunks/3qhgsd4mwnt9v.js"
+      "gzipBytes": 110896,
+      "path": "dist/ui/static/_next/static/chunks/2vmw7uw9qfxtm.js"
     },
     {
       "label": "editor",
@@ -48,21 +48,21 @@
   "editorRuntimeChunkCount": 5,
   "editorRuntimeChunks": [
     {
-      "path": "dist/ui/static/_next/static/chunks/18voy19pok4ko.js",
-      "gzipBytes": 610474,
-      "rawBytes": 2475694,
+      "path": "dist/ui/static/_next/static/chunks/1nqe0rzxqwjkw.js",
+      "gzipBytes": 635157,
+      "rawBytes": 2569489,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3ggg2nmiwuz90.js",
-      "gzipBytes": 270460,
-      "rawBytes": 1140027,
+      "path": "dist/ui/static/_next/static/chunks/06hwq8_gunvuo.js",
+      "gzipBytes": 280277,
+      "rawBytes": 1182855,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3qhgsd4mwnt9v.js",
-      "gzipBytes": 109989,
-      "rawBytes": 359305,
+      "path": "dist/ui/static/_next/static/chunks/2vmw7uw9qfxtm.js",
+      "gzipBytes": 110896,
+      "rawBytes": 362719,
       "workerLabel": "editor"
     },
     {
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "f22610342502f63c09c10b5708786441c49311649cc65d0af0385a2621226573"
+  "measurementSha256": "129ed5728a3e49d39948d22223d298d387325ae67f34cf62286465727c1698bd"
 }
