@@ -1258,6 +1258,13 @@ export interface BuildHandlerDepsOptions {
    */
   readonly codingRuntimeResearchEgressEnabled?: boolean | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
+  /**
+   * Test seam for the gateway readiness probes (the same field as `UiHandlerDeps`), accepted at
+   * build time because the configured-conversation readiness starts during construction and
+   * derives its own dependency views before a caller could set the field on the result (#3897,
+   * coding performance fixture). Production never sets it.
+   */
+  readonly gatewayReadinessFetch?: typeof fetch | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
@@ -4809,6 +4816,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
+    ...(args.options.gatewayReadinessFetch === undefined
+      ? {}
+      : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
     dispose: createUiHandlerDispose(
       args,
       services,

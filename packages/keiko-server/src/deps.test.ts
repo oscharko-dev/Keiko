@@ -633,6 +633,19 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       env: {},
       uiDbPath: join(stateA, "keiko-ui.db"),
     });
+    // #3897: a readiness fetch seam handed to the builder reaches the built dependencies, so a
+    // fixture can answer the automatic conversation probe that starts during construction.
+    const readinessFetch: typeof fetch = () => Promise.reject(new Error("seam-only"));
+    const seamed = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(stateA, "evidence-seamed"),
+      env: {},
+      uiDbPath: join(stateA, "keiko-ui-seamed.db"),
+      gatewayReadinessFetch: readinessFetch,
+    });
+    expect(seamed.gatewayReadinessFetch).toBe(readinessFetch);
+    expect(depsA.gatewayReadinessFetch).toBeUndefined();
+    await seamed.dispose?.();
     const depsB = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: join(stateB, "evidence"),
