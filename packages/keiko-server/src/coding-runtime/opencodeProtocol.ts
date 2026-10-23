@@ -154,7 +154,7 @@ export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
 /**
  * The plan surfaces (#2480): a completed carrier part projects as a governed plan snapshot and
  * none of them ever surfaces as productive tool activity, in any tool profile. OpenCode 2.1.4
- * ships the merged `todo` tool next to the older `todowrite`/`todoread` ids (#3897).
+ * merges `todowrite`/`todoread` into one plan tool whose id is their shared prefix (#3897).
  */
 export const OPENCODE_PLAN_CARRIER_TOOLS: ReadonlySet<string> = new Set(["todowrite", "todo"]);
 export const OPENCODE_PLAN_SURFACE_TOOLS: ReadonlySet<string> = new Set([

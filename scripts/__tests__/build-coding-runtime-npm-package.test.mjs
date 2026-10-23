@@ -57,6 +57,14 @@ function write(path, body) {
 
 const HELPER = "built-helper";
 
+function catalogUpstreamVersion() {
+  const catalog = JSON.parse(
+    readFileSync(join(process.cwd(), "portable-runtime-approvals.json"), "utf8"),
+  );
+  return catalog.sidecarRuntimes.find((runtime) => runtime.name === "opencode-compatible").upstream
+    .version;
+}
+
 async function releaseFixture() {
   const root = scratch();
   const packageDir = join(root, "package");
@@ -74,7 +82,9 @@ async function releaseFixture() {
   const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
   const approval = {
     packageName: built.name,
-    upstreamVersion: "2.0.10",
+    // The receipt binds the approval to the OpenCode version the repository's portable catalog
+    // currently approves; a restated version would drift from the producer on every upgrade.
+    upstreamVersion: catalogUpstreamVersion(),
     helperSha256: built.helperSha256,
     helperSizeBytes: built.helperSizeBytes,
     helperSourceCommit: "a".repeat(40),

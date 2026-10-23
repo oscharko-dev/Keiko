@@ -184,10 +184,10 @@ is the only promotion path and preserves the current complete install on failure
 Sidecar execution authority is owned by the Coding Workbench runtime manager under ADR-0124: the
 manager launches only manifest-verified sidecar payloads from the attested managed install root.
 
-The schema-v2 OpenCode approval binds version `2.0.10` to commit
-`b8cedc1a7a5e2916bbb65dc1d4b620729c261638` and HTTP/SSE compatibility to the raw bytes of
+The schema-v2 OpenCode approval binds version `2.1.4` to commit
+`68bc26b7da1990ce10ffecfbc1e09eb13aa5d824` and HTTP/SSE compatibility to the raw bytes of
 `packages/protocol/openapi.json` at that commit (SHA-256
-`1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec`). Reformatted JSON does not
+`4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9`). Reformatted JSON does not
 satisfy this provenance. Codex is not an approved payload or support claim: pending redistribution
 or subscription-auth approval yields `redistribution-unapproved`, with no global-install fallback.
 
