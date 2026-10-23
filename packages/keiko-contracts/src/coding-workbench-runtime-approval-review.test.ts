@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
+  CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES,
+  CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS,
   unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
 } from "./coding-workbench-runtime-approval-review.js";
@@ -198,5 +200,207 @@ describe("native action review (#3897)", () => {
         },
       }),
     ).not.toEqual([]);
+  });
+});
+
+describe("native action review boundaries (#3897)", () => {
+  const NATIVE_RESOURCES_ERROR = "nativeAction.resources must be a bounded array of display text";
+  const NATIVE_PERMISSION_ERROR = "nativeAction.permission must be a bounded safe identifier";
+
+  /** A pending review for a non-edit native action: no contained paths, no changeset counts. */
+  function nativeReview(
+    nativeAction: unknown,
+    overrides: Readonly<Record<string, unknown>> = {},
+  ): Readonly<Record<string, unknown>> {
+    return activeReview({
+      nativeAction,
+      paths: [],
+      fileCount: 0,
+      addedLines: 0,
+      deletedLines: 0,
+      ...overrides,
+    });
+  }
+
+  function shellAction(
+    overrides: Readonly<Record<string, unknown>> = {},
+  ): Readonly<Record<string, unknown>> {
+    return { permission: "shell", resources: ["npm test"], ...overrides };
+  }
+
+  it("accepts a command review with no contained paths, which a plain edit review forbids", () => {
+    expect(errorsFor(nativeReview(shellAction()))).toEqual([]);
+    expect(errorsFor(activeReview({ paths: [], fileCount: 0 }))).toContain(
+      "pendingApprovalReview.paths must be a non-empty array",
+    );
+  });
+
+  it("accepts an action that names no resource", () => {
+    expect(errorsFor(nativeReview(shellAction({ resources: [] })))).toEqual([]);
+  });
+
+  it("accepts an edit ask that carries its contained paths beside the action", () => {
+    const review = nativeReview(
+      { permission: "edit", resources: ["src/a.ts", "src/b.ts"] },
+      { paths: ["src/a.ts", "src/b.ts"], fileCount: 2, addedLines: 4, deletedLines: 2 },
+    );
+    expect(errorsFor(review)).toEqual([]);
+  });
+
+  it("accepts a truncated path list whose declared file count exceeds what it carries", () => {
+    const review = nativeReview(
+      { permission: "edit", resources: ["src/a.ts"] },
+      { paths: ["src/a.ts"], pathsTruncated: true, fileCount: 7 },
+    );
+    expect(errorsFor(review)).toEqual([]);
+  });
+
+  it("still checks the shared counts and truncation flag of a native review", () => {
+    expect(errorsFor(nativeReview(shellAction(), { fileCount: 3 }))).toContain(
+      "pendingApprovalReview.fileCount must match the carried path list",
+    );
+    expect(errorsFor(nativeReview(shellAction(), { pathsTruncated: "no" }))).toContain(
+      "pendingApprovalReview.pathsTruncated must be a boolean",
+    );
+    expect(errorsFor(nativeReview(shellAction(), { addedLines: -1 }))).toContain(
+      "pendingApprovalReview.addedLines must be a bounded non-negative integer",
+    );
+  });
+
+  it.each([
+    ["a string", "shell"],
+    ["null", null],
+    ["an array", ["shell", ["npm test"]]],
+    ["a number", 1],
+  ])("rejects a native action that is %s", (_label, nativeAction) => {
+    expect(errorsFor(nativeReview(nativeAction))).toEqual(["nativeAction must be an object"]);
+  });
+
+  it("names an unknown key of the native action", () => {
+    expect(errorsFor(nativeReview(shellAction({ command: "rm -rf /" })))).toContain(
+      "nativeAction.command is not allowed",
+    );
+  });
+
+  it("accepts a permission of 64 characters and rejects one of 65", () => {
+    const atLimit = `p${"a".repeat(63)}`;
+    expect(errorsFor(nativeReview(shellAction({ permission: atLimit })))).toEqual([]);
+    expect(errorsFor(nativeReview(shellAction({ permission: `${atLimit}a` })))).toEqual([
+      NATIVE_PERMISSION_ERROR,
+    ]);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["a number", 1],
+    ["empty", ""],
+    ["starting with a separator", "-shell"],
+    ["containing a space", "not a permission"],
+    ["containing a slash", "tool/shell"],
+    ["containing markup", "<b>shell</b>"],
+  ])("rejects a permission that is %s", (_label, permission) => {
+    expect(errorsFor(nativeReview(shellAction({ permission })))).toEqual([NATIVE_PERMISSION_ERROR]);
+  });
+
+  it("accepts the maximum number of resources and rejects one more", () => {
+    const resources = (count: number): string[] =>
+      Array.from({ length: count }, (_unused, index) => `src/f${String(index)}.ts`);
+    const max = CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES;
+    expect(errorsFor(nativeReview(shellAction({ resources: resources(max) })))).toEqual([]);
+    expect(errorsFor(nativeReview(shellAction({ resources: resources(max + 1) })))).toEqual([
+      NATIVE_RESOURCES_ERROR,
+    ]);
+  });
+
+  it("accepts a resource of the maximum length, and an empty one, and rejects one more character", () => {
+    const max = CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS;
+    expect(errorsFor(nativeReview(shellAction({ resources: ["x".repeat(max), ""] })))).toEqual([]);
+    expect(errorsFor(nativeReview(shellAction({ resources: ["x".repeat(max + 1)] })))).toEqual([
+      NATIVE_RESOURCES_ERROR,
+    ]);
+  });
+
+  it("keeps a multi-line command reviewable but refuses text that can spoof the display", () => {
+    expect(
+      errorsFor(nativeReview(shellAction({ resources: ["npm test\n\tnpm run lint"] }))),
+    ).toEqual([]);
+    for (const spoof of [
+      "rm\u202E -rf",
+      "ok\u200Bnot",
+      "nul\0byte",
+      "bell\u0007",
+      "line\u2028sep",
+    ]) {
+      expect(errorsFor(nativeReview(shellAction({ resources: ["npm test", spoof] })))).toEqual([
+        NATIVE_RESOURCES_ERROR,
+      ]);
+    }
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["null", null],
+    ["a string", "npm test"],
+    ["an object", { 0: "npm test" }],
+    ["an array holding a number", ["npm test", 1]],
+    ["an array holding null", [null]],
+    ["an array holding an object", [{ command: "npm test" }]],
+  ])("rejects resources that are %s", (_label, resources) => {
+    expect(errorsFor(nativeReview(shellAction({ resources })))).toEqual([NATIVE_RESOURCES_ERROR]);
+  });
+
+  it.each([
+    ["a delivery review", { draftDelivery: {} }],
+    ["a verified commit", { verifiedCommit: { result: {}, message: "x" } }],
+  ])("refuses a native action that also carries %s", (_label, authority) => {
+    expect(errorsFor(nativeReview(shellAction(), authority))).toContain(
+      "a native action review cannot carry delivery or commit authority",
+    );
+  });
+
+  it("routes a review without a native action but with a delivery draft to delivery validation", () => {
+    const errors = errorsFor(activeReview({ draftDelivery: {} }));
+    expect(errors).toContain("draftDelivery must match the exact pending proposal");
+    expect(errors).toContain("delivery review must not claim workspace edit counts");
+    expect(errors).not.toContain(
+      "a native action review cannot carry delivery or commit authority",
+    );
+  });
+
+  it("rejects a native review whose path list is missing or not an array", () => {
+    const { paths: _dropped, ...withoutPaths } = (
+      nativeReview(shellAction()) as { readonly pending: Record<string, unknown> }
+    ).pending;
+    expect(errorsFor({ session: "active", pending: withoutPaths })).toContain(
+      "pendingApprovalReview.paths must be an array",
+    );
+    expect(errorsFor(nativeReview(shellAction(), { paths: "src/a.ts" }))).toContain(
+      "pendingApprovalReview.paths must be an array",
+    );
+    expect(errorsFor(nativeReview(shellAction(), { paths: null }))).toContain(
+      "pendingApprovalReview.paths must be an array",
+    );
+  });
+
+  it("holds the contained paths of a native review to the shared path rules", () => {
+    const invalid = nativeReview(
+      { permission: "edit", resources: ["../outside.ts"] },
+      { paths: ["../outside.ts"], fileCount: 1 },
+    );
+    expect(errorsFor(invalid)).toContain(
+      "pendingApprovalReview.paths[0] is not a contained relative path",
+    );
+    const duplicated = nativeReview(shellAction(), {
+      paths: ["src/a.ts", "src/a.ts"],
+      fileCount: 2,
+    });
+    expect(errorsFor(duplicated)).toContain("pendingApprovalReview.paths must be unique");
+    const tooMany = Array.from(
+      { length: CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS + 1 },
+      (_value, index) => `src/f${String(index)}.ts`,
+    );
+    expect(
+      errorsFor(nativeReview(shellAction(), { paths: tooMany, fileCount: tooMany.length })),
+    ).toContain("pendingApprovalReview.paths exceeds the reviewable path cap");
   });
 });
