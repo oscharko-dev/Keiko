@@ -192,6 +192,38 @@ async function handleFoundationRoute(
   return false;
 }
 
+async function handleRepositoryFixtureRead(route: Route, pathname: string): Promise<boolean> {
+  const workspace = activeWorkspace().instance;
+  if (pathname === "/api/projects") {
+    await fulfillJson(route, {
+      projects: [
+        {
+          path: workspace.repositoryRoot,
+          name: "workspace",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+          workspaceAvailable: true,
+        },
+      ],
+    });
+    return true;
+  }
+  if (pathname !== "/api/git/branches") return false;
+  if (new URL(route.request().url()).searchParams.get("root") !== workspace.repositoryRoot)
+    return false;
+  await fulfillJson(route, {
+    schemaVersion: "1",
+    root: workspace.repositoryRoot,
+    available: true,
+    state: "available",
+    branches: [{ name: workspace.baseBranch, headRefHash: "a".repeat(40), current: true }],
+    truncated: false,
+  });
+  return true;
+}
+
 async function handleCodexSetupRoute(
   route: Route,
   pathname: string,
@@ -444,6 +476,7 @@ export async function installRuntimeRoutes(
     if (await handleEditorSnapshotRoute(route, pathname, fixture)) return;
     if (await handleCodexSetupRoute(route, pathname, fixture)) return;
     if (route.request().method() === "GET") {
+      if (await handleRepositoryFixtureRead(route, pathname)) return;
       if (await handleRuntimeGet(route, pathname, searchParams, runtimeOptions, fixture)) return;
     } else if (route.request().method() === "POST") {
       if (await handleRuntimePost(route, pathname, fixture)) return;

@@ -29,6 +29,8 @@ import {
   verifyLinuxQualificationRehearsalBundle,
 } from "../../packages/keiko-server/src/coding-runtime/linuxPortableSigstore.ts";
 import { runSignLinuxRuntimeQualificationCli } from "../sign-linux-runtime-qualification.mjs";
+import { MAX_PORTABLE_MANIFEST_BYTES } from "../../packages/keiko-server/src/update-portable-staging-shared.ts";
+import { parseStableVersion } from "../lib/stable-version.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TARGET = "linux-x64";
@@ -151,6 +153,62 @@ describe("linux-portable-signing CLI module graph", () => {
 });
 
 describe("Linux portable qualification sealing", () => {
+  it("accepts the actual published-release catalog within the installed manifest bound", () => {
+    const value = fixture();
+    const candidate = manifest();
+    const catalog = JSON.parse(readFileSync("release-impact.catalog.json", "utf8"));
+    candidate.releaseImpact.catalog = {
+      schemaVersion: catalog.schemaVersion,
+      entries: catalog.entries.filter(
+        (entry) => parseStableVersion(entry.packageVersion) !== undefined,
+      ),
+    };
+    const bytes = `${JSON.stringify(candidate, null, 2)}\n`;
+    expect(Buffer.byteLength(bytes)).toBeGreaterThan(262_144);
+    expect(Buffer.byteLength(bytes)).toBeLessThanOrEqual(MAX_PORTABLE_MANIFEST_BYTES);
+    writeFileSync(join(value.stageRoot, "manifest", "portable-manifest.json"), bytes);
+
+    const deps = dependencies(value.receipt);
+    expect(() => prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), deps)).not.toThrow();
+    expect(deps.rebindSignedPayload).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 1])("enforces the installed manifest byte boundary plus %s", (extraByte) => {
+    const value = fixture();
+    const path = join(value.stageRoot, "manifest", "portable-manifest.json");
+    const bytes = readFileSync(path, "utf8");
+    writeFileSync(
+      path,
+      bytes + " ".repeat(MAX_PORTABLE_MANIFEST_BYTES + extraByte - Buffer.byteLength(bytes)),
+    );
+    const deps = dependencies(value.receipt);
+    const prepare = () => prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), deps);
+    if (extraByte === 0) {
+      expect(prepare).not.toThrow();
+      expect(deps.rebindSignedPayload).toHaveBeenCalledOnce();
+    } else {
+      expect(prepare).toThrow("manifest is invalid");
+      expect(deps.rebindSignedPayload).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["runtime-qualification.json", "runtime-qualification.sigstore.json"])(
+    "keeps the smaller qualification metadata bound for %s",
+    async (name) => {
+      const value = fixture();
+      const deps = dependencies(value.receipt);
+      prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), deps);
+      const path = join(value.resourceRoot, ".portable", name);
+      const bytes = readFileSync(path, "utf8");
+      writeFileSync(path, bytes + " ".repeat(262_145 - Buffer.byteLength(bytes)));
+
+      await expect(
+        finalizeLinuxQualifiedPayload(optionsFor(value.stageRoot), deps),
+      ).rejects.toThrow("is invalid");
+      expect(deps.verifyQualificationBundle).not.toHaveBeenCalled();
+    },
+  );
+
   it("parses every command and rejects malformed CLI arguments", () => {
     for (const command of ["prepare", "finalize", "verify"]) {
       expect(

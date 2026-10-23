@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { prepareLinuxQualifiedPayload } from "../linux-portable-signing.mjs";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
@@ -3508,6 +3509,12 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       expect(
         sbom.components.find((entry) => entry.name === "keiko-runtime-supervisor").hashes,
       ).toContainEqual({ alg: "SHA-256", content: helper.shippedSha256 });
+      prepareLinuxQualifiedPayload({ "stage-root": root });
+      const prepared = JSON.parse(
+        readFileSync(join(root, "manifest", "portable-manifest.json"), "utf8"),
+      );
+      expect(prepared.runtimeActivation.trustAnchor).toBe("sigstore-qualification-receipt");
+      expect(prepared.releaseImpact.catalog).toEqual(stage.manifest.releaseImpact.catalog);
     },
     STAGE_COMMAND_TIMEOUT_MS,
   );

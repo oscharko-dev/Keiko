@@ -3623,7 +3623,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-10-21",
         "humanApproved": true,
-        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4056#issuecomment-6323955124",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4056#6323955124",
         "rationale": "The owner explicitly requested release 1.2.6 after updater repair and verification, followed by a live SSD update from the current Latest installation after successful deployment. This entry covers PR #4056 and issue #4055. Publication remains conditional on applicable local gates, exact-head required checks, accepted review findings and the protected release workflow. Full-package fixture updates and the existing SSD bootstrap are recorded separately; the requested production-release SSD update remains post-deployment acceptance. The same release preparation patches development-only Vitest tooling to 4.1.12 after the required OSV scan reported two newly indexed mocker advisories; no security waiver or quality threshold is changed."
       },
       "breakingException": {
