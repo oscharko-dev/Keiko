@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "83cb51e42d3a44151cbce10dc584c331e25dfc6298c8b5b3e461c9daa2bd56bc",
+    "catalogDigest": "c55e8cbf256e79477da8b84a2ff4a3b8cc2ffb5fdc2de735b4418a9ef5a19561",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8600,11 +8600,25 @@
             "dataClass": "count",
             "required": false
           },
+          "requestId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 128
+          },
+          "inputBinding": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["bound", "reused", "unreconciled"]
+          },
           "reason": {
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
             "values": [
+              "delivery-refused",
+              "delivery-unconfirmed",
               "delivery-unsupported",
               "reference-invalid",
               "reference-not-file",
@@ -8616,6 +8630,7 @@
               "references-prompt-budget",
               "references-run-budget",
               "references-unsupported",
+              "request-conflict",
               "run-unavailable",
               "turn-not-running"
             ]
@@ -8627,8 +8642,8 @@
         "failureClasses": ["coding-runtime-prompt-inputs"],
         "proofIds": ["coding-runtime.prompt-inputs.settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:248",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:316"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:268",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:364"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -11248,7 +11263,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:100",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1015"
+          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1018"
         ]
       },
       {
@@ -28966,7 +28981,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:129",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1471"
+          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1474"
         ]
       },
       {
@@ -58105,6 +58120,12 @@
                   "required": true
                 },
                 {
+                  "name": "inputBinding",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -58121,6 +58142,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "requestId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": false
                 },
                 {
                   "name": "runId",
@@ -95751,7 +95778,7 @@
     {
       "op": "coding-runtime.prompt-inputs.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:251",
+      "site": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:271",
       "package": "keiko-server"
     },
     {
@@ -95987,7 +96014,7 @@
     {
       "op": "coding-runtime.task-dispatch",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1001",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1004",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

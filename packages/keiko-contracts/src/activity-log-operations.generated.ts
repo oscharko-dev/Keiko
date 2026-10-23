@@ -8213,11 +8213,25 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      requestId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+      inputBinding: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["bound", "reused", "unreconciled"],
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",
         required: false,
         values: [
+          "delivery-refused",
+          "delivery-unconfirmed",
           "delivery-unsupported",
           "reference-invalid",
           "reference-not-file",
@@ -8229,6 +8243,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "references-prompt-budget",
           "references-run-budget",
           "references-unsupported",
+          "request-conflict",
           "run-unavailable",
           "turn-not-running",
         ],

@@ -448,6 +448,17 @@ function v2Json(value: unknown): Response {
   });
 }
 
+/**
+ * The producer's receipt for a prompt: it echoes the message id the body carried (the pinned
+ * `Session.Inbox.User`), which the client reconciles against the id it sent; a prompt without an id
+ * keeps the empty receipt it always had.
+ */
+function promptReceipt(path: string, body: BodyInit | null | undefined): Record<string, unknown> {
+  const sent: unknown = typeof body === "string" ? JSON.parse(body) : undefined;
+  const id = typeof sent === "object" && sent !== null ? (sent as { id?: unknown }).id : undefined;
+  return typeof id === "string" ? { id, sessionID: path.split("/")[3] ?? "", type: "user" } : {};
+}
+
 function v2Envelope(value: unknown): Response {
   return v2Json({ data: value });
 }
@@ -947,7 +958,7 @@ async function startBridgeFixture(
       } else if (typeof init?.body === "string") {
         control?.runControl?.promptBodies.push(init.body);
       }
-      return Promise.resolve(v2Envelope({}));
+      return Promise.resolve(v2Envelope(promptReceipt(path, init?.body)));
     }
     if (path.endsWith("/agent")) {
       control?.runControl?.agentRequests?.push({
@@ -3469,8 +3480,15 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
       await vi.waitFor(() => {
         expect(settled).toEqual(["edit"]);
       });
-      writeFileSync(file, "a human edit after it\n");
       const port = fixture.runtime.runPort;
+      // Healthy control first: with the file as the native edit wrote it, the undo stages, and the
+      // undo waits for the edit's image, so the human edit below lands after it was taken.
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+      });
+      revert.requests.length = 0;
+      writeFileSync(file, "a human edit after it\n");
       await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
         ok: false,
         reason: "workspace-changed",
@@ -3478,9 +3496,6 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
       expect(revert.requests.map(({ path }) => path)).not.toContain(
         "/api/session/ses_tool/revert/stage",
       );
-      // Healthy control: with the file as the native edit wrote it, the undo stages.
-      writeFileSync(file, "as the native edit wrote it\n");
-      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
     } finally {
       await fixture.stop();
     }
@@ -6707,14 +6722,16 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         port.deliverPrompt?.(FIXTURE_RUN_ID, "also read @notes.md", admitted.inputs),
       ).resolves.toBe(true);
 
-      expect(promptBodies).toEqual([
-        JSON.stringify({ text: "first task" }),
-        JSON.stringify({
-          text: "also read @notes.md",
-          files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
-          delivery: "steer",
-        }),
-      ]);
+      // The turn's own prompt keeps its exact body; a delivery additionally carries the producer's
+      // supported message id (ADR-0137 D10), which is what makes a retry of it the same input.
+      expect(promptBodies).toHaveLength(2);
+      expect(promptBodies[0]).toBe(JSON.stringify({ text: "first task" }));
+      expect(JSON.parse(promptBodies[1] ?? "null")).toEqual({
+        text: "also read @notes.md",
+        id: expect.stringMatching(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u) as unknown,
+        files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+        delivery: "steer",
+      });
       expect(inputLines(activityLog)).toMatchObject([
         {
           runId: FIXTURE_RUN_ID,
@@ -6722,6 +6739,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
           delivery: "steer",
           referenceCount: 1,
           attachedBytes: "NOTES-CANARY\n".length,
+          inputBinding: "bound",
         },
       ]);
       // The turn the message joined is still the one in flight: a second turn cannot be armed,
@@ -6745,7 +6763,11 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       await expect(
         port.deliverPrompt?.(FIXTURE_RUN_ID, "after this turn", admitted.inputs),
       ).resolves.toBe(true);
-      expect(promptBodies[1]).toBe(JSON.stringify({ text: "after this turn", delivery: "queue" }));
+      expect(JSON.parse(promptBodies[1] ?? "null")).toEqual({
+        text: "after this turn",
+        id: expect.stringMatching(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u) as unknown,
+        delivery: "queue",
+      });
     } finally {
       await fixture.stop();
     }

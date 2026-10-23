@@ -11,8 +11,18 @@ import {
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
-import { resolvePromptReferences } from "./opencodePromptInputs.js";
+import {
+  createOpenCodePromptInputsRunPort,
+  openCodePromptInputs,
+  resolvePromptReferences,
+  type PromptInputsRun,
+} from "./opencodePromptInputs.js";
+import {
+  createProductionRuntimeOperationGuard,
+  createProductionRuntimeTaskDispatcher,
+} from "./productionCodingRuntimePorts.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
@@ -311,6 +321,9 @@ interface Run {
   readonly fixture: Fixture;
   readonly gateway: GatewayStub;
   readonly client: OpenCodeV2HttpClient;
+  /** The running service, for a second client whose transport the test controls. */
+  readonly endpoint: string;
+  readonly password: string;
   readonly sessionId: string;
   /** The type of every runtime event observed on the event stream, in order. */
   readonly events: string[];
@@ -360,7 +373,16 @@ async function withRun(
       });
       return { status: response.status, body: (await response.json()) as unknown };
     };
-    await body({ fixture, gateway, client, sessionId: session.id, events, raw });
+    await body({
+      fixture,
+      gateway,
+      client,
+      endpoint,
+      password: launched.password,
+      sessionId: session.id,
+      events,
+      raw,
+    });
   } finally {
     stream.abort();
     await stopChild(launched.child);
@@ -394,6 +416,102 @@ async function settled(run: Run): Promise<void> {
   await expect
     .poll(() => count(run.events, "session.execution.succeeded"), { timeout: 30_000 })
     .toBe(1);
+}
+
+const RUN_ID = "run-prompt-inputs";
+
+/**
+ * A transport that loses the acknowledgement of the first `delivery` post AFTER the producer has
+ * answered it in full: the request went out, the producer stored the input, and the answer never
+ * reaches the caller. This is the failure the operator's retry has to resolve without a second input.
+ */
+function acknowledgementLosingFetch(state: { lost: number }): typeof globalThis.fetch {
+  return async (input, init): Promise<Response> => {
+    const response = await fetch(input, init);
+    const sent = typeof init?.body === "string" ? init.body : "";
+    if (response.url.endsWith("/prompt") && sent.includes('"delivery"') && state.lost === 0) {
+      state.lost += 1;
+      await response.arrayBuffer();
+      throw new TypeError("fetch failed");
+    }
+    return response;
+  };
+}
+
+/**
+ * Keiko's own delivery path over the real session: the run port that binds the operator request to
+ * the producer's message id, behind the production task dispatcher and its operation guard, which
+ * give the stale-revision, single-use request id and cancellation semantics of a Workbench request.
+ */
+interface DeliveryPath {
+  readonly port: ReturnType<typeof createOpenCodePromptInputsRunPort>;
+  readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+  readonly controller: AbortController;
+  readonly deliver: (
+    requestId: string,
+    expectedRevision: number,
+    taskIntent: string,
+    delivery?: "steer" | "queue",
+  ) => Promise<{ readonly ok: boolean; readonly reason?: string | undefined }>;
+}
+
+function deliveryPath(
+  run: Run,
+  client: OpenCodeV2HttpClient,
+  turnInFlight: () => boolean = (): boolean => true,
+): DeliveryPath {
+  const sink = createBufferedServerLogSink();
+  const promptRun: PromptInputsRun = {
+    runId: RUN_ID,
+    workspaceRoot: run.fixture.workspace,
+    sessionId: run.sessionId,
+    client,
+    runtimeAdapter: { turnInFlight },
+    ready: true,
+  };
+  const port = createOpenCodePromptInputsRunPort({
+    readyRun: (): PromptInputsRun => promptRun,
+    capabilities: openCodePromptInputs("native"),
+    activityLog: sink,
+    recordPostFailure: (): void => undefined,
+  });
+  const controller = new AbortController();
+  const dispatcher = createProductionRuntimeTaskDispatcher(
+    new Map([
+      [
+        RUN_ID,
+        {
+          turnPort: {
+            submitTurn: (): Promise<boolean> => Promise.resolve(false),
+            abortTurn: (): Promise<boolean> => Promise.resolve(true),
+            waitForTerminal: (): Promise<"succeeded"> => Promise.resolve("succeeded" as const),
+            admitPromptInputs: port.admitPromptInputs,
+            deliverPrompt: port.deliverPrompt,
+          },
+          controller,
+          operationGuard: createProductionRuntimeOperationGuard(RUN_ID, (): boolean => true),
+        },
+      ],
+    ]),
+    { record: (): void => undefined },
+  );
+  const deliver = dispatcher.deliver;
+  if (deliver === undefined) throw new Error("fixture-deliver-missing");
+  return {
+    port,
+    sink,
+    controller,
+    deliver: (requestId, expectedRevision, taskIntent, delivery = "queue") =>
+      deliver({ runId: RUN_ID, requestId, expectedRevision, taskIntent, delivery }),
+  };
+}
+
+/** The user messages of the session's history that carry exactly this text. */
+async function userMessagesWith(run: Run, text: string): Promise<readonly string[]> {
+  const messages = await run.client.messages(run.sessionId);
+  return messages
+    .filter((message) => message.type === "user" && message.text === text)
+    .map((message) => String(message.id));
 }
 
 describe("pinned native OpenCode prompt inputs", () => {
@@ -482,6 +600,231 @@ describe("pinned native OpenCode prompt inputs", () => {
         });
         await settled(run);
         expect(run.gateway.requests).toHaveLength(1);
+        expect(count(run.events, "session.execution.started")).toBe(1);
+      });
+    },
+    120_000,
+  );
+
+  // PR #4064 review (ADR-0137 D10): the producer stores ONE input per supported `Session.Message.ID`.
+  // The control proves the hazard the binding removes; the tests after it prove Keiko's path.
+  it.skipIf(skip)(
+    "control: a post resent without an id stores a second input, one resent with the id does not",
+    async () => {
+      await withRun(["tool-held", "text", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const queue = { delivery: "queue" } as const;
+
+        await run.client.prompt(run.sessionId, "Unbound", undefined, undefined, queue);
+        await run.client.prompt(run.sessionId, "Unbound", undefined, undefined, queue);
+        const id = "msg_16b08469d001DaT0xxHG2PAKe6";
+        await run.client.prompt(run.sessionId, "Bound", undefined, undefined, { ...queue, id });
+        await run.client.prompt(run.sessionId, "Bound", undefined, undefined, { ...queue, id });
+        run.gateway.release();
+        await settled(run);
+
+        expect(await userMessagesWith(run, "Unbound")).toHaveLength(2);
+        expect(await userMessagesWith(run, "Bound")).toEqual([id]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps one productive queued input when the acknowledgement is lost and the same request is retried",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const lost = { lost: 0 };
+        const lossy = createOpenCodeV2HttpClient({
+          endpoint: run.endpoint,
+          password: run.password,
+          fetch: acknowledgementLosingFetch(lost),
+        });
+        const path = deliveryPath(run, lossy);
+
+        // The producer accepted the message; its answer was lost, so Keiko cannot tell.
+        await expect(path.deliver("req-1", 4, "Queued message")).resolves.toEqual({ ok: false });
+        expect(lost.lost).toBe(1);
+        // The human retries the same request at the same revision.
+        await expect(path.deliver("req-1", 4, "Queued message")).resolves.toEqual({ ok: true });
+        // A third replay after the known success is refused and sends nothing.
+        await expect(path.deliver("req-1", 4, "Queued message")).resolves.toEqual({ ok: false });
+        await expect(path.deliver("req-1", 5, "Queued message")).resolves.toEqual({ ok: false });
+
+        run.gateway.release();
+        await settled(run);
+
+        expect(await userMessagesWith(run, "Queued message")).toHaveLength(1);
+        // The tool step finished without the message; it reached the model once, after the answer.
+        expect(run.gateway.requests).toHaveLength(3);
+        const last = conversation(run.gateway.requests[2]);
+        expect(last.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+          "assistant",
+          "user",
+        ]);
+        expect(last.at(-1)?.content).toContain("Queued message");
+        // Terminal ordering is the producer's: one execution served the first prompt and the queued
+        // input, and it settled once, after the queued input was answered.
+        expect(count(run.events, "session.execution.started")).toBe(1);
+        expect(count(run.events, "session.execution.succeeded")).toBe(1);
+        expect(count(run.events, "session.inbox.enqueued"), "the retry stored no second copy").toBe(
+          2,
+        );
+        const lines = path.sink.events.map((event) => (event as { extra?: unknown }).extra);
+        expect(lines).toMatchObject([
+          { outcome: "refused", reason: "delivery-unconfirmed", inputBinding: "bound" },
+          { outcome: "accepted", inputBinding: "reused", requestId: "req-1" },
+        ]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps one productive steered input when the retry arrives after the running turn consumed it",
+    async () => {
+      await withRun(["tool-held", "text-held", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const lost = { lost: 0 };
+        const path = deliveryPath(
+          run,
+          createOpenCodeV2HttpClient({
+            endpoint: run.endpoint,
+            password: run.password,
+            fetch: acknowledgementLosingFetch(lost),
+          }),
+        );
+
+        await expect(path.deliver("req-1", 4, "Steered message", "steer")).resolves.toEqual({
+          ok: false,
+        });
+        // The running turn takes the steered message with its next model request, which stays held
+        // so the turn is still running when the retry arrives.
+        run.gateway.release();
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(2);
+        expect(lastUserContent(run.gateway.requests[1])).toContain("Steered message");
+
+        await expect(path.deliver("req-1", 4, "Steered message", "steer")).resolves.toEqual({
+          ok: true,
+        });
+        run.gateway.release();
+        await settled(run);
+
+        expect(await userMessagesWith(run, "Steered message")).toHaveLength(1);
+        expect(
+          run.gateway.requests,
+          "the retry did not reach the model a second time",
+        ).toHaveLength(2);
+        expect(count(run.events, "session.execution.started")).toBe(1);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "stores distinct requests as distinct inputs under ascending ids that follow the producer's own",
+    async () => {
+      await withRun(["tool-held", "text", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = deliveryPath(run, run.client);
+
+        await expect(path.deliver("req-1", 4, "Queued one")).resolves.toEqual({ ok: true });
+        await expect(path.deliver("req-2", 5, "Queued two")).resolves.toEqual({ ok: true });
+        run.gateway.release();
+        await settled(run);
+
+        const [first] = await userMessagesWith(run, "First prompt");
+        const [one] = await userMessagesWith(run, "Queued one");
+        const [two] = await userMessagesWith(run, "Queued two");
+        expect(
+          [first, one, two].every((id) => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u.test(id ?? "")),
+        ).toBe(true);
+        expect((one ?? "") > (first ?? ""), "after the session's earlier message").toBe(true);
+        expect((two ?? "") > (one ?? ""), "after the earlier request").toBe(true);
+        expect(run.gateway.requests).toHaveLength(4);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "frees the request when the producer itself refused the message, and the retry stores one input",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = deliveryPath(run, run.client);
+        const request = {
+          delivery: "queue" as const,
+          references: [{ path: NOTES_FILE }],
+          requestId: "req-1",
+        };
+        const admitted = path.port.admitPromptInputs(RUN_ID, request);
+        if (!admitted.ok) throw new Error("expected admission");
+
+        // The file vanishes between admission and the send: the producer answers 400 and stores nothing.
+        const notes = join(run.fixture.workspace, NOTES_FILE);
+        const content = `${NOTES_CANARY}\n`;
+        rmSync(notes);
+        await expect(
+          path.port.deliverPrompt(RUN_ID, "See the notes", admitted.inputs),
+        ).resolves.toBe(false);
+        expect(await userMessagesWith(run, "See the notes")).toHaveLength(0);
+
+        writeFileSync(notes, content);
+        await expect(
+          path.port.deliverPrompt(RUN_ID, "See the notes", admitted.inputs),
+        ).resolves.toBe(true);
+        run.gateway.release();
+        await settled(run);
+
+        expect(await userMessagesWith(run, "See the notes")).toHaveLength(1);
+        const lines = path.sink.events.map((event) => (event as { extra?: unknown }).extra);
+        expect(lines).toMatchObject([
+          { outcome: "refused", reason: "delivery-refused", inputBinding: "bound" },
+          { outcome: "accepted", inputBinding: "bound" },
+        ]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "sends nothing for a retry once the turn was cancelled, and leaves the settled turn alone",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const lost = { lost: 0 };
+        const inFlight = { value: true };
+        const path = deliveryPath(
+          run,
+          createOpenCodeV2HttpClient({
+            endpoint: run.endpoint,
+            password: run.password,
+            fetch: acknowledgementLosingFetch(lost),
+          }),
+          () => inFlight.value,
+        );
+
+        await expect(path.deliver("req-1", 4, "Queued message")).resolves.toEqual({ ok: false });
+        inFlight.value = false;
+        path.controller.abort();
+        await expect(path.deliver("req-1", 4, "Queued message")).resolves.toMatchObject({
+          ok: false,
+        });
+        run.gateway.release();
+        await settled(run);
+
+        expect(await userMessagesWith(run, "Queued message")).toHaveLength(1);
         expect(count(run.events, "session.execution.started")).toBe(1);
       });
     },

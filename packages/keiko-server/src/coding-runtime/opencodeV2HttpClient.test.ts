@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  OpenCodeV2HttpStatusError,
+  OpenCodeV2PromptRefusedError,
+  OpenCodeV2ReceiptMismatchError,
+  classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
 } from "./opencodeV2HttpClient.js";
@@ -300,6 +304,180 @@ describe("OpenCode V2 prompt inputs", () => {
     await expect(
       client.prompt("ses_prompt_1", "t", undefined, undefined, { delivery: "queue" }),
     ).rejects.toThrow("opencode-v2-response-invalid");
+  });
+});
+
+// A delivery whose acknowledgement is lost must be retried under the SAME native message id: the
+// client sends the id the caller bound, reconciles the receipt against it, and classifies every
+// failure by what it proves about the producer's side (PR #4064 review, ADR-0137 D10).
+describe("OpenCode V2 prompt identity", () => {
+  const SESSION = "ses_prompt_1";
+  const MESSAGE = "msg_16b08469d001DaT0xxHG2PAKe6";
+
+  const receipt = (overrides: Record<string, unknown> = {}): Response =>
+    new Response(
+      JSON.stringify({
+        data: { id: MESSAGE, sessionID: SESSION, type: "user", delivery: "queue", ...overrides },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  function clientFor(respond: () => Promise<Response>): {
+    readonly client: ReturnType<typeof createOpenCodeV2HttpClient>;
+    readonly fetch: ReturnType<typeof vi.fn<typeof globalThis.fetch>>;
+  } {
+    const fetch = vi.fn<typeof globalThis.fetch>(respond);
+    return {
+      client: createOpenCodeV2HttpClient({
+        endpoint: "http://127.0.0.1:1984/",
+        password: "test-only",
+        fetch,
+      }),
+      fetch,
+    };
+  }
+
+  const send = (client: ReturnType<typeof createOpenCodeV2HttpClient>): Promise<void> =>
+    client.prompt(SESSION, "also this", undefined, undefined, { id: MESSAGE, delivery: "queue" });
+
+  async function failureOf(promise: Promise<unknown>): Promise<unknown> {
+    try {
+      await promise;
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the prompt to fail");
+  }
+
+  it("sends the message id beside the text and accepts the receipt that names it", async () => {
+    const { client, fetch } = clientFor(() => Promise.resolve(receipt()));
+    await expect(send(client)).resolves.toBeUndefined();
+    const sent = fetch.mock.calls[0]?.[1]?.body;
+    expect(typeof sent === "string" ? JSON.parse(sent) : undefined).toEqual({
+      text: "also this",
+      id: MESSAGE,
+      delivery: "queue",
+    });
+  });
+
+  it.each([
+    ["an id other than the one sent", { id: "msg_16b08469d002OTHEROTHEROTH" }],
+    ["another session", { sessionID: "ses_other_1" }],
+    ["no id at all", { id: undefined }],
+  ])(
+    "fails as accepted-under-another-identity when the receipt names %s",
+    async (_label, change) => {
+      const { client } = clientFor(() => Promise.resolve(receipt(change)));
+      const error = await failureOf(send(client));
+      expect(error).toBeInstanceOf(OpenCodeV2ReceiptMismatchError);
+      expect(classifyOpenCodeV2PromptFailure(error)).toBe("receipt-mismatch");
+    },
+  );
+
+  it("does not hold a prompt that carries no id to a receipt", async () => {
+    const { client } = clientFor(() => Promise.resolve(receipt({ id: "msg_anything" })));
+    await expect(client.prompt(SESSION, "plain")).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["a malformed id", { id: "not-a-message-id" }],
+    ["an id with a path separator", { id: "msg_a/../b" }],
+    ["an oversized id", { id: `msg_${"a".repeat(252)}` }],
+  ])("refuses %s before any request leaves the process", async (_label, inputs) => {
+    const { client, fetch } = clientFor(() => Promise.resolve(receipt()));
+    const error = await failureOf(client.prompt(SESSION, "t", undefined, undefined, inputs));
+    expect(error).toBeInstanceOf(OpenCodeV2PromptRefusedError);
+    expect((error as Error).message).toBe("opencode-v2-message-invalid");
+    expect(classifyOpenCodeV2PromptFailure(error)).toBe("not-submitted");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps every pre-send refusal's own message and classifies it as not submitted", async () => {
+    const { client, fetch } = clientFor(() => Promise.resolve(receipt()));
+    const cases: readonly [Promise<unknown>, string][] = [
+      [client.prompt(SESSION, "x".repeat(65_537)), "opencode-v2-prompt-oversized"],
+      [client.prompt("not-a-session", "t"), "opencode-v2-session-invalid"],
+      [
+        client.prompt(SESSION, "t", undefined, { displayText: "d", hiddenContextSha256: "x" }),
+        "opencode-v2-prompt-display-invalid",
+      ],
+    ];
+    for (const [attempt, message] of cases) {
+      const error = await failureOf(attempt);
+      expect((error as Error).message).toBe(message);
+      expect(classifyOpenCodeV2PromptFailure(error)).toBe("not-submitted");
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([400, 401, 404, 409])(
+    "classifies the declared HTTP %i refusal as not submitted",
+    async (status) => {
+      const { client } = clientFor(() =>
+        Promise.resolve(
+          new Response("{}", { status, headers: { "content-type": "application/json" } }),
+        ),
+      );
+      const error = await failureOf(send(client));
+      expect(error).toBeInstanceOf(OpenCodeV2HttpStatusError);
+      expect((error as OpenCodeV2HttpStatusError).status).toBe(status);
+      expect((error as Error).message).toBe("opencode-v2-response-invalid");
+      expect(classifyOpenCodeV2PromptFailure(error)).toBe("not-submitted");
+    },
+  );
+
+  it.each([500, 502, 503])(
+    "classifies an undeclared HTTP %i as possibly accepted: the producer may have stored it",
+    async (status) => {
+      const { client } = clientFor(() =>
+        Promise.resolve(
+          new Response("{}", { status, headers: { "content-type": "application/json" } }),
+        ),
+      );
+      expect(classifyOpenCodeV2PromptFailure(await failureOf(send(client)))).toBe(
+        "possibly-accepted",
+      );
+    },
+  );
+
+  const LOST_AFTER_SENDING: readonly (readonly [string, () => Promise<Response>])[] = [
+    ["a reset connection", (): Promise<Response> => Promise.reject(new TypeError("fetch failed"))],
+    [
+      "a timed-out request",
+      (): Promise<Response> =>
+        Promise.reject(new DOMException("The operation timed out.", "TimeoutError")),
+    ],
+    [
+      "an abort",
+      (): Promise<Response> => Promise.reject(new DOMException("aborted", "AbortError")),
+    ],
+    [
+      "a 2xx whose body is not JSON",
+      (): Promise<Response> => Promise.resolve(new Response("ok", { status: 200 })),
+    ],
+    [
+      "a 2xx whose body has no data",
+      (): Promise<Response> =>
+        Promise.resolve(
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+        ),
+    ],
+  ];
+
+  it.each(LOST_AFTER_SENDING)(
+    "classifies %s after the request was sent as possibly accepted",
+    async (_label, respond) => {
+      const { client, fetch } = clientFor(respond);
+      const error = await failureOf(send(client));
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(classifyOpenCodeV2PromptFailure(error)).toBe("possibly-accepted");
+    },
+  );
+
+  it("classifies a failure it does not recognise as possibly accepted, never as not submitted", () => {
+    for (const unknown of [new Error("anything"), "text", undefined, null, 7]) {
+      expect(classifyOpenCodeV2PromptFailure(unknown)).toBe("possibly-accepted");
+    }
   });
 });
 

@@ -320,10 +320,13 @@ describe("production coding runtime turn ports", () => {
 
       await expect(deliver(steer())).resolves.toEqual({ ok: true });
 
+      // The operator request travels with the admission: the delivery binds its native message id
+      // to it, so a retry of the same request resends the id of the unconfirmed attempt.
       expect(turnPort.admitPromptInputs).toHaveBeenCalledExactlyOnceWith("run-1", {
         delivery: "steer",
         references: [{ path: "src/app.ts" }],
         correlationId: "corr-0123456789",
+        requestId: "steer-1",
       });
       expect(turnPort.deliverPrompt).toHaveBeenCalledExactlyOnceWith(
         "run-1",
@@ -467,6 +470,7 @@ describe("production coding runtime turn ports", () => {
         delivery: undefined,
         references: [{ path: "src/app.ts" }],
         correlationId: "corr-0123456789",
+        requestId: "follow-up-1",
       });
       expect(turnPort.submitTurn).toHaveBeenCalledExactlyOnceWith(
         "run-1",

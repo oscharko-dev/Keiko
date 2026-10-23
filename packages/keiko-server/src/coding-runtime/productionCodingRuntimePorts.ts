@@ -699,6 +699,9 @@ function admitTurnInputs(
     delivery: request.delivery,
     references: request.references,
     correlationId: request.correlationId,
+    // The operator request: a delivery binds its native message id to it, so a retry of the same
+    // request resends the id the unconfirmed attempt carried.
+    requestId: request.requestId,
   });
   return admission.ok ? { ok: true, inputs: admission.inputs } : { ok: false };
 }

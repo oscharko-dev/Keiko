@@ -1132,11 +1132,36 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   starts, replaces and settles nothing: the turn keeps its own settlement, and an accepted message
   advances the revision with `task-submitted` so the next one is admitted. It passes the same
   dispatcher admission as any delegation (live authority revalidated, the revision consumed once, a
-  single-use request id). The pinned 2.1.4 behaviour is proven against the original executable
+  single-use request id). A delivery is also safe to retry. Its operator request id is bound to the
+  producer's supported `Session.Message.ID` (the prompt body's `id`, pattern `^msg_` in the pinned
+  schema): the producer stores one input per id and answers a repeated post of it with the receipt
+  it already holds, so a retry after a lost acknowledgement is the same input, not a second one.
+  Keiko mints the id once per request, in the producer's own ascending layout
+  (`opencodeNativeMessageId.ts`: `msg_`, twelve hex digits of `milliseconds * 0x1000 + counter`,
+  fourteen base-62 characters, strictly ascending within the process), and the run port retains it
+  beside a digest of the message (at most 32 per run; an acknowledged entry is forgotten before any
+  unresolved one), so a retry of the same request resends it. The client reconciles the producer's receipt against the
+  id it sent. A failed post is classified by what it proves about the producer: refused before any
+  byte left, or answered with a declared 4xx status, the producer holds nothing and the id is
+  forgotten, unless the failing attempt itself reused an id an earlier attempt may have stored;
+  anything else (a connection lost or timed out after the request was sent, an unreadable
+  acknowledgement, an undeclared 5xx) is possibly accepted and leaves the id bound. Either way the
+  dispatcher frees the reservation, because the delivery was not committed, and the same request may
+  be retried; a replay after the known success, a stale revision, a stopped run and a settled turn
+  are refused exactly as before and send nothing. A request id that returns with another message is
+  refused (`request-conflict`) rather than answered with the receipt of the first, and a receipt
+  that names another id is committed as accepted but unreconciled and never retried. A retry that
+  arrives after the turn settled is refused with no way to tell whether the first attempt was
+  applied; the log shows its `delivery-unconfirmed` attempt. The pinned 2.1.4 behaviour is proven against the original executable
   (`opencodeNativePromptInputs.real.test.ts`): `steer` reaches the model with the running turn's
   next step and `queue` after its final answer, both inside one execution, so the one settlement
-  Keiko waits for covers them; a delivery sent to an idle session starts an execution nothing in
-  Keiko would settle, which is why admission requires a turn in flight. Both inputs are offered by
+  Keiko waits for covers them, and a lost acknowledgement followed by a retry of the same request
+  leaves one productive input, for `queue` and for a `steer` the running turn already consumed
+  (without the id the same retry stores two, which the file's control shows); a delivery sent to an
+  idle session starts an execution nothing in Keiko would settle, which is why admission requires a
+  turn in flight. A consumed id posted again to an idle session starts one too, so a retry is sent
+  only while the turn is in flight; a producer that settles between Keiko's check and the post is
+  the narrow window every delivery already has. Both inputs are offered by
   the native profile only (`openCodePromptInputs`, reported as `promptInputs` in the readiness
   read) and refused as `invalid-intent` elsewhere and for a Codex run, exactly like a `plan`
   request. A reference must resolve, through the descriptor-bound workspace read, to a plain UTF-8
@@ -1148,8 +1173,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   real path and the file name); the typed text stays the visible message and the file content stays
   out of the timeline, Coding History and logs. Evidence is the body-free
   `coding-runtime.prompt-inputs.settled` line: the run, `accepted` or `refused`, the closed
-  delivery, the reference count, and the attached bytes or the closed refusal reason, never a
-  path, name or text. The composer offers Send now (Enter) and Queue (Ctrl or Cmd+Enter) while a
+  delivery, the reference count, and the attached bytes or the closed refusal reason. A delivery
+  also names its operator request id and how its native message id was handled (`inputBinding`:
+  `bound` minted for this request, `reused` resent from an earlier unconfirmed attempt,
+  `unreconciled` accepted under another id); a delivery that failed after admission is `refused`
+  with `delivery-refused` (the producer holds nothing) or `delivery-unconfirmed` (it may hold the
+  message) and the closed error kind, so a lost acknowledgement and the retry that resolved it join
+  on the request id. Never a path, name, text or message id. The composer offers Send now (Enter) and Queue (Ctrl or Cmd+Enter) while a
   turn runs and the `@` picker (the Files search over the run's workspace, no second index) while
   a run runs or is paused. A start carries no references yet: the workspace they name does not
   exist before the run is minted.

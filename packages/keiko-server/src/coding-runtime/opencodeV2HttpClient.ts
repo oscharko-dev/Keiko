@@ -390,10 +390,14 @@ function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<s
     throw new Error("opencode-v2-prompt-delivery-invalid");
   }
   return {
-    ...(inputs?.id === undefined ? {} : { id: safeMessageId(inputs.id) }),
+    ...messageIdField(inputs?.id),
     ...(files.length === 0 ? {} : { files: files.map(safePromptFile) }),
     ...(delivery === undefined ? {} : { delivery }),
   };
+}
+
+function messageIdField(id: string | undefined): Record<string, unknown> {
+  return id === undefined ? {} : { id: safeMessageId(id) };
 }
 
 interface PreparedPrompt {

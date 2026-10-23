@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -9,10 +10,12 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { errorKindOf, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   WorkspaceDescriptorReadError,
@@ -21,8 +24,12 @@ import {
 
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
 import type { OpenCodeRuntimeAdapter } from "./opencodeRuntimeAdapter.js";
-import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
+import {
+  classifyOpenCodeV2PromptFailure,
+  type OpenCodeV2HttpClient,
+} from "./opencodeV2HttpClient.js";
 
 /**
  * What the prompt of a native OpenCode run may carry besides its text (#3897, ADR-0137 D10): a
@@ -63,6 +70,11 @@ export interface PromptInputsRequest {
   readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
   /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
   readonly correlationId?: string | undefined;
+  /**
+   * The operator request this prompt belongs to (the dispatcher's single-use request id). A delivery
+   * binds its native message id to it, so a retry of the same request resends the same id.
+   */
+  readonly requestId?: string | undefined;
 }
 
 /** One attachment in the runtime's own words: the absolute file URI and the file's name. */
@@ -77,6 +89,11 @@ export interface PromptInputsSummary {
   readonly referenceCount: number;
   /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
   readonly correlationId?: string | undefined;
+  /**
+   * The operator request, set only on inputs admitted for a request the dispatcher already
+   * reserved, so it is always a valid request id; a refusal at admission never names one.
+   */
+  readonly requestId?: string | undefined;
 }
 
 /** Prompt inputs that passed admission and are exactly what the runtime is sent. */
@@ -100,7 +117,10 @@ export type PromptInputsRefusal =
   | "reference-too-large"
   | "references-prompt-budget"
   | "references-run-budget"
-  | "reference-unreadable";
+  | "reference-unreadable"
+  | "delivery-refused"
+  | "delivery-unconfirmed"
+  | "request-conflict";
 
 export type PromptInputsAdmission =
   | { readonly ok: true; readonly inputs: AdmittedPromptInputs }
@@ -268,11 +288,24 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
     },
     referenceCount: { type: "integer", dataClass: "count", required: true },
     attachedBytes: { type: "integer", dataClass: "count", required: false },
+    // The operator request a delivery belongs to: the join key between an attempt whose
+    // acknowledgement was lost and the retry that resolved it, each under its own correlation id.
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // How the native message id was handled: `bound` minted for this request, `reused` resent from an
+    // earlier unconfirmed attempt of it, `unreconciled` accepted under a different id than the one sent.
+    inputBinding: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["bound", "reused", "unreconciled"],
+    },
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
       values: [
+        "delivery-refused",
+        "delivery-unconfirmed",
         "delivery-unsupported",
         "reference-invalid",
         "reference-not-file",
@@ -284,6 +317,7 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
         "references-prompt-budget",
         "references-run-budget",
         "references-unsupported",
+        "request-conflict",
         "run-unavailable",
         "turn-not-running",
       ],
@@ -297,14 +331,28 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/** How a delivery's native message id was handled; the closed `inputBinding` of the line. */
+export type PromptInputBinding = "bound" | "reused" | "unreconciled";
+
 export type PromptInputsOutcome =
-  | { readonly outcome: "accepted"; readonly attachedBytes: number }
-  | { readonly outcome: "refused"; readonly reason: PromptInputsRefusal };
+  | {
+      readonly outcome: "accepted";
+      readonly attachedBytes: number;
+      readonly inputBinding?: PromptInputBinding | undefined;
+    }
+  | {
+      readonly outcome: "refused";
+      readonly reason: PromptInputsRefusal;
+      readonly inputBinding?: PromptInputBinding | undefined;
+      /** Set on a delivery that failed after admission, so the line carries the closed error kind. */
+      readonly errorKind?: ActivityLogErrorKind | undefined;
+    };
 
 /**
  * One body-free line per prompt that carried inputs: the run, the closed delivery value, how many
- * files were referenced and, for a refusal, the closed reason. Paths, names and contents never enter
- * the log.
+ * files were referenced and, for a refusal, the closed reason. A delivery also names its operator
+ * request and how its native message id was handled, which is what joins a lost acknowledgement to
+ * the retry that resolved it. Paths, names and contents never enter the log.
  */
 export function recordPromptInputs(
   activityLog: ServerLogSink | undefined,
@@ -318,12 +366,17 @@ export function recordPromptInputs(
       {
         level: settled.outcome === "accepted" ? "info" : "warn",
         correlationId: correlationIdOrUnknown(summary.correlationId ?? runId),
+        ...(settled.outcome === "refused" && settled.errorKind !== undefined
+          ? { errorKind: settled.errorKind }
+          : {}),
       },
       {
         runId,
         outcome: settled.outcome,
         delivery: summary.delivery ?? "none",
         referenceCount: summary.referenceCount,
+        ...(summary.requestId === undefined ? {} : { requestId: summary.requestId }),
+        ...(settled.inputBinding === undefined ? {} : { inputBinding: settled.inputBinding }),
         ...(settled.outcome === "accepted"
           ? { attachedBytes: settled.attachedBytes }
           : { reason: settled.reason }),
@@ -361,6 +414,11 @@ export interface OpenCodePromptInputsRunPort {
    * Sends an admitted `steer` or `queue` message to the session of the turn in flight. It starts no
    * turn, arms nothing and settles nothing: the turn that is running keeps its own settlement, and
    * a failed delivery never cancels it.
+   *
+   * The message goes out under a native message id bound to the operator request, so `false` is
+   * never an unrecoverable answer: when the producer may have accepted the message (the
+   * acknowledgement was lost or timed out) a retry of the same request resends the same id and the
+   * producer, which stores one input per id, does not hold a second copy.
    */
   readonly deliverPrompt: (
     runId: string,
@@ -375,6 +433,8 @@ export interface OpenCodePromptInputsRunPortDeps {
   readonly activityLog: ServerLogSink | undefined;
   /** The composition's body-free diagnostic for a prompt the runtime did not accept. */
   readonly recordPostFailure: (runId: string, error: unknown) => void;
+  /** Mints a native message id; the default is the producer's own ascending layout. */
+  readonly mintMessageId?: (() => string) | undefined;
 }
 
 function requestSummary(request: PromptInputsRequest): PromptInputsSummary {
@@ -396,6 +456,19 @@ function capabilityRefusal(
   return undefined;
 }
 
+function admittedInputs(
+  request: PromptInputsRequest,
+  files: readonly PromptFileAttachment[],
+  fileBytes: number,
+): AdmittedPromptInputs {
+  return {
+    ...requestSummary(request),
+    ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
+    files,
+    fileBytes,
+  };
+}
+
 function admitForRun(
   run: PromptInputsRun | undefined,
   capabilities: CodingWorkbenchRuntimePromptInputs,
@@ -408,19 +481,14 @@ function admitForRun(
     return { ok: false, reason: "turn-not-running" };
   }
   const references = request.references ?? [];
-  if (references.length === 0) {
-    return { ok: true, inputs: { ...requestSummary(request), files: [], fileBytes: 0 } };
-  }
+  if (references.length === 0) return { ok: true, inputs: admittedInputs(request, [], 0) };
   const resolved = resolvePromptReferences({
     workspaceRoot: run.workspaceRoot,
     references,
     remainingRunBytes: OPENCODE_PROMPT_RUN_FILES_MAX_BYTES - (run.promptFileBytes ?? 0),
   });
   if (!resolved.ok) return resolved;
-  return {
-    ok: true,
-    inputs: { ...requestSummary(request), files: resolved.files, fileBytes: resolved.bytes },
-  };
+  return { ok: true, inputs: admittedInputs(request, resolved.files, resolved.bytes) };
 }
 
 /**
@@ -431,18 +499,172 @@ export function acceptPromptInputs(
   activityLog: ServerLogSink | undefined,
   run: Pick<PromptInputsRun, "runId" | "promptFileBytes">,
   inputs: AdmittedPromptInputs,
+  inputBinding?: PromptInputBinding,
 ): void {
   run.promptFileBytes = (run.promptFileBytes ?? 0) + inputs.fileBytes;
   recordPromptInputs(activityLog, run.runId, inputs, {
     outcome: "accepted",
     attachedBytes: inputs.fileBytes,
+    inputBinding,
   });
+}
+
+/**
+ * The most native message ids one run retains. Past it an acknowledged id is forgotten first, then
+ * the oldest unresolved one: a retry of a request whose id was forgotten that way is a new input.
+ */
+export const OPENCODE_NATIVE_INPUT_LEDGER_MAX = 32;
+
+/**
+ * One operator request's native message: the id its message was sent under and the digest of what
+ * that id stands for. The id is minted once, when the request is first delivered, and kept until the
+ * request is known to have been refused by the producer or is forgotten for lack of room, so every
+ * retry of the request resends the same id.
+ */
+interface NativeInputEntry {
+  readonly messageId: string;
+  readonly fingerprint: string;
+  /** The producer's receipt was read; the entry stays only for a commit the dispatcher refused. */
+  acknowledged: boolean;
+}
+
+/** The operator requests of one run whose native message id is retained, oldest first. */
+type NativeInputLedger = Map<string, NativeInputEntry>;
+
+type NativeInputBinding =
+  { readonly kind: PromptInputBinding; readonly messageId: string } | { readonly kind: "conflict" };
+
+/**
+ * What an id stands for: the delivery, the text and the files. Only the digest is kept, so a request
+ * id reused for another message is told apart without the ledger ever holding the message.
+ */
+function messageFingerprint(text: string, inputs: AdmittedPromptInputs): string {
+  return createHash("sha256")
+    .update(JSON.stringify([inputs.delivery, text, inputs.files.map((f) => [f.uri, f.name])]))
+    .digest("hex");
+}
+
+/** Makes room for one more entry: a resolved entry goes before any unresolved one. */
+function makeRoom(ledger: NativeInputLedger): void {
+  if (ledger.size < OPENCODE_NATIVE_INPUT_LEDGER_MAX) return;
+  const resolved = [...ledger].find(([, entry]) => entry.acknowledged);
+  const oldest = resolved ?? ledger.entries().next().value;
+  if (oldest !== undefined) ledger.delete(oldest[0]);
+}
+
+/**
+ * Binds the operator request to its native message id. The first delivery of a request mints and
+ * retains the id; a later one, a retry after an unconfirmed attempt, reuses it. A request id that
+ * comes back with another message is a conflict: the producer would answer it with the receipt of the
+ * first message and the new text would silently never be sent. A delivery with no request identity
+ * has nothing to retain and always gets a fresh id.
+ */
+function bindNativeInput(
+  ledger: NativeInputLedger,
+  mint: () => string,
+  text: string,
+  inputs: AdmittedPromptInputs,
+): NativeInputBinding {
+  const { requestId } = inputs;
+  if (requestId === undefined) return { kind: "bound", messageId: mint() };
+  const fingerprint = messageFingerprint(text, inputs);
+  const held = ledger.get(requestId);
+  if (held !== undefined) {
+    return held.fingerprint === fingerprint
+      ? { kind: "reused", messageId: held.messageId }
+      : { kind: "conflict" };
+  }
+  makeRoom(ledger);
+  const messageId = mint();
+  ledger.set(requestId, { messageId, fingerprint, acknowledged: false });
+  return { kind: "bound", messageId };
+}
+
+interface DeliveryAttempt {
+  readonly run: PromptInputsRun;
+  readonly text: string;
+  readonly inputs: AdmittedPromptInputs;
+  readonly delivery: CodingWorkbenchPromptDelivery;
+  readonly binding: Extract<NativeInputBinding, { readonly messageId: string }>;
+}
+
+interface DeliveryContext {
+  readonly deps: OpenCodePromptInputsRunPortDeps;
+  readonly ledgerOf: (run: PromptInputsRun) => NativeInputLedger;
+}
+
+function acknowledgeNativeInput(context: DeliveryContext, attempt: DeliveryAttempt): void {
+  const requestId = attempt.inputs.requestId;
+  const entry = requestId === undefined ? undefined : context.ledgerOf(attempt.run).get(requestId);
+  if (entry !== undefined) entry.acknowledged = true;
+}
+
+/**
+ * The producer did not take the message. What the retry may do depends on what the failure proves
+ * about the producer's side: a refusal of a message that went out under a fresh id proves nothing was
+ * stored, so the id is forgotten and the retry starts clean; anything else (the connection was lost
+ * after the request was sent, the acknowledgement could not be read, or this attempt reused an id an
+ * earlier attempt may have stored) leaves the id bound to the request so the retry resends it.
+ */
+function recordDeliveryFailure(
+  context: DeliveryContext,
+  attempt: DeliveryAttempt,
+  error: unknown,
+): boolean {
+  const { deps } = context;
+  const { run, inputs, binding } = attempt;
+  deps.recordPostFailure(run.runId, error);
+  const failure = classifyOpenCodeV2PromptFailure(error);
+  if (failure === "receipt-mismatch") {
+    // The producer holds the message under an id the ledger cannot resend: it was accepted, so
+    // reporting it failed would invite a retry that stores a second copy.
+    acknowledgeNativeInput(context, attempt);
+    acceptPromptInputs(deps.activityLog, run, inputs, "unreconciled");
+    return run.ready;
+  }
+  if (failure === "not-submitted" && binding.kind === "bound" && inputs.requestId !== undefined) {
+    context.ledgerOf(run).delete(inputs.requestId);
+  }
+  recordPromptInputs(deps.activityLog, run.runId, inputs, {
+    outcome: "refused",
+    reason: failure === "not-submitted" ? "delivery-refused" : "delivery-unconfirmed",
+    inputBinding: binding.kind,
+    errorKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
+  });
+  return false;
+}
+
+async function sendDelivery(context: DeliveryContext, attempt: DeliveryAttempt): Promise<boolean> {
+  const { run, text, inputs, delivery, binding } = attempt;
+  try {
+    await run.client.prompt(run.sessionId, text, undefined, undefined, {
+      id: binding.messageId,
+      delivery,
+      files: inputs.files,
+    });
+  } catch (error) {
+    return recordDeliveryFailure(context, attempt, error);
+  }
+  acknowledgeNativeInput(context, attempt);
+  acceptPromptInputs(context.deps.activityLog, run, inputs, binding.kind);
+  return run.ready;
 }
 
 export function createOpenCodePromptInputsRunPort(
   deps: OpenCodePromptInputsRunPortDeps,
 ): OpenCodePromptInputsRunPort {
-  const { recordPostFailure } = deps;
+  const mint = deps.mintMessageId ?? createOpenCodeNativeMessageIdMinter();
+  // Keyed by the run object, which the composition keeps for the run's whole life: the ledger goes
+  // with it and no run-teardown hook has to remember it.
+  const ledgers = new WeakMap<PromptInputsRun, NativeInputLedger>();
+  const ledgerOf = (run: PromptInputsRun): NativeInputLedger => {
+    const held = ledgers.get(run);
+    if (held !== undefined) return held;
+    const created: NativeInputLedger = new Map();
+    ledgers.set(run, created);
+    return created;
+  };
+  const context: DeliveryContext = { deps, ledgerOf };
   return {
     promptInputs: deps.capabilities,
     admitPromptInputs: (runId, request): PromptInputsAdmission => {
@@ -467,17 +689,15 @@ export function createOpenCodePromptInputsRunPort(
         });
         return false;
       }
-      try {
-        await run.client.prompt(run.sessionId, text, undefined, undefined, {
-          delivery,
-          files: inputs.files,
+      const binding = bindNativeInput(ledgerOf(run), mint, text, inputs);
+      if (binding.kind === "conflict") {
+        recordPromptInputs(deps.activityLog, runId, inputs, {
+          outcome: "refused",
+          reason: "request-conflict",
         });
-      } catch (error) {
-        recordPostFailure(runId, error);
         return false;
       }
-      acceptPromptInputs(deps.activityLog, run, inputs);
-      return run.ready;
+      return sendDelivery(context, { run, text, inputs, delivery, binding });
     },
   };
 }

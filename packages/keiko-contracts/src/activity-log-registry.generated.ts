@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "83cb51e42d3a44151cbce10dc584c331e25dfc6298c8b5b3e461c9daa2bd56bc" as const;
+  "c55e8cbf256e79477da8b84a2ff4a3b8cc2ffb5fdc2de735b4418a9ef5a19561" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8972,6 +8972,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "inputBinding",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
@@ -8988,6 +8994,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "requestId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
             },
             {
               name: "runId",

@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { activityLogEventWillBeRejected } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -19,6 +20,12 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import {
+  OpenCodeV2HttpStatusError,
+  OpenCodeV2PromptRefusedError,
+  OpenCodeV2ReceiptMismatchError,
+} from "./opencodeV2HttpClient.js";
+import {
+  OPENCODE_NATIVE_INPUT_LEDGER_MAX,
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   OPENCODE_PROMPT_FILES_MAX_BYTES,
   OPENCODE_PROMPT_RUN_FILES_MAX_BYTES,
@@ -336,6 +343,24 @@ describe("prompt input evidence", () => {
       { referenceCount: 0 },
       { outcome: "refused", reason: "turn-not-running" },
     );
+    // A delivery names its operator request and how its native message id was handled: the join key
+    // between a lost acknowledgement and the retry that resolved it.
+    const delivery = { delivery: "queue", referenceCount: 0, requestId: "req-1" } as const;
+    recordPromptInputs(sink, "run-1", delivery, {
+      outcome: "refused",
+      reason: "delivery-unconfirmed",
+      inputBinding: "bound",
+      errorKind: "unavailable",
+    });
+    recordPromptInputs(sink, "run-1", delivery, {
+      outcome: "accepted",
+      attachedBytes: 0,
+      inputBinding: "reused",
+    });
+    recordPromptInputs(sink, "run-1", delivery, {
+      outcome: "refused",
+      reason: "request-conflict",
+    });
     const lines = sink.events.map((event) =>
       expectActivityLogProof(
         "coding-runtime.prompt-inputs.settled.emitted-line",
@@ -345,6 +370,16 @@ describe("prompt input evidence", () => {
     expect(lines).toMatchObject([
       { runId: "run-1", outcome: "accepted", delivery: "steer", referenceCount: 1 },
       { outcome: "refused", delivery: "none", referenceCount: 0, reason: "turn-not-running" },
+      {
+        outcome: "refused",
+        delivery: "queue",
+        requestId: "req-1",
+        inputBinding: "bound",
+        reason: "delivery-unconfirmed",
+        errorKind: "unavailable",
+      },
+      { outcome: "accepted", requestId: "req-1", inputBinding: "reused", attachedBytes: 0 },
+      { outcome: "refused", requestId: "req-1", reason: "request-conflict" },
     ]);
   });
 });
@@ -357,6 +392,8 @@ describe("the run port that admits and delivers prompt inputs", () => {
     readonly run: PromptInputsRun;
     readonly prompts: unknown[][];
     readonly failures: unknown[];
+    /** What the next prompts reject with, one per call; a call past the end succeeds. */
+    readonly promptFailures: Error[];
     readonly sink: ReturnType<typeof createBufferedServerLogSink>;
     inFlight: boolean;
     readonly port: ReturnType<typeof createOpenCodePromptInputsRunPort>;
@@ -371,8 +408,10 @@ describe("the run port that admits and delivers prompt inputs", () => {
   ): Harness {
     const prompts: unknown[][] = [];
     const failures: unknown[] = [];
+    const promptFailures: Error[] = [];
     const sink = createBufferedServerLogSink();
     const state = { inFlight: true };
+    let minted = 0;
     const run: PromptInputsRun = {
       runId: "run-1",
       workspaceRoot: workspace,
@@ -380,9 +419,11 @@ describe("the run port that admits and delivers prompt inputs", () => {
       client: {
         prompt: (...args: unknown[]): Promise<void> => {
           prompts.push(args);
-          return options.rejectPrompt === true
-            ? Promise.reject(new Error("opencode-v2-response-invalid"))
-            : Promise.resolve();
+          if (options.rejectPrompt === true) {
+            return Promise.reject(new Error("opencode-v2-response-invalid"));
+          }
+          const failure = promptFailures.shift();
+          return failure === undefined ? Promise.resolve() : Promise.reject(failure);
         },
       },
       runtimeAdapter: { turnInFlight: (): boolean => state.inFlight },
@@ -393,11 +434,13 @@ describe("the run port that admits and delivers prompt inputs", () => {
       capabilities: options.capabilities ?? NATIVE,
       activityLog: sink,
       recordPostFailure: (_runId, error) => failures.push(error),
+      mintMessageId: () => `msg_minted_${String((minted += 1))}`,
     });
     return {
       run,
       prompts,
       failures,
+      promptFailures,
       sink,
       port,
       get inFlight(): boolean {
@@ -512,7 +555,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
         "also this",
         undefined,
         undefined,
-        { delivery: "queue", files: admitted.inputs.files },
+        { id: "msg_minted_1", delivery: "queue", files: admitted.inputs.files },
       ],
     ]);
     expect(lines(h)).toMatchObject([
@@ -522,6 +565,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
         delivery: "queue",
         referenceCount: 1,
         attachedBytes: "# readme\n".length,
+        inputBinding: "bound",
       },
     ]);
     expect(h.run.promptFileBytes).toBe("# readme\n".length);
@@ -554,7 +598,11 @@ describe("the run port that admits and delivers prompt inputs", () => {
     if (!admitted.ok) throw new Error("expected admission");
     await expect(h.port.deliverPrompt("run-1", "t", admitted.inputs)).resolves.toBe(false);
     expect(h.failures).toHaveLength(1);
-    expect(h.sink.events).toEqual([]);
+    // Never an accepted line, and nothing charged to the run: the failure is one refused line.
+    expect(lines(h)).toMatchObject([
+      { outcome: "refused", delivery: "steer", reason: "delivery-unconfirmed" },
+    ]);
+    expect(h.sink.events.map((event) => (event as { level?: string }).level)).toEqual(["warn"]);
     expect(h.run.promptFileBytes).toBeUndefined();
   });
 
@@ -568,6 +616,227 @@ describe("the run port that admits and delivers prompt inputs", () => {
     expect(h.port.admitPromptInputs("run-1", { references: [{ path: "big.txt" }] })).toEqual({
       ok: false,
       reason: "references-run-budget",
+    });
+  });
+  // PR #4064 review (ADR-0137 D10): a delivery whose acknowledgement was lost must resend the id of
+  // the unconfirmed attempt, and the answer to a failed attempt must say what the failure proves.
+  describe("the native message id bound to the operator request", () => {
+    const LOST = new TypeError("fetch failed");
+
+    function admitDelivery(h: Harness, requestId: string | undefined, text = "also this") {
+      const admitted = h.port.admitPromptInputs("run-1", {
+        delivery: "queue",
+        correlationId: "corr-0123456789",
+        ...(requestId === undefined ? {} : { requestId }),
+      });
+      if (!admitted.ok) throw new Error("expected admission");
+      return (): Promise<boolean> => h.port.deliverPrompt("run-1", text, admitted.inputs);
+    }
+
+    const sentIds = (h: Harness): unknown[] =>
+      h.prompts.map((call) => (call[4] as { id?: unknown } | undefined)?.id);
+
+    it("resends the id of an unconfirmed attempt, so a retry is the same native input", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(false);
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_1"]);
+      expect(lines(h)).toMatchObject([
+        {
+          outcome: "refused",
+          reason: "delivery-unconfirmed",
+          inputBinding: "bound",
+          requestId: "req-1",
+        },
+        { outcome: "accepted", inputBinding: "reused", requestId: "req-1" },
+      ]);
+      expect(h.failures, "each failed attempt is reported once to the composition").toHaveLength(1);
+    });
+
+    it("names the closed error kind of a failed delivery and never its text", async () => {
+      const h = harness();
+      h.promptFailures.push(new TypeError("PRIVATE-TRANSPORT-DETAIL fetch failed"));
+      await admitDelivery(h, "req-1")();
+      const [event] = h.sink.events as { errorKind?: string; level?: string }[];
+      expect(event?.level).toBe("warn");
+      expect(typeof event?.errorKind).toBe("string");
+      expect(JSON.stringify(h.sink.events)).not.toContain("PRIVATE-TRANSPORT-DETAIL");
+    });
+
+    it("keeps the id through repeated losses and charges the files once, at the acknowledged attempt", async () => {
+      const h = harness();
+      const attach = h.port.admitPromptInputs("run-1", {
+        delivery: "steer",
+        requestId: "req-1",
+        references: [{ path: "README.md" }],
+      });
+      if (!attach.ok) throw new Error("expected admission");
+      h.promptFailures.push(LOST, new DOMException("timed out", "TimeoutError"));
+      const send = (): Promise<boolean> => h.port.deliverPrompt("run-1", "t", attach.inputs);
+      await expect(send()).resolves.toBe(false);
+      await expect(send()).resolves.toBe(false);
+      expect(h.run.promptFileBytes).toBeUndefined();
+      await expect(send()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_1", "msg_minted_1"]);
+      expect(h.run.promptFileBytes).toBe("# readme\n".length);
+    });
+
+    it("forgets the id when the producer refused a fresh message: the retry starts clean", async () => {
+      const h = harness();
+      h.promptFailures.push(new OpenCodeV2HttpStatusError(409));
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(false);
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_2"]);
+      expect(lines(h)).toMatchObject([
+        { outcome: "refused", reason: "delivery-refused", inputBinding: "bound" },
+        { outcome: "accepted", inputBinding: "bound" },
+      ]);
+    });
+
+    it("forgets the id when the client refused the message before any byte left", async () => {
+      const h = harness();
+      h.promptFailures.push(new OpenCodeV2PromptRefusedError("opencode-v2-prompt-file-invalid"));
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(false);
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_2"]);
+      expect(lines(h)[0]).toMatchObject({ reason: "delivery-refused" });
+    });
+
+    it("keeps the id when a refusal answers an attempt that reused it: the first may be stored", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST, new OpenCodeV2HttpStatusError(409));
+      await admitDelivery(h, "req-1")();
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(false);
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_1", "msg_minted_1"]);
+      expect(lines(h)[1]).toMatchObject({ reason: "delivery-refused", inputBinding: "reused" });
+    });
+
+    it.each([500, 502])("treats an undeclared HTTP %i as possibly accepted", async (status) => {
+      const h = harness();
+      h.promptFailures.push(new OpenCodeV2HttpStatusError(status));
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(false);
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_1"]);
+      expect(lines(h)[0]).toMatchObject({ reason: "delivery-unconfirmed" });
+    });
+
+    it("reports a receipt for another id as accepted: it cannot be resent and must not be retried", async () => {
+      const h = harness();
+      h.promptFailures.push(new OpenCodeV2ReceiptMismatchError());
+      await expect(admitDelivery(h, "req-1")()).resolves.toBe(true);
+      expect(h.failures).toHaveLength(1);
+      expect(lines(h)).toMatchObject([
+        { outcome: "accepted", inputBinding: "unreconciled", requestId: "req-1" },
+      ]);
+      expect(h.sink.events.map((event) => (event as { level?: string }).level)).toEqual(["info"]);
+    });
+
+    it("refuses a request id that comes back with another message instead of dropping the new text", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await admitDelivery(h, "req-1", "the first text")();
+      await expect(admitDelivery(h, "req-1", "an edited text")()).resolves.toBe(false);
+      expect(sentIds(h), "nothing was sent for the conflicting message").toEqual(["msg_minted_1"]);
+      expect(lines(h)[1]).toMatchObject({ outcome: "refused", reason: "request-conflict" });
+      // The original message is still retryable under its id.
+      await expect(admitDelivery(h, "req-1", "the first text")()).resolves.toBe(true);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_1"]);
+    });
+
+    it("binds the delivery and the files to the id, not the text alone", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await admitDelivery(h, "req-1")();
+      const steered = h.port.admitPromptInputs("run-1", { delivery: "steer", requestId: "req-1" });
+      if (!steered.ok) throw new Error("expected admission");
+      await expect(h.port.deliverPrompt("run-1", "also this", steered.inputs)).resolves.toBe(false);
+      expect(lines(h)[1]).toMatchObject({ reason: "request-conflict" });
+      expect(h.prompts).toHaveLength(1);
+    });
+
+    it("gives distinct requests distinct ids and a request with no identity a fresh id every time", async () => {
+      const h = harness();
+      await admitDelivery(h, "req-1")();
+      await admitDelivery(h, "req-2")();
+      await admitDelivery(h, undefined)();
+      await admitDelivery(h, undefined)();
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_2", "msg_minted_3", "msg_minted_4"]);
+    });
+
+    it("retains nothing for a request with no identity, so its retry is a new input by design", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await admitDelivery(h, undefined)();
+      await admitDelivery(h, undefined)();
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_2"]);
+    });
+
+    it("sends nothing and keeps the id when the turn settled before the retry", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      const retry = admitDelivery(h, "req-1");
+      await retry();
+      h.inFlight = false;
+      await expect(retry()).resolves.toBe(false);
+      expect(h.prompts).toHaveLength(1);
+      expect(lines(h)[1]).toMatchObject({ reason: "turn-not-running", requestId: "req-1" });
+    });
+
+    it("keeps each run's ids apart", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await admitDelivery(h, "req-1")();
+      const otherRun: PromptInputsRun = { ...h.run, runId: "run-2" };
+      const second = createOpenCodePromptInputsRunPort({
+        readyRun: (runId) => (runId === "run-2" ? otherRun : undefined),
+        capabilities: NATIVE,
+        activityLog: h.sink,
+        recordPostFailure: () => undefined,
+        mintMessageId: () => "msg_other_run",
+      });
+      const admitted = second.admitPromptInputs("run-2", { delivery: "queue", requestId: "req-1" });
+      if (!admitted.ok) throw new Error("expected admission");
+      await second.deliverPrompt("run-2", "also this", admitted.inputs);
+      expect(sentIds(h)).toEqual(["msg_minted_1", "msg_other_run"]);
+    });
+
+    it("forgets the oldest unresolved ids first once the ledger is full", async () => {
+      const h = harness();
+      for (let index = 0; index <= OPENCODE_NATIVE_INPUT_LEDGER_MAX; index += 1) {
+        h.promptFailures.push(LOST);
+        await admitDelivery(h, `req-${String(index)}`)();
+      }
+      const before = h.prompts.length;
+      await admitDelivery(h, "req-1")();
+      expect(sentIds(h)[before], "a retained id is still resent").toBe("msg_minted_2");
+      await admitDelivery(h, "req-0")();
+      expect(sentIds(h)[before + 1], "the oldest one was forgotten").not.toBe("msg_minted_1");
+    });
+
+    it("forgets an acknowledged id before any unresolved one", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await admitDelivery(h, "req-pending")();
+      for (let index = 0; index < OPENCODE_NATIVE_INPUT_LEDGER_MAX; index += 1) {
+        await admitDelivery(h, `req-ok-${String(index)}`)();
+      }
+      const before = h.prompts.length;
+      await admitDelivery(h, "req-pending")();
+      expect(sentIds(h)[before]).toBe("msg_minted_1");
+    });
+
+    it("emits lines the registered operation accepts, with the request and the binding", async () => {
+      const h = harness();
+      h.promptFailures.push(LOST);
+      await admitDelivery(h, "req-1")();
+      await admitDelivery(h, "req-1")();
+      await admitDelivery(h, "req-1", "another text")();
+      for (const event of h.sink.events) {
+        expect(activityLogEventWillBeRejected(event)).toBe(false);
+      }
+      expect(JSON.stringify(h.sink.events)).not.toMatch(/also this|another text|msg_minted/u);
     });
   });
 });

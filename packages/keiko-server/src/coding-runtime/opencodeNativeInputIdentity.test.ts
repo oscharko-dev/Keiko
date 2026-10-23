@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
   createOpenCodePromptInputsRunPort,
   openCodePromptInputs,
   type PromptInputsRun,
 } from "./opencodePromptInputs.js";
+import {
+  OpenCodeV2HttpStatusError,
+  OpenCodeV2ReceiptMismatchError,
+} from "./opencodeV2HttpClient.js";
 import {
   createProductionRuntimeOperationGuard,
   createProductionRuntimeTaskDispatcher,
@@ -39,25 +44,39 @@ interface Producer {
   readonly posts: Post[];
   /** The next post is accepted and stored, then its acknowledgement is lost in transit. */
   loseNextAcknowledgement: boolean;
+  /** What the next posts fail with after the producer stored them, one per post. */
+  readonly failAfterStoring: Error[];
+  /** What the next posts are refused with before the producer stores anything, one per post. */
+  readonly refuseBeforeStoring: Error[];
 }
 
 function producer(): Producer {
-  return { inputs: new Map(), posts: [], loseNextAcknowledgement: false };
+  return {
+    inputs: new Map(),
+    posts: [],
+    loseNextAcknowledgement: false,
+    failAfterStoring: [],
+    refuseBeforeStoring: [],
+  };
 }
 
 interface Harness {
   readonly producer: Producer;
   readonly deliver: (requestId: string, revision: number, text?: string) => ReturnType<DeliverFn>;
   readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+  /** What the dispatcher recorded for an attempt it refused, as the operator-facing diagnostic. */
+  readonly diagnostics: ServerDiagnosticRecord[];
   readonly controller: AbortController;
   inFlight: boolean;
 }
 
-type DeliverFn = NonNullable<
-  ReturnType<typeof createProductionRuntimeTaskDispatcher>["deliver"]
->;
+type DeliverFn = NonNullable<ReturnType<typeof createProductionRuntimeTaskDispatcher>["deliver"]>;
 
-function request(requestId: string, revision: number, text: string): CodingRuntimeTaskDispatchRequest {
+function request(
+  requestId: string,
+  revision: number,
+  text: string,
+): CodingRuntimeTaskDispatchRequest {
   return {
     runId: RUN_ID,
     requestId,
@@ -81,6 +100,8 @@ function harness(): Harness {
       prompt: (_sessionId, text, _signal, _display, inputs): Promise<void> => {
         const post: Post = { text, id: inputs?.id, delivery: inputs?.delivery };
         fake.posts.push(post);
+        const refusal = fake.refuseBeforeStoring.shift();
+        if (refusal !== undefined) return Promise.reject(refusal);
         // A post without an id is stored under an id of the producer's own making, as 2.1.4 does.
         counter += 1;
         const id = inputs?.id ?? `msg_producer_${String(counter)}`;
@@ -89,7 +110,8 @@ function harness(): Harness {
           fake.loseNextAcknowledgement = false;
           return Promise.reject(new TypeError("fetch failed"));
         }
-        return Promise.resolve();
+        const failure = fake.failAfterStoring.shift();
+        return failure === undefined ? Promise.resolve() : Promise.reject(failure);
       },
     },
     runtimeAdapter: { turnInFlight: (): boolean => state.inFlight },
@@ -113,12 +135,16 @@ function harness(): Harness {
     controller,
     operationGuard: createProductionRuntimeOperationGuard(RUN_ID, () => true),
   };
-  const dispatcher = createProductionRuntimeTaskDispatcher(new Map([[RUN_ID, record]]));
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const dispatcher = createProductionRuntimeTaskDispatcher(new Map([[RUN_ID, record]]), {
+    record: (diagnostic): void => void diagnostics.push(diagnostic),
+  });
   const deliver = dispatcher.deliver;
   if (deliver === undefined) throw new Error("deliver dispatcher is unavailable");
   return {
     producer: fake,
     sink,
+    diagnostics,
     controller,
     deliver: (requestId, revision, text = "also cover the empty case") =>
       deliver(request(requestId, revision, text)),
@@ -142,6 +168,9 @@ describe("a native delivery whose acknowledgement is lost after the producer acc
     await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: true });
 
     expect(h.producer.inputs.size, "the producer holds exactly one productive input").toBe(1);
+    expect(h.diagnostics).toEqual([
+      expect.objectContaining({ code: "stage=dispatch:reason=adapter-rejected" }),
+    ]);
     expect(h.producer.posts).toHaveLength(2);
     const ids = h.producer.posts.map((post) => post.id);
     expect(ids[0]).toMatch(MESSAGE_ID);
@@ -166,7 +195,7 @@ describe("a native delivery whose acknowledgement is lost after the producer acc
     await expect(h.deliver("req-1", 4, "first")).resolves.toEqual({ ok: true });
     await expect(h.deliver("req-2", 5, "second")).resolves.toEqual({ ok: true });
 
-    const [first, second] = h.producer.posts.map((post) => post.id ?? "");
+    const [first = "", second = ""] = h.producer.posts.map((post) => post.id ?? "");
     expect(first).toMatch(MESSAGE_ID);
     expect(second).toMatch(MESSAGE_ID);
     expect(second > first, "a later request never sorts before an earlier one").toBe(true);
@@ -195,5 +224,122 @@ describe("a native delivery whose acknowledgement is lost after the producer acc
     await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: false });
 
     expect(h.producer.posts).toHaveLength(1);
+  });
+  it.each([
+    ["a timeout", (): Error => new DOMException("The operation timed out.", "TimeoutError")],
+    ["an undeclared HTTP 502", (): Error => new OpenCodeV2HttpStatusError(502)],
+    ["an unreadable acknowledgement", (): Error => new Error("opencode-v2-envelope-invalid")],
+  ])("is one input when the acknowledgement is lost to %s", async (_label, failure) => {
+    const h = harness();
+    h.producer.failAfterStoring.push(failure());
+
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: false });
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: true });
+
+    expect(h.producer.inputs.size).toBe(1);
+    expect(h.producer.posts.map((post) => post.id)).toEqual(
+      Array.from({ length: 2 }, () => h.producer.posts[0]?.id),
+    );
+  });
+
+  it("frees the request after a refusal that stored nothing, and the retry is a clean new input", async () => {
+    const h = harness();
+    h.producer.refuseBeforeStoring.push(new OpenCodeV2HttpStatusError(409));
+
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: false });
+    expect(h.producer.inputs.size).toBe(0);
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: true });
+
+    expect(h.producer.inputs.size).toBe(1);
+    const [refused, retried] = h.producer.posts.map((post) => post.id);
+    expect(retried, "nothing was stored under the refused id, so the retry mints its own").not.toBe(
+      refused,
+    );
+  });
+
+  it("keeps the request retryable through a lost acknowledgement that a later refusal followed", async () => {
+    const h = harness();
+    h.producer.loseNextAcknowledgement = true;
+    // The first attempt reaches the producer and is stored; the second is refused before storing.
+    await h.deliver("req-1", 4);
+    h.producer.refuseBeforeStoring.push(new OpenCodeV2HttpStatusError(409));
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: false });
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: true });
+
+    expect(h.producer.inputs.size).toBe(1);
+    const ids = new Set(h.producer.posts.map((post) => post.id));
+    expect(ids.size, "every attempt carried the id the first one was stored under").toBe(1);
+  });
+
+  it("still resolves the retry after the revision moved on and another request was delivered", async () => {
+    const h = harness();
+    h.producer.loseNextAcknowledgement = true;
+    await expect(h.deliver("req-1", 4, "first message")).resolves.toEqual({ ok: false });
+    // The human sends something else meanwhile; the operation advances the revision past 4.
+    await expect(h.deliver("req-2", 4, "second message")).resolves.toEqual({ ok: true });
+    // The client re-reads the revision and retries its original request under it.
+    await expect(h.deliver("req-1", 5, "first message")).resolves.toEqual({ ok: true });
+
+    expect(h.producer.inputs.size, "two requests, two inputs, and no third").toBe(2);
+    expect([...h.producer.inputs.values()].map((post) => post.text).sort()).toEqual([
+      "first message",
+      "second message",
+    ]);
+  });
+
+  it("refuses a stale revision and a replay of the delivered request, sending nothing", async () => {
+    const h = harness();
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: true });
+
+    await expect(h.deliver("req-2", 4)).resolves.toEqual({ ok: false });
+    await expect(h.deliver("req-2", 3)).resolves.toEqual({ ok: false });
+    await expect(h.deliver("req-1", 5)).resolves.toEqual({ ok: false });
+
+    expect(h.producer.posts).toHaveLength(1);
+  });
+
+  it("refuses an edited message under the id of an unconfirmed one instead of dropping the edit", async () => {
+    const h = harness();
+    h.producer.loseNextAcknowledgement = true;
+    await expect(h.deliver("req-1", 4, "the first text")).resolves.toEqual({ ok: false });
+
+    await expect(h.deliver("req-1", 4, "an edited text")).resolves.toEqual({ ok: false });
+    expect(h.producer.posts).toHaveLength(1);
+
+    await expect(h.deliver("req-1", 4, "the first text")).resolves.toEqual({ ok: true });
+    expect(h.producer.inputs.size).toBe(1);
+    expect([...h.producer.inputs.values()].map((post) => post.text)).toEqual(["the first text"]);
+  });
+
+  it("settles a receipt that names another id as delivered and refuses its replay", async () => {
+    const h = harness();
+    h.producer.failAfterStoring.push(new OpenCodeV2ReceiptMismatchError());
+
+    await expect(h.deliver("req-1", 4)).resolves.toEqual({ ok: true });
+    await expect(h.deliver("req-1", 5)).resolves.toEqual({ ok: false });
+
+    expect(h.producer.inputs.size).toBe(1);
+  });
+
+  it("leaves a body-free trail that joins the lost acknowledgement to the retry that resolved it", async () => {
+    const h = harness();
+    h.producer.loseNextAcknowledgement = true;
+    await h.deliver("req-1", 4, "PRIVATE-MESSAGE-TEXT");
+    await h.deliver("req-1", 4, "PRIVATE-MESSAGE-TEXT");
+
+    const extras = h.sink.events.map((event) => (event as { extra?: unknown }).extra);
+    expect(extras).toMatchObject([
+      {
+        runId: RUN_ID,
+        outcome: "refused",
+        reason: "delivery-unconfirmed",
+        requestId: "req-1",
+        inputBinding: "bound",
+      },
+      { runId: RUN_ID, outcome: "accepted", requestId: "req-1", inputBinding: "reused" },
+    ]);
+    const serialized = JSON.stringify(h.sink.events);
+    expect(serialized).not.toContain("PRIVATE-MESSAGE-TEXT");
+    expect(serialized).not.toMatch(/msg_[0-9a-f]{12}/u);
   });
 });
