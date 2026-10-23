@@ -150,7 +150,8 @@ function runnerFixture(): Promise<string> {
 
 afterAll(() => {
   if (fixtureRoot !== undefined) rmSync(fixtureRoot, { recursive: true, force: true });
-});
+  // Match the private repository cleanup lifecycle in portable-runtime.test.mjs.
+}, 60_000);
 
 describe("scripts/dev-runner.mjs readiness gate", () => {
   let stateDir: string | undefined;
