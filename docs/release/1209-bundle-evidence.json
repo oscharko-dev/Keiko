@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 294
+    "fileCount": 304
   },
   "b1": {
     "firstLoadScriptCount": 21,
@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1009569,
-    "loadedTotalBytes": 1009569,
+    "shipsTotalBytes": 991197,
+    "loadedTotalBytes": 991197,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 112765,
+    "largestWorkerBytes": 109989,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 112765,
+    "largestLoadedWorkerBytes": 109989,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,8 +30,8 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 112765,
-      "path": "dist/ui/static/_next/static/chunks/41umh1jrct7g7.js"
+      "gzipBytes": 109989,
+      "path": "dist/ui/static/_next/static/chunks/3qhgsd4mwnt9v.js"
     },
     {
       "label": "editor",
@@ -48,21 +48,21 @@
   "editorRuntimeChunkCount": 5,
   "editorRuntimeChunks": [
     {
-      "path": "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js",
-      "gzipBytes": 618550,
-      "rawBytes": 2525072,
+      "path": "dist/ui/static/_next/static/chunks/18voy19pok4ko.js",
+      "gzipBytes": 610474,
+      "rawBytes": 2475694,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/2xynqzhclj1u-.js",
-      "gzipBytes": 277980,
-      "rawBytes": 1196425,
+      "path": "dist/ui/static/_next/static/chunks/3ggg2nmiwuz90.js",
+      "gzipBytes": 270460,
+      "rawBytes": 1140027,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/41umh1jrct7g7.js",
-      "gzipBytes": 112765,
-      "rawBytes": 369177,
+      "path": "dist/ui/static/_next/static/chunks/3qhgsd4mwnt9v.js",
+      "gzipBytes": 109989,
+      "rawBytes": 359305,
       "workerLabel": "editor"
     },
     {
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "941f375e53084f5fa48874e97e1ce2c4fdec7510de52972b9e1bc0c0b134c2ca"
+  "measurementSha256": "45b078fb8a984cbada35901e6e0cf6fa57e15768784a7658390fb2f133adf20e"
 }

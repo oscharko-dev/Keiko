@@ -243,3 +243,108 @@ describe("parseEditorInlineCompletionTelemetry", () => {
     expect(parseEditorInlineCompletionTelemetry(undefined)).toMatchObject({ ok: false });
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-inline-completion";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const input = baseRequest();
+    const parsed = publicOwner.parseEditorInlineCompletionRequest(input);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.document).toBe(input.document);
+    expect(parsed.value.triggerKind).toBe("automatic");
+    const telemetry = publicOwner.parseEditorInlineCompletionTelemetry(baseTelemetry());
+    expect(telemetry.ok).toBe(true);
+    if (telemetry.ok) expect(telemetry.value.requestLatencyMsP95).toBe(120);
+  });
+});
+
+// #3918 finite original-first observations.
+describe("#3918 captured output root admission", () => {
+  it.each([
+    ["source", parseEditorInlineCompletionRequest],
+    ["public", publicOwner.parseEditorInlineCompletionRequest],
+  ])("%s refuses a malformed second root", (_surface, parse) => {
+    const input = baseRequest();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : undefined) });
+    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
+    expect(reads).toBe(2);
+  });
+  it.each([
+    ["source", parseEditorInlineCompletionRequest],
+    ["public", publicOwner.parseEditorInlineCompletionRequest],
+  ])("%s keeps a valid changed second root", (_surface, parse) => {
+    const input = baseRequest();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : "/other") });
+    const parsed = parse(input);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.root).toBe("/other");
+    expect(reads).toBe(2);
+  });
+});
+
+describe.each([
+  ["source", parseEditorInlineCompletionTelemetry],
+  ["public", publicOwner.parseEditorInlineCompletionTelemetry],
+] as const)("3918 original-first final telemetry relation %s", (_surface, parse) => {
+  it("refuses inversion on the actual final metric observations", () => {
+    let p50Reads = 0;
+    let p95Reads = 0;
+    const input = baseTelemetry();
+    Object.defineProperty(input, "requestLatencyMsP50", {
+      get(): number {
+        p50Reads += 1;
+        return p50Reads <= 4 ? 42 : 200;
+      },
+    });
+    Object.defineProperty(input, "requestLatencyMsP95", {
+      get(): number {
+        p95Reads += 1;
+        return p95Reads <= 4 ? 120 : 100;
+      },
+    });
+    expect(parse(input)).toEqual({
+      ok: false,
+      errors: ["requestLatencyMsP95 must be greater than or equal to requestLatencyMsP50"],
+    });
+  });
+  it("retains valid changing metrics and legacy omitted defaults", () => {
+    const input = baseTelemetry();
+    let reads = 0;
+    Object.defineProperty(input, "requestLatencyMsP50", {
+      get(): number {
+        reads += 1;
+        return reads <= 4 ? 42 : 50;
+      },
+    });
+    expect(parse(input)).toMatchObject({
+      ok: true,
+      value: { requestLatencyMsP50: 50, requestLatencyMsP95: 120 },
+    });
+    const legacy = baseTelemetry();
+    delete legacy.requestLatencyMsP50;
+    delete legacy.requestLatencyMsP95;
+    expect(parse(legacy)).toMatchObject({
+      ok: true,
+      value: { requestLatencyMsP50: 0, requestLatencyMsP95: 0 },
+    });
+  });
+});
+
+describe.each([
+  ["source", parseEditorInlineCompletionTelemetry],
+  ["public", publicOwner.parseEditorInlineCompletionTelemetry],
+] as const)("3918 individual legacy latency omission %s", (_surface, parse) => {
+  it("preserves an omitted p95 while p50 remains supplied", () => {
+    const value = baseTelemetry();
+    delete value.requestLatencyMsP95;
+    expect(parse(value)).toMatchObject({
+      ok: true,
+      value: { requestLatencyMsP50: 42, requestLatencyMsP95: 0 },
+    });
+  });
+});

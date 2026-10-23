@@ -42,6 +42,7 @@ RUN apt-get update \
         libxkbcommon0 \
         libxrandr2 \
         unzip \
+        zip \
     && rm -rf /var/lib/apt/lists/*
 
 # Browsers live outside the bind-mounted workspace so a host checkout is never polluted and the

@@ -110,6 +110,112 @@ describe("coding app-session channel contract", () => {
     );
     expect(validateCodingAppSessionChannelSnapshot(oversized).ok).toBe(true);
   });
+
+  it("retains snapshot identity and the ordered shape and serialization failure phases", () => {
+    const value = { schemaVersion: "1", content: { kind: "note", body: "bounded 日本語" } };
+    const malformed = {
+      schemaVersion: "2",
+      content: { kind: "", body: "", extra: true },
+      extra: true,
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      const healthy = validateCodingAppSessionChannelSnapshot(value);
+      expect(healthy.ok).toBe(true);
+      if (healthy.ok) expect(healthy.value).toBe(value);
+      expect(stringify).toHaveBeenCalledOnce();
+      expect(stringify.mock.calls[0]?.[0]).toBe(value);
+      stringify.mockClear();
+      expect(validateCodingAppSessionChannelSnapshot(malformed)).toEqual({
+        ok: false,
+        errors: [
+          "channelSnapshot.extra is not allowed",
+          "channelSnapshot.schemaVersion is invalid",
+          "channelSnapshot.content.extra is not allowed",
+          "channelSnapshot.content.kind must be a bounded non-empty string",
+          "channelSnapshot.content.body must be bounded non-empty display text",
+        ],
+      });
+      expect(stringify).not.toHaveBeenCalled();
+      stringify.mockImplementationOnce(() => {
+        throw new TypeError("fixture snapshot serialization failure");
+      });
+      expect(validateCodingAppSessionChannelSnapshot(value)).toEqual({
+        ok: false,
+        errors: ["channel snapshot exceeds the aggregate UTF-8 byte budget"],
+      });
+      expect(stringify).toHaveBeenCalledOnce();
+      expect(stringify.mock.calls[0]?.[0]).toBe(value);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(validateCodingAppSessionChannelSnapshot(value)).toEqual({ ok: true, value });
+  });
+
+  it("preserves content-free and safe-activity snapshot identities", () => {
+    const snapshots = [
+      contentFreeCodingAppSessionChannelSnapshot(),
+      {
+        schemaVersion: "1",
+        content: {
+          kind: "safe-activity",
+          feed: {
+            schemaVersion: "1",
+            availability: "available",
+            runId: "run-snapshot-identity",
+            updatedAt: "2026-07-18T17:00:00.000Z",
+            turns: [],
+            truncated: false,
+            droppedEventCount: 0,
+          },
+        },
+      },
+    ];
+    for (const value of snapshots) {
+      const result = validateCodingAppSessionChannelSnapshot(value);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(value);
+    }
+  });
+
+  it("preserves eager shape reads and serialization of the original snapshot", () => {
+    const reads: string[] = [];
+    const content = {
+      get kind(): string {
+        reads.push("kind");
+        return "note";
+      },
+      get body(): string {
+        reads.push("body");
+        return "bounded";
+      },
+    };
+    const value = {
+      get schemaVersion(): string {
+        reads.push("version");
+        return "1";
+      },
+      get content(): typeof content {
+        reads.push("content");
+        return content;
+      },
+    };
+    const result = validateCodingAppSessionChannelSnapshot(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toEqual([
+      "version",
+      "content",
+      "content",
+      "kind",
+      "kind",
+      "body",
+      "version",
+      "content",
+      "kind",
+      "body",
+    ]);
+  });
 });
 
 describe("coding app-session pairing attestation", () => {

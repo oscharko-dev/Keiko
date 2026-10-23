@@ -173,3 +173,82 @@ describe("target version shape is one shared rule (KEIKO-0326)", () => {
     expect(validTargetVersion(version)).toBe(false);
   });
 });
+
+import { parseUpdateRestartVerificationRequest } from "./update-session.js";
+import * as publicUpdateSession from "@oscharko-dev/keiko-contracts/runtime/update-session";
+
+describe("copied update observation admission", () => {
+  for (const [surface, api] of [
+    ["source", { parseUpdateSessionStartRequest, parseUpdateRestartVerificationRequest }],
+    ["public", publicUpdateSession],
+  ] as const) {
+    it(`${surface}: refuses the malformed copied request id with the existing diagnostic`, () => {
+      let reads = 0;
+      const input = {
+        candidateId: "candidate-1",
+        confirmationDigest: "a".repeat(64),
+        executionToken: "b".repeat(64),
+        get requestId(): unknown {
+          reads += 1;
+          return reads === 2 ? 1 : "request-1";
+        },
+      };
+      expect(api.parseUpdateSessionStartRequest(input)).toEqual({
+        ok: false,
+        errors: ["requestId must be a token of 1-128 characters"],
+      });
+      expect(reads).toBe(3);
+    });
+    it(`${surface}: preserves a healthy three-read request id`, () => {
+      let reads = 0;
+      const input = {
+        candidateId: "candidate-1",
+        confirmationDigest: "a".repeat(64),
+        executionToken: "b".repeat(64),
+        get requestId(): unknown {
+          reads += 1;
+          return "request-1";
+        },
+      };
+      const result = api.parseUpdateSessionStartRequest(input);
+      expect(result).toEqual({
+        ok: true,
+        value: {
+          candidateId: "candidate-1",
+          confirmationDigest: "a".repeat(64),
+          executionToken: "b".repeat(64),
+          requestId: "request-1",
+        },
+      });
+      expect(reads).toBe(3);
+    });
+    it(`${surface}: refuses the malformed final copied restart version`, () => {
+      let reads = 0;
+      const input = {
+        get targetVersion(): unknown {
+          reads += 1;
+          return reads === 4 ? 1 : "1.2.0";
+        },
+      };
+      expect(api.parseUpdateRestartVerificationRequest(input)).toEqual({
+        ok: false,
+        errors: ["targetVersion must be a stable semver version"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: preserves a healthy changing final copied restart version`, () => {
+      let reads = 0;
+      const input = {
+        get targetVersion(): unknown {
+          reads += 1;
+          return reads === 4 ? "1.2.1" : "1.2.0";
+        },
+      };
+      expect(api.parseUpdateRestartVerificationRequest(input)).toEqual({
+        ok: true,
+        value: { targetVersion: "1.2.1" },
+      });
+      expect(reads).toBe(4);
+    });
+  }
+});

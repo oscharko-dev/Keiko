@@ -516,3 +516,60 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
     },
   );
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const source = collection();
+    const parsed = publicOwner.parseEditorM7WorkspaceSnippetCollection(source);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.snippets[0]).toBe(source.snippets[0]);
+    expect(Object.isFrozen(parsed.value.snippets)).toBe(true);
+    expect(publicOwner.compileEditorM7SnippetBody(["${CURRENT_YEAR}"])).toEqual({
+      ok: true,
+      value: "${CURRENT_YEAR}$0",
+    });
+  });
+});
+
+function spoofSnippetMembers(healthy: string): unknown[] {
+  const entries: unknown[] = [7];
+  Object.defineProperty(entries, Symbol.iterator, {
+    value: function* (): Generator<string> {
+      yield healthy;
+    },
+  });
+  return entries;
+}
+describe.each([
+  ["source", parseEditorM7WorkspaceSnippetCollection],
+  ["public", publicOwner.parseEditorM7WorkspaceSnippetCollection],
+] as const)("#3918 stage2 snippet physical members %s", (_surface, parse) => {
+  it("healthy retained snippet members and ordinary malformed members", () => {
+    const source = collection();
+    const result = parse(source);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.snippets[0]).toBe(source.snippets[0]);
+    expect(parse({ ...source, snippets: [{ ...snippet(), prefixes: [7] }] })).toEqual({
+      ok: false,
+      reasonCode: "INVALID_INPUT",
+    });
+  });
+  it.each([
+    ["prefixes", "ktest", "INVALID_INPUT"],
+    ["languages", "typescript", "INVALID_INPUT"],
+    ["include", "src/**/*.ts", "UNSAFE_PATH"],
+    ["exclude", "src/**/*.spec.ts", "UNSAFE_PATH"],
+    ["body", "$0", "UNSAFE_SNIPPET"],
+  ])("finite iterator cannot replace physical %s members", (field, healthy, reasonCode) => {
+    expect(
+      parse({
+        ...collection(),
+        snippets: [{ ...snippet(), [field]: spoofSnippetMembers(healthy) }],
+      }),
+    ).toEqual({ ok: false, reasonCode });
+  });
+});

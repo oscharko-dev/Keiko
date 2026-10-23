@@ -370,7 +370,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Exported enum guards ─────────────────────────────────────────────────────────────────────────
@@ -523,11 +524,21 @@ export function isGitMergeReadinessBlocker(value: unknown): value is GitMergeRea
 }
 
 function isBlockerArray(value: unknown): value is readonly GitMergeReadinessBlocker[] {
-  return Array.isArray(value) && value.every(isGitMergeReadinessBlocker);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitMergeReadinessBlocker(value[index])) return false;
+  }
+  return true;
 }
 
 function hasBlockingBlocker(blockers: readonly { readonly severity: string }[]): boolean {
-  return blockers.some((blocker) => blocker.severity === "blocking");
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (blockers[index]?.severity === "blocking") return true;
+  }
+  return false;
 }
 
 // The only code collectMergeAdvisory ever constructs via advisory(...) — kept immediately beside
@@ -543,17 +554,26 @@ const CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT: ReadonlySet<GitMergeReadinessBlocke
 ]);
 
 function hasIllegitimateAdvisoryBlocker(blockers: readonly GitMergeReadinessBlocker[]): boolean {
-  return blockers.some(
-    (blocker) =>
-      blocker.severity === "advisory" && !CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT.has(blocker.code),
-  );
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    const blocker = blockers[index];
+    if (
+      blocker?.severity === "advisory" &&
+      !CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT.has(blocker.code)
+    )
+      return true;
+  }
+  return false;
 }
 
 // "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
 // been seen, no blocking entry may follow.
 function isSeverityRanked(blockers: readonly { readonly severity: string }[]): boolean {
   let sawAdvisory = false;
-  for (const blocker of blockers) {
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    const blocker = blockers[index];
+    if (blocker === undefined) return false;
     if (blocker.severity === "advisory") {
       sawAdvisory = true;
     } else if (sawAdvisory) {

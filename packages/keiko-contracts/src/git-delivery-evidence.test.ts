@@ -256,3 +256,48 @@ describe("evidence record guard (on-read tamper gate)", () => {
     expect(isGitDeliveryEvidenceRecord([baseRecord()])).toBe(false);
   });
 });
+
+import * as g2PublicEvidence from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
+
+describe("G2 physical audit records", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryAuditPacket],
+    ["public", g2PublicEvidence.isGitDeliveryAuditPacket],
+  ] as const) {
+    it(`${surface} admits actual audit producer output and preserves its records`, () => {
+      const records = [baseRecord()];
+      const packet = buildGitDeliveryAuditPacket(records, 1);
+      expect(validate(packet)).toBe(true);
+      expect(packet.records).toBe(records);
+      expect(packet.outcomeClassCounts.succeeded).toBe(1);
+    });
+    it(`${surface} refuses an absent physical record`, () => {
+      const packet = buildGitDeliveryAuditPacket([], 1);
+      expect(validate({ ...packet, recordCount: 1, records: Array(1) })).toBe(false);
+    });
+    it(`${surface} refuses an invalid record concealed by every`, () => {
+      const packet = buildGitDeliveryAuditPacket([], 1);
+      const records = [{}];
+      Object.defineProperty(records, "every", { value: () => true });
+      expect(validate({ ...packet, recordCount: 1, records })).toBe(false);
+    });
+  }
+});
+
+describe("G2 healthy inherited audit members", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryAuditPacket],
+    ["public", g2PublicEvidence.isGitDeliveryAuditPacket],
+  ] as const) {
+    it(`${surface} preserves inherited-present records and empty producer output`, () => {
+      const record = baseRecord();
+      const records = [record];
+      Reflect.deleteProperty(records, "0");
+      Object.setPrototypeOf(records, [record]);
+      const packet = buildGitDeliveryAuditPacket(records, 1);
+      expect(validate(packet)).toBe(true);
+      expect(packet.records).toBe(records);
+      expect(validate(buildGitDeliveryAuditPacket([], 1))).toBe(true);
+    });
+  }
+});

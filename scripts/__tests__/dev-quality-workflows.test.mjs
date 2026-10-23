@@ -1,5 +1,16 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -40,6 +51,7 @@ function runCiAggregate(overrides = {}) {
       BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
       CHANGE_SCOPE_RESULT: "success",
       CORE_QUALITY_RESULT: "success",
+      CODE_QUALITY_POLICY_RESULT: "success",
       COVERAGE_SONAR_RESULT: "success",
       CROSS_PLATFORM_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
@@ -276,12 +288,14 @@ describe("dev quality workflows", () => {
   it("binds every full-tree quality lane to the same immutable merge candidate", () => {
     const candidateJobs = [
       "core-quality",
+      "code-quality-policy",
       "coverage-packages",
       "coverage-ui",
       "coverage-scripts",
       "coverage-sonar",
       "build-scan-sbom-smoke",
       "cross-platform-smoke",
+      "firefox-smoke",
       "ui",
     ];
 
@@ -501,11 +515,16 @@ describe("dev quality workflows", () => {
     // If it is dropped, the consolidated evaluation loses its keiko-ui input entirely.
     expect(coverageJob).toContain("Download keiko-ui coverage evidence");
     const mergeAt = coverageJob.indexOf("npm run test:coverage:packages:merge");
+    const scriptMergeAt = coverageJob.indexOf("npm run test:coverage:scripts:merge");
     const judgeAt = coverageJob.indexOf("npm run check:coverage:quality");
     const scanAt = coverageJob.indexOf("SonarCloud CI-based analysis");
     expect(mergeAt).toBeGreaterThan(-1);
+    expect(scriptMergeAt).toBeGreaterThan(-1);
+    expect(coverageJob).toContain("path: .vitest-reports-scripts");
     expect(judgeAt).toBeGreaterThan(mergeAt);
+    expect(judgeAt).toBeGreaterThan(scriptMergeAt);
     expect(scanAt).toBeGreaterThan(mergeAt);
+    expect(scanAt).toBeGreaterThan(scriptMergeAt);
   });
 
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
@@ -551,6 +570,8 @@ describe("dev quality workflows", () => {
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
+    expect(aggregateJob).toContain("- code-quality-policy");
+    expect(aggregateJob).toContain("CODE_QUALITY_POLICY_RESULT");
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
@@ -712,5 +733,97 @@ describe("dev quality workflows", () => {
     expect(mutation).not.toContain("workflow_run");
     expect(ci).not.toContain("pull_request_target");
     expect(ci).not.toContain("workflow_run");
+  });
+});
+
+function withAptSourceFixture(assert) {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-apt-sources-"));
+  try {
+    assert(directory);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function runAptSourcePreflight(paths) {
+  const action = parse(
+    readFileSync(resolve(root, ".github/actions/setup-sandbox-isolation/action.yml"), "utf8"),
+    { maxAliasCount: 0 },
+  );
+  const preflight = action.runs.steps[0].run;
+  // The original preflight has no normalization program and leaves these inputs unchanged.
+  const program = preflight.split("<<'NODE'\n")[1]?.split("\nNODE")[0] ?? "";
+  const result = spawnSync(process.execPath, ["--input-type=module", "-", ...paths], {
+    input: program,
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
+function aptSourceIdentity(path) {
+  const source = statSync(path);
+  return { ino: source.ino, uid: source.uid, gid: source.gid, mode: source.mode };
+}
+
+describe("Linux APT source preflight", () => {
+  it("normalizes the actual mirror list and source formats without changing trust fields", () => {
+    withAptSourceFixture((directory) => {
+      const fixtures = [
+        [
+          "apt-mirrors.txt",
+          "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n",
+          "https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n",
+        ],
+        [
+          "ubuntu.list",
+          "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://azure.archive.ubuntu.com/ubuntu noble main universe\n",
+          "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu/ noble main universe\n",
+        ],
+        [
+          "ubuntu.sources",
+          "Types: deb\r\nURIs: http://azure.archive.ubuntu.com/ubuntu/ http://azure.archive.ubuntu.com/ubuntu/\r\nSuites: noble noble-updates noble-backports noble-security\r\nComponents: main restricted universe multiverse\r\nArchitectures: amd64\r\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\r\n",
+          "Types: deb\r\nURIs: https://archive.ubuntu.com/ubuntu/ https://archive.ubuntu.com/ubuntu/\r\nSuites: noble noble-updates noble-backports noble-security\r\nComponents: main restricted universe multiverse\r\nArchitectures: amd64\r\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\r\n",
+        ],
+      ];
+      const paths = fixtures.map(([name, input]) => {
+        const path = join(directory, name);
+        writeFileSync(path, input, { mode: 0o640 });
+        return path;
+      });
+      const identities = paths.map(aptSourceIdentity);
+      runAptSourcePreflight(paths);
+      for (const [index, path] of paths.entries()) {
+        expect(readFileSync(path, "utf8")).toBe(fixtures[index][2]);
+        expect(aptSourceIdentity(path)).toEqual(identities[index]);
+      }
+    });
+  });
+
+  it("preserves a source symlink and leaves unrelated read-only inputs unwritten", () => {
+    withAptSourceFixture((directory) => {
+      const target = join(directory, "target.sources");
+      const link = join(directory, "ubuntu.sources");
+      const unchanged = join(directory, "unrelated.list");
+      writeFileSync(target, "URIs: http://azure.archive.ubuntu.com/ubuntu/\n", { mode: 0o640 });
+      symlinkSync("target.sources", link, "file");
+      const untouched =
+        "https://security.ubuntu.com/ubuntu/\nhttps://archive.ubuntu.com/ubuntu/\nhttps://packages.microsoft.com/ubuntu/24.04/prod\nhttp://azure.archive.ubuntu.com.evil/ubuntu/\nhttp://azure.archive.ubuntu.com/ubuntu/nested\n";
+      writeFileSync(unchanged, untouched, { mode: 0o400 });
+      utimesSync(unchanged, new Date(0), new Date(0));
+      const identity = aptSourceIdentity(target);
+      const linkIdentity = lstatSync(link).ino;
+      const untouchedIdentity = aptSourceIdentity(unchanged);
+      const untouchedTime = statSync(unchanged).mtimeMs;
+      runAptSourcePreflight([link, unchanged, join(directory, "absent.list"), directory]);
+      expect(readFileSync(target, "utf8")).toBe("URIs: https://archive.ubuntu.com/ubuntu/\n");
+      expect(aptSourceIdentity(target)).toEqual(identity);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(lstatSync(link).ino).toBe(linkIdentity);
+      expect(readlinkSync(link)).toBe("target.sources");
+      expect(readFileSync(unchanged, "utf8")).toBe(untouched);
+      expect(aptSourceIdentity(unchanged)).toEqual(untouchedIdentity);
+      expect(statSync(unchanged).mtimeMs).toBe(untouchedTime);
+    });
   });
 });

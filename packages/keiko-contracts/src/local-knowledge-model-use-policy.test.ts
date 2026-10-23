@@ -111,3 +111,78 @@ describe("Knowledge Pod model-use policy", () => {
     expect(result.errors).toContain("modelUsePolicy.operations.rawContentRelease is invalid");
   });
 });
+
+import { validateKnowledgePodModelUsePolicy as publicValidatePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+type PolicyAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicPolicy(input: unknown): void {
+  const result = publicValidatePolicy(input);
+  if (result.ok) {
+    const schema: "1" = result.value.schemaVersion;
+    const mode: "sealed-local" | "standard" | "custom" = result.value.mode;
+    const decision: "allow" | "deny" | "inherit" = result.value.operations.rawContentRelease;
+    const _concrete: PolicyAny<typeof result.value> = false;
+    const _concreteDecision: PolicyAny<typeof result.value.operations.rawContentRelease> = false;
+    expect(result.value).toBe(input);
+    expect(schema).toBe("1");
+    expect(mode).toBe("standard");
+    expect(decision).toBe(standardPodModelUsePolicy().operations.rawContentRelease);
+  }
+}
+it("public model policy consumer retains complete operations and references", () => {
+  const input = standardPodModelUsePolicy();
+  consumePublicPolicy(input);
+  const result = publicValidatePolicy(input);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toBe(input);
+  expect(result.value.operations).toBe(input.operations);
+  expect(
+    publicValidatePolicy({
+      ...input,
+      operations: { ...input.operations, rawContentRelease: "invalid" },
+    }).ok,
+  ).toBe(false);
+});
+
+describe.each([
+  ["source", validateKnowledgePodModelUsePolicy],
+  ["public", publicValidatePolicy],
+])("%s malformed policy admission", (_surface, validate) => {
+  it("refuses a non-record input", () => {
+    expect(validate(null)).toEqual({ ok: false, errors: ["modelUsePolicy must be an object"] });
+  });
+  it("retains schema and mode diagnostics before malformed operations", () => {
+    expect(validate({ schemaVersion: "2", mode: "unbounded", operations: null })).toEqual({
+      ok: false,
+      errors: [
+        "modelUsePolicy.schemaVersion is invalid",
+        "modelUsePolicy.mode is invalid",
+        "modelUsePolicy.operations must be an object",
+      ],
+    });
+  });
+  it("refuses the first missing operation", () => {
+    expect(validate({ ...standardPodModelUsePolicy(), operations: {} })).toEqual({
+      ok: false,
+      errors: ["modelUsePolicy.operations.externalEmbeddings is invalid"],
+    });
+  });
+  it("refuses an unknown operations key before a bad decision", () => {
+    expect(
+      validate({
+        ...standardPodModelUsePolicy(),
+        operations: {
+          ...standardPodModelUsePolicy().operations,
+          metadata: false,
+          externalEmbeddings: "unbounded",
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "modelUsePolicy.operations must not include metadata",
+        "modelUsePolicy.operations.externalEmbeddings is invalid",
+      ],
+    });
+  });
+});

@@ -157,8 +157,9 @@ base branch):
    instantiating Monaco. #1207 measures and enforces these budgets; #1209 records release evidence.
 7. **Monaco DOMPurify supply-chain control (#1196 host mount).** Mounting Monaco in `keiko-ui` brings
    `monaco-editor`'s declared `dompurify@3.4.8` dependency into keiko-ui's audit closure. The control
-   is a root `overrides: { dompurify: "3.4.13" }` pinning the patched DOMPurify line (the advisories
-   affect `<= 3.4.10`); `monaco-editor` stays at the reviewed `0.56.0` pin and the old
+   is a root `overrides: { dompurify: "3.4.17" }` pinning the patched DOMPurify line (the reviewed
+   advisories affect versions through `3.4.16`); `monaco-editor` stays at the reviewed `0.56.0` pin and
+   the old
    `npm audit fix` downgrade path is not taken. The override does not replace Monaco's vendored
    DOMPurify copy, which is also `3.4.8` in `monaco-editor@0.56.0`. Governed providers
    may explicitly enable hover, completion, parameter hints, code-action lightbulbs, and inlay hints;
@@ -167,7 +168,8 @@ base branch):
    than every content backtick run. Suggest documentation, links, code lens, the inline-suggest
    toolbar, and syntax-highlighted ghost text remain disabled. Runtime guards discard non-string
    completion/signature metadata even if an untyped host violates the TypeScript contract. The
-   durable fix remains upgrading Monaco to a release vendoring DOMPurify `> 3.4.10` once one exists.
+   durable fix remains upgrading Monaco to a release whose vendored DOMPurify fixes the reviewed
+   advisories.
    Detailed in the `@oscharko-dev/keiko-editor` README supply-chain note.
 
 ### D4 — Server-side deterministic language service is the single source of truth

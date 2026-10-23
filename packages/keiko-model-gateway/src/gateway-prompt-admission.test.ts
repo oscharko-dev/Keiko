@@ -8,7 +8,11 @@ import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-
 import { createDefaultChatCapability } from "./capabilities.js";
 import type { GatewayCallRequest } from "./gateway.js";
 import type { ModelProviderConfig } from "./types.js";
-import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
+import type {
+  GatewayFailureEvidence,
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+} from "./observability.js";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   countGatewayPromptTokens,
@@ -69,7 +73,7 @@ describe("provider counter availability", () => {
 });
 
 it("retains a prior measured contribution if counting fails during a repair", async () => {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const budget = deriveContextProfileFromCapability(capability).effectiveInputBudget;
   const fetchImpl = vi
     .fn<typeof fetch>()
@@ -143,11 +147,11 @@ it.each([50, 100])("charges the complete local admission duration of %i ms", asy
 });
 
 function captureAdmissionEvents(): {
-  events: ModelGatewayLogEvent[];
-  write: (event: ModelGatewayLogEvent) => void;
+  events: ModelGatewayLogTransport[];
+  write: (event: ModelGatewayLogTransport) => void;
   errorEvidence: () => GatewayFailureEvidence;
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     write: (event): void => {
@@ -236,7 +240,7 @@ describe.each([false, true])("retry measurement evidence with image=%s", (image)
       await admission.admit(repaired, 1000);
       const event = sink.events.filter((entry) => entry.op === "gateway.prompt.admission").at(-1);
       // The current counter result must stay raw, including an absent measurement on failure.
-      expect(event?.extra?.reportedPromptTokens).toBe(reported);
+      expect(normalFixtureEvent(event)?.extra?.reportedPromptTokens).toBe(reported);
       const persisted = expectActivityLogProof(
         "gateway.prompt.admission.bounds",
         formatActivityLogProofLine(event ?? {}),
@@ -311,7 +315,11 @@ it("records cooldown activation, per-call suppression, and expiry with model sco
   expect(fetchImpl).toHaveBeenCalledTimes(2);
   const events = sink.events.filter((event) => event.op === "gateway.prompt.counter-cooldown");
   expect(
-    events.map((event) => [event.correlationId, event.extra?.state, event.extra?.remainingMs]),
+    events.map((event) => [
+      event.correlationId,
+      normalFixtureEvent(event).extra?.state,
+      normalFixtureEvent(event).extra?.remainingMs,
+    ]),
   ).toEqual([
     ["cooldown-first", "activated", 60_000],
     ["cooldown-second", "suppressed", 59_000],
@@ -373,3 +381,15 @@ it.each(["counter", "validation"] as const)(
     });
   },
 );
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -1,3 +1,19 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import {
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import {
+  addSourceToCapsule,
+  persistHtmlManualSourceMetadata,
+} from "@oscharko-dev/keiko-local-knowledge";
+import type { KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import {
+  createServerLogger,
+  setServerLogger,
+  type ServerLogEvent,
+} from "../observability/index.js";
 // Issue #2242 — Confluence sync composition tests: routes + service + provider adapter + sync
 // lane + local-knowledge sink, end to end. Hermetic: the transport is the in-memory Confluence
 // fixture from keiko-connectors (mirroring createInMemoryManualFetcher — no atlassian.net, no
@@ -770,5 +786,76 @@ describe("Confluence sync — governed (agent-initiated) start correlation", () 
       disposition: "denied",
       correlationId: "req-governed-thread-01",
     });
+  });
+});
+
+describe("unapplied connector summary evidence", () => {
+  it("wires the existing job port and correlation after a provider timeout", async () => {
+    const healthy = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [fixtureSpace()],
+    });
+    let unavailable = false;
+    const port: AtlassianHttpBodyPort = (request) =>
+      unavailable ? Promise.resolve({ kind: "timeout" }) : healthy(request);
+    const { deps, credential } = depsFor(port);
+    const first = await startSync(deps, credential, { spaceKeys: ["ENG"] });
+    await awaitTerminal(first.job.jobId);
+    const session = openKnowledgeStoreForDeps(deps);
+    const sourceId = "sync-mixed-manual" as KnowledgeSourceId;
+    try {
+      addSourceToCapsule(session.store, first.capsuleId as KnowledgeCapsuleId, {
+        id: sourceId,
+        displayName: "Fixture manual",
+        tags: [
+          htmlManualSourceKindTag("html-manual-http"),
+          htmlManualSourceFingerprintTag("fp-sync"),
+        ],
+        scope: { kind: "folder", rootPath: "/fixture/manual", recursive: true },
+      });
+      persistHtmlManualSourceMetadata(
+        session.store,
+        first.capsuleId as KnowledgeCapsuleId,
+        sourceId,
+        {
+          schemaVersion: "1",
+          scope: {
+            kind: "html-manual-http",
+            origin: "https://manual.example.invalid",
+            pathPrefix: null,
+          },
+          limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+          sourceFingerprint: "fp-sync",
+          proposedPodName: "Fixture manual",
+        },
+      );
+      // Historical corrupt state after a healthy source INSERT.
+      session.store._internal.db
+        .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
+        .run({ bytes: "{private-summary-fixture" });
+    } finally {
+      session.close();
+    }
+    const events: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+    );
+    try {
+      unavailable = true;
+      const started = await startSync(deps, credential, { capsuleId: first.capsuleId });
+      const terminal = await awaitTerminal(started.job.jobId);
+      expect(terminal.status).toBe("failed");
+      const rejected = events.filter(
+        (event) => event.op === "knowledge.manual-refresh-summary.rejected",
+      );
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toMatchObject({
+        correlationId: started.job.jobId,
+        extra: { invalidJsonCount: 1, summaryReturned: false },
+      });
+      expect(JSON.stringify(events)).not.toContain("private-summary-fixture");
+    } finally {
+      resetServerLogger();
+    }
   });
 });

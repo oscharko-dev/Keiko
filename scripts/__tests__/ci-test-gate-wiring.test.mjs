@@ -1,7 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 // GEN-SYNTH-COVERAGE-003 / GEN-TEST-E2E-001 / GEN-TEST-RELEASE-GATE-*: the audit's core meta-finding
 // is "the CI/release gate estate is green but load-bearing in the wrong places" — required proof
@@ -152,7 +155,8 @@ const REQUIRED_CI_COMMANDS = [
   // exactly-once assertion below is what replaced it.
   "npm run test:coverage:packages:shard",
   "npm run test:coverage:packages:merge",
-  "npm run test:coverage:scripts",
+  "npm run test:coverage:scripts:shard",
+  "npm run test:coverage:scripts:merge",
   "npm run check:coverage:quality",
   "npm run test:coverage:ui",
   // Browser release proof.
@@ -221,6 +225,53 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it.each([
+    ["packages", 5, ".vitest-reports"],
+    ["scripts", 2, ".vitest-reports-scripts"],
+  ])("requires every native %s coverage shard before merging", (scope, count, directory) => {
+    const workflow = parse(ci);
+    const job = workflow.jobs[`coverage-${scope}`];
+    expect(job.strategy["fail-fast"]).toBe(false);
+    expect(job.strategy.matrix.shard).toEqual(Array.from({ length: count }, (_, i) => i + 1));
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(job.steps.find((step) => step.run?.includes(`test:coverage:${scope}:shard`)).run).toBe(
+      `npm run test:coverage:${scope}:shard -- --shard=${"${{ matrix.shard }}"}/${count} --reporter=github-actions`,
+    );
+    const finalizer = workflow.jobs["coverage-sonar"].steps;
+    const admission = finalizer.find(
+      (step) =>
+        step.name ===
+        `Verify every ${scope === "packages" ? "package" : "script"} coverage shard delivered its evidence`,
+    );
+    expect(admission).toBeDefined();
+    const root = mkdtempSync(join(tmpdir(), "keiko-coverage-admission-"));
+    try {
+      const scratch = join(root, directory);
+      // Exercise the actual workflow admission shell; do not substitute a test-only checker.
+      const run = () => spawnSync("bash", ["-c", admission.run], { cwd: root, encoding: "utf8" });
+      expect(run().status).not.toBe(0);
+      mkdirSync(scratch);
+      for (let i = 1; i <= count; i += 1)
+        writeFileSync(join(scratch, `blob-${i}-${count}.json`), "{}");
+      expect(run().status).toBe(0);
+      rmSync(join(scratch, `blob-${count}-${count}.json`));
+      expect(run().status).not.toBe(0);
+      writeFileSync(join(scratch, "blob-foreign.json"), "{}");
+      expect(run().status).not.toBe(0);
+      writeFileSync(join(scratch, `blob-${count}-${count}.json`), "{}");
+      expect(run().status).not.toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    const merge = finalizer.findIndex(
+      (step) => step.run === `npm run test:coverage:${scope}:merge`,
+    );
+    expect(merge).toBeGreaterThan(finalizer.indexOf(admission));
+    expect(
+      finalizer.findIndex((step) => step.run === "npm run check:coverage:quality"),
+    ).toBeGreaterThan(merge);
+  });
+
   it("keeps package coverage blob paths aligned with the governed Vitest 4 reporter", () => {
     expect(rootManifest.scripts["test:coverage:packages:shard"]).toContain("--reporter=blob");
     expect(rootManifest.scripts["test:coverage:packages:merge"]).toContain(
@@ -229,7 +280,7 @@ describe("CI test/gate wiring guard", () => {
     expect(ci).toContain("path: .vitest-reports/");
     expect(ci).toContain("path: .vitest-reports\n");
     expect(ci).toContain("find .vitest-reports -maxdepth 1 -name 'blob-*.json'");
-    expect(ci).toContain("run: rm -rf .vitest-reports");
+    expect(ci).toContain("run: rm -rf .vitest-reports .vitest-reports-scripts");
   });
 
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
@@ -487,10 +538,12 @@ describe("CI test/gate wiring guard", () => {
     // Issue #3594 adds the required customer-shape qualification job to the release workflow.
     // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
     // The portable secure-read matrix adds one governed Node 24 lane for all four native targets.
-    expect(node24SetupCount).toBe(32);
+    // The isolated Firefox smoke matrix adds one governed Node 24 setup definition.
+    expect(node24SetupCount).toBe(33);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(33);
-    expect(verificationCount).toBe(nodeSetupCount);
+    expect(nodeSetupCount).toBe(34);
+    expect(verificationCount).toBe(nodeSetupCount + 1);
+    expect(ci).toContain("node-version: ${{ matrix.node }}");
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });
@@ -553,7 +606,8 @@ describe("CI test/gate wiring guard", () => {
 
   it("measures each coverage suite exactly once per run", () => {
     expect(runLineCount("npm run test:coverage:ui")).toBe(1);
-    expect(runLineCount("npm run test:coverage:scripts")).toBe(1);
+    expect(runLineCount("npm run test:coverage:scripts")).toBe(0);
+    expect(runLineCount("npm run test:coverage:scripts:merge")).toBe(1);
     expect(runLineCount("npm run check:coverage:quality")).toBe(1);
   });
 

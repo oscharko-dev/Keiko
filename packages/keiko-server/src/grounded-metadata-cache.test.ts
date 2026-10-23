@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function physicalRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-metadata-cache-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-metadata-cache-")));
   roots.push(root);
   return root;
 }
@@ -77,6 +77,31 @@ function manifestCorpus(root: string, count: number): void {
 }
 
 describe("metadata retention and pre-read cache identity", () => {
+  it("retains every explicit file beyond the reference preview on cold and warm searches", async () => {
+    const root = physicalRoot();
+    mkdirSync(join(root, "src"));
+    const paths = Array.from({ length: 6 }, (_, index) => `src/source${String(index)}.ts`);
+    for (const path of paths) writeFileSync(join(root, path), "export const sharedMarker = 7;\n");
+    writeFileSync(join(root, "README.md"), "Accepted behavior: preserve customer input.\n");
+    const requested = [...paths, "README.md"];
+    const microIndex = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: () => 0 });
+    const get = vi.spyOn(microIndex, "get");
+    const deps = dependencies(root, { microIndex });
+    const input = request(root, `Compare sharedMarker using ${requested.join(", ")}.`);
+    const cold = await retrieveConnectedContextPack(input, deps);
+    expect(cold.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining(requested),
+    );
+    expect(microIndex.size()).toBeGreaterThan(0);
+    get.mockClear();
+    const warm = await retrieveConnectedContextPack(input, deps);
+    expect(
+      get.mock.results.some((result) => result.type === "return" && result.value !== undefined),
+    ).toBe(true);
+    expect(warm.pack.files).toEqual(cold.pack.files);
+    expect(warm.pack.omitted).toEqual(cold.pack.omitted);
+  });
+
   it.each([
     ["Missing-8Z", "low", "Unit-G42", false],
     ["Unit-G42", "high", "Unit-G42", false],

@@ -12,6 +12,7 @@ import {
   nullModelGatewayLogSink,
   resolveLogSink,
   withCorrelationId,
+  type ModelGatewayLogTransport,
   type ModelGatewayLogEvent,
   type ModelGatewayLogLevel,
   type ModelGatewayLogSink,
@@ -32,7 +33,7 @@ describe("resolveLogSink", () => {
   it("delivers events to the caller's sink when one is wired", () => {
     const received: string[] = [];
     const sink = {
-      write: (event: ModelGatewayLogEvent): void => {
+      write: (event: ModelGatewayLogTransport): void => {
         received.push(event.op);
       },
     };
@@ -86,13 +87,13 @@ describe("logLevelEnabled", () => {
 describe("withCorrelationId", () => {
   function recorder(): {
     readonly sink: ModelGatewayLogSink;
-    readonly events: ModelGatewayLogEvent[];
+    readonly events: ModelGatewayLogTransport[];
   } {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     return {
       events,
       sink: {
-        write(event: ModelGatewayLogEvent): void {
+        write(event: ModelGatewayLogTransport): void {
           events.push(event);
         },
       },
@@ -145,8 +146,8 @@ describe("withCorrelationId", () => {
   it("delegates the level predicate to the wrapped sink, preserving its receiver", () => {
     class ThresholdSink implements ModelGatewayLogSink {
       private readonly declined: ModelGatewayLogLevel = "debug";
-      readonly events: ModelGatewayLogEvent[] = [];
-      write(event: ModelGatewayLogEvent): void {
+      readonly events: ModelGatewayLogTransport[] = [];
+      write(event: ModelGatewayLogTransport): void {
         this.events.push(event);
       }
       // Reads instance state on purpose: a wrapper that copied the function instead of calling it
@@ -404,7 +405,7 @@ describe("a caller-supplied sink is foreign code", () => {
   // observability.ts. A raw sink that accepts only its own report shape, and refuses everything
   // else, lets this test observe that written-back line instead of only counting attempts.
   it("proves the gateway.log.sink-failed line the report writes back through the same raw sink", () => {
-    const attempts: ModelGatewayLogEvent[] = [];
+    const attempts: ModelGatewayLogTransport[] = [];
     const rawSink: ModelGatewayLogSink = {
       write(event): void {
         attempts.push(event);

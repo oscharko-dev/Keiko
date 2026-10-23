@@ -606,6 +606,7 @@ function recordUnappliedOutcome(
       capsuleId: context.job.capsuleId,
       sourceId: context.job.sourceId,
       now: context.now,
+      logSink: processServerLogSink(),
     },
     {
       runId: context.job.jobId,

@@ -1,8 +1,10 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { ChatScopeNotice, type ChatScopeNoticeProps } from "../ChatScopeNotice";
+import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+import type { updateChatConnectedScopes } from "@/lib/api";
 import { ConnectedScopePill } from "../ConnectedScopePill";
 import { toUserErrorNotice } from "../format-error";
 import type {
@@ -59,6 +61,7 @@ import {
 } from "./memorySettings";
 import { loadMemoryAutonomyMode } from "@/lib/memory-session-api";
 import { fetchMarkdownSkillSelection } from "@/lib/markdown-skills-api";
+import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
 import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
@@ -120,6 +123,16 @@ vi.mock("@/lib/memory-session-api", () => ({
     deploymentCeiling: "governed-assist",
     revision: 0,
   }),
+}));
+
+vi.mock("@/lib/chat-draft-api", () => ({
+  readChatDraft: vi.fn().mockResolvedValue({ text: "", revision: 0 }),
+  writeChatDraft: vi
+    .fn()
+    .mockImplementation(async (_id: string, update: ChatDraftUpdate): Promise<ChatDraft> => ({
+      text: update.text,
+      revision: update.expectedRevision + 1,
+    })),
 }));
 
 afterEach(() => {
@@ -290,6 +303,48 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("reloads a bootstrap snapshot invalidated by an acknowledged scope mutation", async () => {
+    const initial = chat({ id: "chat-scope-bootstrap", updatedAt: 1 });
+    const changed = chat({
+      id: initial.id,
+      updatedAt: 2,
+      connectedScopes: [
+        { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 2 },
+      ],
+    });
+    const pending = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats)
+      .mockResolvedValueOnce({ chats: [initial] })
+      .mockResolvedValue({ chats: [changed] });
+    vi.mocked(fetchChatMessages)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ messages: [] });
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+    act(() => notifyChatUpsert(changed));
+    await act(async () => pending.resolve({ messages: [] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.connectedScopes).toEqual(changed.connectedScopes);
+    expect(result.current.chats.find((entry) => entry.id === initial.id)?.connectedScopes).toEqual(
+      changed.connectedScopes,
+    );
+    await waitFor(() => expect(result.current.draftPersistence?.phase).toBe("saved"));
+    unmount();
+  });
+
+  it("restores the private unsent draft when a chat window is reopened", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(readChatDraft).mockResolvedValueOnce({ text: "Unsent synthetic draft", revision: 2 });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.activeChat?.id).toBe("chat-1"));
+    await waitFor(() => expect(result.current.draft).toBe("Unsent synthetic draft"));
+  });
+
   it("requests a server background catalog refresh when the workspace bootstraps", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
@@ -1892,7 +1947,7 @@ function ScopeRefreshHarness({
   persist,
 }: {
   readonly capture: (session: UseChatSessionResult) => void;
-  readonly persist: NonNullable<ChatScopeNoticeProps["updateScopes"]>;
+  readonly persist: typeof updateChatConnectedScopes;
 }): ReactNode {
   const session = useChatSession({ autoCreate: false });
   useEffect((): void => capture(session), [capture, session]);
@@ -1902,12 +1957,18 @@ function ScopeRefreshHarness({
     <div>
       <output data-testid="scope-refresh-identity">{active.groundingScopeIdentity}</output>
       <ConnectedScopePill chat={active} onDisconnect={session.replaceChat} updateScopes={persist} />
-      <ChatScopeNotice
-        chat={active}
-        onChatChanged={session.replaceChat}
-        onKeepFolderChange={(): void => undefined}
-        updateScopes={persist}
-      />
+      <button
+        onClick={(): void => {
+          void replaceGroundingScopeList(
+            active,
+            scopeRefreshChats().folder.connectedScopes ?? [],
+            persist,
+            session.replaceChat,
+          ).then((reply) => session.replaceChat(reply.chat));
+        }}
+      >
+        Navigate to folder
+      </button>
       <button
         onClick={(): void => {
           void session.sendMessage({ text: "Inspect the current folder" });
@@ -1946,7 +2007,7 @@ async function mountScopeRefreshRace(): Promise<{
   readonly session: () => UseChatSessionResult;
   readonly observer: ReturnType<typeof renderHook<UseChatSessionResult, never>>;
   readonly chats: ReturnType<typeof scopeRefreshChats>;
-  readonly persist: NonNullable<ChatScopeNoticeProps["updateScopes"]>;
+  readonly persist: typeof updateChatConnectedScopes;
 }> {
   const chats = scopeRefreshChats();
   vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-doc" })] });
@@ -1962,7 +2023,7 @@ async function mountScopeRefreshRace(): Promise<{
     current = session;
   };
   const persist = vi
-    .fn<NonNullable<ChatScopeNoticeProps["updateScopes"]>>()
+    .fn<typeof updateChatConnectedScopes>()
     .mockResolvedValue({ chat: chats.restored });
   render(<ScopeRefreshHarness capture={capture} persist={persist} />);
   await waitFor(() =>
@@ -1973,7 +2034,7 @@ async function mountScopeRefreshRace(): Promise<{
   const observer = renderHook(() => useChatSession({ autoCreate: false }));
   await waitFor(() => expect(observer.result.current.loading).toBe(false));
   act(() => notifyChatUpsert(chats.file));
-  await screen.findByRole("button", { name: "Keep folder" });
+  await screen.findByTitle("/repo/src/validation.ts");
   return {
     session: (): UseChatSessionResult => {
       if (current === undefined) throw new TypeError("Missing mounted session");
@@ -1987,7 +2048,7 @@ async function mountScopeRefreshRace(): Promise<{
 
 describe("grounded post-answer refresh scope acknowledgement ownership", () => {
   it.each([false, true])(
-    "preserves Keep folder ACK while a %s-matched list is pending",
+    "preserves navigation ACK while a %s-matched list is pending",
     async (matched) => {
       const fixture = await mountScopeRefreshRace();
       const pending = deferred<Awaited<ReturnType<typeof fetchChats>>>();
@@ -1995,7 +2056,9 @@ describe("grounded post-answer refresh scope acknowledgement ownership", () => {
       vi.mocked(fetchChats).mockClear();
       fireEvent.click(screen.getByRole("button", { name: "Send scope question" }));
       await waitFor(() => expect(fetchChats).toHaveBeenCalledOnce());
-      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep folder" })));
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Navigate to folder" })),
+      );
       expect(fixture.persist).toHaveBeenCalledWith(
         fixture.chats.file.id,
         fixture.chats.folder.connectedScopes,
@@ -2082,6 +2145,22 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
     // The optimistic user message must NOT have been appended.
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("forgets a deleted chat's failed private draft without blocking another chat", async () => {
+    const { result } = await setupGroundedSession();
+    const originalId = result.current.activeChat!.id;
+    act(() => result.current.setDraft("Deleted private draft"));
+    vi.mocked(writeChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    await act(async () => {
+      expect(await result.current.draftPersistence?.prepareClose()).toBe(false);
+    });
+    await act(async () => result.current.openChat(chat({ id: "remaining-chat" })));
+    act(() => notifyChatDeleted(originalId));
+    await act(async () => {
+      expect(await result.current.draftPersistence?.prepareClose()).toBe(true);
+    });
+    expect(result.current.draft).toBe("");
   });
 
   it("treats git-change scopes as grounded when attachments are staged", async () => {
@@ -2171,7 +2250,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     },
   );
 
-  it.each(["newer chat", "new draft", "cancel"] as const)(
+  it.each(["newer chat", "new draft", "saved draft", "cancel"] as const)(
     "preserves %s while the refused chat refresh is pending",
     async (change) => {
       const { result } = await setupGroundedSession();
@@ -2200,8 +2279,15 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
         act(() => {
           if (change === "newer chat") notifyChatUpsert(newer);
           else if (change === "new draft") result.current.setDraft("New question");
-          else result.current.cancelSend();
+          else if (change === "cancel") result.current.cancelSend();
         });
+        if (change === "saved draft") {
+          vi.mocked(readChatDraft).mockResolvedValueOnce({
+            text: "Remote saved draft",
+            revision: 8,
+          });
+          await act(async () => result.current.draftPersistence?.retry());
+        }
         await act(async () => {
           refresh.resolve({
             chats: [{ ...original, groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}` }],
@@ -2212,12 +2298,14 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
         const expectedDraft = {
           "newer chat": "Private draft canary",
           "new draft": "New question",
+          "saved draft": "Remote saved draft",
           cancel: "",
         };
         expect(result.current.draft).toBe(expectedDraft[change]);
         const activities = {
           "newer chat": "scope-refusal-restored",
           "new draft": "scope-refusal-skipped-draft",
+          "saved draft": "scope-refusal-skipped-draft",
           cancel: "scope-refusal-skipped-owner",
         };
         expect(diagnostic).toHaveBeenCalledWith(
@@ -2306,7 +2394,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   });
 
   it.each(["INTERNAL", "GROUNDING_SCOPE_CHANGED"])(
-    "does not restore a typed draft for a non409 %s failure",
+    "restores a typed draft for a non409 %s failure only after missing-turn proof",
     async (code) => {
       const { result } = await setupGroundedSession();
       vi.mocked(askGrounded).mockRejectedValue(new ApiError(code, "Internal error.", 500));
@@ -2314,7 +2402,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
       await act(async () => {
         await result.current.sendMessage();
       });
-      expect(result.current.draft).toBe("");
+      expect(result.current.draft).toBe("Original typed question");
       expect(askGrounded).toHaveBeenCalledOnce();
     },
   );
@@ -5632,6 +5720,124 @@ describe("ungrounded streaming refusal recovery", () => {
       resetClientDiagnosticWriter();
     }
   });
+
+  function failCompactionStream(): void {
+    vi.mocked(sendDesktopChatStream).mockImplementationOnce(async (_input, _signal, handlers) => {
+      handlers.onStarted?.("compaction-timeout-test");
+      handlers.onError({
+        code: "GATEWAY_TIMEOUT",
+        message: "Prompt preparation timed out.",
+        correlationId: "compaction-timeout-test",
+      });
+    });
+  }
+
+  it.each(["missing", "failed", "cancelled"] as const)(
+    "restores a timed-out typed draft after exact reconciliation proves %s",
+    async (proof) => {
+      const { result } = await streamingSession();
+      failCompactionStream();
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+        messages:
+          proof === "missing" ? [] : [await canonicalMessage("timeout-turn", { turnState: proof })],
+      });
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        act(() => result.current.setDraft("Private timeout draft"));
+        await act(async () => {
+          await result.current.sendMessage({ clientTurnId: "timeout-turn" });
+          expect(await result.current.draftPersistence?.prepareClose()).toBe(true);
+        });
+        expect(result.current.draft).toBe("Private timeout draft");
+        expect(writeChatDraft).toHaveBeenLastCalledWith(
+          "chat-1",
+          expect.objectContaining({ text: "Private timeout draft" }),
+        );
+        expect(result.current.error).toContain("GATEWAY_TIMEOUT");
+        expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+        expect(sendDesktopChat).not.toHaveBeenCalled();
+        expect(diagnostic).toHaveBeenCalledWith("Keiko failed composer recovery.", {
+          correlationId: "compaction-timeout-test",
+          composerActivity: "send-failure-restored",
+        });
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private timeout draft");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("admits a new explicit typed send after a compaction timeout without replaying it", async () => {
+    const { result } = await streamingSession();
+    failCompactionStream();
+    act(() => result.current.setDraft("First question"));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.sendStatus).toBe("failed");
+    failCompactionStream();
+    act(() => result.current.setDraft("Revised question"));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(sendDesktopChatStream).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sendDesktopChatStream).mock.calls[1]?.[0]).toMatchObject({
+      content: "Revised question",
+    });
+    expect(result.current.draft).toBe("Revised question");
+  });
+
+  it.each(["persisted", "answered", "unknown"] as const)(
+    "does not restore a timeout draft when canonical evidence is %s",
+    async (proof) => {
+      const { result } = await streamingSession();
+      failCompactionStream();
+      if (proof === "unknown")
+        vi.mocked(fetchChatMessages).mockRejectedValueOnce(new TypeError("offline"));
+      else
+        vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+          messages: [
+            await canonicalMessage("timeout-turn"),
+            ...(proof === "answered"
+              ? [await canonicalMessage("timeout-turn", { role: "assistant", id: "reply" })]
+              : []),
+          ],
+        });
+      act(() => result.current.setDraft("Private timeout draft"));
+      await act(async () => {
+        await result.current.sendMessage({ clientTurnId: "timeout-turn" });
+      });
+      expect(result.current.draft).toBe("");
+      expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["new draft", "edit then clear"])(
+    "retains %s while timeout reconciliation is pending",
+    async (change) => {
+      const { result } = await streamingSession();
+      const reconciliation = deferred<Awaited<ReturnType<typeof fetchChatMessages>>>();
+      vi.mocked(fetchChatMessages).mockReturnValueOnce(reconciliation.promise);
+      failCompactionStream();
+      act(() => result.current.setDraft("Private timeout draft"));
+      let sending: Promise<unknown> | undefined;
+      act(() => {
+        sending = result.current.sendMessage();
+      });
+      await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
+      act(() => {
+        result.current.setDraft("Newer question");
+        if (change === "edit then clear") result.current.setDraft("");
+      });
+      await act(async () => {
+        reconciliation.resolve({ messages: [] });
+        await sending;
+      });
+      expect(result.current.draft).toBe(change === "new draft" ? "Newer question" : "");
+      expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    },
+  );
 
   it("refreshes sources and restores a scope-refused streaming draft without replay", async () => {
     const { result } = await streamingSession();

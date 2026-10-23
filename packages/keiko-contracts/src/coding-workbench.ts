@@ -761,7 +761,8 @@ export type CodingWorkbenchValidationResult<T> =
   CodingWorkbenchValidationOk<T> | CodingWorkbenchValidationFail;
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 export function isCodingWorkbenchMode(value: unknown): value is CodingWorkbenchMode {

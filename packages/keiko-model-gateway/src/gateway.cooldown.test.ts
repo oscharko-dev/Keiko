@@ -14,7 +14,7 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -61,7 +61,7 @@ function answer(): NormalizedResponse {
 function gateway(
   call: ProviderAdapter["call"],
   config = gatewayConfig(),
-  events: ModelGatewayLogEvent[] = [],
+  events: ModelGatewayLogTransport[] = [],
   random: () => number = () => 0,
 ): Gateway {
   return new Gateway(config, {
@@ -96,7 +96,7 @@ describe("concurrent provider cooldown admission", () => {
   });
   it("resamples admission jitter when another caller extends a sleeping cooldown", async () => {
     vi.useFakeTimers();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const random = vi.fn<() => number>().mockReturnValueOnce(0).mockReturnValue(1);
     let rejectSlow!: (error: Error) => void;
     const slowResponse = new Promise<NormalizedResponse>((_resolve, reject) => {
@@ -136,7 +136,7 @@ describe("concurrent provider cooldown admission", () => {
     expect(random).toHaveBeenCalledTimes(2);
     const delays = events
       .filter((event) => event.op === "gateway.circuit.wait" && event.extra?.outcome === "started")
-      .map((event) => event.extra?.delayMs);
+      .map((event) => normalFixtureEvent(event).extra?.delayMs);
     expect(delays).toEqual([101, 220]);
     await vi.advanceTimersByTimeAsync(219);
     expect(call).toHaveBeenCalledTimes(2);
@@ -149,7 +149,7 @@ describe("concurrent provider cooldown admission", () => {
 
   it.each([0, 1])("bounds fresh-caller admission jitter at random=%i", async (random) => {
     vi.useFakeTimers();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const call = vi
       .fn()
       .mockRejectedValueOnce(new RateLimitError("Synthetic 429", 100))
@@ -194,7 +194,7 @@ describe("concurrent provider cooldown admission", () => {
     "closes the stream lifecycle when initial admission is %s",
     async (mode) => {
       vi.useFakeTimers();
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const controller = new AbortController();
       const recovery = mode === "refused" ? null : mode === "budget" ? 2_147_483_647 : 1000;
       const call = vi.fn(() =>
@@ -243,7 +243,7 @@ describe("concurrent provider cooldown admission", () => {
 
   it.each([0, 1])("honors a 429 minimum plus bounded retry jitter at random=%i", async (random) => {
     vi.useFakeTimers();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const call = vi
       .fn()
       .mockRejectedValueOnce(new RateLimitError("Synthetic 429", 100))
@@ -269,7 +269,7 @@ describe("concurrent provider cooldown admission", () => {
     await vi.runAllTimersAsync();
     await pending;
     const scheduled = events.find((event) => event.op === "gateway.retry.scheduled");
-    expect(scheduled?.extra?.delayMs).toBe(random === 0 ? 110 : 120);
+    expect(normalFixtureEvent(scheduled)?.extra?.delayMs).toBe(random === 0 ? 110 : 120);
     expect(call).toHaveBeenCalledTimes(2);
   });
 
@@ -357,7 +357,7 @@ describe("concurrent provider cooldown admission", () => {
   it("cancels a saturated probe waiter without starting an extra provider call or retaining timers", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     let releaseProbe: ((value: NormalizedResponse) => void) | undefined;
     const provider = gateway(
@@ -401,7 +401,7 @@ describe("concurrent provider cooldown admission", () => {
   it("preserves each original provider cause when the breaker wait cannot fit the actual request budget", async () => {
     vi.useFakeTimers();
     const errors: ProviderError[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const config = gatewayConfig();
     const provider = gateway(
       () => {
@@ -436,7 +436,7 @@ describe("concurrent provider cooldown admission", () => {
 
   it("does not retry a fresh buffered request refused before any provider attempt", async () => {
     vi.useFakeTimers();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const config = gatewayConfig();
     const call = vi.fn(() =>
       Promise.reject(new ProviderError("Synthetic outage", 503, [], 3_000_000)),
@@ -548,7 +548,7 @@ describe("concurrent provider cooldown admission", () => {
   it("emits a body-free canonical wait outcome without classifying cancellation as provider failure", async () => {
     vi.useFakeTimers();
     let calls = 0;
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = gateway(
       () => {
         calls += 1;
@@ -578,7 +578,19 @@ describe("concurrent provider cooldown admission", () => {
       completeness: "complete",
       loss: "none",
     });
-    expect(cancelled?.errorKind).toBeUndefined();
+    expect(normalFixtureEvent(cancelled)?.errorKind).toBeUndefined();
     expect(provider.circuitStatus(REQUEST.modelId).consecutiveFailures).toBe(0);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

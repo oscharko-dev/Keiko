@@ -264,7 +264,7 @@ function isValidTaskId(value: unknown): value is string {
 
 // timeoutMs feeds a real timer budget; a fractional or 1e300 value is malformed, not a large
 // timeout, so the parse boundary requires a safe integer rather than any positive finite number.
-function isPositiveSafeInteger(value: unknown): boolean {
+function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
@@ -277,95 +277,158 @@ function isValidRequestId(value: unknown): value is string {
   );
 }
 
-function collectOptionalRequestErrors(input: Record<string, unknown>, errors: string[]): void {
-  if (input.timeoutMs !== undefined && !isPositiveSafeInteger(input.timeoutMs)) {
-    errors.push("timeoutMs must be a positive finite number");
-  }
-  if (input.requestId !== undefined && !isValidRequestId(input.requestId)) {
+function requestOptionalsAreValid(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & Pick<CommandTaskRunRequest, "timeoutMs" | "requestId"> {
+  const timeout = input.timeoutMs === undefined || isPositiveSafeInteger(input.timeoutMs);
+  if (!timeout) errors.push("timeoutMs must be a positive finite number");
+  const request = input.requestId === undefined || isValidRequestId(input.requestId);
+  if (!request)
     errors.push(`requestId must be a token of 1-${String(MAX_REQUEST_ID_LENGTH)} characters`);
-  }
+  return timeout && request;
 }
 
-// Parses an incoming run request at the BFF trust boundary. Collects ALL field errors in a fixed
-// order (deterministic strings for test assertions); never throws.
-export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunRequestParse {
-  const errors: string[] = [];
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["request must be an object"] };
-  }
-  errors.push(...unknownKeys(input, RUN_REQUEST_KEYS, "request"));
-  if (!isBoundedControlFreeString(input.projectId, MAX_PROJECT_ID_LENGTH)) {
-    errors.push("projectId must be a non-empty string");
-  }
-  if (!isValidTaskId(input.taskId)) {
+function requestFieldsAreValid(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & CommandTaskRunRequest {
+  const project = isBoundedControlFreeString(input.projectId, MAX_PROJECT_ID_LENGTH);
+  if (!project) errors.push("projectId must be a non-empty string");
+  const task = isValidTaskId(input.taskId);
+  if (!task)
     errors.push(
       `taskId must be a non-empty string of up to ${String(MAX_TASK_ID_LENGTH)} characters`,
     );
-  }
-  collectOptionalRequestErrors(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as CommandTaskRunRequest };
+  const optional = requestOptionalsAreValid(input, errors);
+  return project && task && optional;
 }
 
-function validateTaskArgs(value: Record<string, unknown>, path: string, errors: string[]): void {
+export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunRequestParse {
+  try {
+    const errors: string[] = [];
+    if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
+    errors.push(...unknownKeys(input, RUN_REQUEST_KEYS, "request"));
+    if (!requestFieldsAreValid(input, errors) || errors.length > 0) return { ok: false, errors };
+    return { ok: true, value: input };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
+  }
+}
+
+function validateTaskArgs(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & Pick<CommandTask, "args"> {
   const args = value.args;
   if (!Array.isArray(args)) {
     errors.push(`${path}.args must be an array`);
-    return;
+    return false;
   }
-  if (!args.every((arg) => typeof arg === "string")) {
-    errors.push(`${path}.args must be an array of strings`);
+  const entries: readonly unknown[] = args;
+  const length = entries.length;
+  for (let index = 0; index < length; index += 1) {
+    if (typeof entries[index] !== "string") {
+      errors.push(`${path}.args must be an array of strings`);
+      return false;
+    }
   }
+  return true;
 }
 
-function validateTask(value: unknown, index: number, errors: string[]): void {
+function taskIdentityIsValid(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & Pick<CommandTask, "id" | "label" | "executable" | "kind"> {
+  const id = isNonEmptyString(value.id);
+  if (!id) errors.push(`${path}.id must be a non-empty string`);
+  const label = isNonEmptyString(value.label);
+  if (!label) errors.push(`${path}.label must be a non-empty string`);
+  const executable = isNonEmptyString(value.executable);
+  if (!executable) errors.push(`${path}.executable must be a non-empty string`);
+  const kind = isOneOf(value.kind, COMMAND_TASK_KINDS);
+  if (!kind) errors.push(`${path}.kind is invalid`);
+  return id && label && executable && kind;
+}
+
+function taskTrustIsValid(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & Pick<CommandTask, "source" | "trustState" | "trustReason"> {
+  const source = isOneOf(value.source, COMMAND_TASK_SOURCES);
+  if (!source) errors.push(`${path}.source is invalid`);
+  const trust = isOneOf(value.trustState, COMMAND_TASK_TRUST_STATES);
+  if (!trust) errors.push(`${path}.trustState is invalid`);
+  const reason = isOneOf(value.trustReason, COMMAND_TASK_TRUST_REASONS);
+  if (!reason) errors.push(`${path}.trustReason is invalid`);
+  return source && trust && reason;
+}
+
+function validateTask(value: unknown, index: number, errors: string[]): value is CommandTask {
   const path = `tasks[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
-  errors.push(...unknownKeys(value, TASK_KEYS, path));
-  if (!isNonEmptyString(value.id)) errors.push(`${path}.id must be a non-empty string`);
-  if (!isNonEmptyString(value.label)) errors.push(`${path}.label must be a non-empty string`);
-  if (!isNonEmptyString(value.executable)) {
-    errors.push(`${path}.executable must be a non-empty string`);
+  const extra = unknownKeys(value, TASK_KEYS, path);
+  errors.push(...extra);
+  const identity = taskIdentityIsValid(value, path, errors);
+  const trust = taskTrustIsValid(value, path, errors);
+  const args = validateTaskArgs(value, path, errors);
+  return extra.length === 0 && identity && trust && args;
+}
+
+function taskArrayIsValid(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Pick<CommandTaskCatalog, "tasks"> {
+  if (!Array.isArray(value.tasks)) {
+    errors.push("tasks must be an array");
+    return false;
   }
-  if (!isOneOf(value.kind, COMMAND_TASK_KINDS)) errors.push(`${path}.kind is invalid`);
-  if (!isOneOf(value.source, COMMAND_TASK_SOURCES)) errors.push(`${path}.source is invalid`);
-  if (!isOneOf(value.trustState, COMMAND_TASK_TRUST_STATES)) {
-    errors.push(`${path}.trustState is invalid`);
+  const tasks: unknown = value.tasks;
+  if (!Array.isArray(tasks)) {
+    errors.push("tasks must be an array");
+    return false;
   }
-  if (!isOneOf(value.trustReason, COMMAND_TASK_TRUST_REASONS)) {
-    errors.push(`${path}.trustReason is invalid`);
+  const entries: readonly unknown[] = tasks;
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in entries)) {
+      errors.push(`tasks[${String(index)}] must be an object`);
+      return false;
+    }
+    if (!validateTask(entries[index], index, errors)) valid = false;
   }
-  validateTaskArgs(value, path, errors);
+  return valid;
+}
+
+function catalogFieldsAreValid(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CommandTaskCatalog {
+  const schema = value.schemaVersion === COMMAND_RUNNER_SCHEMA_VERSION;
+  if (!schema) errors.push("schemaVersion is invalid");
+  const project = isNonEmptyString(value.projectId);
+  if (!project) errors.push("projectId must be a non-empty string");
+  const tasks = taskArrayIsValid(value, errors);
+  return schema && project && tasks;
 }
 
 export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogParse {
-  const errors: string[] = [];
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["catalog must be an object"] };
+  try {
+    const errors: string[] = [];
+    if (!isRecord(value)) return { ok: false, errors: ["catalog must be an object"] };
+    errors.push(...unknownKeys(value, CATALOG_KEYS, "catalog"));
+    if (!catalogFieldsAreValid(value, errors) || errors.length > 0) return { ok: false, errors };
+    return { ok: true, value };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
   }
-  errors.push(...unknownKeys(value, CATALOG_KEYS, "catalog"));
-  if (value.schemaVersion !== COMMAND_RUNNER_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
-  if (!isNonEmptyString(value.projectId)) {
-    errors.push("projectId must be a non-empty string");
-  }
-  if (!Array.isArray(value.tasks)) {
-    errors.push("tasks must be an array");
-  } else {
-    value.tasks.forEach((task, index) => {
-      validateTask(task, index, errors);
-    });
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: value as unknown as CommandTaskCatalog };
 }
 
 // KEIKO-0601: the field-by-field scalar/runtime checks below (schemaVersion, runId, taskId, kind,
@@ -374,22 +437,28 @@ export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogPa
 // validateRunResultCore, parameterized by this executor's own schema version, COMMAND_TASK_KINDS and
 // COMMAND_FAILURE_REASONS. Only the unknown-key rejection above is command-runner-specific.
 export function validateCommandTaskRunResult(value: unknown): CommandTaskRunResultParse {
-  const errors: string[] = [];
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["result must be an object"] };
+  try {
+    const errors: string[] = [];
+    if (!isRecord(value)) {
+      return { ok: false, errors: ["result must be an object"] };
+    }
+    errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
+    if (
+      !validateRunResultCore(
+        value,
+        {
+          schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
+          kinds: COMMAND_TASK_KINDS,
+          failureReasons: COMMAND_FAILURE_REASONS,
+        },
+        errors,
+      ) ||
+      errors.length > 0
+    ) {
+      return { ok: false, errors };
+    }
+    return { ok: true, value };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
   }
-  errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
-  validateRunResultCore(
-    value,
-    {
-      schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
-      kinds: COMMAND_TASK_KINDS,
-      failureReasons: COMMAND_FAILURE_REASONS,
-    },
-    errors,
-  );
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: value as unknown as CommandTaskRunResult };
 }

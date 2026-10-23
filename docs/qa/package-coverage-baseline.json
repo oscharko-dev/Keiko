@@ -246,7 +246,7 @@
       }
     },
     "keiko-server": {
-      "files": 821,
+      "files": 824,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,
@@ -282,7 +282,7 @@
       }
     },
     "keiko-ui": {
-      "files": 525,
+      "files": 535,
       "uncoveredFiles": 3,
       "uncoveredLines": 2947,
       "totalLines": 41689,
@@ -306,7 +306,7 @@
       }
     },
     "keiko-workflows": {
-      "files": 77,
+      "files": 79,
       "uncoveredFiles": 0,
       "uncoveredLines": 160,
       "totalLines": 2904,
@@ -318,7 +318,7 @@
       }
     },
     "keiko-workspace": {
-      "files": 79,
+      "files": 80,
       "uncoveredFiles": 0,
       "uncoveredLines": 629,
       "totalLines": 9637,

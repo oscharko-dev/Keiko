@@ -33,9 +33,20 @@ export function copyOpenCodeServiceHostStartPacket(
   const record = dataRecord(value);
   if (record === undefined || !isStartPacket(record)) return undefined;
   // The validated closed fields are copied in canonical order for deterministic packet bytes.
-  return Object.freeze(
-    Object.fromEntries(OPENCODE_SERVICE_HOST_START_PACKET_FIELDS.map((key) => [key, record[key]])),
-  ) as OpenCodeServiceHostStartPacket;
+  const packet: OpenCodeServiceHostStartPacket = {
+    workspace: record.workspace,
+    stateRoot: record.stateRoot,
+    password: record.password,
+    providerURL: record.providerURL,
+    providerCapability: record.providerCapability,
+    facadeURL: record.facadeURL,
+    facadeCapability: record.facadeCapability,
+    mode: record.mode,
+    runId: record.runId,
+    configDigest: record.configDigest,
+    toolProfile: record.toolProfile,
+  };
+  return Object.freeze(packet);
 }
 
 function isStartPacket(
@@ -192,7 +203,8 @@ function dataRecord(value: unknown): Record<string, unknown> | undefined {
     for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor)) return undefined;
-      Object.defineProperty(result, key, { value: descriptor.value, enumerable: true });
+      const datum: unknown = descriptor.value;
+      Object.defineProperty(result, key, { value: datum, enumerable: true });
     }
     return result;
   } catch {

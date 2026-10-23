@@ -354,9 +354,58 @@ jobs:
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
             --log-opts="${QUALITY_BASE_SHA}..${squash}" .
 
+  code-quality-policy:
+    name: Static code-quality policy (Node ${{ matrix.node }})
+    needs: verified-tree
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24.18.0", "26.8.1"]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - run: npm ci --ignore-scripts
+      - name: Provision the approved USearch native runtime
+        run: npm run provision:usearch
+      - run: npm run build:packages
+      - name: Check the bounded default CLI integration fixture serially
+        env:
+          NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
+        run: npm run check:code-quality-policy:cli-smoke
+      - name: Qualify the complete current-subject policy serially
+        # Preserve Core's Node24 heap and Node26's existing default heap. Product/native
+        # qualification remains on the existing x64, Windows and macOS lanes.
+        env:
+          NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
+        run: |
+          node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+          /usr/bin/time -v npm run check:code-quality-policy:repository
+      - name: Qualify the actual raw-reader responsibility serially
+        run: npm run check:code-quality-policy:raw-reader
+
   core-quality:
     name: Core quality
-    needs: verified-tree
+    needs: [verified-tree, code-quality-policy]
     if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
@@ -430,7 +479,7 @@ jobs:
       - run: npm run check:release-required-workflows
       - run: npm run check:portable-approvals
       - run: npm run check:git-client-evidence
-      - run: npm run lint
+      - run: npm run lint:typed
         env:
           NODE_OPTIONS: --max-old-space-size=12288
       - run: npm run check:native-host-code-quality
@@ -550,9 +599,9 @@ jobs:
   # heaviest suite split into vitest shards. Every one of them MEASURES and none of them judges
   # (ADR-0156 D1): a shard writes a vitest blob report, and `coverage-sonar` below merges the blobs
   # and evaluates every floor exactly once, against complete coverage. A per-shard verdict would
-  # compare a third of the suite against the whole suite's floors.
+  # compare a partial suite against the whole suite's floors.
   coverage-packages:
-    name: Coverage shard (packages ${{ matrix.shard }}/3)
+    name: Coverage shard (packages ${{ matrix.shard }}/5)
     needs: verified-tree
     # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
     # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
@@ -566,7 +615,7 @@ jobs:
       # One shard's result must never mask another's; `coverage-sonar` fails closed on all of them.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -652,16 +701,16 @@ jobs:
         # before collecting, which increases the pressure that causes the kill.
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
+        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/5 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-blob-packages-${{ matrix.shard }}
-          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the three uploads merge into
+          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the five uploads merge into
           # one directory without collision. That per-shard name is exactly what an explicit
-          # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
-          # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
+          # `--outputFile.blob` destroys: a set output path wins verbatim, so all five shards write
+          # the one same file and `merge-multiple` keeps only the last of them -- four fifths of the
           # measurement, silently. The shard script therefore passes no output path and this follows
           # the reporter default. Vitest 4 writes `.vitest-reports`; the temporary Vitest 5 line
           # used `.vitest/blob`, so this path is deliberately pinned to the governed major.
@@ -742,7 +791,7 @@ jobs:
           retention-days: 1
 
   coverage-scripts:
-    name: Coverage suite (scripts)
+    name: Coverage shard (scripts ${{ matrix.shard }}/2)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
     if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
@@ -750,6 +799,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -790,17 +843,16 @@ jobs:
       # packages by bare specifier, which resolve to `dist`.
       - name: Build internal packages so workspace dist resolves
         run: npm run build:packages
-      - name: Measure script coverage
+      - name: Measure script coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:scripts
-      - name: Upload script coverage evidence
+        run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/2 --reporter=github-actions
+      - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-report-scripts
-          path: |
-            coverage/scripts/lcov.info
-            coverage/scripts/coverage-summary.json
+          name: coverage-blob-scripts-${{ matrix.shard }}
+          path: .vitest-reports/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -900,6 +952,10 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
+      - name: Build workspace producers for the original OpenCode host
+        run: npm run build:packages
+      - name: Install locked original OpenCode host dependencies
+        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
       # Reassembly happens before ANY evaluation, and the `needs:` edges above make that ordering
       # structural rather than a convention: a per-file floor read off one shard's partial summary
       # would silently under-report, so no gate below ever sees a shard-local view.
@@ -910,7 +966,7 @@ jobs:
           # The reporter default directory the shard script writes to, so that script followed by
           # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
           # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
-          # the three per-shard blob names into one.
+          # the five per-shard blob names into one.
           path: .vitest-reports
           pattern: coverage-blob-packages-*
           merge-multiple: true
@@ -920,41 +976,74 @@ jobs:
         with:
           name: coverage-report-ui
           path: packages/keiko-ui/coverage
-      - name: Download script coverage evidence
+      - name: Download script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: coverage-report-scripts
-          path: coverage/scripts
+          pattern: coverage-blob-scripts-*
+          path: .vitest-reports-scripts
+          merge-multiple: true
       - name: Verify every package coverage shard delivered its evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # download-artifact's `pattern:` form succeeds silently when nothing matches, so it is the
-        # one fail-open primitive in this chain. Counting the blobs binds the hardcoded `/3` in the
+        # one fail-open primitive in this chain. Counting the blobs and checking native names binds `/5` in the
         # shard command to the matrix: if the two ever drift, a PARTIAL merge would otherwise be
         # judged as if it were complete.
         run: |
           set -euo pipefail
-          expected=3
+          expected=5
           actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
             echo "A merge over a partial shard set would under-report every per-file floor."
             exit 1
           fi
+          for index in $(seq 1 "$expected"); do
+            if [ ! -f ".vitest-reports/blob-$index-$expected.json" ]; then
+              echo "Missing native package coverage blob $index/$expected."
+              exit 1
+            fi
+          done
           echo "All $expected package coverage shard blobs are present."
+      - name: Verify every script coverage shard delivered its evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: |
+          set -euo pipefail
+          expected=2
+          actual=$(find .vitest-reports-scripts -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          if [ "$actual" -ne "$expected" ]; then
+            echo "Expected $expected script coverage shard blobs, found $actual."
+            exit 1
+          fi
+          for index in $(seq 1 "$expected"); do
+            if [ ! -f ".vitest-reports-scripts/blob-$index-$expected.json" ]; then
+              echo "Missing native script coverage blob $index/$expected."
+              exit 1
+            fi
+          done
+          echo "All $expected script coverage shard blobs are present."
       - name: Reassemble merged package coverage
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # Vitest's own blob merge, not a bespoke reassembler: it merges the shards' coverage maps
         # and re-runs the reporters, so `coverage/packages/lcov.info` and `coverage-summary.json`
         # are regenerated rather than concatenated. The summary carries only covered/total counts
-        # with no line identity and is not losslessly concatenable. This run uses the JUDGING
-        # configuration, so the per-file floors are evaluated here, once, on complete coverage.
+        # with no line identity and is not losslessly concatenable. Neither configuration judges;
+        # the subsequent single quality check evaluates the complete reports (ADR-0158).
         # Same bound as the shards, for the same reason. The merge re-runs every reporter over the
-        # reassembled coverage map of all three shards — the largest single object in the lane — in
+        # reassembled coverage map of all five shards — the largest single object in the lane — in
         # a job that also holds the downloaded artifacts.
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
+      - name: Reassemble merged script coverage
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # The same native merge reconstructs the second coverage scope in its own report directory.
+        run: npm run test:coverage:scripts:merge
+      # The native Node reporter appends to the final LCOV once, after Vitest regenerates it from
+      # both script blobs. Appending inside a shard would be discarded by the later blob merge.
+      - name: Add measured original host coverage to the script report
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:coverage:opencode-service-host
       - name: Discard the shard blobs now that the merged coverage exists
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
@@ -964,7 +1053,7 @@ jobs:
         # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
         # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
         # business being there once the merge has run.
-        run: rm -rf .vitest-reports
+        run: rm -rf .vitest-reports .vitest-reports-scripts
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality
@@ -1117,6 +1206,12 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Build workspace producers for the original OpenCode host
+        run: npm run build:packages
+      - name: Install the locked private OpenCode host graph
+        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
+      - name: Qualify the original OpenCode service, transport and process lifecycle
+        run: npm run test:opencode-service-host
       - name: Compile and functionally qualify the real secure-read helper
         run: node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}
 
@@ -1131,6 +1226,7 @@ jobs:
       - verified-tree
       - build-scan-sbom-smoke
       - core-quality
+      - code-quality-policy
       - coverage-sonar
       - cross-platform-smoke
       - node-26-compatibility
@@ -1147,6 +1243,7 @@ jobs:
           BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
           CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
+          CODE_QUALITY_POLICY_RESULT: ${{ needs.code-quality-policy.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
@@ -1187,6 +1284,7 @@ jobs:
             # else — failure, cancelled, an empty result, an unknown state — fails closed.
             for named in "CHANGE_SCOPE:${CHANGE_SCOPE_RESULT:-}" "PROTECTED_BRANCH:${PROTECTED_BRANCH_RESULT:-}" \
                          "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
+                         "CODE_QUALITY_POLICY:${CODE_QUALITY_POLICY_RESULT:-}" \
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
                          "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}" \
@@ -1206,7 +1304,7 @@ jobs:
             echo "Trusted push SBOM provenance did not succeed (${SBOM_PROVENANCE_RESULT:-unset})."
             exit 1
           fi
-          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
+          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$CODE_QUALITY_POLICY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
@@ -1544,15 +1642,82 @@ jobs:
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install:optional
 
+  firefox-smoke:
+    name: Firefox smoke (shard ${{ matrix.shard }}/4)
+    needs: verified-tree
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces (single root lockfile after #167)
+        run: npm ci --ignore-scripts
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Build internal packages
+        run: npm run build:packages
+      - name: Build UI (static export)
+        run: npm run build --workspace @oscharko-dev/keiko-ui
+      - name: Install locked Playwright Firefox
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: ./node_modules/.bin/playwright install --with-deps firefox
+      # Each matrix leg runs on its own hosted runner VM and owns its checkout, server,
+      # durable state and test-results directory. This does not promise same-host isolation.
+      # Keep one worker and the existing complete smoke selection and per-test limits.
+      - name: Release smoke E2E (Firefox)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/4
+      - name: Upload Firefox smoke traces on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-smoke-firefox-shard-${{ matrix.shard }}-of-4
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   ui:
     name: ui
-    needs: verified-tree
+    needs: [verified-tree, firefox-smoke]
     if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: Require complete Firefox smoke shards
+        env:
+          KEIKO_FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$KEIKO_FIREFOX_RESULT" == "success" ]]; then
+            exit 0
+          fi
+          echo "Firefox smoke shards did not succeed: $KEIKO_FIREFOX_RESULT"
+          exit 1
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # The immutable D12 evidence gate recomputes the subject for its pinned baseline commit.
@@ -1647,12 +1812,6 @@ jobs:
         run: |
           npm run check:update-ui-evidence
           npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
-      # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
-      # attributable at a glance instead of hiding inside the Chromium run's report.
-      - name: Release smoke E2E (Firefox)
-        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        timeout-minutes: 20
-        run: npm run test:e2e:smoke:firefox
       # Same functional @smoke journeys on WebKit. This is a Safari engine proxy, not evidence for
       # Apple-platform integration that Playwright's patched Linux runtime cannot reproduce.
       - name: Release smoke E2E (WebKit Safari proxy)

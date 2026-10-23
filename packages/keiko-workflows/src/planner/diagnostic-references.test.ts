@@ -133,6 +133,7 @@ describe("conversational orientation retains diagnostic context", () => {
       const result = plan(text, "diagnostic-search");
       expect(result.retrievalIntent).toBe("conversational-follow-up");
       expect(result).toMatchObject({ effectiveRetrievalIntent: "diagnostic-search" });
+      expect(result.rings.map((ring) => ring.kind)).toContain("git-history");
     },
   );
 

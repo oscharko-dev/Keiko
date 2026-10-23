@@ -29,7 +29,7 @@ import {
   streamingResponseFromNode,
 } from "./http.js";
 import { requestOpenAIEmbedding } from "./openai-embedding-adapter.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -636,7 +636,7 @@ describe("gatewayFetch", () => {
       socket.once("close", () => originSockets.delete(socket));
     });
     const originPort = await listen(origin);
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     try {
       await expect(
         gatewayFetch(`https://127.0.0.1:${String(originPort)}/secure`, {
@@ -802,7 +802,7 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
 
   it("requires delegated-policy acknowledgement before sending a hostname through a proxy", async () => {
     let proxiedRequests = 0;
-    const logEvents: ModelGatewayLogEvent[] = [];
+    const logEvents: ModelGatewayLogTransport[] = [];
     const proxy = createHttpServer((_req, res) => {
       proxiedRequests += 1;
       res.writeHead(200);

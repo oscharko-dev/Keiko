@@ -61,24 +61,23 @@ function schemaMismatch(actual: unknown): boolean {
 
 // ─── Enum guards ────────────────────────────────────────────────────────────────
 export function isContextLaneId(value: unknown): value is ContextLaneId {
-  return typeof value === "string" && CONTEXT_LANE_IDS.includes(value as ContextLaneId);
+  const allowed: readonly string[] = CONTEXT_LANE_IDS;
+  return typeof value === "string" && allowed.includes(value);
 }
 
 function isEvictionPolicy(value: unknown): value is ContextEvictionPolicy {
-  return (
-    typeof value === "string" && CONTEXT_EVICTION_POLICIES.includes(value as ContextEvictionPolicy)
-  );
+  const allowed: readonly string[] = CONTEXT_EVICTION_POLICIES;
+  return typeof value === "string" && allowed.includes(value);
 }
 
 function isBudgetPressure(value: unknown): value is ContextBudgetPressure {
-  return typeof value === "string" && BUDGET_PRESSURES.has(value as ContextBudgetPressure);
+  const allowed: ReadonlySet<string> = BUDGET_PRESSURES;
+  return typeof value === "string" && allowed.has(value);
 }
 
 function isTokenAccountingSource(value: unknown): value is ContextTokenAccountingSource {
-  return (
-    typeof value === "string" &&
-    CONTEXT_TOKEN_ACCOUNTING_SOURCES.includes(value as ContextTokenAccountingSource)
-  );
+  const allowed: readonly string[] = CONTEXT_TOKEN_ACCOUNTING_SOURCES;
+  return typeof value === "string" && allowed.includes(value);
 }
 
 // ─── ContextProfile ─────────────────────────────────────────────────────────────

@@ -454,9 +454,13 @@ system that exists, never beside it:
   selection uses the final six available source-detail fields. Additional selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
-  Contextual keep-one fallback logs its closed ranking source and remains low confidence. Its
+  Contextual below-floor fallback logs its closed ranking source and remains low confidence. Its
   lexical producer order requires matching live content identities and excludes semantic or
-  successfully reranked selections. Short ordinary documents may use the existing canonical
+  successfully reranked selections. At most two additional eligible content peers may share the
+  first retained source's same-query matched-group key; equal numeric scores alone do not
+  qualify. Existing read/byte grants remain binding. `keepOneFallbackApplied` describes exactly
+  one retained fallback source, and the existing completion count records the actual size.
+  Short ordinary documents may use the existing canonical
   reader's complete current redacted source only within both existing byte grants; explicit
   selections and certified/source-code ranges retain their geometry (ADR-0022).
   The six-reference intake preserves the primary local trace frame and explicitly named question
@@ -818,11 +822,13 @@ system that exists, never beside it:
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
   and originating request retain the existing causal link. Candidate counts and model-authored
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
-  `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing
+  `client.scope.notice` records scope narrowing, widening and adding missing
   evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
   `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
   `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
-  The existing timeline carries these dispositions and counts without scope paths or notice text.
+  `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
+  folder or asks for confirmation. The existing timeline carries these dispositions and counts
+  without scope paths or notice text.
   `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
   `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
   `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch
@@ -857,6 +863,11 @@ system that exists, never beside it:
   `withActivityLogParentCorrelation`; a plain object spread drops its non-enumerable registration
   and rejection markers. Preserve producer-owned ids and prove forwarded events through the real
   registered formatter, not only a buffered event assertion.
+  Other forwarding copies use `copyActivityLogEventMetadata`, which retains raw registration and
+  closed rejection markers without granting write authority. The checked metadata reader admits
+  complete structure; only the physical writer admits canonical operations and fields. Injected
+  ports retain the constructor's normal-event/rejection union rather than asserting a refused
+  construction is the requested operation.
   Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
@@ -940,6 +951,14 @@ system that exists, never beside it:
   scope. Any other narrowing of the gate remains rejected. Each failure
   names its check, rule, site, and remediation. Run it before every pull request that changes
   product runtime behaviour.
+
+Shared browser BFF response validation reports a refused contract through the existing
+`client.diagnostic` operation before throwing `CONTRACT_VALIDATION_FAILED` (502). The report
+uses `kind: other`, `errorKind: validation-failed`, redacted error evidence and the response
+correlation when available. It never includes the request path, query, response body, diff or
+validation reason. Healthy responses emit no refusal. Delivery retains the existing bounded
+client transport and explicit loss accounting; it does not promise persistence when that
+transport is unavailable.
 
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
@@ -1101,6 +1120,17 @@ alone); the `coding-workbench` latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
 
+For dictation, `speech.stt.request.dispatch` records the sent container class and byte count,
+and `speech.stt.request.completed` records a received provider HTTP status. An absent status
+means no response was observed. Browser clips are normalized in memory to mono PCM16 WAV;
+normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
+
+Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
+Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
+browser persistence; stale revisions fail closed (ADR-0114 D1).
+The private draft notification subscription mounts in layout before browser input or passive effects;
+`client.composer.activity` records `draft-notifications-ready` without draft text.
+
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
 
@@ -1165,6 +1195,11 @@ These cost real time when rediscovered. They are all real and current.
   check the provenance hardware in the document before believing it: comparing a local document
   against a hosted run is comparing two machine classes. See
   [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md).
+- **Source-bound policy qualification needs a stable checkout.** `npm run arch:check:negative`
+  temporarily writes `packages/keiko-security/src/__arch_check_negative_bare_specifier_probe__.ts`.
+  Finish that probe before starting `npm run check:code-quality-policy:repository`; overlapping
+  them correctly fails the qualifier's source-membership guard. Keep other checkout edits and
+  builds outside the qualification run too. This is execution order, not a gate exemption.
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
   surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes

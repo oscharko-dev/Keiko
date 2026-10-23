@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 
 import { createRequire } from "node:module";
 import { KEIKO_CONTRACTS_VERSION } from "./version.js";
@@ -1510,4 +1510,82 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EvalFloorResult>();
     pin<import("./index.js").RegressionProbeResult>();
   });
+});
+
+import { normalizePdfCitationPreviewMarkerIndex as publicPreviewMarker } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
+it("actual public preview subpath preserves closed marker parsing", () => {
+  const parsed: number | undefined = publicPreviewMarker("【2】");
+  expect(parsed).toBe(2);
+  expect(publicPreviewMarker("[2】")).toBeUndefined();
+  expect(publicPreviewMarker(0)).toBeUndefined();
+});
+
+it("exports the additive Git parse types through the existing root type surface", () => {
+  const ok: import("./index.js").GitRepositoryParseOk<string> = { ok: true, value: "checked" };
+  const parsed: import("./index.js").GitRepositoryParseResult<string> = ok;
+  expect(parsed.value).toBe("checked");
+  const status: typeof import("./index.js").parseGitRepositoryStatusResponse = (
+    input: unknown,
+  ): import("./index.js").GitRepositoryParseResult<
+    import("./index.js").GitRepositoryStatusResponse
+  > => parsePublicGitStatusForIndex(input);
+  expect(status(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+
+import { parseGitRepositoryStatusResponse as parsePublicGitStatusForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+
+import { parseGitHistoryResponse as parsePublicHistoryForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import {
+  parseGitSyncPreview as parsePublicSyncPreviewForIndex,
+  parseGitSyncExecuteResponse as parsePublicSyncExecuteForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+
+it("exports both additive Git sync parser type identities", () => {
+  const preview: typeof import("./index.js").parseGitSyncPreview = parsePublicSyncPreviewForIndex;
+  const execute: typeof import("./index.js").parseGitSyncExecuteResponse =
+    parsePublicSyncExecuteForIndex;
+  for (const parse of [preview, execute])
+    expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+import {
+  parseGitRepositorySummary as parsePublicSummaryForIndex,
+  parseGitRemotesResponse as parsePublicRemotesForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
+
+it("exports all three additive Git read parser type identities", () => {
+  const history: typeof import("./index.js").parseGitHistoryResponse = parsePublicHistoryForIndex;
+  const summary: typeof import("./index.js").parseGitRepositorySummary = parsePublicSummaryForIndex;
+  const remotes: typeof import("./index.js").parseGitRemotesResponse = parsePublicRemotesForIndex;
+  for (const parse of [history, summary, remotes])
+    expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+
+import {
+  parseLocalKnowledgeCapsulesResponse as parsePublicCatalogCapsulesForIndex,
+  parseLocalKnowledgeCapsuleSetsResponse as parsePublicCatalogSetsForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+
+it("exposes concrete typed catalog wire parsers without widening strict producers (#3918)", () => {
+  const capsules: typeof import("@oscharko-dev/keiko-contracts").parseLocalKnowledgeCapsulesResponse =
+    parsePublicCatalogCapsulesForIndex;
+  const sets: typeof import("@oscharko-dev/keiko-contracts").parseLocalKnowledgeCapsuleSetsResponse =
+    parsePublicCatalogSetsForIndex;
+  expect(capsules({ capsules: [] })).toEqual({ ok: true, value: { capsules: [] } });
+  expect(sets({ capsuleSets: [] })).toEqual({ ok: true, value: { capsuleSets: [] } });
+  const pin = <T>(_value?: T): T | undefined => undefined;
+  pin<import("./index.js").KnowledgePodCatalogSummary>();
+  pin<import("./index.js").LocalKnowledgeCapsulesCatalogResponse>();
+  pin<import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse>();
+  expectTypeOf<import("./index.js").LegacyKnowledgePodCatalogSummary>().not.toExtend<
+    import("./index.js").KnowledgePodSummary
+  >();
+  expectTypeOf<import("./index.js").KnowledgePodSummary>().toExtend<
+    import("./index.js").KnowledgePodCatalogSummary
+  >();
+  expectTypeOf<
+    import("./index.js").LocalKnowledgeCapsulesCatalogResponse["capsules"][number]["id"]
+  >().toEqualTypeOf<import("./index.js").KnowledgeCapsuleId>();
+  expectTypeOf<
+    import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse["capsuleSets"][number]["capsuleCount"]
+  >().toEqualTypeOf<number>();
 });

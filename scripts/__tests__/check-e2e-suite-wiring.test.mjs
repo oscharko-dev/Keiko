@@ -375,6 +375,14 @@ jobs:
     );
   });
 
+  it("keeps the actual literal Firefox shard invocation required per PR", () => {
+    const text = readFileSync(join(import.meta.dirname, "../../.github/workflows/ci.yml"), "utf8");
+    expect(text).toContain("npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/4");
+    expect(suiteProtectionClass("test:e2e:smoke:firefox", [{ name: "ci.yml", text }])).toBe(
+      "runs-per-pr",
+    );
+  });
+
   it.each([
     [
       "a condition separated from run by a comment",

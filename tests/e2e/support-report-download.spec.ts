@@ -1,11 +1,11 @@
 import {
   expect,
-  test,
   type APIRequestContext,
   type Locator,
   type Page,
   type TestInfo,
 } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

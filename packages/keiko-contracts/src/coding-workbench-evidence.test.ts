@@ -176,3 +176,43 @@ describe("evidence-safe-text allowlist covers every canonical enum literal (KEIK
     },
   );
 });
+
+describe("C1B evidence complete admission branches", () => {
+  it.each([
+    "recordId",
+    "runId",
+    "schemaVersion",
+    "kind",
+    "effectiveMode",
+    "runtimeSource",
+    "modelSource",
+    "artifactLabel",
+    "safeSummary",
+    "digest",
+    "byteCount",
+    "denied",
+  ])("refuses malformed evidence %s", (field) => {
+    const healthy = evidenceRecord("2026-07-31T12:00:00Z");
+    expect(validateCodingWorkbenchEvidenceRecord(healthy)).toEqual({ ok: true, value: healthy });
+    const result = validateCodingWorkbenchEvidenceRecord({
+      ...healthy,
+      [field]: field === "byteCount" ? -1 : 7,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("malformed evidence admitted");
+    expect(result.errors.some((error) => error.includes(field))).toBe(true);
+  });
+  it("preserves required identity error order and refuses non-object evidence", () => {
+    const input = evidenceRecord("2026-07-31T12:00:00Z");
+    delete input.recordId;
+    delete input.runId;
+    expect(validateCodingWorkbenchEvidenceRecord(input)).toEqual({
+      ok: false,
+      errors: ["record.recordId is required", "record.runId is required"],
+    });
+    expect(validateCodingWorkbenchEvidenceRecord(null)).toEqual({
+      ok: false,
+      errors: ["evidence record must be an object"],
+    });
+  });
+});

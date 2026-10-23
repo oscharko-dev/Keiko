@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isCodingWorkbenchModel,
   isToolCallingVerificationFresh,
@@ -163,26 +163,58 @@ async function installedRuntimeHandler(): Promise<FixtureRouteHandler> {
 function capturedCatalogRoute(
   suffix: string,
   method = "GET",
+  pathname = "/api/models",
 ): CapturedRoute & {
   readonly continued: () => boolean;
+  readonly delegated: () => boolean;
 } {
   const captured = capturedRoute(null);
   let continued = false;
+  let delegated = false;
   const route = {
     request: () => ({
       method: (): string => method,
-      url: (): string => `http://fixture.invalid/api/models${suffix}`,
+      url: (): string => `http://fixture.invalid${pathname}${suffix}`,
     }),
     fulfill: (options: RouteFulfillOptions): Promise<void> => captured.route.fulfill(options),
+    fallback: (): Promise<void> => {
+      delegated = true;
+      return Promise.resolve();
+    },
     continue: (): Promise<void> => {
       continued = true;
       return Promise.resolve();
     },
   } as unknown as Route;
-  return { route, fulfillment: captured.fulfillment, continued: () => continued };
+  return {
+    route,
+    fulfillment: captured.fulfillment,
+    continued: () => continued,
+    delegated: () => delegated,
+  };
 }
 
 describe("installed live runtime model catalog", (): void => {
+  it("retains one fresh verification per installation across ordinary and refreshed reads", async (): Promise<void> => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-17T04:00:00.000Z"));
+      const handler = await installedRuntimeHandler();
+      const first = capturedCatalogRoute("");
+      await handler(first.route);
+      vi.advanceTimersByTime(5_000);
+      const refreshed = capturedCatalogRoute("?refresh=1");
+      await handler(refreshed.route);
+      expect(refreshed.fulfillment()?.body).toBe(first.fulfillment()?.body);
+      const nextHandler = await installedRuntimeHandler();
+      const next = capturedCatalogRoute("");
+      await nextHandler(next.route);
+      expect(next.fulfillment()?.body).not.toBe(first.fulfillment()?.body);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["", "?refresh=1"])(
     "serves a freshly verified ready model for GET /api/models%s",
     async (suffix): Promise<void> => {
@@ -206,11 +238,21 @@ describe("installed live runtime model catalog", (): void => {
     },
   );
 
-  it("leaves non-GET model requests to the real server", async (): Promise<void> => {
+  it("delegates startup update requests to the context fixture", async (): Promise<void> => {
+    const route = capturedCatalogRoute("", "GET", "/api/update/preflight");
+    const handler = await installedRuntimeHandler();
+    await handler(route.route);
+    expect(route.delegated()).toBe(true);
+    expect(route.continued()).toBe(false);
+    expect(route.fulfillment()).toBeUndefined();
+  });
+
+  it("delegates non-GET model requests to remaining handlers", async (): Promise<void> => {
     const route = capturedCatalogRoute("", "POST");
     const handler = await installedRuntimeHandler();
     await handler(route.route);
-    expect(route.continued()).toBe(true);
+    expect(route.delegated()).toBe(true);
+    expect(route.continued()).toBe(false);
     expect(route.fulfillment()).toBeUndefined();
   });
 });

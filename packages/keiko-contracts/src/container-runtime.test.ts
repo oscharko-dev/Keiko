@@ -436,3 +436,274 @@ describe("validateContainerRunResult", () => {
     }
   });
 });
+
+// #3918: canonical runtime vocabularies own the capability response's declared output.
+import {
+  RUNTIME_CAPABILITY_STATES,
+  RUNTIME_CAPABILITY_UNAVAILABLE_REASONS,
+} from "./runtime-capabilities.js";
+
+describe("#3918 canonical container capability admission", () => {
+  it("rejects a noncanonical engine state from capability validation", () => {
+    const input = { ...baseCapability(), engines: [{ engine: "docker", state: "future-state" }] };
+    expect(validateContainerCapabilityResponse(input)).toEqual({
+      ok: false,
+      errors: ["engines[0].state is invalid"],
+    });
+  });
+  it("rejects a noncanonical optional engine-unavailable reason", () => {
+    const input = {
+      ...baseCapability(),
+      engines: [{ engine: "docker", state: "missing", unavailableReason: "future-reason" }],
+    };
+    expect(validateContainerCapabilityResponse(input)).toEqual({
+      ok: false,
+      errors: ["engines[0].unavailableReason is invalid"],
+    });
+  });
+  it.each(RUNTIME_CAPABILITY_STATES)(
+    "accepts canonical state %s without a new relational restriction",
+    (state) => {
+      const input = { ...baseCapability(), engines: [{ engine: "docker", state }] };
+      const result = validateContainerCapabilityResponse(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    },
+  );
+  it.each(RUNTIME_CAPABILITY_UNAVAILABLE_REASONS)(
+    "accepts canonical reason %s",
+    (unavailableReason) => {
+      const input = {
+        ...baseCapability(),
+        engines: [{ engine: "docker", state: "missing", unavailableReason }],
+      };
+      const result = validateContainerCapabilityResponse(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    },
+  );
+  it("preserves absent and explicit undefined optionals and ordinary strings", () => {
+    for (const optionals of [
+      {},
+      { version: undefined, unavailableReason: undefined, remediationHint: undefined },
+      { version: "1.0", remediationHint: "Install the optional engine" },
+    ]) {
+      const input = {
+        ...baseCapability(),
+        engines: [{ engine: "docker", state: "missing", ...optionals }],
+      };
+      const result = validateContainerCapabilityResponse(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    }
+  });
+});
+
+function observedExecutionFields(
+  input: Record<string, unknown>,
+  reads: string[],
+): Record<string, unknown> {
+  return Object.defineProperties(
+    {},
+    Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [
+        key,
+        {
+          enumerable: true,
+          get: (): unknown => {
+            reads.push(key);
+            return value;
+          },
+        },
+      ]),
+    ),
+  );
+}
+
+describe("#3918 container checked-phase preservation", () => {
+  it("preserves request identity and optional field observation order", () => {
+    const reads: string[] = [];
+    const input = observedExecutionFields(
+      { ...baseRequest(), timeoutMs: 12, requestId: "request-1" },
+      reads,
+    );
+    const result = parseContainerRunRequest(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(reads).toEqual([
+      "projectId",
+      "taskId",
+      "timeoutMs",
+      "timeoutMs",
+      "requestId",
+      "requestId",
+    ]);
+  });
+  it("preserves original catalog and nested task/argument identity", () => {
+    const reads: string[] = [];
+    const task = baseTask();
+    const input = observedExecutionFields({ ...baseCatalog(), tasks: [task] }, reads);
+    const result = validateContainerTaskCatalog(input);
+    const admissionReads = [...reads];
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.tasks[0]).toBe(task);
+      expect(result.value.tasks[0]?.args).toBe(task.args);
+    }
+    expect(admissionReads).toEqual([
+      "schemaVersion",
+      "projectId",
+      "engineAvailable",
+      "tasks",
+      "tasks",
+    ]);
+  });
+  it("preserves result identity and eager common-field order", () => {
+    const reads: string[] = [];
+    const input = observedExecutionFields({ ...baseResult() }, reads);
+    const result = validateContainerRunResult(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(reads).toEqual([
+      "schemaVersion",
+      "runId",
+      "taskId",
+      "kind",
+      "engine",
+      "failureReason",
+      "exitCode",
+      "durationMs",
+      "truncated",
+      "timedOut",
+      "stdout",
+      "stderr",
+    ]);
+  });
+});
+
+describe("#3918 native array member admission", () => {
+  it("rejects malformed tasks despite an own forEach that skips members", () => {
+    const tasks = Object.defineProperty([{ ...baseTask(), image: 0 }], "forEach", {
+      value: (): void => undefined,
+    });
+    expect(validateContainerTaskCatalog({ ...baseCatalog(), tasks })).toEqual({
+      ok: false,
+      errors: ["tasks[0].image must be a non-empty string"],
+    });
+  });
+  it("rejects nonstring arguments despite an own every that claims success", () => {
+    const args = Object.defineProperty([1], "every", { value: (): boolean => true });
+    expect(
+      validateContainerTaskCatalog({ ...baseCatalog(), tasks: [{ ...baseTask(), args }] }),
+    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
+  });
+  it("rejects a task hole that cannot satisfy the member contract", () => {
+    expect(
+      validateContainerTaskCatalog({ ...baseCatalog(), tasks: new Array<unknown>(1) }),
+    ).toEqual({ ok: false, errors: ["tasks[0] must be an object"] });
+  });
+  it("rejects an argument hole that cannot satisfy the string contract", () => {
+    expect(
+      validateContainerTaskCatalog({
+        ...baseCatalog(),
+        tasks: [{ ...baseTask(), args: new Array<unknown>(1) }],
+      }),
+    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
+  });
+  it("rejects a nonarray second task observation with the original two reads", () => {
+    let reads = 0;
+    const input = Object.defineProperty({ ...baseCatalog() }, "tasks", {
+      get: (): unknown => (++reads === 1 ? [baseTask()] : { forEach: (): void => undefined }),
+    });
+    expect(validateContainerTaskCatalog(input)).toEqual({
+      ok: false,
+      errors: ["tasks must be an array"],
+    });
+    expect(reads).toBe(2);
+  });
+});
+
+describe("#3918 native engine member admission", () => {
+  it("rejects malformed engines despite an own forEach that skips members", () => {
+    const engines = Object.defineProperty([{ engine: "other", state: "available" }], "forEach", {
+      value: (): void => undefined,
+    });
+    expect(validateContainerCapabilityResponse({ ...baseCapability(), engines })).toEqual({
+      ok: false,
+      errors: ["engines[0].engine is invalid"],
+    });
+  });
+  it("rejects an engine hole that cannot satisfy the member contract", () => {
+    expect(
+      validateContainerCapabilityResponse({ ...baseCapability(), engines: new Array<unknown>(1) }),
+    ).toEqual({ ok: false, errors: ["engines[0] must be an object"] });
+  });
+  it("rejects a nonarray second engine observation with the original two reads", () => {
+    let reads = 0;
+    const input = Object.defineProperty({ ...baseCapability() }, "engines", {
+      get: (): unknown =>
+        ++reads === 1 ? baseCapability().engines : { forEach: (): void => undefined },
+    });
+    expect(validateContainerCapabilityResponse(input)).toEqual({
+      ok: false,
+      errors: ["engines must be an array"],
+    });
+    expect(reads).toBe(2);
+  });
+});
+
+it("#3918 refuses a large sparse engines collection at its first missing member", () => {
+  const result = validateContainerCapabilityResponse({
+    ...baseCapability(),
+    engines: new Array<unknown>(100000),
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toBe("engines[0] must be an object");
+  }
+});
+
+it("#3918 bounds sparse container task diagnostics", () => {
+  const result = validateContainerTaskCatalog({
+    ...baseCatalog(),
+    tasks: new Array<unknown>(100000),
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toBe("tasks[0] must be an object");
+  }
+});
+
+it("#3918 retains inherited present container tasks and engines", () => {
+  const tasks = new Array<unknown>(1);
+  Object.setPrototypeOf(tasks, Object.defineProperty([], "0", { value: baseTask() }));
+  const catalog = { ...baseCatalog(), tasks };
+  const catalogResult = validateContainerTaskCatalog(catalog);
+  expect(catalogResult.ok).toBe(true);
+  if (catalogResult.ok) expect(catalogResult.value).toBe(catalog);
+  const engines = new Array<unknown>(1);
+  Object.setPrototypeOf(
+    engines,
+    Object.defineProperty([], "0", { value: { engine: "docker", state: "available" } }),
+  );
+  const capability = { ...baseCapability(), engines };
+  const capabilityResult = validateContainerCapabilityResponse(capability);
+  expect(capabilityResult.ok).toBe(true);
+  if (capabilityResult.ok) expect(capabilityResult.value).toBe(capability);
+});
+
+it("#3918 preserves dense container task and engine error order", () => {
+  expect(validateContainerTaskCatalog({ ...baseCatalog(), tasks: [null, null] })).toEqual({
+    ok: false,
+    errors: ["tasks[0] must be an object", "tasks[1] must be an object"],
+  });
+  expect(
+    validateContainerCapabilityResponse({ ...baseCapability(), engines: [null, null] }),
+  ).toEqual({
+    ok: false,
+    errors: ["engines[0] must be an object", "engines[1] must be an object"],
+  });
+});

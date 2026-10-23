@@ -162,6 +162,39 @@ const POD_COUNT_KEYS = [
 ] as const;
 const POD_KINDS = ["pod", "pod-set"] as const;
 
+type ActivityPodStructure = Omit<KnowledgePodRetrievalActivityPod, "podId" | "sourceIds"> & {
+  readonly podId: string;
+  readonly sourceIds: readonly string[];
+};
+type ActivityStructure = Omit<KnowledgePodRetrievalActivity, "pods"> & {
+  readonly pods: readonly ActivityPodStructure[];
+};
+
+function isCapturedExtent(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validateStableExtent(
+  members: readonly unknown[],
+  extent: number,
+  field: string,
+  errors: string[],
+): boolean {
+  if (members.length !== extent)
+    return reject(errors, `${field} must not change length during validation`);
+  return true;
+}
+
+function combineAdmissions(previous: boolean, current: boolean): boolean {
+  return previous && current;
+}
+
+// A refusal records the original diagnostic and actual failed field evidence.
+function reject(errors: string[], ...reasons: string[]): false {
+  errors.push(...reasons);
+  return false;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -334,25 +367,34 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-function validateNonNegativeInteger(value: unknown, field: string, errors: string[]): void {
-  if (!isNonNegativeInteger(value)) errors.push(`${field} must be a non-negative integer`);
+function validateNonNegativeInteger(value: unknown, field: string, errors: string[]): boolean {
+  let valid = true;
+  if (!isNonNegativeInteger(value))
+    valid = reject(errors, `${field} must be a non-negative integer`);
+  return valid;
 }
 
-function validateSummary(value: unknown, errors: string[]): void {
+function validateSummary(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("summary must be an object");
-    return;
+    valid = reject(errors, "summary must be an object");
+    return valid;
   }
   onlyKeys(value, SUMMARY_KEYS, "summary", errors);
   for (const key of SUMMARY_KEYS) {
-    validateNonNegativeInteger(value[key], `summary.${key}`, errors);
+    valid = combineAdmissions(
+      valid,
+      validateNonNegativeInteger(value[key], `summary.${key}`, errors),
+    );
   }
+  return valid;
 }
 
-function validatePrivacy(value: unknown, errors: string[]): void {
+function validatePrivacy(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("privacy must be an object");
-    return;
+    valid = reject(errors, "privacy must be an object");
+    return valid;
   }
   onlyKeys(value, PRIVACY_KEYS, "privacy", errors);
   if (
@@ -362,8 +404,9 @@ function validatePrivacy(value: unknown, errors: string[]): void {
     value.privatePathsExposed !== false ||
     value.directVectorScoreComparison !== false
   ) {
-    errors.push("privacy must preserve the retrieval activity redaction posture");
+    valid = reject(errors, "privacy must preserve the retrieval activity redaction posture");
   }
+  return valid;
 }
 
 function validateEnumArray(
@@ -371,71 +414,139 @@ function validateEnumArray(
   allowed: readonly string[],
   field: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(value) || value.length === 0) {
-    errors.push(`${field} must be a non-empty array`);
-    return;
+    valid = reject(errors, `${field} must be a non-empty array`);
+    return valid;
   }
-  for (const entry of value) {
+  const members = value;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, `${field} must have a valid array length`);
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = members[index];
+
     if (typeof entry !== "string" || !allowed.includes(entry)) {
-      errors.push(`${field} entries are invalid`);
-      return;
+      valid = reject(errors, `${field} entries are invalid`);
+      return valid;
     }
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, field, errors));
+  return valid;
 }
 
-function validateSourceIds(value: unknown, errors: string[]): void {
+function validateSourceIds(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push("pod.sourceIds must be an array");
-    return;
+    valid = reject(errors, "pod.sourceIds must be an array");
+    return valid;
   }
-  for (const entry of value) {
+  const members = value;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "pod.sourceIds must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = members[index];
+
     if (!isSafeActivityText(entry)) {
-      errors.push("pod.sourceIds entries must be evidence-safe strings");
-      return;
+      valid = reject(errors, "pod.sourceIds entries must be evidence-safe strings");
+      return valid;
     }
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, "pod.sourceIds", errors));
+  return valid;
 }
 
-function validatePodCounts(value: unknown, errors: string[]): void {
+function validatePodCounts(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("pod.counts must be an object");
-    return;
+    valid = reject(errors, "pod.counts must be an object");
+    return valid;
   }
   onlyKeys(value, POD_COUNT_KEYS, "pod.counts", errors);
   for (const key of POD_COUNT_KEYS) {
-    validateNonNegativeInteger(value[key], `pod.counts.${key}`, errors);
+    valid = combineAdmissions(
+      valid,
+      validateNonNegativeInteger(value[key], `pod.counts.${key}`, errors),
+    );
   }
+  return valid;
 }
 
-function validatePod(value: unknown, errors: string[]): void {
+function validatePod(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("pod must be an object");
-    return;
+    valid = reject(errors, "pod must be an object");
+    return valid;
   }
   onlyKeys(value, POD_KEYS, "pod", errors);
-  if (!isSafeActivityText(value.podId)) errors.push("pod.podId must be evidence-safe");
-  if (typeof value.podKind !== "string" || !POD_KINDS.includes(value.podKind as never)) {
-    errors.push("pod.podKind is invalid");
+  if (!isSafeActivityText(value.podId)) valid = reject(errors, "pod.podId must be evidence-safe");
+  if (typeof value.podKind !== "string" || !POD_KINDS_ADMISSION.includes(value.podKind)) {
+    valid = reject(errors, "pod.podKind is invalid");
   }
   if (!isSafeActivityText(value.displayName)) {
-    errors.push("pod.displayName must be evidence-safe");
+    valid = reject(errors, "pod.displayName must be evidence-safe");
   }
   if (
     typeof value.state !== "string" ||
-    !KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_STATES.includes(value.state as never)
+    !KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_STATES_ADMISSION.includes(value.state)
   ) {
-    errors.push("pod.state is invalid");
+    valid = reject(errors, "pod.state is invalid");
   }
-  validateEnumArray(value.modes, KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_MODES, "pod.modes", errors);
-  validateEnumArray(
-    value.reasonCodes,
-    KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
-    "pod.reasonCodes",
-    errors,
+  valid = combineAdmissions(
+    valid,
+    validateEnumArray(value.modes, KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_MODES, "pod.modes", errors),
   );
-  validateSourceIds(value.sourceIds, errors);
-  validatePodCounts(value.counts, errors);
+  valid = combineAdmissions(
+    valid,
+    validateEnumArray(
+      value.reasonCodes,
+      KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
+      "pod.reasonCodes",
+      errors,
+    ),
+  );
+  valid = combineAdmissions(valid, validateSourceIds(value.sourceIds, errors));
+  valid = combineAdmissions(valid, validatePodCounts(value.counts, errors));
+  return valid;
+}
+
+function admitsKnowledgePodRetrievalActivity(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & ActivityStructure {
+  let valid = true;
+  onlyKeys(input, ACTIVITY_KEYS, "activity", errors);
+  if (input.schemaVersion !== KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION) {
+    valid = reject(errors, "activity.schemaVersion is invalid");
+  }
+  valid = combineAdmissions(valid, validateSummary(input.summary, errors));
+  valid = combineAdmissions(valid, validatePrivacy(input.privacy, errors));
+  if (!Array.isArray(input.pods)) {
+    valid = reject(errors, "activity.pods must be an array");
+  } else {
+    const members = input.pods;
+    const extent = members.length;
+    if (!isCapturedExtent(extent)) {
+      reject(errors, "activity.pods must have a valid array length");
+      return false;
+    }
+    for (let index = 0; index < extent; index += 1) {
+      const pod: unknown = members[index];
+      valid = combineAdmissions(valid, validatePod(pod, errors));
+    }
+    valid = combineAdmissions(
+      valid,
+      validateStableExtent(members, extent, "activity.pods", errors),
+    );
+  }
+
+  return valid;
 }
 
 export function validateKnowledgePodRetrievalActivity(
@@ -443,18 +554,14 @@ export function validateKnowledgePodRetrievalActivity(
 ): LocalKnowledgeValidation<KnowledgePodRetrievalActivity> {
   if (!isRecord(input)) return { ok: false, errors: ["activity must be an object"] };
   const errors: string[] = [];
-  onlyKeys(input, ACTIVITY_KEYS, "activity", errors);
-  if (input.schemaVersion !== KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION) {
-    errors.push("activity.schemaVersion is invalid");
-  }
-  validateSummary(input.summary, errors);
-  validatePrivacy(input.privacy, errors);
-  if (!Array.isArray(input.pods)) {
-    errors.push("activity.pods must be an array");
-  } else {
-    for (const pod of input.pods) validatePod(pod, errors);
-  }
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: input as unknown as KnowledgePodRetrievalActivity };
+  if (!admitsKnowledgePodRetrievalActivity(input, errors) || errors.length > 0)
+    return { ok: false, errors };
+  // All non-brand fields are admitted above; this attaches only erased ID brands.
+  const admitted: ActivityStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
+  return { ok: true, value: admitted as KnowledgePodRetrievalActivity };
 }
+
+const POD_KINDS_ADMISSION: readonly unknown[] = POD_KINDS;
+const KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_STATES_ADMISSION: readonly unknown[] =
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_STATES;

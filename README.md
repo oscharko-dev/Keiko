@@ -90,7 +90,29 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
-## What's new in 1.2.2
+## What's new in 1.2.4
+
+- **Slow-gateway resilience.** Chat waits through extended response-start silence within bounded gateway deadlines, preserves unchanged drafts after cancellation and avoids duplicate conversations during model-catalog refresh.
+- **Clearer connected sources.** The compact Sources header follows acknowledged Files navigation without OK or Keep folder confirmations. Completed conversation history remains intact. A source snapshot invalidated while a window loads is refreshed before that window becomes ready.
+- **More relevant repository evidence.** Search improves compound-term and related-source selection, retains explicitly requested files, and excludes incidental lockfiles while preserving dependency-version evidence. Cooperative indexing keeps existing authority and resource limits.
+- **Windows host containment.** OpenCode metadata and home resolution stay inside private host state; original host and dependency-consumer compatibility tests cover the supported integration.
+
+The [Java/Spring Boot skill](scripts/testing/chat-skills-lab/skills/java-spring-unit-tests.md) and
+[React/MUI/Vitest skill](scripts/testing/chat-skills-lab/skills/react-mui-vitest-tests.md) are editable
+candidates for review. Immediate client cancellation before source acknowledgement, complete
+multi-source compaction qualification and repeated generated-test quality remain tracked in
+[follow-up #4040](https://github.com/oscharko-dev/Keiko/issues/4040). This release does not claim
+complete Gemma qualification.
+
+## What's new in 1.2.3
+
+- **Reliable dictation through LiteLLM.** Browser recordings are normalized to mono PCM16 WAV for compatible Whisper deployments. Click the microphone to record, follow the subtle input waveform, and click the same control to stop. The transcript is inserted directly into your editable draft; it is never sent automatically.
+- **Skills and drafts that recover correctly.** The Skills dialog refreshes when the normal launcher session becomes available. Private Chat drafts survive reload and restart; simultaneous edits require an explicit choice. Deleted selected skills stop the turn rather than silently sending without the chosen instructions.
+- **Better source fidelity.** Generated skill references must match the actual admitted source. History recovery after compaction retains complementary relevant sections, and maximized Chat windows fit the current tab's viewport.
+
+The local UI store advances to schema V44 for private drafts. Keep a backup before changing versions; older binaries cannot read the newer schema. Existing manual-update eligibility and platform qualification limits remain unchanged.
+
+## Previous additions in 1.2.2
 
 - **Private skills in Chat.** Open **Skills** beside the Composer, upload a Markdown file and select it for that chat. The active skill is visible beside the context meter. Preview, replace, download or delete a skill in the same dialog; uploading alone does not activate it.
 - **Instructions that survive compaction.** The complete selected revision counts toward the context budget and remains intact when conversation history is summarized. If it cannot fit or its revision is unavailable, Chat explains the correction instead of silently dropping it.

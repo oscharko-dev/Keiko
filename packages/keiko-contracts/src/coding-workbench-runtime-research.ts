@@ -5,7 +5,6 @@ import {
   invalid,
   isOneOf,
   isRecord,
-  result,
   validateSafeId,
   validateStrictUtcInstant,
   validateUntrustedDisplayText,
@@ -87,7 +86,16 @@ export function validateCodingWorkbenchRuntimeResearchChannelPayload(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchChannelPayload> {
   if (!isRecord(value)) return invalid("research channel payload must be an object");
   const errors = exactKeys(value, ["session", "pending", "grant"], "researchChannelPayload");
-  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES)) {
+  const admitted = checkResearchChannel(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkResearchChannel(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeResearchChannelPayload {
+  const session = isOneOf(value.session, CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES);
+  if (!session) {
     errors.push("researchChannelPayload.session is invalid");
   }
   if (value.session === "unpaired" && (value.pending !== undefined || value.grant !== undefined)) {
@@ -95,59 +103,78 @@ export function validateCodingWorkbenchRuntimeResearchChannelPayload(
       "researchChannelPayload research state must be absent when the session is unpaired",
     );
   }
-  if (value.pending !== undefined) validatePendingResearch(value.pending, errors);
-  if (value.grant !== undefined) validateResearchGrant(value.grant, errors);
-  return result(value, errors);
+  const pending = value.pending === undefined || validatePendingResearch(value.pending, errors);
+  const grant = value.grant === undefined || validateResearchGrant(value.grant, errors);
+  return session && pending && grant;
 }
 
-function validatePendingResearch(value: unknown, errors: string[]): void {
+function validatePendingResearch(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimePendingResearch {
   if (!isRecord(value)) {
     errors.push("researchChannelPayload.pending must be an object");
-    return;
+    return false;
   }
   errors.push(
     ...exactKeys(value, ["requestId", "host", "requestLine", "expiresAt"], "pendingResearch"),
   );
-  validateSafeId(
+  const requestId = validateSafeId(
     value.requestId,
     "pendingResearch.requestId",
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  if (!isCodeTaskPublicDomain(value.host)) {
+  const host = isCodeTaskPublicDomain(value.host);
+  if (!host) {
     errors.push("pendingResearch.host must be a canonical public domain");
   }
   // The request line for a bare root fetch is legitimately empty, so only the upper bound applies.
-  if (
-    !validateUntrustedDisplayText(
-      value.requestLine,
-      CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
-      { minChars: 0 },
-    )
-  ) {
+  const requestLine = validateUntrustedDisplayText(
+    value.requestLine,
+    CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
+    { minChars: 0 },
+  );
+  if (!requestLine) {
     errors.push("pendingResearch.requestLine must be a bounded string");
   }
-  validateStrictUtcInstant(value.expiresAt, "pendingResearch.expiresAt", errors);
+  const expiry = validateStrictUtcInstant(value.expiresAt, "pendingResearch.expiresAt", errors);
+  return requestId && host && requestLine && expiry;
 }
 
-function validateResearchGrant(value: unknown, errors: string[]): void {
+function validateResearchGrant(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeResearchGrant {
   if (!isRecord(value)) {
     errors.push("researchChannelPayload.grant must be an object");
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["grantId", "domains", "expiresAt"], "researchGrant"));
-  validateSafeId(
+  const grantId = validateSafeId(
     value.grantId,
     "researchGrant.grantId",
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  if (
-    !Array.isArray(value.domains) ||
-    value.domains.length === 0 ||
-    !value.domains.every((domain) => isCodeTaskPublicDomain(domain))
-  ) {
-    errors.push("researchGrant.domains must be a non-empty list of public domains");
+  const domains = checkResearchDomains(value);
+  if (!domains) errors.push("researchGrant.domains must be a non-empty list of public domains");
+  const expiry = validateStrictUtcInstant(value.expiresAt, "researchGrant.expiresAt", errors);
+  return grantId && domains && expiry;
+}
+
+function checkResearchDomains(value: Record<string, unknown>): boolean {
+  if (!Array.isArray(value.domains) || value.domains.length === 0) return false;
+  const domains: unknown = value.domains;
+  return admittedDomainMembers(domains);
+}
+
+function admittedDomainMembers(value: unknown): value is readonly string[] {
+  if (!Array.isArray(value)) return false;
+  const count = value.length;
+  for (let index = 0; index < count; index += 1) {
+    const domain: unknown = value[index];
+    if (!isCodeTaskPublicDomain(domain)) return false;
   }
-  validateStrictUtcInstant(value.expiresAt, "researchGrant.expiresAt", errors);
+  return true;
 }

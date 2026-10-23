@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as publicRepository from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import {
   CODING_REPOSITORY_LIMITS,
   captureCodingRepositoryRequest,
@@ -94,4 +95,51 @@ describe("bounded coding repository handler contracts", () => {
     expect(isCodingRepositoryRequest({ ...search, includeGlobs: globs })).toBe(false);
     expect(isCodingRepositoryRequest({ ...search, includeGlobs: new Array(2) })).toBe(false);
   });
+});
+
+describe("Coding repository request guard and capture responsibility", () => {
+  for (const [surface, api] of Object.entries({
+    source: { isCodingRepositoryRequest, captureCodingRepositoryRequest },
+    public: publicRepository,
+  })) {
+    it(`${surface}: captures isolated bounded read and search requests`, () => {
+      const mutable = { ...search, includeGlobs: ["src/**"], excludeGlobs: ["test/**"] };
+      const candidate: unknown = mutable;
+      if (!api.isCodingRepositoryRequest(candidate)) throw new TypeError("request fixture refused");
+      expect(candidate.kind).toBe("search");
+      const captured = api.captureCodingRepositoryRequest(candidate);
+      if (captured?.kind !== "search") throw new TypeError("search capture missing");
+      expect(captured).not.toBe(mutable);
+      expect(Object.isFrozen(captured)).toBe(true);
+      expect(captured.includeGlobs).not.toBe(mutable.includeGlobs);
+      expect(captured.excludeGlobs).not.toBe(mutable.excludeGlobs);
+      expect(Object.isFrozen(captured.includeGlobs)).toBe(true);
+      expect(Object.isFrozen(captured.excludeGlobs)).toBe(true);
+      mutable.includeGlobs[0] = "private/**";
+      mutable.excludeGlobs[0] = "private/**";
+      expect(captured.includeGlobs).toEqual(["src/**"]);
+      expect(captured.excludeGlobs).toEqual(["test/**"]);
+      const capturedRead = api.captureCodingRepositoryRequest(read);
+      expect(capturedRead).toEqual(read);
+      expect(capturedRead).not.toBe(read);
+      expect(Object.isFrozen(capturedRead)).toBe(true);
+    });
+
+    it(`${surface}: refuses malformed and accessor-bearing requests before capture`, () => {
+      const malformed = { ...search, root: "/untrusted" };
+      expect(api.captureCodingRepositoryRequest(malformed)).toBeUndefined();
+      expect(api.isCodingRepositoryRequest(malformed)).toBe(false);
+      let reads = 0;
+      const accessor = {
+        ...search,
+        get query(): string {
+          reads += 1;
+          return "secret";
+        },
+      };
+      expect(api.captureCodingRepositoryRequest(accessor)).toBeUndefined();
+      expect(api.isCodingRepositoryRequest(accessor)).toBe(false);
+      expect(reads).toBe(0);
+    });
+  }
 });

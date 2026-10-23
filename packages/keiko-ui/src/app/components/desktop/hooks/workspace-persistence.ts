@@ -106,7 +106,6 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
     CHAT_ID_FINGERPRINT_CFG_KEY,
     CHAT_ID_CHOSEN_CFG_KEY,
     "memoryEnabled",
-    "keepFilesFolder",
     "projectPath",
     "projectPathPrivacy",
     CHAT_TITLE_IS_DEFAULT_CFG_KEY,
@@ -182,12 +181,7 @@ function sanitizeSetMarker(value: unknown): AppWindow["cfg"][string] {
   return value === true ? true : undefined;
 }
 
-function sanitizeBooleanPreference(value: unknown): AppWindow["cfg"][string] {
-  return typeof value === "boolean" ? value : undefined;
-}
-
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
-  "chat:keepFilesFolder": sanitizeBooleanPreference,
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
   "editor:rootBinding": sanitizeCodingRepositoryBinding,

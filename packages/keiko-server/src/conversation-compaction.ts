@@ -43,6 +43,8 @@ import {
 } from "./conversation-gateway.js";
 
 export interface ConversationCompactionOptions {
+  /** Explicit maintenance summarizes the complete eligible history in a single pass. */
+  readonly compactAllHistory?: boolean | undefined;
   readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly contextProfile?: ContextProfile | undefined;
   readonly effectiveInputBudget?: number | undefined;
@@ -97,7 +99,10 @@ export function conversationForGatewayWithCompaction(
     { messages: fullVerbatimMessages },
     tokenAccounting,
   );
-  if (fullVerbatimTokens <= effectiveInputBudget) {
+  if (
+    fullVerbatimTokens <= effectiveInputBudget &&
+    (opts.compactAllHistory !== true || filtered.length === 0)
+  ) {
     return { messages: fullVerbatimMessages, compaction: earlier };
   }
 
@@ -130,11 +135,12 @@ function selectCompactionOutcome(
     tokenAccounting,
     earlier,
     allowTrimming: false,
+    compactAllHistory: opts.compactAllHistory === true,
   };
   const complete = selectCompaction(prepared, system, budget);
   if (complete !== undefined)
     return buildCompactedOutcome(prepared, system, complete, tokenAccounting, earlier);
-  if (earlier !== undefined) {
+  if (earlier !== undefined && (opts.compactAllHistory !== true || prepared.length === 0)) {
     const refitted = refitEarlierCheckpoint(
       prepared,
       system,
@@ -208,13 +214,15 @@ function selectCompaction(
   systemMessage: GatewayConversationMessage | undefined,
   budget: Omit<CompactionCandidateBudget, "systemContent"> & {
     readonly preserveNewestTurn: boolean;
+    readonly compactAllHistory: boolean;
   },
 ): CompactionSelection | undefined {
   const systemContent = systemMessage?.content;
   if (systemContent === undefined && prepared.length === 0) return undefined;
   const tokenPrefix = buildTokenPrefix(prepared);
   const maxDropCount = budget.preserveNewestTurn ? prepared.length - 1 : prepared.length;
-  for (let dropCount = 1; dropCount <= maxDropCount; dropCount += 1) {
+  const firstDropCount = budget.compactAllHistory ? Math.max(1, maxDropCount) : 1;
+  for (let dropCount = firstDropCount; dropCount <= maxDropCount; dropCount += 1) {
     const selection = selectCompactionCandidate(prepared, tokenPrefix, dropCount, {
       ...budget,
       systemContent,

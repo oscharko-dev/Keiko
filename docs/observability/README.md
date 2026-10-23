@@ -46,6 +46,14 @@ and `reportLoss`. The event's own `completeness: complete` and `loss: none` mean
 was recorded successfully, not that the report contains complete server evidence. Closed
 `evidenceScope` and `availabilityReason` describe that distinction without report contents.
 
+Shared browser BFF response validation reports a refused contract through the existing
+`client.diagnostic` operation before throwing `CONTRACT_VALIDATION_FAILED` (502). The report
+uses `kind: other`, `errorKind: validation-failed`, redacted error evidence and the response
+correlation when available. It never includes the request path, query, response body, diff or
+validation reason. Healthy responses emit no refusal. Delivery retains the existing bounded
+client transport and explicit loss accounting; it does not promise persistence when that
+transport is unavailable.
+
 `client.files-scope.decision` joins source ownership and grounding-queue decisions to their actual
 actions. Current queue/retry records identify `mutationSurface` as `files`, `local-knowledge` or
 `git-change`. The shared closed decision vocabulary covers restoration, release, ambiguity,
@@ -321,6 +329,15 @@ and release impact. The runtime event constructor derives its TypeScript shape f
 the physical sink validates the same contract again immediately before serialization. A caller
 therefore cannot add arbitrary metadata, widen a field after construction, or use an unregistered
 operation as an escape hatch.
+
+`activityLogEvent` returns either the requested event or a closed construction refusal. Keep both
+arms on the existing injected ports: a refused construction never acquires the requested operation's
+type or write authority. `activityLogEventRegistration` checks complete structural metadata and
+preserves its reference, while canonical registration and fields remain the physical writer's
+decision. Correlation wrappers and other forwarding copies use `copyActivityLogEventMetadata` to
+retain raw registration and closed rejection markers; dropping malformed attachments would erase
+the writer's existing rejection reason. Buffered logger loss counts are separate from the physical
+writer's rejection accounting.
 
 The generated contracts runtime exports those complete safe operation schemas and the derived
 failure-class coverage alongside the identity digests. Every schema receives mandatory

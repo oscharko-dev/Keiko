@@ -1442,12 +1442,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/knowledge-pods.ts",
-      "owner": "readManualRefreshSummary",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/parsers/_internal.ts",
       "owner": "decodeBytes",
       "kind": "unregistered-catch",

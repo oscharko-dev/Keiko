@@ -385,6 +385,50 @@ describe("coding safe-activity contract", () => {
     }
   });
 
+  it("preserves local serialization phases after earlier member errors", async () => {
+    const { vi } = await import("vitest");
+    const base = availableFeed();
+    if (base.availability !== "available") throw new TypeError("expected available fixture");
+    const turn = base.turns[0];
+    if (turn === undefined) throw new TypeError("expected turn fixture");
+    const [first, second] = turn.messages;
+    if (first === undefined || second === undefined) {
+      throw new TypeError("expected nested fixture");
+    }
+    const badMessage = { ...first, role: "system", occurredAt: "invalid" };
+    const sibling = { ...second, messageId: "msg_trace_sibling" };
+    const laterMessage = { ...first, messageId: "msg_trace_later" };
+    const laterTurn = {
+      ...turn,
+      turnId: "turn_trace_later",
+      messages: [laterMessage],
+      tools: [],
+    };
+    const currentPlan = plan();
+    const value = {
+      ...base,
+      turns: [{ ...turn, messages: [badMessage, sibling] }, laterTurn],
+      plan: currentPlan,
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(validateCodingSafeActivityFeed(value)).toEqual({
+        ok: false,
+        errors: [
+          "safeActivityFeed.turns[0].messages[0].role is invalid",
+          "safeActivityFeed.turns[0].messages[0].occurredAt must be a strict UTC millisecond instant",
+        ],
+      });
+      expect(stringify).toHaveBeenCalledTimes(4);
+      expect(stringify.mock.calls[0]?.[0]).toBe(sibling);
+      expect(stringify.mock.calls[1]?.[0]).toBe(laterMessage);
+      expect(stringify.mock.calls[2]?.[0]).toBe(laterTurn);
+      expect(stringify.mock.calls[3]?.[0]).toBe(currentPlan);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   // KEIKO-0749: validatePlan / validateTurn / validateMessage each call `serializedBytes` (a
   // full JSON.stringify traversal) to check the deep byte budget. Before the fix they ran that
   // call even when the structure had already failed shape validation — wasting a deep
@@ -492,3 +536,171 @@ function planStep(
     ...overrides,
   } as CodingSafeActivityPlan["steps"][number];
 }
+
+describe("C2 owning activity member admissions", () => {
+  it.each(["turns", "messages", "tools", "segments", "steps"] as const)(
+    "refuses skipped malformed %s members",
+    (surface) => {
+      const base = availableFeed();
+      if (base.availability !== "available") throw new Error("expected available fixture");
+      const turn = base.turns[0];
+      const message = turn?.messages[0];
+      if (turn === undefined || message === undefined) throw new Error("expected nested fixture");
+      const entries: unknown[] = [null];
+      Object.defineProperty(entries, "forEach", { value: (): void => undefined });
+      const value =
+        surface === "turns"
+          ? { ...base, turns: entries }
+          : surface === "messages"
+            ? { ...base, turns: [{ ...turn, messages: entries }] }
+            : surface === "tools"
+              ? { ...base, turns: [{ ...turn, tools: entries }] }
+              : surface === "segments"
+                ? { ...base, turns: [{ ...turn, messages: [{ ...message, segments: entries }] }] }
+                : {
+                    ...base,
+                    plan: {
+                      revision: 1,
+                      anchorMessageId: "msg_assistant_1",
+                      updatedAt: base.updatedAt,
+                      steps: entries,
+                      truncated: false,
+                    },
+                  };
+      expect(validateCodingSafeActivityFeed(value).ok).toBe(false);
+    },
+  );
+
+  it("retains a healthy original feed reference", () => {
+    const value = availableFeed();
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it("refuses a sparse turn list with one owning diagnostic", () => {
+    const entries: unknown[] = [];
+    entries.length = CODING_SAFE_ACTIVITY_MAX_TURNS;
+    const result = validateCodingSafeActivityFeed({ ...availableFeed(), turns: entries });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors).toHaveLength(1);
+  });
+});
+
+describe("C2 observed safe-activity scalar admissions", () => {
+  it.each([
+    { observations: [0, Number.NaN, Number.NaN], expectedReads: 2 },
+    { observations: [0, 1, Number.NaN], expectedReads: 3 },
+  ])(
+    "refuses an invalid later dropped-event observation $observations",
+    ({ observations, expectedReads }) => {
+      const value = unavailableCodingSafeActivityFeed(
+        "run-safe-activity-1",
+        "2026-07-18T17:00:00.000Z",
+      );
+      let reads = 0;
+      Object.defineProperty(value, "droppedEventCount", {
+        enumerable: true,
+        get: (): unknown => observations[reads++] ?? 0,
+      });
+      expect(validateCodingSafeActivityFeed(value)).toEqual({
+        ok: false,
+        errors: ["safeActivityFeed.droppedEventCount is invalid"],
+      });
+      expect(reads).toBe(expectedReads);
+    },
+  );
+
+  it("preserves three healthy dropped-event observations and the serialization read", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    const observations = [0, 1, 2, 3];
+    let reads = 0;
+    Object.defineProperty(value, "droppedEventCount", {
+      enumerable: true,
+      get: (): unknown => observations[reads++] ?? 3,
+    });
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(4);
+  });
+
+  it("refuses an invalid second plan revision", () => {
+    const value = { ...availableFeed(), plan: plan() };
+    let reads = 0;
+    Object.defineProperty(value.plan, "revision", {
+      enumerable: true,
+      get: (): unknown => (++reads === 2 ? Number.NaN : 1),
+    });
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: ["safeActivityFeed.plan.revision must be a positive safe integer"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("preserves two healthy plan revision observations and both serialization reads", () => {
+    const value = { ...availableFeed(), plan: plan() };
+    let reads = 0;
+    Object.defineProperty(value.plan, "revision", { enumerable: true, get: (): number => ++reads });
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(4);
+  });
+
+  it("reports the original availability diagnostic for a later invalid variant", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    const observations = ["unavailable", "available", "invalid"];
+    let reads = 0;
+    Object.defineProperty(value, "availability", {
+      enumerable: true,
+      get: (): unknown => observations[reads++] ?? "unavailable",
+    });
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: ["safeActivityFeed.availability is invalid"],
+    });
+    expect(reads).toBe(3);
+  });
+
+  it("does not repeat the base availability diagnostic", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    let reads = 0;
+    Object.defineProperty(value, "availability", {
+      enumerable: true,
+      get: (): string => (++reads === 1 ? "unavailable" : "invalid"),
+    });
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: ["safeActivityFeed.availability is invalid"],
+    });
+    expect(reads).toBe(4);
+  });
+
+  it("retains a healthy changing availability schedule", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    const observations = ["unavailable", "available", "unavailable", "unavailable"];
+    let reads = 0;
+    Object.defineProperty(value, "availability", {
+      enumerable: true,
+      get: (): unknown => observations[reads++] ?? "unavailable",
+    });
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(4);
+  });
+});

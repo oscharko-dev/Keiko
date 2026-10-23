@@ -35,6 +35,19 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
+On 2026-10-13, the required OSV scan reported two newly published Microsoft cryptography
+advisories against the Windows RFC 3161 native-quality project's
+`System.Security.Cryptography.Pkcs` 10.0.9:
+[GHSA-2fmv-rv2c-59x7](https://github.com/advisories/GHSA-2fmv-rv2c-59x7) and
+[GHSA-846f-f764-76mx](https://github.com/advisories/GHSA-846f-f764-76mx). The project now selects
+the patched 10.0.13 release, and an unlocked .NET 8 restore regenerated its committed NuGet
+lockfile, including the cryptography and ASN.1 transitive dependencies. The native-quality
+invocation retains `RestoreLockedMode=true`; neither an OSV waiver nor a gate bound changed.
+The repository-wide OSV Scanner 2.6.0 scan and the local locked quality build qualify this
+dependency repair. The native Windows integration remains required CI evidence; a macOS
+cross-targeted build does not replace it. These NuGet records are governed by the committed
+project/lock and Windows native-quality gate, separately from the npm currency rows below.
+
 | Source                     | Result                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |
@@ -97,6 +110,23 @@ The targeted update changes only the shared resolution; the Rust validator retai
 manifest-size and sensitive-path checks. The patched recursive OSV scan and production npm
 audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
 to accommodate this update.
+
+On 2026-10-23 the required recursive OSV scan and production npm audits identified new
+advisories in DOMPurify, Next.js and `ip-address`. This repair moves the existing DOMPurify
+override to 3.4.17 for
+[GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7),
+[GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) and
+[GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f).
+Next.js and its ESLint configuration move together to 16.4.2; the patched minimum is 16.4.1 for
+[GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw),
+[GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) and
+[GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr).
+Both root and native-host lockfiles resolve `ip-address` 10.7.4 for
+[GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5), within their
+existing `socks` dependency range. No new override or waiver is added. The DOMPurify npm
+resolution does not replace Monaco's separately vendored sanitizer; its existing disabled-markdown
+and inert-markup controls remain independently verified. The two earlier build-time advisory
+waivers retain their existing scope, expiry and revisit conditions.
 
 ### How this queue must be queried — and the trap in it
 
@@ -192,8 +222,8 @@ or peer graph).
 | `oxlint`                      | root                  | 1.78.0  | current        | Development-only syntax runner qualified for #3915; supplements typed ESLint and Sonar. Exact MIT pin, native parser visitation and conformance proofs; no product runtime dependency.                                                                                                                       |
 | `@oxlint/plugins`             | root                  | 1.78.0  | current        | Exact MIT plugin bridge of the pinned anti-slop dependency; native compatibility is qualified, not used as an ESLint replacement.                                                                                                                                                                            |
 | `oxlint-plugin-anti-slop`     | root                  | 0.1.2   | current        | MIT, Dillon Mulroy (2026). Immutable HTTPS archive at c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b with lockfile SRI and complete source hashes; #3915 qualifies all 21 noncosmetic fixture suites.                                                                                                              |
-| `next`                        | keiko-ui              | 16.3.8  | current        | Security patch on the 16.3 line taken 2026-10-08 for the reviewed Next advisories fixed in 16.3.8 (PR #3895), retaining the prior critical 16.3.6 repair from #3678; moved together with `eslint-config-next`.                                                                                               |
-| `eslint-config-next`          | keiko-ui              | 16.3.8  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
+| `next`                        | keiko-ui              | 16.4.2  | current        | Security update taken 2026-10-23 for the three reviewed Next advisories fixed from 16.4.1; moved together with `eslint-config-next`, retaining the earlier security repairs.                                                                                                                                 |
+| `eslint-config-next`          | keiko-ui              | 16.4.2  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
 | `react`                       | keiko-ui              | 19.3.0  | current        | React and its declarations move together across the UI and editor test/runtime surfaces; the UI, editor, static export, accessibility, and E2E lanes are authoritative.                                                                                                                                      |
 | `react-dom`                   | keiko-ui              | 19.3.0  | current        | Matches `react` across the UI and editor surfaces.                                                                                                                                                                                                                                                           |
 | `prosemirror-commands`        | keiko-ui              | 1.7.2   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
@@ -209,10 +239,10 @@ or peer graph).
 | `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
 | `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
 | `@babel/preset-env`           | root                  | 8.0.5   | current        | Dependabot #3545; reviewed Babel bug-fix rollup, including destructuring, block-scoping, Safari array bounds, and parser correctness fixes.                                                                                                                                                                  |
-| `vite`                        | keiko-ui              | 8.3.0   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                              |
-| `vitest`                      | root                  | 4.1.11  | major-deferred | #3474 reverts the Vitest 5 adoption for the mutation lane: Stryker 10 with Vitest 5.0.0 reports zero killed mutants despite a covering dry run, making the security mutation evidence meaningless. 4.1.11 is the patched Vitest 4 line with a clean audit result and working Stryker/Vitest instrumentation. |
-| `vitest`                      | keiko-ui              | 4.1.11  | major-deferred | Kept exactly aligned with the root because workspace-local Vitest drift previously produced peer-invalid `npm ls` output. The next Vitest major move must first prove non-zero Stryker kills on the security mutation scope.                                                                                 |
-| `@vitest/coverage-v8`         | root                  | 4.1.11  | major-deferred | Exact peer match for Vitest 4.1.11. Vitest 5 coverage stays deferred with the Vitest major because the security mutation runner, not the coverage package alone, is the blocking evidence path (#3474).                                                                                                      |
+| `vite`                        | keiko-ui              | 8.3.3   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                              |
+| `vitest`                      | root                  | 4.1.12  | major-deferred | #3474 reverts the Vitest 5 adoption for the mutation lane: Stryker 10 with Vitest 5.0.0 reports zero killed mutants despite a covering dry run, making the security mutation evidence meaningless. 4.1.12 is the patched Vitest 4 line with patched mocker logic and working Stryker/Vitest instrumentation. |
+| `vitest`                      | keiko-ui              | 4.1.12  | major-deferred | Kept exactly aligned with the root because workspace-local Vitest drift previously produced peer-invalid `npm ls` output. The next Vitest major move must first prove non-zero Stryker kills on the security mutation scope.                                                                                 |
+| `@vitest/coverage-v8`         | root                  | 4.1.12  | major-deferred | Exact peer match for Vitest 4.1.12. Vitest 5 coverage stays deferred with the Vitest major because the security mutation runner, not the coverage package alone, is the blocking evidence path (#3474).                                                                                                      |
 | `autoprefixer`                | keiko-ui              | 10.6.1  | current        | Dependabot #3590 (consolidated 2026-09-25); minor release on the 10.x line.                                                                                                                                                                                                                                  |
 | `@types/react`                | keiko-ui              | 19.3.0  | current        | Kept exactly aligned with React 19.3 and `@types/react-dom` across the UI and editor workspaces.                                                                                                                                                                                                             |
 | `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.                                                                                                                                                                                                                             |
@@ -523,3 +553,7 @@ otherwise. It touches more than twenty files across five kinds of change:
 
 No product runtime behaviour, published surface, or state store changes; the only source edit under
 `packages/` is a corrected comment.
+
+### 2026-10-22 OSV patch refresh (#3918)
+
+The required workflow-hygiene scan on PR #4013 identified fixable advisories in Vite, the Vitest mocker, markdown-it and the native MCP client. The root override and UI Vite declaration move together to 8.3.3. Root/UI Vitest and the coverage peer stay on the reviewed Vitest 4 major and move together to 4.1.12; the Vitest 5/Stryker deferral remains. The existing prosemirror-markdown dependency resolves markdown-it 14.3.3 without a new direct dependency. The native host retains its existing MCP override mechanism and aligns client/core at 2.3.0, as required by the client's exact core dependency. The pinned scanner, waiver set and security policy are unchanged. This security update does not establish a cause or fix for the separately open Node 26 grounding-import finding.

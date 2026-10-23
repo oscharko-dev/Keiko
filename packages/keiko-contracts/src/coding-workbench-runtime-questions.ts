@@ -6,7 +6,6 @@ import {
   invalid,
   isOneOf,
   isRecord,
-  result,
   validateSafeId,
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
@@ -97,13 +96,32 @@ export function parseCodingWorkbenchRuntimeQuestionAnswerRequest(
     ["requestId", "expectedRevision", "questionId", "answers"],
     "questionAnswer",
   );
-  validateSafeId(value.requestId, "requestId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
-  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
-    errors.push("expectedRevision must be a non-negative safe integer");
-  }
-  if (!isCodeTaskQuestionId(value.questionId)) errors.push("questionId is invalid");
-  validateAnswers(value.answers, errors);
-  return result(value, errors);
+  const admitted = checkQuestionAnswer(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkQuestionAnswer(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeQuestionAnswerRequest {
+  const request = validateSafeId(
+    value.requestId,
+    "requestId",
+    errors,
+    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  );
+  const revision = validAnswerRevision(value);
+  if (!revision) errors.push("expectedRevision must be a non-negative safe integer");
+  const question = isCodeTaskQuestionId(value.questionId);
+  if (!question) errors.push("questionId is invalid");
+  const answers = validateAnswers(value.answers, errors);
+  return request && revision && question && answers;
+}
+
+function validAnswerRevision(value: Record<string, unknown>): boolean {
+  if (!Number.isSafeInteger(value.expectedRevision)) return false;
+  const revision: unknown = value.expectedRevision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0;
 }
 
 export function validateCodingWorkbenchRuntimeQuestionsResponse(
@@ -111,8 +129,15 @@ export function validateCodingWorkbenchRuntimeQuestionsResponse(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsResponse> {
   if (!isRecord(value)) return invalid("questions response must be an object");
   const errors = exactKeys(value, ["questions"], "questionsResponse");
-  checkBoundedQuestionRequests(value.questions, value, errors);
-  return result(value, errors);
+  const admitted = checkQuestionsResponse(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkQuestionsResponse(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeQuestionsResponse {
+  return checkBoundedQuestionRequests(value.questions, value, errors);
 }
 
 /**
@@ -124,17 +149,23 @@ export function validateCodingWorkbenchRuntimeQuestionsChannelPayload(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload> {
   if (!isRecord(value)) return invalid("questions channel payload must be an object");
   const errors = exactKeys(value, ["session", "questions"], "questionsChannelPayload");
-  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_QUESTIONS_SESSION_STATES)) {
-    errors.push("questionsChannelPayload.session is invalid");
-  }
+  const admitted = checkQuestionsChannel(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkQuestionsChannel(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeQuestionsChannelPayload {
+  const session = isOneOf(value.session, CODING_WORKBENCH_RUNTIME_QUESTIONS_SESSION_STATES);
+  if (!session) errors.push("questionsChannelPayload.session is invalid");
   if (
     value.session === "unpaired" &&
     (!Array.isArray(value.questions) || value.questions.length > 0)
-  ) {
+  )
     errors.push("questionsChannelPayload.questions must be empty when the session is unpaired");
-  }
-  checkBoundedQuestionRequests(value.questions, value, errors);
-  return result(value, errors);
+  const questions = checkBoundedQuestionRequests(value.questions, value, errors);
+  return session && questions;
 }
 
 /** Shared question-request bounds: array cap, per-request structure, and the aggregate byte budget. */
@@ -142,144 +173,233 @@ function checkBoundedQuestionRequests(
   questions: unknown,
   container: object,
   errors: string[],
-): void {
+): questions is readonly CodingWorkbenchRuntimeQuestionRequest[] {
   if (
     !Array.isArray(questions) ||
     questions.length > CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT
   ) {
     errors.push("questions must be a bounded array");
-    return;
+    return false;
   }
-  validateQuestionRequests(questions, errors);
+  const admitted = validateQuestionRequests(questions, errors);
   if (
     errors.length === 0 &&
     serializedBytes(container) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES
-  ) {
+  )
     errors.push("questions response exceeds the aggregate UTF-8 byte budget");
-  }
+  return admitted;
 }
 
-function validateQuestionRequests(values: readonly unknown[], errors: string[]): void {
-  const ids = new Set<string>();
-  values.forEach((value, index) => {
+function validateQuestionRequests(
+  values: readonly unknown[],
+  errors: string[],
+): values is readonly CodingWorkbenchRuntimeQuestionRequest[] {
+  const ids = new Set<unknown>();
+  const count = values.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
     const path = `questions[${String(index)}]`;
-    if (!isRecord(value)) {
+    if (!(index in values)) {
       errors.push(`${path} must be an object`);
-      return;
+      return false;
     }
-    errors.push(...exactKeys(value, ["id", "questions"], path));
-    if (!isCodeTaskQuestionId(value.id)) errors.push(`${path}.id is invalid`);
-    else if (ids.has(value.id)) errors.push("question request ids must be unique");
-    else ids.add(value.id);
-    validateQuestions(value.questions, path, errors);
-  });
+    admitted = validateQuestionRequest(values[index], path, ids, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validateQuestions(value: unknown, path: string, errors: string[]): void {
+function validateQuestionRequest(
+  value: unknown,
+  path: string,
+  ids: Set<unknown>,
+  errors: string[],
+): value is CodingWorkbenchRuntimeQuestionRequest {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
+  errors.push(...exactKeys(value, ["id", "questions"], path));
+  const id = isCodeTaskQuestionId(value.id);
+  if (!id) errors.push(`${path}.id is invalid`);
+  else if (ids.has(value.id)) errors.push("question request ids must be unique");
+  else ids.add(value.id);
+  const questions = validateQuestions(value.questions, path, errors);
+  return id && questions;
+}
+
+function validateQuestions(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is readonly CodingWorkbenchRuntimeQuestion[] {
   if (
     !Array.isArray(value) ||
     value.length < 1 ||
     value.length > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_COUNT
   ) {
     errors.push(`${path}.questions must be a bounded non-empty array`);
-    return;
+    return false;
   }
-  value.forEach((question, index) => {
-    validateQuestion(question, `${path}.questions[${String(index)}]`, errors);
-  });
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const memberPath = `${path}.questions[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${memberPath} must be an object`);
+      return false;
+    }
+    const question: unknown = value[index];
+    admitted = validateQuestion(question, memberPath, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validateQuestion(value: unknown, path: string, errors: string[]): void {
+function validateQuestion(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is CodingWorkbenchRuntimeQuestion {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["question", "header", "options", "multiple", "custom"], path));
-  validateText(
+  const question = validateText(
     value.question,
     `${path}.question`,
     CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
     errors,
   );
-  validateText(
+  const header = validateText(
     value.header,
     `${path}.header`,
     CODING_WORKBENCH_RUNTIME_QUESTION_HEADER_MAX_CHARS,
     errors,
   );
-  validateOptions(value.options, path, errors);
+  const options = validateOptions(value.options, path, errors);
+  let flags = true;
   for (const flag of ["multiple", "custom"] as const) {
     if (value[flag] !== undefined && typeof value[flag] !== "boolean") {
       errors.push(`${path}.${flag} must be a boolean`);
+      flags = false;
     }
   }
+  return question && header && options && flags;
 }
 
-function validateOptions(value: unknown, path: string, errors: string[]): void {
+function validateOptions(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is readonly CodingWorkbenchRuntimeQuestionOption[] {
   if (!Array.isArray(value) || value.length > CODING_WORKBENCH_RUNTIME_QUESTION_OPTIONS_MAX_COUNT) {
     errors.push(`${path}.options must be a bounded array`);
-    return;
+    return false;
   }
   const labels = new Set<string>();
-  value.forEach((option, index) => {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
     const optionPath = `${path}.options[${String(index)}]`;
-    if (!isRecord(option)) {
+    if (!(index in value)) {
       errors.push(`${optionPath} must be an object`);
-      return;
+      return false;
     }
-    errors.push(...exactKeys(option, ["label", "description"], optionPath));
-    validateText(
-      option.label,
-      `${optionPath}.label`,
-      CODING_WORKBENCH_RUNTIME_QUESTION_OPTION_LABEL_MAX_CHARS,
-      errors,
-    );
-    validateText(
-      option.description,
-      `${optionPath}.description`,
-      CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
-      errors,
-    );
-    if (typeof option.label === "string") {
-      if (labels.has(option.label)) errors.push(`${path}.option labels must be unique`);
-      labels.add(option.label);
-    }
-  });
+    const option: unknown = value[index];
+    admitted = validateOption(option, optionPath, path, labels, errors) && admitted;
+  }
+  return admitted;
 }
 
-function validateAnswers(value: unknown, errors: string[]): void {
+function validateOption(
+  value: unknown,
+  optionPath: string,
+  path: string,
+  labels: Set<string>,
+  errors: string[],
+): value is CodingWorkbenchRuntimeQuestionOption {
+  if (!isRecord(value)) {
+    errors.push(`${optionPath} must be an object`);
+    return false;
+  }
+  errors.push(...exactKeys(value, ["label", "description"], optionPath));
+  const label = validateText(
+    value.label,
+    `${optionPath}.label`,
+    CODING_WORKBENCH_RUNTIME_QUESTION_OPTION_LABEL_MAX_CHARS,
+    errors,
+  );
+  const description = validateText(
+    value.description,
+    `${optionPath}.description`,
+    CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
+    errors,
+  );
+  if (typeof value.label === "string") {
+    if (labels.has(value.label)) errors.push(`${path}.option labels must be unique`);
+    labels.add(value.label);
+  }
+  return label && description;
+}
+
+function validateAnswers(
+  value: unknown,
+  errors: string[],
+): value is readonly (readonly string[])[] {
   if (
     !Array.isArray(value) ||
     value.length < 1 ||
     value.length > CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT
   ) {
     errors.push("answers must be a bounded non-empty array");
-    return;
+    return false;
   }
-  value.forEach((answer, index) => {
-    const valid =
-      Array.isArray(answer) &&
-      answer.length <= CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT &&
-      answer.every((selection) =>
-        validText(selection, CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS),
-      );
-    if (!valid) errors.push(`answers[${String(index)}] must contain bounded strings`);
-    else if (new Set(answer).size !== answer.length)
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const answer: unknown = value[index];
+    if (!validAnswerMembers(answer)) {
+      errors.push(`answers[${String(index)}] must contain bounded strings`);
+      admitted = false;
+      if (!(index in value)) return false;
+    } else if (new Set(answer).size !== answer.length) {
       errors.push(`answers[${String(index)}] must not contain duplicate selections`);
-  });
+    }
+  }
   // Per-array caps above bound each answer individually (32 arrays x 32 selections x 4096 chars),
   // but not their sum: matches the aggregate budget checkBoundedQuestionRequests already enforces
   // on the outbound side, gated on no per-item error the same way that function gates its own check.
   if (
     errors.length === 0 &&
     serializedBytes({ answers: value }) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES
-  ) {
+  )
     errors.push("answers exceed the aggregate UTF-8 byte budget");
-  }
+  return admitted;
 }
 
-function validateText(value: unknown, path: string, max: number, errors: string[]): void {
-  if (!validText(value, max)) errors.push(`${path} must be a bounded non-empty string`);
+function validAnswerMembers(value: unknown): value is readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT
+  )
+    return false;
+  const count = value.length;
+  for (let index = 0; index < count; index += 1) {
+    const selection: unknown = value[index];
+    if (!validText(selection, CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS)) return false;
+  }
+  return true;
+}
+
+function validateText(
+  value: unknown,
+  path: string,
+  max: number,
+  errors: string[],
+): value is string {
+  const admitted = validText(value, max);
+  if (!admitted) errors.push(`${path} must be a bounded non-empty string`);
+  return admitted;
 }
 
 function validText(value: unknown, max: number): value is string {

@@ -173,10 +173,13 @@ export type EditorCompletionParse = EditorCompletionParseOk | EditorCompletionPa
 // coding-context.ts (KEIKO-0159): this file previously re-implemented all eight byte-for-byte
 // identically to editor-inline-completion.ts and (except isCostClass) editor-test-generation.ts.
 
+const EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_COMPLETION_WIRE_TRIGGER_KINDS;
+
 function isWireTriggerKind(value: unknown): value is EditorCompletionWireTriggerKind {
   return (
     typeof value === "string" &&
-    (EDITOR_COMPLETION_WIRE_TRIGGER_KINDS as readonly string[]).includes(value)
+    EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES.includes(value)
   );
 }
 
@@ -221,23 +224,64 @@ export function parseEditorCompletionRequest(value: unknown): EditorCompletionPa
     return { ok: false, errors };
   }
   const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
+  const request = captureCompleteCompletionRequest(value, context);
+  if (!isCompleteCompletionRequest(request))
+    return { ok: false, errors: collectRequestErrors({ ...request }) };
+  return { ok: true, value: request };
+}
+
+interface CapturedEditorCompletionWireRequest {
+  readonly schemaVersion: typeof EDITOR_COMPLETION_SCHEMA_VERSION;
+  readonly root: unknown;
+  readonly document: unknown;
+  readonly position: unknown;
+  readonly triggerKind: unknown;
+  readonly contextBudgetBytes: unknown;
+  readonly editorSessionId?: string;
+  readonly context?: ReturnType<typeof buildContextSelectors>;
+  readonly triggerCharacter?: string;
+  readonly maxCostClass?: CostClass;
+}
+
+function captureCompleteCompletionRequest(
+  value: Record<string, unknown>,
+  context: ReturnType<typeof buildContextSelectors> | undefined,
+): CapturedEditorCompletionWireRequest {
   return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
-      root: value.root as string,
-      ...(isBoundedEditorSessionId(value.editorSessionId)
-        ? { editorSessionId: value.editorSessionId }
-        : {}),
-      document: value.document as LanguageDocumentOverlay,
-      position: value.position as LanguagePosition,
-      triggerKind: value.triggerKind as EditorCompletionWireTriggerKind,
-      ...(typeof value.triggerCharacter === "string"
-        ? { triggerCharacter: value.triggerCharacter }
-        : {}),
-      contextBudgetBytes: value.contextBudgetBytes as number,
-      ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
-      ...(isCostClass(value.maxCostClass) ? { maxCostClass: value.maxCostClass } : {}),
-    },
+    schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
+    root: value.root,
+    ...(isBoundedEditorSessionId(value.editorSessionId)
+      ? { editorSessionId: value.editorSessionId }
+      : {}),
+    document: value.document,
+    position: value.position,
+    triggerKind: value.triggerKind,
+    ...(typeof value.triggerCharacter === "string"
+      ? { triggerCharacter: value.triggerCharacter }
+      : {}),
+    contextBudgetBytes: value.contextBudgetBytes,
+    ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
+    ...(isCostClass(value.maxCostClass) ? { maxCostClass: value.maxCostClass } : {}),
   };
+}
+
+function isCompleteCompletionRequest(
+  value: CapturedEditorCompletionWireRequest,
+): value is EditorCompletionWireRequest {
+  return (
+    validCompletionRequestCore(value) &&
+    (value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId)) &&
+    (value.triggerCharacter === undefined || typeof value.triggerCharacter === "string") &&
+    (value.maxCostClass === undefined || isCostClass(value.maxCostClass))
+  );
+}
+
+function validCompletionRequestCore(value: CapturedEditorCompletionWireRequest): boolean {
+  return (
+    isNonEmptyString(value.root) &&
+    isLanguageDocumentOverlay(value.document) &&
+    isLanguagePosition(value.position) &&
+    isWireTriggerKind(value.triggerKind) &&
+    isNonNegativeInteger(value.contextBudgetBytes)
+  );
 }

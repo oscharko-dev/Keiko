@@ -189,7 +189,11 @@ function validUniqueStringArray(
 ): value is readonly string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > maxItems) return false;
   const seen = new Set<string>();
-  for (const entry of value) {
+  const extent = value.length;
+  if (!isPositiveBoundedExtent(extent, maxItems)) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const entry: unknown = value[index];
     if (!predicate(entry) || utf8ByteLength(entry) > maxBytes || seen.has(entry)) return false;
     seen.add(entry);
   }
@@ -207,7 +211,7 @@ function validPattern(value: unknown): value is string {
   return !value.split("/").some((segment) => segment === "." || segment === "..");
 }
 
-function validOptionalPatterns(value: unknown): boolean {
+function validOptionalPatterns(value: unknown): value is readonly string[] | undefined {
   return (
     value === undefined ||
     validUniqueStringArray(value, MAX_PATTERNS, MAX_PATTERN_BYTES, validPattern)
@@ -245,7 +249,11 @@ function validProvenance(value: unknown): value is EditorM7SnippetProvenance {
 function validSnippetBody(value: unknown): value is readonly string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_BODY_LINES) return false;
   let totalBytes = 0;
-  for (const line of value) {
+  const extent = value.length;
+  if (!isPositiveBoundedExtent(extent, MAX_BODY_LINES)) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const line: unknown = value[index];
     if (typeof line !== "string") return false;
     totalBytes += utf8ByteLength(line);
     if (totalBytes > MAX_BODY_BYTES || !snippetLineSafe(line)) return false;
@@ -457,7 +465,10 @@ function containsUnescapedMarkdownImage(line: string): boolean {
   return false;
 }
 
-function validSnippetIdentity(value: UnknownRecord): boolean {
+function validSnippetIdentity(
+  value: UnknownRecord,
+): value is UnknownRecord &
+  Pick<EditorM7WorkspaceSnippet, "id" | "name" | "prefixes" | "description"> {
   if (!validToken(value.id) || !validBoundedString(value.name, 128)) {
     return false;
   }
@@ -467,11 +478,15 @@ function validSnippetIdentity(value: UnknownRecord): boolean {
   return validBoundedString(value.description, 256);
 }
 
-function validSnippetLanguageScope(value: UnknownRecord): boolean {
+function validSnippetLanguageScope(
+  value: UnknownRecord,
+): value is UnknownRecord & Pick<EditorM7WorkspaceSnippet, "languages"> {
   return validUniqueStringArray(value.languages, MAX_LANGUAGE_SCOPES, 64, validLanguage);
 }
 
-function validSnippetRevisionAndProvenance(value: UnknownRecord): boolean {
+function validSnippetRevisionAndProvenance(
+  value: UnknownRecord,
+): value is UnknownRecord & Pick<EditorM7WorkspaceSnippet, "revision" | "provenance"> {
   return validRevision(value.revision) && validProvenance(value.provenance);
 }
 
@@ -480,14 +495,14 @@ function parseSnippet(value: unknown): EditorM7ParseResult<EditorM7WorkspaceSnip
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
   if (!validSnippetLanguageScope(value)) return { ok: false, reasonCode: "INVALID_INPUT" };
-  if (!validOptionalPatterns(value.include) || !validOptionalPatterns(value.exclude)) {
+  if (!validSnippetPatterns(value)) {
     return { ok: false, reasonCode: "UNSAFE_PATH" };
   }
-  if (!validSnippetBody(value.body)) return { ok: false, reasonCode: "UNSAFE_SNIPPET" };
+  if (!validSnippetContent(value)) return { ok: false, reasonCode: "UNSAFE_SNIPPET" };
   if (!validSnippetRevisionAndProvenance(value)) {
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
-  return { ok: true, value: value as unknown as EditorM7WorkspaceSnippet };
+  return { ok: true, value };
 }
 
 export function parseEditorM7WorkspaceSnippetCollection(
@@ -705,4 +720,19 @@ function advanceGlobState(
     default:
       return;
   }
+}
+
+function validSnippetPatterns(
+  value: UnknownRecord,
+): value is UnknownRecord & Pick<EditorM7WorkspaceSnippet, "include" | "exclude"> {
+  return validOptionalPatterns(value.include) && validOptionalPatterns(value.exclude);
+}
+function validSnippetContent(
+  value: UnknownRecord,
+): value is UnknownRecord & Pick<EditorM7WorkspaceSnippet, "body"> {
+  return validSnippetBody(value.body);
+}
+
+function isPositiveBoundedExtent(value: number, maximum: number): boolean {
+  return Number.isSafeInteger(value) && value >= 1 && value <= maximum;
 }

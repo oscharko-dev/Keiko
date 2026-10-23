@@ -182,25 +182,19 @@ export const VOICE_TRANSCRIPT_SEGMENT_TRANSITIONS: Record<
 export function isVoiceTranscriptSegmentState(
   value: unknown,
 ): value is VoiceTranscriptSegmentState {
-  return (
-    typeof value === "string" &&
-    (VOICE_TRANSCRIPT_SEGMENT_STATES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(VOICE_TRANSCRIPT_SEGMENT_STATES).has(value);
 }
 
 export function isVoiceTranscriptProviderErrorKind(
   value: unknown,
 ): value is VoiceTranscriptProviderErrorKind {
   return (
-    typeof value === "string" &&
-    (VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS as readonly string[]).includes(value)
+    typeof value === "string" && new Set<string>(VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS).has(value)
   );
 }
 
 export function isVoiceTranscriptSource(value: unknown): value is VoiceTranscriptSource {
-  return (
-    typeof value === "string" && (VOICE_TRANSCRIPT_SOURCES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(VOICE_TRANSCRIPT_SOURCES).has(value);
 }
 
 export function voiceTranscriptSegmentReplayClass(
@@ -225,7 +219,7 @@ export function canTransitionVoiceTranscriptSegment(
 
 // AC5: a segment's text is consumable downstream iff it is committed or corrected.
 export function isCommittedVoiceTranscriptState(state: VoiceTranscriptSegmentState): boolean {
-  return (VOICE_TRANSCRIPT_CONSUMABLE_STATES as readonly string[]).includes(state);
+  return new Set<string>(VOICE_TRANSCRIPT_CONSUMABLE_STATES).has(state);
 }
 
 // Exhaustiveness guard: a `default`/fall-through that reaches this fails to type-check if a new

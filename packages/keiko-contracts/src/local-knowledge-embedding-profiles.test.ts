@@ -255,3 +255,26 @@ describe("embedding profile compatibility", () => {
     });
   });
 });
+
+import {
+  embeddingProfileFromModelIdentity as publicProfile,
+  embeddingProfileKey as publicProfileKey,
+  compareEmbeddingProfiles as publicCompare,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-embedding-profiles";
+import { validateEmbeddingModelIdentity as publicValidateIdentity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+it("public profile producer consumes admitted identity without changing canonical framing", () => {
+  const admitted = publicValidateIdentity(HARDENED_IDENTITY);
+  expect(admitted.ok).toBe(true);
+  if (!admitted.ok) return;
+  const profile = publicProfile(admitted.value);
+  const dimensions: number = profile.vectorDimensions;
+  const metric: "cosine" | "euclidean" | "dot" = profile.vectorMetric;
+  expect(dimensions).toBe(1536);
+  expect(metric).toBe("cosine");
+  expect(publicProfileKey(profile)).toBe(
+    embeddingProfileKey(embeddingProfileFromModelIdentity(admitted.value)),
+  );
+  expect(
+    publicCompare(profile, publicProfile({ ...admitted.value, modelRevision: "other" })).reason,
+  ).toBe("model-revision-mismatch");
+});

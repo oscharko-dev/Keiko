@@ -120,6 +120,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gateway-readiness", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "conversation-readiness-log", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "chat-context-log", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "chat-draft-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "markdown-skill-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-continuity-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-setup", surface: "model-gateway" },

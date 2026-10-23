@@ -353,12 +353,18 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   "network-egress",
 ]);
 
+function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
+  errors.push(...issues);
+  return issues.length === 0;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 function isSafeIntegerOrZero(value: unknown): value is number {
@@ -374,50 +380,89 @@ function validateAllowedKeys(
   allowed: readonly string[],
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   Object.keys(record)
     .filter((key) => !allowed.includes(key))
-    .forEach((key) => errors.push(`${path}.${key} is not allowed`));
+    .forEach(
+      (key) =>
+        (valid = [appendValidationIssues(errors, `${path}.${key} is not allowed`), valid].every(
+          Boolean,
+        )),
+    );
+
+  return valid;
 }
 
-function validateEvidenceIdentityFields(record: Record<string, unknown>, errors: string[]): void {
+function validateEvidenceIdentityFields(
+  record: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (record.recordId === undefined) {
-    errors.push("record.recordId is required");
+    valid = [appendValidationIssues(errors, "record.recordId is required"), valid].every(Boolean);
   } else if (!isCodingWorkbenchEvidenceSafeText(record.recordId)) {
-    errors.push("record.recordId must be content-free evidence-safe text");
+    valid = [
+      appendValidationIssues(errors, "record.recordId must be content-free evidence-safe text"),
+      valid,
+    ].every(Boolean);
   }
   if (record.runId === undefined) {
-    errors.push("record.runId is required");
+    valid = [appendValidationIssues(errors, "record.runId is required"), valid].every(Boolean);
   } else if (!isCodingWorkbenchEvidenceSafeText(record.runId)) {
-    errors.push("record.runId must be content-free evidence-safe text");
+    valid = [
+      appendValidationIssues(errors, "record.runId must be content-free evidence-safe text"),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateEvidenceMetadataFields(record: Record<string, unknown>, errors: string[]): void {
+function validateEvidenceMetadataFields(
+  record: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (record.schemaVersion !== CODING_WORKBENCH_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
   }
   if (!isIsoInstant(record.occurredAt)) {
-    errors.push("record.occurredAt must be an ISO-8601 UTC instant");
+    valid = [
+      appendValidationIssues(errors, "record.occurredAt must be an ISO-8601 UTC instant"),
+      valid,
+    ].every(Boolean);
   }
   if (!isOneOf(record.kind, CODING_WORKBENCH_EVIDENCE_KINDS)) {
-    errors.push("record.kind is invalid");
+    valid = [appendValidationIssues(errors, "record.kind is invalid"), valid].every(Boolean);
   }
   if (!isOneOf(record.effectiveMode, CODING_WORKBENCH_MODES)) {
-    errors.push("record.effectiveMode is invalid");
+    valid = [appendValidationIssues(errors, "record.effectiveMode is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (!isOneOf(record.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES)) {
-    errors.push("record.runtimeSource is invalid");
+    valid = [appendValidationIssues(errors, "record.runtimeSource is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (!isOneOf(record.modelSource, CODING_WORKBENCH_MODEL_SOURCES)) {
-    errors.push("record.modelSource is invalid");
+    valid = [appendValidationIssues(errors, "record.modelSource is invalid"), valid].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateDigest(value: unknown, path: string, errors: string[]): void {
+function validateDigest(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (typeof value !== "string" || !HEX_64_PATTERN.test(value)) {
-    errors.push(`${path} must be a 64-character lowercase hex digest`);
+    valid = [
+      appendValidationIssues(errors, `${path} must be a 64-character lowercase hex digest`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 const CODING_WORKBENCH_EVIDENCE_RECORD_KEYS: readonly string[] = Object.freeze([
@@ -446,23 +491,33 @@ function validateOptionalSafeEvidenceTextField(
   record: Record<string, unknown>,
   key: "artifactLabel" | "safeSummary",
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   const value = record[key];
   if (value !== undefined && !isCodingWorkbenchEvidenceSafeText(value)) {
-    errors.push(`record.${key} must be content-free evidence-safe text`);
+    valid = [
+      appendValidationIssues(errors, `record.${key} must be content-free evidence-safe text`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateOptionalDigestField(record: Record<string, unknown>, errors: string[]): void {
+function validateOptionalDigestField(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (record.digest !== undefined) {
-    validateDigest(record.digest, "record.digest", errors);
+    valid = [validateDigest(record.digest, "record.digest", errors), valid].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateOptionalNonNegativeIntegerFields(
   record: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   const keys = [
     "byteCount",
     "fileCount",
@@ -474,24 +529,37 @@ function validateOptionalNonNegativeIntegerFields(
   ] as const;
   keys.forEach((key) => {
     if (record[key] !== undefined && !isSafeIntegerOrZero(record[key])) {
-      errors.push(`record.${key} must be a non-negative safe integer`);
+      valid = [
+        appendValidationIssues(errors, `record.${key} must be a non-negative safe integer`),
+        valid,
+      ].every(Boolean);
     }
   });
+
+  return valid;
 }
 
 function validateOptionalBooleanField(
   record: Record<string, unknown>,
   key: "denied",
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] !== undefined && typeof record[key] !== "boolean") {
-    errors.push(`record.${key} must be a boolean`);
+    valid = [appendValidationIssues(errors, `record.${key} must be a boolean`), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
-function validateEvidenceCommon(record: Record<string, unknown>, errors: string[]): void {
-  validateEvidenceIdentityFields(record, errors);
-  validateEvidenceMetadataFields(record, errors);
+function validateEvidenceCommon(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [validateEvidenceIdentityFields(record, errors), valid].every(Boolean);
+  valid = [validateEvidenceMetadataFields(record, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function isSafeEvidenceLabel(value: string): boolean {
@@ -623,21 +691,37 @@ export function redactCodingWorkbenchEvidenceText(value: string): string {
   return isCodingWorkbenchEvidenceSafeText(redacted) ? redacted : REDACTED_CONTENT_TOKEN;
 }
 
+function admitCodingWorkbenchEvidenceRecord(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchEvidenceRecord {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "evidence record must be an object");
+    return false;
+  }
+  valid = [
+    validateAllowedKeys(value, CODING_WORKBENCH_EVIDENCE_RECORD_KEYS, "record", errors),
+    valid,
+  ].every(Boolean);
+  valid = [validateEvidenceCommon(value, errors), valid].every(Boolean);
+  valid = [validateOptionalSafeEvidenceTextField(value, "artifactLabel", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateOptionalSafeEvidenceTextField(value, "safeSummary", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateOptionalDigestField(value, errors), valid].every(Boolean);
+  valid = [validateOptionalNonNegativeIntegerFields(value, errors), valid].every(Boolean);
+  valid = [validateOptionalBooleanField(value, "denied", errors), valid].every(Boolean);
+  return valid;
+}
+
 export function validateCodingWorkbenchEvidenceRecord(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchEvidenceRecord> {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["evidence record must be an object"] };
-  }
   const errors: string[] = [];
-  validateAllowedKeys(value, CODING_WORKBENCH_EVIDENCE_RECORD_KEYS, "record", errors);
-  validateEvidenceCommon(value, errors);
-  validateOptionalSafeEvidenceTextField(value, "artifactLabel", errors);
-  validateOptionalSafeEvidenceTextField(value, "safeSummary", errors);
-  validateOptionalDigestField(value, errors);
-  validateOptionalNonNegativeIntegerFields(value, errors);
-  validateOptionalBooleanField(value, "denied", errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchEvidenceRecord };
+  return admitCodingWorkbenchEvidenceRecord(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }

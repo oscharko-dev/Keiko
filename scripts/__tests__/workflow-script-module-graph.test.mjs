@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { unresolvableImports, workflowEntryScripts } from "./workflow-script-graph.mjs";
+import {
+  importGraphReachesDist,
+  unresolvableImports,
+  workflowEntryScripts,
+} from "./workflow-script-graph.mjs";
 
 // The workflows run repository scripts with plain node, while this suite runs them under vitest,
 // which rewrites ".js" specifiers to ".ts" sources and adds extensions. A green suite was therefore
@@ -94,6 +98,69 @@ describe("the resolver the guard relies on", () => {
       { from: "scripts/bridge.cjs", specifier: "./missing.cjs" },
     ]);
   });
+
+  it.each([
+    [
+      "quoted generated source",
+      `const source = 'import "./missing-string.mjs";';
+const built = 'export { value } from "../packages/x/dist/string.js";';`,
+    ],
+    [
+      "line comments",
+      '// import "./missing-comment.mjs";\n// import "../packages/x/dist/comment.js";',
+    ],
+    [
+      "block comments",
+      '/* import "./missing-comment.mjs"; export { value } from "../packages/x/dist/comment.js"; */',
+    ],
+    [
+      "template text",
+      'const source = `import "./missing-template.mjs"; import "../packages/x/dist/template.js";`;',
+    ],
+    [
+      "regular expressions",
+      String.raw`const source = /import ".\/missing-regex.mjs";/u;
+const built = /import "..\/packages\/x\/dist\/regex.js";/u;`,
+    ],
+  ])("ignores import-like %s in both graph consumers", (_shape, source) => {
+    const root = fixture({ "scripts/entry.mjs": source });
+
+    expect.soft(unresolvableImports("scripts/entry.mjs", root)).toEqual([]);
+    expect.soft(importGraphReachesDist("scripts/entry.mjs", root)).toBe(false);
+  });
+
+  it.each([
+    ["a static named import", (specifier) => `import { value } from "${specifier}";`],
+    ["a static re-export", (specifier) => `export { value } from "${specifier}";`],
+    ["a side-effect import", (specifier) => `import "${specifier}";`],
+    ["a literal dynamic import", (specifier) => `void import("${specifier}");`],
+    ["a template expression", (specifier) => 'const value = `${import("' + specifier + '")}`;'],
+  ])("retains %s as an actual edge in both graph consumers", (_shape, source) => {
+    const missingRoot = fixture({ "scripts/entry.mjs": source("./missing.mjs") });
+    const builtRoot = fixture({
+      "scripts/entry.mjs": source("../packages/x/dist/missing.js"),
+    });
+
+    expect(unresolvableImports("scripts/entry.mjs", missingRoot)).toEqual([
+      { from: "scripts/entry.mjs", specifier: "./missing.mjs" },
+    ]);
+    expect(importGraphReachesDist("scripts/entry.mjs", builtRoot)).toBe(true);
+  });
+
+  it.each(["require", "module.require"])(
+    "preserves %s without expanding the provisioning import scope",
+    (loader) => {
+      const root = fixture({
+        "scripts/entry.cjs": `const value = ${loader}("./missing.cjs");`,
+        "scripts/lazy.mjs": `const load = () => ${loader}("../packages/x/dist/value.js");`,
+      });
+
+      expect(unresolvableImports("scripts/entry.cjs", root)).toEqual([
+        { from: "scripts/entry.cjs", specifier: "./missing.cjs" },
+      ]);
+      expect(importGraphReachesDist("scripts/lazy.mjs", root)).toBe(false);
+    },
+  );
 
   it("names a missing entry point instead of passing it silently", () => {
     const root = fixture({ "scripts/present.mjs": "export {};\n" });

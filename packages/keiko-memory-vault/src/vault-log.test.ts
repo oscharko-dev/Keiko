@@ -19,6 +19,7 @@ import {
   memoryVaultErrorKind,
   nullMemoryVaultLogSink,
   startMemoryVaultLogTimer,
+  type MemoryVaultLogTransport,
   type MemoryVaultLogEvent,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
@@ -109,9 +110,9 @@ describe("emitMemoryVaultLogEvent", () => {
 
   function recordingSinkThatFailsOn(failingOps: readonly string[]): {
     sink: MemoryVaultLogSink;
-    events: MemoryVaultLogEvent[];
+    events: MemoryVaultLogTransport[];
   } {
-    const events: MemoryVaultLogEvent[] = [];
+    const events: MemoryVaultLogTransport[] = [];
     return {
       sink: {
         write: (event): void => {

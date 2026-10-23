@@ -5,13 +5,14 @@
 //   2. STT-enabled deployment: /api/voice/capability is stubbed to advertise speech-to-text and
 //      /api/voice/transcribe returns a deterministic transcript; a fake MediaRecorder is injected so
 //      no real microphone/provider is touched (privacy contract: no real audio leaves the host). The
-//      user dictates, stops, reviews/edits the transcript preview, and inserts it into the composer
+//      user dictates, stops, and edits the automatically inserted transcript in the composer
 //      (AC2/AC3), then a denied-permission run proves the composer survives the failure (AC4).
 //
 // Tagged @smoke so the Studio browser quality gate exercises it. The required `ci` check does not run
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-ui vitest suites.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
@@ -73,6 +74,8 @@ async function dictateInsertFlow(page: Page): Promise<void> {
   );
   await openChatComposer(page);
 
+  const composer = page.getByRole("textbox", { name: "Chat message" }).first();
+  await composer.fill("Existing draft.");
   const mic = page.getByRole("button", { name: "Dictate a message" });
   await expect(mic).toBeVisible();
   await mic.click();
@@ -80,15 +83,14 @@ async function dictateInsertFlow(page: Page): Promise<void> {
   await expect(stop).toBeVisible();
   await stop.click();
 
-  const transcript = page.getByRole("textbox", { name: "Review your dictation" });
-  await expect(transcript).toBeVisible();
-  await expect(transcript).toHaveValue("dictated hello from the smoke test");
-  await transcript.fill("dictated hello, edited");
-
-  await page.getByRole("button", { name: "Insert transcript into the message" }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveText(
-    /dictated hello, edited/u,
-  );
+  await expect(composer).toHaveText("Existing draft. dictated hello from the smoke test");
+  await expect(composer).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Review your dictation" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Insert transcript into the message" }),
+  ).toHaveCount(0);
+  await composer.fill("Existing draft. dictated hello, edited");
+  await expect(composer).toHaveText("Existing draft. dictated hello, edited");
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/495-dictation-insert.png"),
     fullPage: true,
@@ -116,7 +118,7 @@ test("composer dictation @smoke — no-voice composer is usable with no mic (AC1
   await noVoiceFlow(page);
 });
 
-test("composer dictation @smoke — dictate, review, edit, and insert (AC2/AC3)", async ({
+test("composer dictation @smoke — stop inserts into the editable draft (AC2/AC3)", async ({
   page,
 }) => {
   await dictateInsertFlow(page);

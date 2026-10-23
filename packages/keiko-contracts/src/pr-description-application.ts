@@ -224,19 +224,35 @@ export function isObservedReadyRebinding(
   if (!Number.isFinite(before) || !Number.isFinite(after) || after < before) return false;
   return BINDING_KEYS.every((key) => READY_REBINDING_KEYS.has(key) || previous[key] === next[key]);
 }
+function observedApplicationState(reason: unknown): PrDescriptionApplicationState | undefined {
+  if (
+    typeof reason !== "string" ||
+    !Object.hasOwn(PR_DESCRIPTION_APPLICATION_REASON_STATES, reason)
+  )
+    return undefined;
+  const states: Readonly<Partial<Record<string, PrDescriptionApplicationState>>> =
+    PR_DESCRIPTION_APPLICATION_REASON_STATES;
+  return states[reason];
+}
+function validStateDetails(
+  value: Record<string, unknown>,
+  state: PrDescriptionApplicationState,
+): boolean {
+  if (value.state !== state) return false;
+  if (state === "current") return value.completeness === "complete" && exactSuccessfulEffect(value);
+  if (state === "partial" || state === "fallback")
+    return value.completeness === state && successfulEffect(value.effect);
+  return value.effect === "none" || value.effect === "uncertain";
+}
 function validState(value: Record<string, unknown>): boolean {
   if (
     typeof value.reason !== "string" ||
     !Object.hasOwn(PR_DESCRIPTION_APPLICATION_REASON_STATES, value.reason)
   )
     return false;
-  const state =
-    PR_DESCRIPTION_APPLICATION_REASON_STATES[value.reason as PrDescriptionApplicationReason];
-  if (value.state !== state) return false;
-  if (state === "current") return value.completeness === "complete" && exactSuccessfulEffect(value);
-  if (state === "partial" || state === "fallback")
-    return value.completeness === state && successfulEffect(value.effect);
-  return value.effect === "none" || value.effect === "uncertain";
+  const state = observedApplicationState(value.reason);
+  if (state === undefined) return false;
+  return validStateDetails(value, state);
 }
 export function isPrDescriptionApplicationStatus(
   value: unknown,

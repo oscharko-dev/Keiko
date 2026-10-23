@@ -37,8 +37,8 @@ export function gateMemoryScope(scope: MemoryScope): MemoryScope {
   if (!result.ok) {
     throw new MemoryStorageValidationError("Invalid memory scope.", toFailures(result.errors));
   }
-  // validateMemoryScope's signature returns `MemoryValidation<undefined>` — it asserts shape but
-  // does not narrow. The input has the type we promised so we return it directly.
+  // The validator returns a checked MemoryScope while preserving the original input.
+  // Keep that same scope reference at the vault boundary.
   return scope;
 }
 

@@ -3,7 +3,42 @@
 // precisely at the broken invariant — the same mutation-robust pattern used by
 // local-knowledge.test.ts and connected-context.test.ts.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
+import { spawnSync } from "node:child_process";
+import * as publicMemory from "@oscharko-dev/keiko-contracts/memory";
+import {
+  validateMemoryRecord as validatePublicMemoryRecord,
+  validateMemoryProposal as validatePublicMemoryProposal,
+  validateMemoryAcceptance as validatePublicMemoryAcceptance,
+  validateMemoryRejection as validatePublicMemoryRejection,
+  validateMemoryUpdate as validatePublicMemoryUpdate,
+  validateMemorySupersession as validatePublicMemorySupersession,
+  validateMemoryPin as validatePublicMemoryPin,
+  validateMemoryUnpin as validatePublicMemoryUnpin,
+  validateMemoryArchive as validatePublicMemoryArchive,
+  validateMemoryForget as validatePublicMemoryForget,
+  validateMemoryAuditRecord as validatePublicMemoryAuditRecord,
+  validateMemoryRetrievalRequest as validatePublicMemoryRetrievalRequest,
+  validateMemoryScope as validatePublicMemoryScope,
+  validateMemoryStructuredPayload as validatePublicMemoryStructuredPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
+import type {
+  MemoryRecord as PublicMemoryRecord,
+  MemoryProposal as PublicMemoryProposal,
+  MemoryAcceptance as PublicMemoryAcceptance,
+  MemoryRejection as PublicMemoryRejection,
+  MemoryUpdate as PublicMemoryUpdate,
+  MemorySupersession as PublicMemorySupersession,
+  MemoryPin as PublicMemoryPin,
+  MemoryUnpin as PublicMemoryUnpin,
+  MemoryArchive as PublicMemoryArchive,
+  MemoryForget as PublicMemoryForget,
+  MemoryAuditRecord as PublicMemoryAuditRecord,
+  MemoryRetrievalRequest as PublicMemoryRetrievalRequest,
+  MemoryScope as PublicMemoryScope,
+  MemoryStructuredPayload as PublicMemoryStructuredPayload,
+  MemoryValidation as PublicMemoryValidation,
+} from "@oscharko-dev/keiko-contracts";
 import {
   MEMORY_AUDIT_ACTION_KINDS,
   MEMORY_EDGE_KINDS,
@@ -1478,3 +1513,1116 @@ const _unusedTypeAnchor = (): void => {
   };
   const _b: MemoryAuditRecordId = audit("ar-1");
 };
+
+// These ordinary-object controls preserve the existing observation schedule, not a
+// guarantee that a getter cannot change after validation. The original before receipt
+// retains the pre-migration production behavior.
+describe("public memory observation preservation", () => {
+  it.each([
+    { kind: "global" },
+    { kind: "user", userId: "user" },
+    { kind: "workspace", workspaceId: "workspace" },
+    { kind: "project", projectId: "project" },
+    { kind: "workflow", workflowDefinitionId: "workflow" },
+  ])("retains each scope arm by identity: $kind", (scope) => {
+    const result = publicMemory.validateMemoryScope(scope);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(scope);
+  });
+
+  it.each([
+    { kind: "string-list", items: ["one", "two"] },
+    { kind: "key-value", entries: [{ key: "key", value: "value" }] },
+  ])("retains root, nested values and serialized bytes for $kind", (payload) => {
+    const record = happyRecord();
+    const input = {
+      ...record,
+      payload,
+      retentionHint: { policyKey: "default", retainUntil: 0, notes: "note" },
+    };
+    const bytes = JSON.stringify(input);
+    const result = publicMemory.validateMemoryRecord(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.scope).toBe(record.scope);
+    expect(result.value.provenance).toBe(record.provenance);
+    expect(result.value.validity).toBe(record.validity);
+    expect(result.value.tags).toBe(record.tags);
+    expect(result.value.retentionHint).toBe(input.retentionHint);
+    expect(result.value.payload).toBe(payload);
+    expect(JSON.stringify(result.value)).toBe(bytes);
+    const checked = publicMemory.validateMemoryStructuredPayload(payload);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect(checked.value).toBe(payload);
+    if (checked.value.kind === "string-list") expect(checked.value.items).toBe(payload.items);
+    else {
+      expect(checked.value.entries).toBe(payload.entries);
+      expect(checked.value.entries[0]).toBe(payload.entries?.[0]);
+    }
+  });
+
+  it.each(["payload", "staleReason", "retentionHint"])(
+    "preserves omitted and own-undefined %s while refusing null",
+    (field) => {
+      const omitted = happyRecord();
+      const explicit = { ...omitted, [field]: undefined };
+      for (const input of [omitted, explicit]) {
+        const result = publicMemory.validateMemoryRecord(input);
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.value).toBe(input);
+          expect(Object.hasOwn(result.value, field)).toBe(Object.hasOwn(input, field));
+          expect(JSON.stringify(result.value)).toBe(JSON.stringify(input));
+        }
+      }
+      expect(publicMemory.validateMemoryRecord({ ...omitted, [field]: null }).ok).toBe(false);
+    },
+  );
+
+  it("preserves open expiry omission and own-undefined beside null refusal", () => {
+    for (const input of [{ validFrom: 0 }, { validFrom: 0, validUntil: undefined }]) {
+      const result = publicMemory.validateMemoryValidityInterval(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(Object.hasOwn(result.value, "validUntil")).toBe(Object.hasOwn(input, "validUntil"));
+      }
+    }
+    expect(publicMemory.validateMemoryValidityInterval({ validFrom: 0, validUntil: null }).ok).toBe(
+      false,
+    );
+  });
+
+  it("retains ordered diagnostics across independent record failures", () => {
+    const result = publicMemory.validateMemoryRecord({
+      ...happyRecord(),
+      schemaVersion: "2",
+      scope: { kind: "user", userId: "" },
+      body: "",
+      pinned: 0,
+      type: "invalid",
+      status: "invalid",
+      createdAt: 2,
+      updatedAt: 1,
+      payload: { kind: "string-list", items: [""] },
+      provenance: { ...happyProvenance(), confidence: 2 },
+      validity: { validFrom: 2, validUntil: 1 },
+      tags: [""],
+      retentionHint: { policyKey: "" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'record.schemaVersion must be the literal "1"',
+        "record.scope.userId must be a non-empty string for kind=user",
+        "record.body must be a bounded control-free non-empty string",
+        "record.pinned must be a boolean",
+        "record.type must be one of episodic|semantic-fact|procedural|preference|correction|decision|negative|pinned",
+        "record.status must be one of proposed|accepted|rejected|superseded|archived|forgotten|conflicted|expired",
+        "record.updatedAt must be greater than or equal to record.createdAt",
+        "record.payload.items entry must be a non-empty bounded control-free string",
+        "record.provenance.confidence must be a finite number in [0, 1]",
+        "record.validity.validUntil must be greater than or equal to validFrom",
+        "record.tags entry must be a non-empty bounded control-free string",
+        "record.retentionHint.policyKey must be a non-empty string",
+      ],
+    });
+  });
+
+  it("reads scope through its original Proxy receiver in order", () => {
+    const reads: string[] = [];
+    const scope = new Proxy(
+      { kind: "user", userId: "user" },
+      {
+        get(target, key, receiver): unknown {
+          expect(receiver).toBe(scope);
+          reads.push(String(key));
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const result = publicMemory.validateMemoryScope(scope);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(scope);
+    expect(reads).toEqual(["kind", "kind", "userId"]);
+  });
+
+  it("retains repeated validity reads including a changing final getter", () => {
+    const reads: string[] = [];
+    let untilReads = 0;
+    const input = {
+      get validFrom(): number {
+        reads.push("from");
+        return 1;
+      },
+      get validUntil(): number {
+        reads.push("until");
+        return ++untilReads === 3 ? 0 : 2;
+      },
+    };
+    expect(publicMemory.validateMemoryValidityInterval(input)).toEqual({
+      ok: false,
+      errors: ["validity.validUntil must be greater than or equal to validFrom"],
+    });
+    expect(reads).toEqual(["from", "until", "until", "from", "until", "from"]);
+    expect(publicMemory.validateMemoryValidityInterval({ validFrom: 1, validUntil: 2 }).ok).toBe(
+      true,
+    );
+  });
+
+  it("propagates the exact error at the second expiry getter read", () => {
+    const failure = new TypeError("fixture getter failure");
+    let reads = 0;
+    const input = {
+      validFrom: 1,
+      get validUntil(): number {
+        if (++reads === 2) throw failure;
+        return 2;
+      },
+    };
+    expect.assertions(3);
+    try {
+      publicMemory.validateMemoryValidityInterval(input);
+    } catch (error: unknown) {
+      expect(error).toBe(failure);
+    }
+    expect(reads).toBe(2);
+    expect(publicMemory.validateMemoryValidityInterval({ validFrom: 1 }).ok).toBe(true);
+  });
+
+  it("preserves payload array reads, iteration and receiver", () => {
+    const reads: string[] = [];
+    const items = new Proxy(["item"], {
+      get(target, key, receiver): unknown {
+        expect(receiver).toBe(items);
+        reads.push(String(key));
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    let itemReads = 0;
+    const payload = {
+      kind: "string-list",
+      get items(): string[] {
+        itemReads++;
+        return items;
+      },
+    };
+    expect(publicMemory.validateMemoryStructuredPayload(payload).ok).toBe(true);
+    expect(itemReads).toBe(3);
+    expect(reads).toEqual(["length", "Symbol(Symbol.iterator)", "length", "0", "length"]);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    "refuses invalid optional expiry and record timestamps %s",
+    (value) => {
+      expect(
+        publicMemory.validateMemoryValidityInterval({ validFrom: 0, validUntil: value }).ok,
+      ).toBe(false);
+      expect(publicMemory.validateMemoryRecord({ ...happyRecord(), createdAt: value }).ok).toBe(
+        false,
+      );
+      expect(publicMemory.validateMemoryRecord({ ...happyRecord(), updatedAt: value }).ok).toBe(
+        false,
+      );
+      expect(
+        publicMemory.validateMemoryRecord({ ...happyRecord(), createdAt: 0, updatedAt: 0 }).ok,
+      ).toBe(true);
+    },
+  );
+
+  it("retains distinct coordinate and record ID grammar", () => {
+    const id = " ../\uff41/record ";
+    expect(publicMemory.validateMemoryScope({ kind: "user", userId: id }).ok).toBe(true);
+    expect(publicMemory.validateMemoryRecord({ ...happyRecord(), id }).ok).toBe(true);
+  });
+
+  it("accepts exact payload count/text boundaries without normalization", () => {
+    const items = Array.from({ length: 128 }, () => "\uff41\t\n\r" + "x".repeat(4092));
+    const payload = { kind: "string-list", items };
+    expect(publicMemory.validateMemoryStructuredPayload(payload).ok).toBe(true);
+    const entries = Array.from({ length: 128 }, () => ({
+      key: "k".repeat(64),
+      value: "x".repeat(4096),
+    }));
+    expect(publicMemory.validateMemoryStructuredPayload({ kind: "key-value", entries }).ok).toBe(
+      true,
+    );
+    expect(items[0]).toBe("\uff41\t\n\r" + "x".repeat(4092));
+  });
+});
+
+describe("public memory optional and root observation preservation", () => {
+  it.each([
+    "sourceConversationId",
+    "sourceWorkflowRunId",
+    "sourceEvidenceManifestId",
+    "modelIdentity",
+    "captureRationale",
+  ])("preserves provenance optional %s and refuses null", (field) => {
+    const omitted = happyProvenance();
+    for (const input of [omitted, { ...omitted, [field]: undefined }]) {
+      const result = publicMemory.validateMemoryProvenance(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(Object.hasOwn(result.value, field)).toBe(Object.hasOwn(input, field));
+      }
+    }
+    expect(publicMemory.validateMemoryProvenance({ ...omitted, [field]: null }).ok).toBe(false);
+  });
+
+  it("retains root field observation order and receiver", () => {
+    const reads: string[] = [];
+    const input = new Proxy(happyRecord(), {
+      get(target, key, receiver): unknown {
+        expect(receiver).toBe(input);
+        reads.push(String(key));
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = publicMemory.validateMemoryRecord(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(reads).toEqual([
+      "schemaVersion",
+      "scope",
+      "id",
+      "body",
+      "pinned",
+      "staleReason",
+      "type",
+      "status",
+      "createdAt",
+      "updatedAt",
+      "createdAt",
+      "updatedAt",
+      "updatedAt",
+      "createdAt",
+      "payload",
+      "provenance",
+      "validity",
+      "tags",
+      "retentionHint",
+    ]);
+  });
+
+  it("propagates a fixture-owned payload iterator failure without rewriting it", () => {
+    const failure = new TypeError("fixture iterator failure");
+    const items = ["item"];
+    Object.defineProperty(items, Symbol.iterator, {
+      value(): never {
+        throw failure;
+      },
+    });
+    expect.assertions(2);
+    try {
+      publicMemory.validateMemoryStructuredPayload({ kind: "string-list", items });
+    } catch (error: unknown) {
+      expect(error).toBe(failure);
+    }
+    expect(
+      publicMemory.validateMemoryStructuredPayload({ kind: "string-list", items: ["item"] }).ok,
+    ).toBe(true);
+  });
+});
+
+it("keeps own-undefined expiry in the public presence-branch type", () => {
+  const input = { validFrom: 0, validUntil: undefined };
+  const result = publicMemory.validateMemoryValidityInterval(input);
+  expect(result.ok).toBe(true);
+  if (result.ok && "validUntil" in result.value) {
+    expectTypeOf(result.value.validUntil).toEqualTypeOf<number | undefined>();
+    expect(result.value.validUntil).toBeUndefined();
+    expect(result.value).toBe(input);
+  }
+});
+
+it("keeps the proven public optional types honest under required presence", () => {
+  expectTypeOf<Required<publicMemory.MemoryValidityInterval>["validUntil"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryModelIdentity>["modelRevision"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceConversationId"]>().toEqualTypeOf<
+    publicMemory.ConversationId | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceWorkflowRunId"]>().toEqualTypeOf<
+    publicMemory.WorkflowRunId | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceEvidenceManifestId"]>().toEqualTypeOf<
+    publicMemory.EvidenceManifestId | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["modelIdentity"]>().toEqualTypeOf<
+    publicMemory.MemoryModelIdentity | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["captureRationale"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRetentionHint>["retainUntil"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRetentionHint>["notes"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRecord>["payload"]>().toEqualTypeOf<
+    publicMemory.MemoryStructuredPayload | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRecord>["staleReason"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRecord>["retentionHint"]>().toEqualTypeOf<
+    publicMemory.MemoryRetentionHint | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryEdge>["confidence"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryEdge>["provenanceSummary"]>().toEqualTypeOf<
+    string | undefined
+  >();
+});
+
+// MEM4013-HOSTILE-EVERY-001 / MEM4013-HOSTILE-PUSH-001: intrinsic mutations stay
+// inside disposable processes; each challenge has a production healthy control.
+const MEMORY_INTRINSIC_CONTROL = `
+import { strict as assert } from "node:assert";
+import { validateMemoryScope, validateMemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+const healthy = {
+  id: "memory-fixture", schemaVersion: "1", scope: { kind: "global" },
+  type: "episodic", body: "fixture", status: "accepted", pinned: false, tags: [],
+  provenance: { sourceKind: "explicit-user-instruction", capturedAt: 0, confidence: 1, sensitivity: "public" },
+  validity: { validFrom: 0 }, createdAt: 0, updatedAt: 0,
+};
+const scopeControl = validateMemoryScope(healthy.scope);
+const recordControl = validateMemoryRecord(healthy);
+assert.equal(scopeControl.ok, true);
+assert.equal(scopeControl.value, healthy.scope);
+assert.equal(recordControl.ok, true);
+assert.equal(recordControl.value, healthy);
+const push = Object.getOwnPropertyDescriptor(Array.prototype, "push");
+const every = Object.getOwnPropertyDescriptor(Array.prototype, "every");
+let reads = 0;
+let result;
+try {
+  if (process.argv[1] === "push") {
+    result = validateMemoryScope({ get kind() {
+      reads++;
+      Array.prototype.push = function () { throw new Error("fixture-push"); };
+      return "invalid-fixture-kind";
+    } });
+  } else {
+    result = validateMemoryRecord({ ...healthy, schemaVersion: "invalid-fixture-version", get id() {
+      reads++;
+      Array.prototype.every = function () { return true; };
+      return "memory-fixture";
+    } });
+  }
+} finally {
+  Object.defineProperty(Array.prototype, "push", push);
+  Object.defineProperty(Array.prototype, "every", every);
+}
+assert.equal(reads, 1);
+assert.deepEqual(result, { ok: false, errors: [process.argv[1] === "push"
+  ? "scope.kind must be one of user|workspace|project|workflow|global"
+  : 'record.schemaVersion must be the literal "1"'] });
+`;
+
+it.each(["push", "every"])(
+  "preserves public refusal after a getter replaces Array.%s",
+  (method) => {
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", MEMORY_INTRINSIC_CONTROL, method],
+      { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+    );
+    expect(child.error).toBeUndefined();
+    expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" });
+  },
+);
+
+// Original-first obligations for the remaining DTO chains. Both actual source and built
+// public calls must reach their healthy controls before a refusal is called a regression red.
+describe("remaining memory DTO physical admission (#3918)", () => {
+  it.each(["source", "public"])("retains %s healthy envelope references", (surface) => {
+    const proposal = happyProposal();
+    const auditRecord = happyAuditRecord();
+    const retrieval = { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] };
+    const proposalResult =
+      surface === "source"
+        ? validateMemoryProposal(proposal)
+        : publicMemory.validateMemoryProposal(proposal);
+    const auditResult =
+      surface === "source"
+        ? validateMemoryAuditRecord(auditRecord)
+        : publicMemory.validateMemoryAuditRecord(auditRecord);
+    const retrievalResult =
+      surface === "source"
+        ? validateMemoryRetrievalRequest(retrieval)
+        : publicMemory.validateMemoryRetrievalRequest(retrieval);
+    expect(proposalResult.ok).toBe(true);
+    if (proposalResult.ok) expect(proposalResult.value).toBe(proposal);
+    expect(auditResult.ok).toBe(true);
+    if (auditResult.ok) expect(auditResult.value).toBe(auditRecord);
+    expect(retrievalResult.ok).toBe(true);
+    if (retrievalResult.ok) expect(retrievalResult.value).toBe(retrieval);
+  });
+
+  it.each(["source", "public"])("rejects %s own undefined required audit proposalId", (surface) => {
+    const input = {
+      ...happyAuditRecord(),
+      action: {
+        kind: "accepted",
+        proposalId: undefined,
+        memoryId: "mem-1",
+        scope: happyScopeUser(),
+      },
+    };
+    const result =
+      surface === "source"
+        ? validateMemoryAuditRecord(input)
+        : publicMemory.validateMemoryAuditRecord(input);
+    expect(result).toEqual({ ok: false, errors: ["action.proposalId must be a non-empty string"] });
+  });
+
+  it.each(["source", "public"])("rejects %s own undefined required audit memoryId", (surface) => {
+    const input = {
+      ...happyAuditRecord(),
+      action: {
+        kind: "accepted",
+        proposalId: "prop-1",
+        memoryId: undefined,
+        scope: happyScopeUser(),
+      },
+    };
+    const result =
+      surface === "source"
+        ? validateMemoryAuditRecord(input)
+        : publicMemory.validateMemoryAuditRecord(input);
+    expect(result).toEqual({ ok: false, errors: ["action.memoryId must be a non-empty string"] });
+  });
+
+  it.each(["source", "public"])(
+    "refuses %s malformed physical retrieval scope hidden by iterator",
+    (surface) => {
+      const scopes: unknown[] = [{}];
+      Object.defineProperty(scopes, Symbol.iterator, {
+        value: function* (): Generator {
+          yield happyScopeUser();
+        },
+      });
+      const input = { schemaVersion: "1", requestedAt: 0, scopes };
+      const result =
+        surface === "source"
+          ? validateMemoryRetrievalRequest(input)
+          : publicMemory.validateMemoryRetrievalRequest(input);
+      expect(result.ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses %s malformed physical retrieved audit scope hidden by iterator",
+    (surface) => {
+      const scopes: unknown[] = [{}];
+      Object.defineProperty(scopes, Symbol.iterator, {
+        value: function* (): Generator {
+          yield happyScopeUser();
+        },
+      });
+      const input = {
+        ...happyAuditRecord(),
+        actionKind: "retrieved",
+        action: { kind: "retrieved", scopes, matchedMemoryIds: ["mem-1"] },
+      };
+      const result =
+        surface === "source"
+          ? validateMemoryAuditRecord(input)
+          : publicMemory.validateMemoryAuditRecord(input);
+      expect(result.ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])("refuses %s physical type filter hidden by iterator", (surface) => {
+    const typeFilter = ["not-a-memory-type"];
+    Object.defineProperty(typeFilter, Symbol.iterator, {
+      value: function* (): Generator {
+        yield "preference";
+      },
+    });
+    const input = { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()], typeFilter };
+    const result =
+      surface === "source"
+        ? validateMemoryRetrievalRequest(input)
+        : publicMemory.validateMemoryRetrievalRequest(input);
+    expect(result).toEqual({
+      ok: false,
+      errors: [`retrieval.typeFilter entry must be one of ${MEMORY_TYPES.join("|")}`],
+    });
+  });
+
+  it.each(["source", "public"])(
+    "refuses %s physical numeric tag hidden by every and iterator",
+    (surface) => {
+      const tags: unknown[] = [5];
+      Object.defineProperty(tags, "every", {
+        value(): boolean {
+          return true;
+        },
+      });
+      Object.defineProperty(tags, Symbol.iterator, {
+        value: function* (): Generator {
+          yield "healthy";
+        },
+      });
+      const input = { ...happyProposal(), tags };
+      const result =
+        surface === "source"
+          ? validateMemoryProposal(input)
+          : publicMemory.validateMemoryProposal(input);
+      expect(result).toEqual({ ok: false, errors: ["proposal.tags must be a string array"] });
+    },
+  );
+});
+
+it.each(["source", "public"])(
+  "preserves %s omitted and own-undefined proposal options",
+  (surface) => {
+    const omitted = happyProposal();
+    const explicit = {
+      ...happyProposal(),
+      payload: undefined,
+      retentionHint: undefined,
+      captureReason: undefined,
+    };
+    const validate =
+      surface === "source" ? validateMemoryProposal : publicMemory.validateMemoryProposal;
+    const first = validate(omitted);
+    const second = validate(explicit);
+    expect(first.ok).toBe(true);
+    if (first.ok) expect(first.value).toBe(omitted);
+    expect(second.ok).toBe(true);
+    if (second.ok) expect(second.value).toBe(explicit);
+    expect(Object.hasOwn(omitted, "captureReason")).toBe(false);
+    expect(Object.hasOwn(explicit, "captureReason")).toBe(true);
+  },
+);
+
+export function parsePublicMemoryRecord(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryRecord> {
+  const result = validatePublicMemoryRecord(input);
+  return result;
+}
+
+export function parsePublicMemoryScope(input: unknown): PublicMemoryValidation<PublicMemoryScope> {
+  const result = validatePublicMemoryScope(input);
+  return result;
+}
+
+export function parsePublicMemoryPayload(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryStructuredPayload> {
+  const result = validatePublicMemoryStructuredPayload(input);
+  return result;
+}
+
+describe("Memory public parsers (#3918)", () => {
+  it("preserves original record, scope and payload references and optional presence", () => {
+    const payload = { kind: "string-list", items: ["fixture-item"] };
+    const input = { ...happyRecord(), scope: happyScopeUser(), payload };
+    const record = parsePublicMemoryRecord(input);
+    expect(record.ok).toBe(true);
+    if (!record.ok) throw new TypeError("healthy public memory refused");
+    expect(record.value).toBe(input);
+    expect(record.value.scope).toBe(input.scope);
+    expect(record.value.payload).toBe(payload);
+    expect(record.value).not.toHaveProperty("staleReason");
+    const ownUndefined = { ...input, staleReason: undefined };
+    expect(parsePublicMemoryRecord(ownUndefined)).toEqual({ ok: true, value: ownUndefined });
+    expect(Object.hasOwn(ownUndefined, "staleReason")).toBe(true);
+    const scope = parsePublicMemoryScope(input.scope);
+    const parsedPayload = parsePublicMemoryPayload(payload);
+    if (!scope.ok || !parsedPayload.ok) throw new TypeError("healthy public nested memory refused");
+    expect(scope.value).toBe(input.scope);
+    expect(parsedPayload.value).toBe(payload);
+  });
+
+  it("refuses malformed values through each actual public parser with owning reasons", () => {
+    for (const input of [undefined, null, 12, "record", []]) {
+      expect(parsePublicMemoryRecord(input).ok).toBe(false);
+      expect(parsePublicMemoryScope(input).ok).toBe(false);
+      expect(parsePublicMemoryPayload(input).ok).toBe(false);
+    }
+    const record = { ...happyRecord(), schemaVersion: "2", type: "bad", updatedAt: -1 };
+    expect(parsePublicMemoryRecord(record)).toEqual(validateMemoryRecord(record));
+    expect(parsePublicMemoryRecord(record)).toMatchObject({
+      ok: false,
+      errors: [
+        'record.schemaVersion must be the literal "1"',
+        `record.type must be one of ${MEMORY_TYPES.join("|")}`,
+        "record.updatedAt must be a finite non-negative number",
+      ],
+    });
+    expect(parsePublicMemoryScope({ kind: "user", userId: "" })).toEqual({
+      ok: false,
+      errors: ["scope.userId must be a non-empty string for kind=user"],
+    });
+    expect(parsePublicMemoryPayload({ kind: "string-list", items: [12] })).toEqual({
+      ok: false,
+      errors: ["payload.items entry must be a non-empty bounded control-free string"],
+    });
+  });
+
+  it("retains global coordinates and payload bounds and literal domain result identities", () => {
+    const scope = { kind: "global", userId: "ignored" };
+    const parsedScope = parsePublicMemoryScope(scope);
+    expect(parsedScope).toEqual({ ok: true, value: scope });
+    for (const payload of [
+      { kind: "string-list", items: [] },
+      { kind: "key-value", entries: [{ key: "label", value: "" }] },
+    ])
+      expect(parsePublicMemoryPayload(payload)).toEqual({ ok: true, value: payload });
+    expect(
+      parsePublicMemoryPayload({
+        kind: "string-list",
+        items: Array.from({ length: 129 }, () => "item"),
+      }).ok,
+    ).toBe(false);
+    expectTypeOf(parsePublicMemoryRecord).returns.toEqualTypeOf<
+      PublicMemoryValidation<PublicMemoryRecord>
+    >();
+    expectTypeOf(parsePublicMemoryScope).returns.toEqualTypeOf<
+      PublicMemoryValidation<PublicMemoryScope>
+    >();
+    expectTypeOf(parsePublicMemoryPayload).returns.toEqualTypeOf<
+      PublicMemoryValidation<PublicMemoryStructuredPayload>
+    >();
+  });
+});
+
+export function parsePublicMemoryProposal(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryProposal> {
+  const result = validatePublicMemoryProposal(input);
+  return result;
+}
+
+export function parsePublicMemoryAcceptance(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryAcceptance> {
+  const result = validatePublicMemoryAcceptance(input);
+  return result;
+}
+
+export function parsePublicMemoryRejection(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryRejection> {
+  const result = validatePublicMemoryRejection(input);
+  return result;
+}
+
+export function parsePublicMemoryUpdate(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryUpdate> {
+  const result = validatePublicMemoryUpdate(input);
+  return result;
+}
+
+export function parsePublicMemorySupersession(
+  input: unknown,
+): PublicMemoryValidation<PublicMemorySupersession> {
+  const result = validatePublicMemorySupersession(input);
+  return result;
+}
+
+export function parsePublicMemoryPin(input: unknown): PublicMemoryValidation<PublicMemoryPin> {
+  const result = validatePublicMemoryPin(input);
+  return result;
+}
+
+export function parsePublicMemoryUnpin(input: unknown): PublicMemoryValidation<PublicMemoryUnpin> {
+  const result = validatePublicMemoryUnpin(input);
+  return result;
+}
+
+export function parsePublicMemoryArchive(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryArchive> {
+  const result = validatePublicMemoryArchive(input);
+  return result;
+}
+
+export function parsePublicMemoryForget(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryForget> {
+  const result = validatePublicMemoryForget(input);
+  return result;
+}
+
+export function parsePublicMemoryAuditRecord(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryAuditRecord> {
+  const result = validatePublicMemoryAuditRecord(input);
+  return result;
+}
+
+export function parsePublicMemoryRetrievalRequest(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryRetrievalRequest> {
+  const result = validatePublicMemoryRetrievalRequest(input);
+  return result;
+}
+
+interface RemainingMemoryCase {
+  readonly parse: (input: unknown) => PublicMemoryValidation<unknown>;
+  readonly input: Record<string, unknown>;
+  readonly invalid: Record<string, unknown>;
+  readonly errors: readonly string[];
+  readonly optionalField: string;
+}
+
+function lifecycleProofInput(fields: Record<string, unknown>): Record<string, unknown> {
+  return { schemaVersion: "1", memoryId: "mem-1", reviewerId: "rev-1", ...fields };
+}
+
+function remainingMemoryCase(
+  parse: RemainingMemoryCase["parse"],
+  input: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  error: string,
+  optionalField = "fixtureExtension",
+): RemainingMemoryCase {
+  return { parse, input, invalid: { ...input, ...patch }, errors: [error], optionalField };
+}
+
+function remainingInitialMemoryCases(): readonly RemainingMemoryCase[] {
+  return [
+    remainingMemoryCase(
+      parsePublicMemoryProposal,
+      happyProposal(),
+      { initialStatus: "accepted" },
+      'proposal.initialStatus must be the literal "proposed"',
+      "captureReason",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryAcceptance,
+      lifecycleProofInput({ proposalId: "prop-1", mintedMemoryId: "mem-1", acceptedAt: 0 }),
+      { acceptedAt: -1 },
+      "acceptance.acceptedAt must be a finite non-negative number",
+      "bodyOverride",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryRejection,
+      lifecycleProofInput({ proposalId: "prop-1", rejectedAt: 0, reason: "fixture" }),
+      { reason: "" },
+      "rejection.reason must be a bounded control-free non-empty string",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryUpdate,
+      lifecycleProofInput({ updatedAt: 0, bodyPatch: "fixture" }),
+      { bodyPatch: undefined },
+      "update must change at least one field",
+      "reviewerNote",
+    ),
+  ];
+}
+
+function remainingLifecycleMemoryCases(): readonly RemainingMemoryCase[] {
+  return [
+    remainingMemoryCase(
+      parsePublicMemorySupersession,
+      lifecycleProofInput({
+        oldMemoryId: "old",
+        newMemoryId: "new",
+        supersededAt: 0,
+        reason: "fixture",
+        edgeKind: "supersedes",
+      }),
+      { edgeKind: "related" },
+      'supersession.edgeKind must be the literal "supersedes"',
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryPin,
+      lifecycleProofInput({ pinnedAt: 0 }),
+      { pinnedAt: -1 },
+      "pin.pinnedAt must be a finite non-negative number",
+      "reason",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryUnpin,
+      lifecycleProofInput({ unpinnedAt: 0 }),
+      { unpinnedAt: -1 },
+      "unpin.unpinnedAt must be a finite non-negative number",
+      "reason",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryArchive,
+      lifecycleProofInput({ archivedAt: 0 }),
+      { archivedAt: -1 },
+      "archive.archivedAt must be a finite non-negative number",
+      "reason",
+    ),
+  ];
+}
+
+function remainingOtherMemoryCases(): readonly RemainingMemoryCase[] {
+  return [
+    remainingMemoryCase(
+      parsePublicMemoryForget,
+      lifecycleProofInput({
+        forgottenAt: 0,
+        reason: "user-request",
+        userAcknowledgedDestructive: true,
+      }),
+      { userAcknowledgedDestructive: false },
+      "forget.userAcknowledgedDestructive must be the literal true",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryAuditRecord,
+      happyAuditRecord(),
+      { actionKind: "archived" },
+      "auditRecord.action.kind must match auditRecord.actionKind",
+      "initiatorReviewerId",
+    ),
+    remainingMemoryCase(
+      parsePublicMemoryRetrievalRequest,
+      { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] },
+      { scopes: [] },
+      "retrieval.scopes must be a non-empty array",
+      "includeSuperseded",
+    ),
+  ];
+}
+
+function initialAuditProofActions(): readonly Record<string, unknown>[] {
+  return [
+    { kind: "proposed", proposalId: "prop-1", scope: happyScopeUser() },
+    { kind: "accepted", proposalId: "prop-1", memoryId: "mem-1", scope: happyScopeUser() },
+    { kind: "rejected", proposalId: "prop-1", reason: "fixture" },
+    { kind: "updated", memoryId: "mem-1", fieldsChanged: ["body"] },
+    {
+      kind: "superseded",
+      oldMemoryId: "old",
+      newMemoryId: "new",
+      edgeId: "edge-1",
+      edgeKind: "supersedes",
+    },
+  ];
+}
+
+function remainingAuditProofActions(): readonly Record<string, unknown>[] {
+  return [
+    { kind: "pinned", memoryId: "mem-1" },
+    { kind: "unpinned", memoryId: "mem-1" },
+    { kind: "archived", memoryId: "mem-1" },
+    { kind: "forgotten", memoryId: "mem-1", scope: happyScopeUser(), reason: "user-request" },
+    { kind: "retrieved", scopes: [happyScopeUser()], matchedMemoryIds: ["mem-1"] },
+  ];
+}
+
+function auditMemoryProofCases(): readonly RemainingMemoryCase[] {
+  return [...initialAuditProofActions(), ...remainingAuditProofActions()].map((action) =>
+    remainingMemoryCase(
+      parsePublicMemoryAuditRecord,
+      { ...happyAuditRecord(), actionKind: action.kind, action },
+      { actionKind: action.kind === "accepted" ? "archived" : "accepted" },
+      "auditRecord.action.kind must match auditRecord.actionKind",
+      "initiatorReviewerId",
+    ),
+  );
+}
+
+function allRemainingMemoryCases(): readonly RemainingMemoryCase[] {
+  return [
+    ...remainingInitialMemoryCases(),
+    ...remainingLifecycleMemoryCases(),
+    ...remainingOtherMemoryCases(),
+    ...auditMemoryProofCases(),
+  ];
+}
+
+function expectRemainingMemoryIdentity(own: RemainingMemoryCase): void {
+  const parsed = own.parse(own.input);
+  if (!parsed.ok) throw new TypeError("healthy remaining public memory refused");
+  expect(parsed.value).toBe(own.input);
+  const descriptors = Object.getOwnPropertyDescriptors(parsed.value);
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(own.input))) {
+    expect(descriptors[key]?.value).toBe(descriptor.value);
+  }
+  expect(Object.hasOwn(own.input, own.optionalField)).toBe(false);
+  const explicit = { ...own.input, [own.optionalField]: undefined };
+  const result = own.parse(explicit);
+  expect(result).toEqual({ ok: true, value: explicit });
+  if (!result.ok) throw new TypeError("public own-undefined memory refused");
+  expect(result.value).toBe(explicit);
+  expect(Object.hasOwn(explicit, own.optionalField)).toBe(true);
+}
+
+function assertRemainingInitialMemoryTypes(): void {
+  expectTypeOf(validatePublicMemoryProposal).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryProposal>
+  >();
+  expectTypeOf(parsePublicMemoryProposal).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryProposal>
+  >();
+  expectTypeOf(validatePublicMemoryAcceptance).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryAcceptance>
+  >();
+  expectTypeOf(parsePublicMemoryAcceptance).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryAcceptance>
+  >();
+  expectTypeOf(validatePublicMemoryRejection).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryRejection>
+  >();
+  expectTypeOf(parsePublicMemoryRejection).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryRejection>
+  >();
+  expectTypeOf(validatePublicMemoryUpdate).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryUpdate>
+  >();
+  expectTypeOf(parsePublicMemoryUpdate).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryUpdate>
+  >();
+}
+
+function assertRemainingLifecycleMemoryTypes(): void {
+  expectTypeOf(validatePublicMemorySupersession).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemorySupersession>
+  >();
+  expectTypeOf(parsePublicMemorySupersession).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemorySupersession>
+  >();
+  expectTypeOf(validatePublicMemoryPin).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryPin>
+  >();
+  expectTypeOf(parsePublicMemoryPin).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryPin>
+  >();
+  expectTypeOf(validatePublicMemoryUnpin).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryUnpin>
+  >();
+  expectTypeOf(parsePublicMemoryUnpin).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryUnpin>
+  >();
+  expectTypeOf(validatePublicMemoryArchive).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryArchive>
+  >();
+  expectTypeOf(parsePublicMemoryArchive).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryArchive>
+  >();
+}
+
+function assertRemainingOtherMemoryTypes(): void {
+  expectTypeOf(validatePublicMemoryForget).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryForget>
+  >();
+  expectTypeOf(parsePublicMemoryForget).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryForget>
+  >();
+  expectTypeOf(validatePublicMemoryAuditRecord).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryAuditRecord>
+  >();
+  expectTypeOf(parsePublicMemoryAuditRecord).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryAuditRecord>
+  >();
+  expectTypeOf(validatePublicMemoryRetrievalRequest).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryRetrievalRequest>
+  >();
+  expectTypeOf(parsePublicMemoryRetrievalRequest).returns.toEqualTypeOf<
+    PublicMemoryValidation<PublicMemoryRetrievalRequest>
+  >();
+}
+
+function expectRemainingMemoryAccumulation(): void {
+  expect(parsePublicMemoryProposal({ ...happyProposal(), proposedAt: -1, body: "" })).toEqual({
+    ok: false,
+    errors: [
+      "proposal.proposedAt must be a finite non-negative number",
+      "proposal.body must be a bounded control-free non-empty string",
+    ],
+  });
+  expect(
+    parsePublicMemoryAuditRecord({
+      ...happyAuditRecord(),
+      occurredAt: -1,
+      summary: "",
+      actionKind: "archived",
+    }),
+  ).toEqual({
+    ok: false,
+    errors: [
+      "auditRecord.occurredAt must be a finite non-negative number",
+      "auditRecord.summary must be a bounded control-free non-empty string",
+      "auditRecord.action.kind must match auditRecord.actionKind",
+    ],
+  });
+  expect(
+    parsePublicMemoryRetrievalRequest({
+      schemaVersion: "1",
+      requestedAt: -1,
+      scopes: [],
+      includeArchived: "yes",
+      includeSuperseded: "yes",
+    }),
+  ).toEqual({
+    ok: false,
+    errors: [
+      "retrieval.requestedAt must be a finite non-negative number",
+      "retrieval.scopes must be a non-empty array",
+      "retrieval.includeArchived must be a boolean when set",
+      "retrieval.includeSuperseded must be a boolean when set",
+    ],
+  });
+}
+
+describe("Memory remaining public parsers (#3918)", () => {
+  it("preserves operation audit and retrieval identities and optional presence", () => {
+    expect(auditMemoryProofCases().map(({ input }) => input.actionKind)).toEqual(
+      MEMORY_AUDIT_ACTION_KINDS,
+    );
+    for (const own of allRemainingMemoryCases()) expectRemainingMemoryIdentity(own);
+  });
+
+  it("refuses malformed Memory envelopes with exact owning diagnostics", () => {
+    expectRemainingMemoryAccumulation();
+    for (const own of allRemainingMemoryCases()) {
+      expect
+        .soft(own.parse(own.invalid), own.parse.name)
+        .toEqual({ ok: false, errors: own.errors });
+      for (const input of [undefined, null, 12, "memory", []]) {
+        expect(own.parse(input).ok).toBe(false);
+      }
+    }
+  });
+
+  it("retains branded domain result types acknowledgement and array admission", () => {
+    assertRemainingInitialMemoryTypes();
+    assertRemainingLifecycleMemoryTypes();
+    assertRemainingOtherMemoryTypes();
+    expect(
+      parsePublicMemoryForget(
+        lifecycleProofInput({
+          forgottenAt: 0,
+          reason: "user-request",
+          userAcknowledgedDestructive: false,
+        }),
+      ).ok,
+    ).toBe(false);
+    const scopes = new Array<unknown>(1);
+    expect(
+      parsePublicMemoryRetrievalRequest({ schemaVersion: "1", requestedAt: 0, scopes }).ok,
+    ).toBe(false);
+    const input = { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] };
+    for (const toggle of ["includeArchived", "includeSuperseded"]) {
+      for (const value of [undefined, false, true]) {
+        const healthy = { ...input, [toggle]: value };
+        expect(parsePublicMemoryRetrievalRequest(healthy)).toEqual({ ok: true, value: healthy });
+      }
+      expect(parsePublicMemoryRetrievalRequest({ ...input, [toggle]: "yes" })).toEqual({
+        ok: false,
+        errors: [`retrieval.${toggle} must be a boolean when set`],
+      });
+    }
+  });
+});

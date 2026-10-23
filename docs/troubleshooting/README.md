@@ -54,6 +54,10 @@ LiteLLM production-gateway issues are covered in the dedicated
 `x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`
 rejections on reasoning aliases, and truncated discovery on large multi-team proxies.
 
+Whisper dictation failures after a successful microphone capture are covered in
+[Dictation through LiteLLM](voice-dictation-litellm.md), including browser codec compatibility
+and the body-free STT dispatch/completion diagnostics.
+
 Coding Workbench runs that start with less authority than the composer shows — a Supervised
 workspace or Full access selection capped by the installation's deployment ceiling — are covered in
 the dedicated [Coding Workbench Authority Limit](coding-workbench-authority-limit.md) entry.

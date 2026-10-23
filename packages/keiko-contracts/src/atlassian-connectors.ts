@@ -13,6 +13,7 @@
 // shape is content-free by construction: enums, counts, identifiers, hashes, and durations — no
 // field can hold an issue/page body, comment text, raw JQL, token, or URL.
 
+import { isRecord } from "./contract-validation-primitives.js";
 import {
   codingWorkbenchPolicyEffectFor,
   decideCodingWorkbenchActionForMode,
@@ -22,7 +23,6 @@ import {
   type CodingWorkbenchConnectorScope,
   type CodingWorkbenchMode,
   type CodingWorkbenchPolicyDenialReason,
-  type CodingWorkbenchPolicyEffect,
   type CodingWorkbenchPolicyResourceScope,
   type CodingWorkbenchSupervisedActionKind,
 } from "./coding-workbench.js";
@@ -643,10 +643,15 @@ function atlassianClassAdmission(
   workbenchClass: CodingWorkbenchActionClass,
   connectorScopes: readonly CodingWorkbenchConnectorScope[],
   envelopeActionClasses: readonly CodingWorkbenchActionClass[] | undefined,
-): {
-  readonly effect: CodingWorkbenchPolicyEffect;
-  readonly denyReason: CodingWorkbenchPolicyDenialReason;
-} {
+):
+  | {
+      readonly effect: "denied";
+      readonly denyReason: CodingWorkbenchPolicyDenialReason;
+    }
+  | {
+      readonly effect: "allowed";
+      readonly denyReason: "connector-access-denied";
+    } {
   const classDecision = decideCodingWorkbenchActionForMode(mode, workbenchClass, connectorScopes);
   if (!classDecision.allowed) {
     return { effect: "denied", denyReason: classDecision.reasonCode };
@@ -1121,16 +1126,18 @@ function isBoundedArrayOf<T>(
   value: unknown,
   isEntry: (entry: unknown) => entry is T,
 ): value is readonly T[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= ATLASSIAN_CITATION_LIST_MAX_ENTRIES &&
-    value.every((entry) => isEntry(entry))
-  );
+  if (!Array.isArray(value)) return false;
+  if (value.length <= ATLASSIAN_CITATION_LIST_MAX_ENTRIES) {
+    // Preserve the caller-owned property lookup, but admission uses the native traversal.
+    const _observedEvery = value.every;
+    return Array.prototype.every.call(value, (entry: unknown) => isEntry(entry));
+  }
+  return false;
 }
 
 function isJiraIssueLinkRef(value: unknown): value is JiraIssueLinkRef {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   if (Object.keys(record).some((key) => key !== "linkType" && key !== "issueKey")) return false;
   return isSafeJiraCitationFieldText(record.linkType) && isSafeAtlassianIdentifier(record.issueKey);
 }
@@ -1167,8 +1174,8 @@ function jiraCitationListFieldsSafe(record: Record<string, unknown>): boolean {
 // Strict, fail-closed guard for the citation-metadata projection: unknown keys are rejected, the
 // issue key is mandatory, every field is bounded display-safe text or a validated identifier.
 export function isJiraIssueCitationMetadata(value: unknown): value is JiraIssueCitationMetadata {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   if (Object.keys(record).some((key) => !JIRA_CITATION_METADATA_KEYS.has(key))) return false;
   if (!isSafeAtlassianIdentifier(record.issueKey)) return false;
   return jiraCitationScalarFieldsSafe(record) && jiraCitationListFieldsSafe(record);
@@ -1299,7 +1306,8 @@ export interface AtlassianConnectorPodSource {
 
 // ─── Enum guards ───────────────────────────────────────────────────────────────
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 export function isAtlassianConnectorProvider(value: unknown): value is AtlassianConnectorProvider {

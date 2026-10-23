@@ -1,0 +1,102 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath, URL } from "node:url";
+import { policyDigest } from "../lib/code-quality-inventory.mjs";
+import { isMainModule } from "../lib/is-main-module.mjs";
+import { executePolicyWithDiagnostics } from "./code-quality-wiring-smoke.mjs";
+
+function assertQualifiedRecord(assessment, record) {
+  assert.deepEqual(
+    { id: assessment.id, owner: assessment.owner, kind: assessment.kind, rules: assessment.rules },
+    { id: record.id, owner: record.owner, kind: record.kind, rules: record.rules },
+  );
+  assert.equal(assessment.structural, "ready");
+  assert.equal(assessment.semantic, "qualified");
+  assert.deepEqual(assessment.reasons, []);
+  assert.deepEqual(assessment.obligations, []);
+  assert.deepEqual(
+    assessment.proofs.map(({ path }) => path),
+    record.proofs,
+  );
+  assert.ok(assessment.proofs.every(({ executed }) => executed === true));
+  assert.deepEqual(
+    assessment.proofAssertions,
+    record.proofAssertions.map((selector) => ({ ...selector, status: "passed" })),
+  );
+}
+
+function assertRepositoryScope(report, policyBytes) {
+  assert.deepEqual(
+    {
+      outcome: report.outcome,
+      enforcementOutcome: report.enforcementOutcome,
+      mode: report.mode,
+      scope: report.scope,
+    },
+    {
+      outcome: "passed",
+      enforcementOutcome: "passed",
+      mode: "enforce",
+      scope: { id: "repository", partial: false },
+    },
+  );
+  assert.equal(report.subject, report.inventory.subject);
+  assert.match(report.subject, /^[a-f0-9]{40}$/u);
+  assert.equal(report.policySha256, policyDigest(policyBytes));
+  assert.equal(report.counts.expected, report.counts.visited);
+  assert.equal(report.counts.visited, report.inventory.files.length);
+  assert.ok(report.counts.visited > 0);
+  assert.equal(report.counts.packages, 27);
+  assert.equal(report.pack.length, 27);
+  assert.equal(report.rules.length, 22);
+  assert.equal(report.counts.violations, 0);
+  assert.deepEqual(report.violations, []);
+}
+
+export function assertRepositoryQualification(report, policy, policyBytes) {
+  assertRepositoryScope(report, policyBytes);
+  assert.ok(policy.responsibilities.length > 0);
+  const responsibilities = report.responsibilities;
+  assert.deepEqual(responsibilities.counts, {
+    ready: policy.responsibilities.length,
+    incomplete: 0,
+    invalid: 0,
+    qualified: policy.responsibilities.length,
+    pending: 0,
+    rejected: 0,
+  });
+  assert.deepEqual(
+    responsibilities.assessments.map(({ id }) => id),
+    policy.responsibilities.map(({ id }) => id),
+  );
+  responsibilities.assessments.forEach((assessment, index) =>
+    assertQualifiedRecord(assessment, policy.responsibilities[index]),
+  );
+  assert.equal(responsibilities.execution.status, "passed");
+  assert.equal(responsibilities.execution.invocationCount, 1);
+  assert.equal(responsibilities.execution.process.directChildClosed, true);
+  assert.equal(responsibilities.execution.process.groupAbsent, true);
+}
+
+export async function qualifyRepository() {
+  const policyPath = new URL("../code-quality-policy.json", import.meta.url);
+  const policyBytes = readFileSync(policyPath, "utf8");
+  const entry = new URL("../check-code-quality-policy.mjs", import.meta.url);
+  // The existing required job bounds the complete operation. Operation-owned limits stay intact.
+  const { stdout } = await executePolicyWithDiagnostics(
+    [fileURLToPath(entry), "--qualify-responsibilities", "--json", "--progress"],
+    { cwd: new URL("../../", import.meta.url), encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
+    true,
+  );
+  assert.equal(readFileSync(policyPath, "utf8"), policyBytes);
+  const report = JSON.parse(stdout);
+  assertRepositoryQualification(report, JSON.parse(policyBytes), policyBytes);
+  return report;
+}
+
+if (isMainModule(import.meta.url)) {
+  await qualifyRepository();
+  console.log(
+    "code-quality repository qualification: PASS — complete current-subject semantic proofs closed and drained.",
+  );
+}

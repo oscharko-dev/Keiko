@@ -8,7 +8,8 @@
 //
 // Tagged @smoke so every engine in the required browser lanes proves the recovery.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";

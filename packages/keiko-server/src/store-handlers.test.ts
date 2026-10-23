@@ -191,13 +191,15 @@ function observeSerializedSignal(
   observed: ReturnType<typeof deferred<AbortSignal>>,
 ): ChatTurnSerializer {
   return {
+    ...serializer,
     runExclusive: <T>(
       chatId: string,
       signal: AbortSignal,
       operation: () => T | Promise<T>,
+      generation?: AbortController,
     ): Promise<T | typeof CHAT_TURN_WAIT_CANCELLED> => {
       observed.resolve(signal);
-      return serializer.runExclusive(chatId, signal, operation);
+      return serializer.runExclusive(chatId, signal, operation, generation);
     },
   };
 }
@@ -368,7 +370,7 @@ function contextRouteBody(): { chatId: string; projectPath: string; modelId: str
 }
 
 function seedContextRouteHistory(chatId: string): void {
-  for (let index = 0; index < 80; index += 1) {
+  for (let index = 0; index < 140; index += 1) {
     store.createMessage({
       chatId,
       role: index % 2 === 0 ? "user" : "assistant",
@@ -397,6 +399,7 @@ describe("context maintenance HTTP routes", () => {
     const beforeResponse = await fetch(url(`/api/chats/context?${query}`));
     expect(beforeResponse.status).toBe(200);
     const before = (await beforeResponse.json()) as ChatContextStatusWire;
+    expect(before.canCompact).toBe(true);
     const response = await fetch(url("/api/chats/context/compact"), {
       method: "POST",
       headers: POST_HEADERS,
@@ -406,6 +409,7 @@ describe("context maintenance HTTP routes", () => {
     const after = (await response.json()) as ChatContextStatusWire;
     expect(after.estimatedInputTokens).toBeLessThan(before.estimatedInputTokens);
     expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(after.canCompact).toBe(false);
     expect(after.contextWindowTokens).toBe(64_000);
     expect(store.listMessages(body.chatId, 500)).toEqual(original);
     expect(await (await fetch(url(`/api/chats/context?${query}`))).json()).toEqual(after);

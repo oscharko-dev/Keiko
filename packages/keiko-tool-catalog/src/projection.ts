@@ -1,12 +1,12 @@
 import type {
   CatalogManifest,
+  CatalogGatewayToolDefinition,
   CatalogProfile,
   CatalogVersionRef,
   CompiledCatalogTool,
   CompiledToolProjection,
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { catalogObject, copyCatalogJson } from "./json.js";
 import { semanticDigest, versionRefFrom } from "./identity.js";
@@ -83,7 +83,7 @@ export function compileToolProjection(
 export function gatewayToolDefinitions(
   catalog: ToolCatalog,
   profile: CatalogVersionRef,
-): readonly ToolDefinition[] {
+): readonly CatalogGatewayToolDefinition[] {
   const projection = compileToolProjection(catalog, profile);
   return deepFreeze(
     projection.tools.map((tool) => ({

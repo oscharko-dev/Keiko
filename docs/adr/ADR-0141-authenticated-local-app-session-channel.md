@@ -190,6 +190,12 @@ pairing or rotation writes no line of its own and stays in the rate-limited aggr
 writes none either, so the log never shows a sign-out that did not happen. A
 pairing fragment that arrives by same-document navigation (after a lane restart, say) is redeemed
 like a boot fragment, and every session read in the window runs again after it.
+This includes the private Chat skill selection and an already-open skill library: both subscribe
+to the shared session-redemption notification. Their reads are refreshed after any earlier pending
+read settles, so stale unavailable results cannot suppress recovery. The dialog and unsent message
+remain mounted; selection, upload and dispatch still require the server's verified session.
+Existing session-pairing and `skills.library.operation` lifecycle records show the recovery without
+recording skill bodies or introducing a separate diagnostic stream.
 
 The browser bounds pairing and existing-session confirmation with the same 15-second local
 session transport deadline. A stalled pairing request therefore releases the shared boot wait;

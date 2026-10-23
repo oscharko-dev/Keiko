@@ -12,26 +12,17 @@
 //                     flat keeps the scoped-list query free of payload parsing for the common case)
 
 import type {
-  MemoryId,
-  MemoryProvenance,
   MemoryRecord,
   MemoryRetentionHint,
   MemoryScope,
-  MemoryScopeKind,
-  MemorySensitivity,
-  MemorySourceKind,
-  MemoryStatus,
   MemoryStructuredPayload,
-  MemoryType,
   MemoryValidityInterval,
-  ConversationId,
-  EvidenceManifestId,
-  ProjectId,
-  UserId,
-  WorkflowDefinitionId,
-  WorkflowRunId,
-  WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  validateMemoryRecord,
+  validateMemoryScope,
+  validateMemoryStructuredPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import { MemoryStorageError } from "./errors.js";
 import type { MemoryContentCipher } from "./cipher.js";
@@ -107,18 +98,18 @@ export interface MemoryRow {
   readonly updated_at: number;
 }
 
-function buildScopeFromRow(kind: string, coord: string): MemoryScope {
-  switch (kind as MemoryScopeKind) {
+function scopeCandidateFromRow(kind: string, coord: string): Readonly<Record<string, string>> {
+  switch (kind) {
     case "user":
-      return { kind: "user", userId: coord as UserId };
+      return { kind, userId: coord };
     case "workspace":
-      return { kind: "workspace", workspaceId: coord as WorkspaceId };
+      return { kind, workspaceId: coord };
     case "project":
-      return { kind: "project", projectId: coord as ProjectId };
+      return { kind, projectId: coord };
     case "workflow":
-      return { kind: "workflow", workflowDefinitionId: coord as WorkflowDefinitionId };
+      return { kind, workflowDefinitionId: coord };
     case "global":
-      return { kind: "global" };
+      return { kind };
     default:
       throw new MemoryStorageError(
         "schema-mismatch",
@@ -127,44 +118,40 @@ function buildScopeFromRow(kind: string, coord: string): MemoryScope {
   }
 }
 
-function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
-  const base: {
-    sourceKind: MemorySourceKind;
-    capturedAt: number;
-    confidence: number;
-    sensitivity: MemorySensitivity;
-    sourceConversationId?: ConversationId;
-    sourceWorkflowRunId?: WorkflowRunId;
-    sourceEvidenceManifestId?: EvidenceManifestId;
-    modelIdentity?: { provider: string; modelId: string; modelRevision?: string };
-    captureRationale?: string;
-  } = {
-    sourceKind: row.source_kind as MemorySourceKind,
+function buildScopeFromRow(kind: string, coord: string): MemoryScope {
+  const result = validateMemoryScope(scopeCandidateFromRow(kind, coord));
+  if (!result.ok) {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory scope coordinate is invalid.");
+  }
+  return result.value;
+}
+
+function buildProvenanceFromRow(row: MemoryRow): object {
+  return {
+    sourceKind: row.source_kind,
     capturedAt: row.captured_at,
     confidence: row.confidence,
-    sensitivity: row.sensitivity as MemorySensitivity,
+    sensitivity: row.sensitivity,
+    ...(row.source_conversation_id !== null
+      ? { sourceConversationId: row.source_conversation_id }
+      : {}),
+    ...(row.source_workflow_run_id !== null
+      ? { sourceWorkflowRunId: row.source_workflow_run_id }
+      : {}),
+    ...(row.source_evidence_manifest_id !== null
+      ? { sourceEvidenceManifestId: row.source_evidence_manifest_id }
+      : {}),
+    ...(row.capture_rationale !== null ? { captureRationale: row.capture_rationale } : {}),
+    ...(row.model_provider !== null && row.model_id !== null
+      ? {
+          modelIdentity: {
+            provider: row.model_provider,
+            modelId: row.model_id,
+            ...(row.model_revision !== null ? { modelRevision: row.model_revision } : {}),
+          },
+        }
+      : {}),
   };
-  if (row.source_conversation_id !== null) {
-    base.sourceConversationId = row.source_conversation_id as ConversationId;
-  }
-  if (row.source_workflow_run_id !== null) {
-    base.sourceWorkflowRunId = row.source_workflow_run_id as WorkflowRunId;
-  }
-  if (row.source_evidence_manifest_id !== null) {
-    base.sourceEvidenceManifestId = row.source_evidence_manifest_id as EvidenceManifestId;
-  }
-  if (row.capture_rationale !== null) {
-    base.captureRationale = row.capture_rationale;
-  }
-  if (row.model_provider !== null && row.model_id !== null) {
-    const identity: { provider: string; modelId: string; modelRevision?: string } = {
-      provider: row.model_provider,
-      modelId: row.model_id,
-    };
-    if (row.model_revision !== null) identity.modelRevision = row.model_revision;
-    base.modelIdentity = identity;
-  }
-  return base;
 }
 
 function buildValidityFromRow(row: MemoryRow): MemoryValidityInterval {
@@ -190,13 +177,13 @@ function parseTagsJson(raw: string): readonly string[] {
   } catch {
     throw new MemoryStorageError("schema-mismatch", "Stored memory tags JSON is invalid.");
   }
-  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
+  if (!Array.isArray(parsed) || !parsed.every((value: unknown) => typeof value === "string")) {
     throw new MemoryStorageError(
       "schema-mismatch",
       "Stored memory tags JSON must be an array of strings.",
     );
   }
-  return parsed as string[];
+  return parsed;
 }
 
 function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefined {
@@ -213,7 +200,11 @@ function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefin
       "Stored memory payload JSON must be an object payload.",
     );
   }
-  return parsed as MemoryStructuredPayload;
+  const result = validateMemoryStructuredPayload(parsed);
+  if (!result.ok) {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory structured payload is invalid.");
+  }
+  return result.value;
 }
 
 export function rowToMemoryRecord(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
@@ -225,26 +216,30 @@ function decryptedRowToMemoryRecord(row: MemoryRow): MemoryRecord {
   const payload = parsePayloadJson(row.payload_json);
   const retentionHint = buildRetentionHintFromRow(row);
   const base = {
-    id: row.id as MemoryId,
-    schemaVersion: "1" as const,
+    id: row.id,
+    schemaVersion: row.schema_version,
     scope: buildScopeFromRow(row.scope_kind, row.scope_coordinate),
-    type: row.type as MemoryType,
+    type: row.type,
     body: row.body,
     provenance: buildProvenanceFromRow(row),
     validity: buildValidityFromRow(row),
-    status: row.status as MemoryStatus,
+    status: row.status,
     pinned: row.pinned === 1,
     tags: parseTagsJson(row.tags_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  } satisfies Omit<MemoryRecord, "staleReason" | "retentionHint" | "payload">;
-  const out: MemoryRecord = {
+  };
+  const candidate = {
     ...base,
     ...(payload !== undefined ? { payload } : {}),
     ...(row.stale_reason !== null ? { staleReason: row.stale_reason } : {}),
     ...(retentionHint !== undefined ? { retentionHint } : {}),
   };
-  return out;
+  const result = validateMemoryRecord(candidate);
+  if (!result.ok) {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory record is invalid.");
+  }
+  return result.value;
 }
 
 export interface MemoryRowWrite {

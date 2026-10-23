@@ -31,6 +31,25 @@ runs:
             sudo rm -f "${source}"
           fi
         done
+        # Preserve source stanzas and archive signatures; only replace the exact Azure HTTP
+        # Ubuntu archive URI that exhausted hosted jobs before Firefox could start.
+        node_bin="$(command -v node)"
+        [[ "${node_bin}" == /* ]]
+        sudo "${node_bin}" --input-type=module - \
+          /etc/apt/apt-mirrors.txt /etc/apt/sources.list \
+          /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources <<'NODE'
+        import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+        for (const path of process.argv.slice(2)) {
+          if (!existsSync(path) || !statSync(path).isFile()) continue;
+          // Latin1 preserves every non-URI byte, including comments and line endings.
+          const original = readFileSync(path, "latin1");
+          const normalized = original.replace(
+            /(^|[ \t\r\n])http:\/\/azure\.archive\.ubuntu\.com\/ubuntu\/?(?=[ \t\r\n]|$)/g,
+            "$1https://archive.ubuntu.com/ubuntu/",
+          );
+          if (normalized !== original) writeFileSync(path, normalized, "latin1");
+        }
+        NODE
     - name: Install Linux namespace tools
       shell: bash
       run: |

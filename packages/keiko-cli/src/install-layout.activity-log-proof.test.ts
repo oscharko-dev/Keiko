@@ -17,7 +17,7 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
   writeInstallLayoutOverrideEvidence,
-  type InstallLayoutNormalizedActivityLogEvent,
+  type InstallLayoutActivityLogTransport,
 } from "./install-layout.js";
 
 describe("install-layout activity log proof", () => {
@@ -27,7 +27,7 @@ describe("install-layout activity log proof", () => {
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin,ui-static-root",
       [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
     };
-    const events: InstallLayoutNormalizedActivityLogEvent[] = [];
+    const events: InstallLayoutActivityLogTransport[] = [];
 
     const wrote = writeInstallLayoutOverrideEvidence(
       { write: (event) => void events.push(event) },

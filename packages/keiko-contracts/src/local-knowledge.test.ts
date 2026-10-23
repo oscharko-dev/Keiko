@@ -3,7 +3,7 @@
 // precisely at the broken invariant — the same mutation-robust pattern used by
 // connected-context.test.ts and workflow-handoff.test.ts.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
@@ -25,6 +25,7 @@ import {
 } from "./local-knowledge-records.js";
 import type {
   CapsuleSet,
+  ConnectorGraphState,
   ChunkId,
   DocumentId,
   KnowledgeCapsuleId,
@@ -42,6 +43,7 @@ import type {
   VectorRecord,
 } from "./local-knowledge-records.js";
 import {
+  type LocalKnowledgeValidation,
   isSafeDisplaySummary,
   validateCapsuleSet,
   validateCapsuleContextualRetrievalSettings,
@@ -1189,5 +1191,291 @@ describe("mutation-robustness anchors", () => {
 
   it("capsuleSet non-empty check: empty array must reject", () => {
     expect(validateCapsuleSet({ ...happyCapsuleSet(), capsuleIds: [] }).ok).toBe(false);
+  });
+});
+
+import {
+  validateCapsuleSet as publicValidateSet,
+  validateCapsuleReindexRequest as publicValidateReindex,
+  validateConnectorGraphState as publicValidateGraph,
+  type LocalKnowledgeValidation as PublicKnowledgeValidation,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import type {
+  CapsuleSet as PublicCapsuleSet,
+  CapsuleReindexRequest as PublicReindexRequest,
+  ConnectorGraphState as PublicGraphState,
+  KnowledgeCapsuleId as PublicKnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
+
+export function parsePublicKnowledgeSet(
+  input: unknown,
+): PublicKnowledgeValidation<PublicCapsuleSet> {
+  const result = publicValidateSet(input);
+  return result;
+}
+
+describe("Knowledge capsule set public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateCapsuleSet).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateSet).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeSet).parameter(0).toBeUnknown();
+    expectTypeOf(validateCapsuleSet).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateSet).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeSet).parameter(0).not.toBeAny();
+    expectTypeOf(validateCapsuleSet).returns.toEqualTypeOf<LocalKnowledgeValidation<CapsuleSet>>();
+    expectTypeOf(validateCapsuleSet).returns.not.toBeAny();
+    expectTypeOf(publicValidateSet).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicCapsuleSet>
+    >();
+    expectTypeOf(parsePublicKnowledgeSet).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicCapsuleSet>
+    >();
+    expectTypeOf(publicValidateSet).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeSet).returns.not.toBeAny();
+    const result = parsePublicKnowledgeSet(happyCapsuleSet());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicCapsuleSet>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.id).not.toBeAny();
+      expectTypeOf(result.value.id).not.toBeUnknown();
+      expectTypeOf(result.value.capsuleIds).not.toBeAny();
+      expectTypeOf(result.value.capsuleIds).not.toBeUnknown();
+      expectTypeOf(result.value.tags).not.toBeAny();
+      expectTypeOf(result.value.tags).not.toBeUnknown();
+      expectTypeOf(result.value.description).not.toBeAny();
+      expectTypeOf(result.value.description).not.toBeUnknown();
+    }
+  });
+});
+
+export function parsePublicKnowledgeReindex(
+  input: unknown,
+): PublicKnowledgeValidation<PublicReindexRequest> {
+  const result = publicValidateReindex(input);
+  return result;
+}
+
+describe("Knowledge reindex public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateCapsuleReindexRequest).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateReindex).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeReindex).parameter(0).toBeUnknown();
+    expectTypeOf(validateCapsuleReindexRequest).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateReindex).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeReindex).parameter(0).not.toBeAny();
+    expectTypeOf(validateCapsuleReindexRequest).returns.toEqualTypeOf<
+      LocalKnowledgeValidation<CapsuleReindexRequest>
+    >();
+    expectTypeOf(validateCapsuleReindexRequest).returns.not.toBeAny();
+    expectTypeOf(publicValidateReindex).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicReindexRequest>
+    >();
+    expectTypeOf(parsePublicKnowledgeReindex).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicReindexRequest>
+    >();
+    expectTypeOf(publicValidateReindex).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeReindex).returns.not.toBeAny();
+    const result = parsePublicKnowledgeReindex({
+      capsuleId: "cap-1",
+      mode: "resume",
+      force: true,
+      resumeJobId: "job-1",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicReindexRequest>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.capsuleId).not.toBeAny();
+      expectTypeOf(result.value.capsuleId).not.toBeUnknown();
+      expectTypeOf(result.value.mode).not.toBeAny();
+      expectTypeOf(result.value.mode).not.toBeUnknown();
+      expectTypeOf(result.value.force).not.toBeAny();
+      expectTypeOf(result.value.force).not.toBeUnknown();
+      expectTypeOf(result.value.resumeJobId).not.toBeAny();
+      expectTypeOf(result.value.resumeJobId).not.toBeUnknown();
+    }
+  });
+});
+
+export function parsePublicKnowledgeGraph(
+  input: unknown,
+): PublicKnowledgeValidation<PublicGraphState> {
+  const result = publicValidateGraph(input);
+  return result;
+}
+
+describe("Knowledge graph public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf(validateConnectorGraphState).parameter(0).toBeUnknown();
+    expectTypeOf(publicValidateGraph).parameter(0).toBeUnknown();
+    expectTypeOf(parsePublicKnowledgeGraph).parameter(0).toBeUnknown();
+    expectTypeOf(validateConnectorGraphState).parameter(0).not.toBeAny();
+    expectTypeOf(publicValidateGraph).parameter(0).not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeGraph).parameter(0).not.toBeAny();
+    expectTypeOf(validateConnectorGraphState).returns.toEqualTypeOf<
+      LocalKnowledgeValidation<ConnectorGraphState>
+    >();
+    expectTypeOf(validateConnectorGraphState).returns.not.toBeAny();
+    expectTypeOf(publicValidateGraph).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicGraphState>
+    >();
+    expectTypeOf(parsePublicKnowledgeGraph).returns.toEqualTypeOf<
+      PublicKnowledgeValidation<PublicGraphState>
+    >();
+    expectTypeOf(publicValidateGraph).returns.not.toBeAny();
+    expectTypeOf(parsePublicKnowledgeGraph).returns.not.toBeAny();
+    const result = parsePublicKnowledgeGraph(happyGraph());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectTypeOf(result.value).toEqualTypeOf<PublicGraphState>();
+      expectTypeOf(result.value).not.toBeAny();
+      expectTypeOf(result.value).not.toBeUnknown();
+      expectTypeOf(result.value.nodes).not.toBeAny();
+      expectTypeOf(result.value.nodes).not.toBeUnknown();
+      expectTypeOf(result.value.edges).not.toBeAny();
+      expectTypeOf(result.value.edges).not.toBeUnknown();
+      expectTypeOf(result.value.updatedAt).not.toBeAny();
+      expectTypeOf(result.value.updatedAt).not.toBeUnknown();
+    }
+  });
+});
+
+describe("Knowledge capsule set public responsibility (#3918)", () => {
+  it("preserves set identity optional presence and nominal capsule lineage", () => {
+    for (const state of ["omitted", "undefined", "present"]) {
+      const input = happyCapsuleSet();
+      if (state !== "omitted") input.description = state === "undefined" ? undefined : "fixture";
+      const result = parsePublicKnowledgeSet(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.capsuleIds).toBe(input.capsuleIds);
+      expect(result.value.tags).toBe(input.tags);
+      expect(Object.hasOwn(result.value, "description")).toBe(state !== "omitted");
+      expectTypeOf(result.value.capsuleIds).toEqualTypeOf<PublicCapsuleSet["capsuleIds"]>();
+      expectTypeOf(result.value.id).toEqualTypeOf<PublicCapsuleSet["id"]>();
+    }
+  });
+  it("refuses malformed set fields and checks physical collection positions", () => {
+    const replaced = Object.defineProperty([0], "every", { value: (): boolean => true });
+    for (const input of [
+      null,
+      [],
+      { ...happyCapsuleSet(), id: "" },
+      { ...happyCapsuleSet(), displayName: "" },
+      { ...happyCapsuleSet(), capsuleIds: [] },
+      { ...happyCapsuleSet(), capsuleIds: replaced },
+      { ...happyCapsuleSet(), capsuleIds: new Array<unknown>(1) },
+      { ...happyCapsuleSet(), composedAt: Number.POSITIVE_INFINITY },
+      { ...happyCapsuleSet(), tags: ["bad\u0000tag"] },
+    ])
+      expect(parsePublicKnowledgeSet(input).ok).toBe(false);
+    const inherited = new Array<unknown>(1);
+    Object.setPrototypeOf(inherited, ["cap-1"]);
+    const input = { ...happyCapsuleSet(), capsuleIds: inherited };
+    const result = parsePublicKnowledgeSet(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.capsuleIds).toBe(inherited);
+  });
+});
+
+describe("Knowledge reindex public responsibility (#3918)", () => {
+  it("preserves reindex identity and optional presence without adding defaults", () => {
+    for (const state of ["omitted", "undefined", "present"]) {
+      const input: Record<string, unknown> = { capsuleId: "cap-1" };
+      if (state !== "omitted") {
+        input.mode = state === "undefined" ? undefined : "resume";
+        input.force = state === "undefined" ? undefined : true;
+        input.resumeJobId = state === "undefined" ? undefined : "job-1";
+      }
+      const result = parsePublicKnowledgeReindex(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      for (const field of ["mode", "force", "resumeJobId"])
+        expect(Object.hasOwn(result.value, field)).toBe(state !== "omitted");
+      expectTypeOf(result.value.capsuleId).toEqualTypeOf<PublicKnowledgeCapsuleId>();
+    }
+  });
+  it("refuses invalid mode force and resume preconditions", () => {
+    for (const input of [
+      null,
+      {},
+      { capsuleId: "", mode: "changed-files" },
+      { capsuleId: "cap-1", mode: "all-files" },
+      { capsuleId: "cap-1", force: "yes" },
+      { capsuleId: "cap-1", mode: "resume", resumeJobId: " " },
+      { capsuleId: "cap-1", mode: "changed-files", resumeJobId: "job-1" },
+    ])
+      expect(parsePublicKnowledgeReindex(input).ok).toBe(false);
+  });
+});
+
+describe("Knowledge graph public responsibility (#3918)", () => {
+  it("preserves graph node edge target identities and nominal lineage", () => {
+    const input = happyGraph();
+    const result = parsePublicKnowledgeGraph(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.nodes).toBe(input.nodes);
+    expect(result.value.edges).toBe(input.edges);
+    for (const node of result.value.nodes) {
+      expectTypeOf(node).not.toBeAny();
+      if (node.kind === "local-knowledge" && node.target.kind === "capsule") {
+        expectTypeOf(node.target.capsuleId).toEqualTypeOf<PublicKnowledgeCapsuleId>();
+        expect(node.target.capsuleId).toBe("cap-1");
+      }
+    }
+  });
+  it("refuses invalid graph references discriminants and nested target fields", () => {
+    for (const input of [
+      null,
+      { ...happyGraph(), schemaVersion: "unsupported" },
+      { ...happyGraph(), nodes: [{ kind: "unknown", nodeId: "n-1" }] },
+      {
+        ...happyGraph(),
+        nodes: [
+          { kind: "local-knowledge", nodeId: "n-1", target: { kind: "capsule", capsuleId: 1 } },
+        ],
+      },
+      {
+        ...happyGraph(),
+        edges: [
+          {
+            from: { nodeId: "missing", kind: "files-window" },
+            to: { nodeId: "n-2", kind: "local-knowledge" },
+            createdAt: 1,
+          },
+        ],
+      },
+      { ...happyGraph(), updatedAt: Number.NaN },
+    ])
+      expect(parsePublicKnowledgeGraph(input).ok).toBe(false);
+  });
+});
+
+describe("Knowledge graph public responsibility (#3918)", () => {
+  it("revalidates actual endpoint reads before admitting graph edges", () => {
+    for (const replacement of [undefined, null, 1]) {
+      let reads = 0;
+      const endpoint = { nodeId: "n-1", kind: "files-window" };
+      const edge = {
+        get from(): unknown {
+          reads += 1;
+          return reads === 1 ? endpoint : replacement;
+        },
+        to: { nodeId: "n-2", kind: "local-knowledge" },
+        createdAt: 1,
+      };
+      expect(parsePublicKnowledgeGraph({ ...happyGraph(), edges: [edge] })).toEqual({
+        ok: false,
+        errors: ["graph.edges entry must have from/to objects"],
+      });
+      expect(reads).toBe(2);
+    }
   });
 });

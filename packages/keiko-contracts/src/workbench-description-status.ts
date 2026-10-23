@@ -66,9 +66,8 @@ export type WorkbenchDescriptionReason = keyof typeof WORKBENCH_DESCRIPTION_REAS
 export type WorkbenchDescriptionState =
   (typeof WORKBENCH_DESCRIPTION_REASON_STATES)[WorkbenchDescriptionReason];
 
-const REASONS = new Set(
-  Object.keys(WORKBENCH_DESCRIPTION_REASON_STATES),
-) as ReadonlySet<WorkbenchDescriptionReason>;
+const REASONS: ReadonlySet<string> = new Set(Object.keys(WORKBENCH_DESCRIPTION_REASON_STATES));
+const ARTIFACT_OUTCOMES: readonly string[] = PR_DESCRIPTION_OUTCOMES;
 
 /**
  * One durable, immutable-per-revision status for the latest description-generation attempt bound
@@ -182,19 +181,24 @@ function nullableDigest(value: unknown): boolean {
   return value === null || (typeof value === "string" && DIGEST.test(value));
 }
 
+function isDescriptionReason(value: unknown): value is WorkbenchDescriptionReason {
+  return typeof value === "string" && Object.hasOwn(WORKBENCH_DESCRIPTION_REASON_STATES, value);
+}
+
 function validReasonState(value: Record<string, unknown>): boolean {
-  if (typeof value.reason !== "string" || !REASONS.has(value.reason as WorkbenchDescriptionReason))
-    return false;
-  return (
-    value.state === WORKBENCH_DESCRIPTION_REASON_STATES[value.reason as WorkbenchDescriptionReason]
-  );
+  if (typeof value.reason !== "string") return false;
+  const membership: unknown = value.reason;
+  if (typeof membership !== "string" || !REASONS.has(membership)) return false;
+  const state: unknown = value.state;
+  const reason: unknown = value.reason;
+  return isDescriptionReason(reason) && state === WORKBENCH_DESCRIPTION_REASON_STATES[reason];
 }
 
 function validArtifact(value: Record<string, unknown>): boolean {
   if (value.artifactOutcome === null) return value.draftDigest === null;
   return (
     typeof value.artifactOutcome === "string" &&
-    (PR_DESCRIPTION_OUTCOMES as readonly string[]).includes(value.artifactOutcome) &&
+    ARTIFACT_OUTCOMES.includes(value.artifactOutcome) &&
     typeof value.draftDigest === "string" &&
     DIGEST.test(value.draftDigest)
   );

@@ -376,8 +376,8 @@ export type DebugParseResult<T> =
   | { readonly ok: false; readonly errors: readonly string[] };
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
-type RecordValidator = (value: UnknownRecord) => boolean;
-type RecordBuilder<T> = (value: UnknownRecord) => T;
+type RecordValidator<S extends UnknownRecord> = (value: UnknownRecord) => value is S;
+type RecordBuilder<S extends UnknownRecord> = (value: S) => UnknownRecord;
 
 const TEXT_ENCODER = new TextEncoder();
 const OPAQUE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
@@ -406,7 +406,8 @@ function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean 
 }
 
 function memberOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && values.includes(value as T);
+  const vocabulary: readonly string[] = values;
+  return typeof value === "string" && vocabulary.includes(value);
 }
 
 function isNonnegativeSafeInteger(value: unknown): value is number {
@@ -458,12 +459,16 @@ function isDenseArray<T>(
   maxLength: number,
   predicate: (entry: unknown) => entry is T,
 ): value is readonly T[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= maxLength &&
-    Object.keys(value).length === value.length &&
-    value.every(predicate)
-  );
+  if (!Array.isArray(value)) return false;
+  const initiallyWithinLimit = value.length <= maxLength;
+  if (!initiallyWithinLimit) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maxLength) return false;
+  if (Object.keys(value).length !== extent) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !predicate(value[index])) return false;
+  }
+  return true;
 }
 
 function parseSafely<T>(parser: () => DebugParseResult<T>): DebugParseResult<T> {
@@ -479,21 +484,27 @@ function parseSafely<T>(parser: () => DebugParseResult<T>): DebugParseResult<T> 
   }
 }
 
-function parseObject<T>(
+function parseObject<S extends UnknownRecord>(
   value: unknown,
   label: string,
   keys: readonly string[],
-  validate: RecordValidator,
-  build: RecordBuilder<T>,
-): DebugParseResult<T> {
+  validate: RecordValidator<S>,
+  build: RecordBuilder<S>,
+): DebugParseResult<S> {
   if (!isRecord(value)) return { ok: false, errors: [`${label} must be an object`] };
   if (!hasOnlyKeys(value, keys) || !validate(value)) {
     return { ok: false, errors: [`${label} is invalid or contains unknown fields`] };
   }
-  return { ok: true, value: build(value) };
+  const canonical = build(value);
+  if (!hasOnlyKeys(canonical, keys) || !validate(canonical)) {
+    return { ok: false, errors: [`${label} is invalid or contains unknown fields`] };
+  }
+  return { ok: true, value: canonical };
 }
 
-function hasSchema(value: UnknownRecord): boolean {
+function hasSchema(
+  value: UnknownRecord,
+): value is UnknownRecord & Pick<DebugBootstrapRequest, "schemaVersion"> {
   return value.schemaVersion === DAP_DEBUG_CONTRACT_SCHEMA_VERSION;
 }
 
@@ -633,7 +644,9 @@ function canonicalWatch(value: WatchExpression): WatchExpression {
   return { watchId: value.watchId, expression: value.expression, enabled: value.enabled };
 }
 
-function hasSessionGeneration(value: UnknownRecord): boolean {
+function hasSessionGeneration(
+  value: UnknownRecord,
+): value is UnknownRecord & Pick<ScopesRequest, "sessionId" | "pauseGeneration"> {
   return isOpaqueId(value.sessionId) && isNonnegativeSafeInteger(value.pauseGeneration);
 }
 
@@ -645,10 +658,11 @@ export function parseDebugBootstrapRequest(
       value,
       "debug bootstrap request",
       ["schemaVersion", "workspaceId"],
-      (record) => hasSchema(record) && isOpaqueId(record.workspaceId),
+      (record): record is UnknownRecord & DebugBootstrapRequest =>
+        hasSchema(record) && isOpaqueId(record.workspaceId),
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        workspaceId: record.workspaceId as string,
+        workspaceId: record.workspaceId,
       }),
     ),
   );
@@ -662,16 +676,16 @@ export function parseDebugSessionStartRequest(
       value,
       "debug session start request",
       ["schemaVersion", "workspaceId", "target", "activationRevision"],
-      (record) =>
+      (record): record is UnknownRecord & DebugSessionStartRequest =>
         hasSchema(record) &&
         isOpaqueId(record.workspaceId) &&
         isDebugLaunchTarget(record.target) &&
         isNonnegativeSafeInteger(record.activationRevision),
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        workspaceId: record.workspaceId as string,
-        target: buildDebugLaunchTarget(record.target as DebugLaunchTarget),
-        activationRevision: record.activationRevision as number,
+        workspaceId: record.workspaceId,
+        target: buildDebugLaunchTarget(record.target),
+        activationRevision: record.activationRevision,
       }),
     ),
   );
@@ -685,21 +699,23 @@ export function parseDebugSessionControlRequest(
       value,
       "debug session control request",
       ["schemaVersion", "sessionId", "action", "pauseGeneration"],
-      (record) =>
+      (record): record is UnknownRecord & DebugSessionControlRequest =>
         hasSchema(record) &&
         hasSessionGeneration(record) &&
         memberOf(record.action, CONTROL_ACTIONS),
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        sessionId: record.sessionId as string,
-        action: record.action as DebugSessionControlAction,
-        pauseGeneration: record.pauseGeneration as number,
+        sessionId: record.sessionId,
+        action: record.action,
+        pauseGeneration: record.pauseGeneration,
       }),
     ),
   );
 }
 
-function validSetBreakpointsRequest(value: UnknownRecord): boolean {
+function validSetBreakpointsRequest(
+  value: UnknownRecord,
+): value is UnknownRecord & SetBreakpointsRequest {
   if (!hasSchema(value) || !isOpaqueId(value.workspaceId)) return false;
   if (!isNonnegativeSafeInteger(value.expectedRevision) || !isCanonicalFileId(value.fileId)) {
     return false;
@@ -727,16 +743,18 @@ export function parseSetBreakpointsRequest(
       validSetBreakpointsRequest,
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        workspaceId: record.workspaceId as string,
-        expectedRevision: record.expectedRevision as number,
-        fileId: record.fileId as string,
-        breakpoints: (record.breakpoints as readonly SourceBreakpoint[]).map(canonicalBreakpoint),
+        workspaceId: record.workspaceId,
+        expectedRevision: record.expectedRevision,
+        fileId: record.fileId,
+        breakpoints: record.breakpoints.map(canonicalBreakpoint),
       }),
     ),
   );
 }
 
-function validSetExceptionBreakpointsRequest(value: UnknownRecord): boolean {
+function validSetExceptionBreakpointsRequest(
+  value: UnknownRecord,
+): value is UnknownRecord & SetExceptionBreakpointsRequest {
   return (
     hasSchema(value) &&
     isOpaqueId(value.workspaceId) &&
@@ -756,11 +774,9 @@ export function parseSetExceptionBreakpointsRequest(
       validSetExceptionBreakpointsRequest,
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        workspaceId: record.workspaceId as string,
-        expectedRevision: record.expectedRevision as number,
-        filters: (record.filters as readonly ExceptionBreakpointFilter[]).map(
-          canonicalExceptionFilter,
-        ),
+        workspaceId: record.workspaceId,
+        expectedRevision: record.expectedRevision,
+        filters: record.filters.map(canonicalExceptionFilter),
       }),
     ),
   );
@@ -772,7 +788,7 @@ export function parseStackTraceRequest(value: unknown): DebugParseResult<StackTr
       value,
       "stack trace request",
       ["schemaVersion", "sessionId", "pauseGeneration", "startFrame", "cursor", "levels"],
-      (record) =>
+      (record): record is UnknownRecord & StackTraceRequest =>
         hasSchema(record) &&
         hasSessionGeneration(record) &&
         ((record.startFrame === 0 && record.cursor === undefined) ||
@@ -781,34 +797,58 @@ export function parseStackTraceRequest(value: unknown): DebugParseResult<StackTr
         record.levels <= DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        sessionId: record.sessionId as string,
-        pauseGeneration: record.pauseGeneration as number,
-        ...(record.startFrame === undefined ? {} : { startFrame: record.startFrame as number }),
-        ...(record.cursor === undefined ? {} : { cursor: record.cursor as string }),
-        levels: record.levels as number,
+        sessionId: record.sessionId,
+        pauseGeneration: record.pauseGeneration,
+        ...(record.startFrame === undefined ? {} : { startFrame: record.startFrame }),
+        ...(record.cursor === undefined ? {} : { cursor: record.cursor }),
+        levels: record.levels,
       }),
     ),
   );
 }
 
-function parseReferenceRequest<T extends ScopesRequest | VariablesRequest>(
+function parseReferenceRequest(
+  value: unknown,
+  label: string,
+  referenceKey: "frameRef",
+): DebugParseResult<ScopesRequest>;
+function parseReferenceRequest(
+  value: unknown,
+  label: string,
+  referenceKey: "variableRef",
+): DebugParseResult<VariablesRequest>;
+function parseReferenceRequest(
   value: unknown,
   label: string,
   referenceKey: "frameRef" | "variableRef",
-): DebugParseResult<T> {
+): DebugParseResult<ScopesRequest | VariablesRequest> {
+  if (referenceKey === "frameRef") {
+    return parseObject(
+      value,
+      label,
+      ["schemaVersion", "sessionId", "pauseGeneration", referenceKey],
+      (record): record is UnknownRecord & ScopesRequest =>
+        hasSchema(record) && hasSessionGeneration(record) && isOpaqueId(record[referenceKey]),
+      (record) => ({
+        schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+        sessionId: record.sessionId,
+        pauseGeneration: record.pauseGeneration,
+        frameRef: record.frameRef,
+      }),
+    );
+  }
   return parseObject(
     value,
     label,
     ["schemaVersion", "sessionId", "pauseGeneration", referenceKey],
-    (record) =>
+    (record): record is UnknownRecord & VariablesRequest =>
       hasSchema(record) && hasSessionGeneration(record) && isOpaqueId(record[referenceKey]),
-    (record) =>
-      ({
-        schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        sessionId: record.sessionId as string,
-        pauseGeneration: record.pauseGeneration as number,
-        [referenceKey]: record[referenceKey] as string,
-      }) as unknown as T,
+    (record) => ({
+      schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+      sessionId: record.sessionId,
+      pauseGeneration: record.pauseGeneration,
+      variableRef: record.variableRef,
+    }),
   );
 }
 
@@ -826,23 +866,23 @@ export function parseSetVariableRequest(value: unknown): DebugParseResult<SetVar
       value,
       "set variable request",
       ["schemaVersion", "sessionId", "pauseGeneration", "variableRef", "value"],
-      (record) =>
+      (record): record is UnknownRecord & SetVariableRequest =>
         hasSchema(record) &&
         hasSessionGeneration(record) &&
         isOpaqueId(record.variableRef) &&
         isBoundedText(record.value, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxValueBytes, true),
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        sessionId: record.sessionId as string,
-        pauseGeneration: record.pauseGeneration as number,
-        variableRef: record.variableRef as string,
-        value: record.value as string,
+        sessionId: record.sessionId,
+        pauseGeneration: record.pauseGeneration,
+        variableRef: record.variableRef,
+        value: record.value,
       }),
     ),
   );
 }
 
-function validSetWatchesRequest(value: UnknownRecord): boolean {
+function validSetWatchesRequest(value: UnknownRecord): value is UnknownRecord & SetWatchesRequest {
   return (
     hasSchema(value) &&
     isOpaqueId(value.workspaceId) &&
@@ -860,9 +900,9 @@ export function parseSetWatchesRequest(value: unknown): DebugParseResult<SetWatc
       validSetWatchesRequest,
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        workspaceId: record.workspaceId as string,
-        expectedRevision: record.expectedRevision as number,
-        watches: (record.watches as readonly WatchExpression[]).map(canonicalWatch),
+        workspaceId: record.workspaceId,
+        expectedRevision: record.expectedRevision,
+        watches: record.watches.map(canonicalWatch),
       }),
     ),
   );
@@ -874,23 +914,28 @@ export function parseEvaluateWatchRequest(value: unknown): DebugParseResult<Eval
       value,
       "evaluate watch request",
       ["schemaVersion", "sessionId", "pauseGeneration", "watchId", "frameRef"],
-      (record) =>
+      (record): record is UnknownRecord & EvaluateWatchRequest =>
         hasSchema(record) &&
         hasSessionGeneration(record) &&
         isOpaqueId(record.watchId) &&
         (record.frameRef === undefined || isOpaqueId(record.frameRef)),
       (record) => ({
         schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-        sessionId: record.sessionId as string,
-        pauseGeneration: record.pauseGeneration as number,
-        watchId: record.watchId as string,
-        ...(record.frameRef === undefined ? {} : { frameRef: record.frameRef as string }),
+        sessionId: record.sessionId,
+        pauseGeneration: record.pauseGeneration,
+        watchId: record.watchId,
+        ...(record.frameRef === undefined ? {} : { frameRef: record.frameRef }),
       }),
     ),
   );
 }
 
-function utf8Prefix(value: string, maxBytes: number): { value: string; bytes: number } {
+interface DebugTextPrefix {
+  readonly value: string;
+  readonly bytes: number;
+}
+
+function utf8Prefix(value: string, maxBytes: number): DebugTextPrefix {
   let prefix = "";
   let bytes = 0;
   for (const codePoint of value) {

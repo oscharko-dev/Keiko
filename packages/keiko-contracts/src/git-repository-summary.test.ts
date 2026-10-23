@@ -3,6 +3,8 @@ import {
   GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
   validateGitRemotesResponse,
   validateGitRepositorySummary,
+  parseGitRepositorySummary,
+  parseGitRemotesResponse,
 } from "./git-repository-summary.js";
 
 function validSummary(): Record<string, unknown> {
@@ -406,4 +408,148 @@ describe("validateGitRemotesResponse", () => {
       expect(result.reasons).toContain("repositoryRoot must be a string when present");
     }
   });
+});
+
+import {
+  validateGitRepositorySummary as validatePublicSummary,
+  validateGitRemotesResponse as validatePublicRemotes,
+  parseGitRepositorySummary as parsePublicSummary,
+  parseGitRemotesResponse as parsePublicRemotes,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
+
+function invalidRemoteArray(kind: string): unknown[] {
+  if (kind === "sparse") {
+    const items: unknown[] = [];
+    items.length = 1;
+    return items;
+  }
+  return Object.assign([null], { forEach: (): undefined => undefined });
+}
+
+describe("Git summary and remotes actual array admission (#3918)", () => {
+  for (const { surface, validate, fixture } of [
+    { surface: "source summary", validate: validateGitRepositorySummary, fixture: validSummary },
+    { surface: "public summary", validate: validatePublicSummary, fixture: validSummary },
+    { surface: "source remotes", validate: validateGitRemotesResponse, fixture: validRemotes },
+    { surface: "public remotes", validate: validatePublicRemotes, fixture: validRemotes },
+  ]) {
+    it.each(["sparse", "spoofed"])(`${surface}: refuses %s remotes`, (kind) => {
+      expect(validate({ ...fixture(), remotes: invalidRemoteArray(kind) })).toEqual({
+        ok: false,
+        reasons: ["remotes[0] must be an object"],
+      });
+    });
+  }
+});
+
+export function parsePublicGitSummary(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitRepositorySummary
+> {
+  const result = parsePublicSummary(input);
+  return result;
+}
+
+export function parsePublicGitRemotes(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitRemotesResponse
+> {
+  const result = parsePublicRemotes(input);
+  return result;
+}
+
+describe("Git summary and remotes typed parsers (#3918)", () => {
+  for (const { surface, summary, remotes } of [
+    { surface: "source", summary: parseGitRepositorySummary, remotes: parseGitRemotesResponse },
+    { surface: "public", summary: parsePublicGitSummary, remotes: parsePublicGitRemotes },
+  ]) {
+    it(`${surface}: preserves original nested values and optional presence`, () => {
+      const input = validSummary();
+      input.message = undefined;
+      delete input.branch;
+      const result = summary(input);
+      if (!result.ok) throw new TypeError("valid summary refused");
+      expect(result.value).toBe(input);
+      expect(result.value.remotes).toBe(input.remotes);
+      expect(result.value.upstream).toBe(input.upstream);
+      expect(result.value.lastSync).toBe(input.lastSync);
+      expect(Object.hasOwn(result.value, "branch")).toBe(false);
+      expect(Object.hasOwn(result.value, "message")).toBe(true);
+      const remoteInput = validRemotes();
+      const remoteResult = remotes(remoteInput);
+      if (!remoteResult.ok) throw new TypeError("valid remotes refused");
+      expect(remoteResult.value).toBe(remoteInput);
+      expect(remoteResult.value.remotes).toBe(remoteInput.remotes);
+    });
+    it(`${surface}: refuses primitives sparse and spoofed remotes with eager reasons`, () => {
+      for (const input of [undefined, null, 1, true, [], "input"]) {
+        expect(summary(input)).toEqual({ ok: false, reasons: ["response must be an object"] });
+        expect(remotes(input)).toEqual({ ok: false, reasons: ["response must be an object"] });
+      }
+      for (const kind of ["sparse", "spoofed"]) {
+        expect(summary({ ...validSummary(), remotes: invalidRemoteArray(kind) }).ok).toBe(false);
+        expect(remotes({ ...validRemotes(), remotes: invalidRemoteArray(kind) }).ok).toBe(false);
+      }
+      const input = {
+        ...validSummary(),
+        schemaVersion: 0,
+        state: [],
+        message: 1,
+        available: 1,
+        remotes: [null],
+      };
+      expect(summary(input)).toEqual({
+        ok: false,
+        reasons: [
+          "schemaVersion invalid",
+          "state invalid",
+          "message must be a bounded string when present",
+          "available must be a boolean",
+          "remotes[0] must be an object",
+        ],
+      });
+      expect(summary(input)).toEqual(validateGitRepositorySummary(input));
+    });
+    it(`${surface}: retains URL redaction and upstream pair admission`, () => {
+      expect(
+        summary({
+          ...validSummary(),
+          remotes: [{ name: "origin", fetchUrl: "https://example.invalid/repo" }],
+        }).ok,
+      ).toBe(false);
+      expect(
+        remotes({
+          ...validRemotes(),
+          remotes: [{ name: "origin", fetchUrl: "https://user:password@example.invalid/repo" }],
+        }).ok,
+      ).toBe(false);
+      expect(
+        remotes({
+          ...validRemotes(),
+          remotes: [{ name: "origin", fetchUrl: "git@example.invalid:org/repo.git" }],
+        }).ok,
+      ).toBe(true);
+      expect(
+        summary({ ...validSummary(), upstream: { ref: "origin/main", remote: "origin" } }).ok,
+      ).toBe(false);
+      expect(
+        summary({ ...validSummary(), upstream: { ref: "origin/main" }, lastSync: {} }).ok,
+      ).toBe(true);
+    });
+  }
+});
+
+it("public summary and remotes retain distinct typed values", () => {
+  const summary = parsePublicSummary(validSummary());
+  const remotes = parsePublicRemotes(validRemotes());
+  if (!summary.ok || !remotes.ok) throw new TypeError("valid Git fixtures refused");
+  const value: import("@oscharko-dev/keiko-contracts").GitRepositorySummary = summary.value;
+  const remoteValue: import("@oscharko-dev/keiko-contracts").GitRemotesResponse = remotes.value;
+  expect(value.ahead).toBe(2);
+  expect(remoteValue.remotes[0]?.fetchUrl).toBeDefined();
+  // @ts-expect-error The reduced remotes envelope is not a complete repository summary.
+  const wrong: import("@oscharko-dev/keiko-contracts").GitRepositorySummary = remotes.value;
+  expect(wrong).toBe(remoteValue);
 });

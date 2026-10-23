@@ -2,10 +2,14 @@ import { observedFailureQuery } from "../../../../tests/support/observed-failure
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { nodeWorkspaceFs, type WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { basename, join } from "node:path";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceDirEntry,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
@@ -91,6 +95,75 @@ function settledProof(events: readonly ServerLogEvent[]): Record<string, unknown
     "coding-repository-handler.settled.emitted-line",
     formatActivityLogProofLine(events[1] ?? {}),
   );
+}
+
+function fixtureSignal(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((release) => {
+    resolve = release;
+  });
+  return { promise, resolve };
+}
+
+function softScanFixtureFs(advanceClock: () => void): {
+  readonly fs: WorkspaceFs;
+  readonly release: () => void;
+  readonly settle: () => Promise<void>;
+} {
+  const read = nodeWorkspaceFs.readFileBytes;
+  if (read === undefined) throw new Error("fixture byte reader missing");
+  const firstMayRead = fixtureSignal();
+  const laterMayRead = fixtureSignal();
+  const heldPaths = new Set<string>();
+  let laterNativeReads = 0;
+  const reads: Promise<void>[] = [];
+  const release = (): void => {
+    firstMayRead.resolve();
+    laterMayRead.resolve();
+  };
+  return {
+    release,
+    settle: async (): Promise<void> => {
+      await Promise.all(reads);
+    },
+    fs: {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (path, ...args): Promise<Uint8Array> => {
+        const finished = fixtureSignal();
+        reads.push(finished.promise);
+        try {
+          if (basename(path) === "example.ts") {
+            await firstMayRead.promise;
+          } else {
+            heldPaths.add(path);
+            if (heldPaths.size === 7) firstMayRead.resolve();
+            await laterMayRead.promise;
+            laterNativeReads += 1;
+          }
+          return await read(path, ...args);
+        } finally {
+          finished.resolve();
+        }
+      },
+      iterateDirectory: async function* (path): AsyncGenerator<WorkspaceDirEntry> {
+        const entries = [...nodeWorkspaceFs.readDir(path)].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+        for (const entry of entries) {
+          yield entry;
+          if (entry.name !== "z-late-6.ts") continue;
+          await firstMayRead.promise;
+          // The collector waits at eight pending admissions. Seven cannot finish before their
+          // native reads, so this resumes only after example.ts matching and retention finish.
+          // A changed collector capacity must fail this fixture rather than weaken its result.
+          expect(heldPaths.size).toBe(7);
+          expect(laterNativeReads).toBe(0);
+          advanceClock();
+          laterMayRead.resolve();
+        }
+      },
+    },
+  };
 }
 
 const request = {
@@ -297,42 +370,53 @@ describe("production coding repository handler composition", () => {
     });
   });
 
-  it("records a soft scan stop as a completed partial result inside the hard deadline", async () => {
+  it("records a soft scan stop as a completed partial result inside the hard deadline", async ({
+    onTestFinished,
+  }) => {
     let now = 0;
-    const read = nodeWorkspaceFs.readFileBytes;
-    if (read === undefined) throw new Error("fixture byte reader missing");
-    let firstReadCompleted!: () => void;
-    const firstRead = new Promise<void>((resolve) => {
-      firstReadCompleted = resolve;
+    const controlled = softScanFixtureFs(() => {
+      now = 60;
+      vi.advanceTimersByTime(60);
     });
     const { root, handler, events } = fixture(() => true, {
       nowMs: () => now,
       deadlineAtMs: 100,
-      fs: {
-        ...nodeWorkspaceFs,
-        readFileBytes: async (...args): Promise<Uint8Array> => {
-          const bytes = await read(...args);
-          firstReadCompleted();
-          return bytes;
-        },
-        iterateDirectory: async function* (path): AsyncGenerator<WorkspaceDirEntry> {
-          for (const entry of nodeWorkspaceFs.readDir(path)) {
-            yield entry;
-            if (entry.name === "example.ts") {
-              await firstRead;
-              await new Promise<void>((resolve) => setImmediate(resolve));
-              now = 60;
-            }
-          }
-        },
-      },
+      fs: controlled.fs,
     });
-    writeFileSync(join(root, "src/z-late.ts"), "parseConfig late");
-    expect(await handler.invoke(request, context())).toMatchObject({
-      ok: true,
-      hits: [{ path: "src/example.ts" }],
-      truncationReasons: ["time-limit"],
+    for (let index = 0; index < 7; index += 1) {
+      writeFileSync(join(root, `src/z-late-${index.toString()}.ts`), "parseConfig late");
+    }
+    let pending: ReturnType<typeof handler.invoke> | undefined = undefined;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(async () => {
+      try {
+        now = 60;
+        controlled.release();
+        try {
+          await pending;
+        } finally {
+          await controlled.settle();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
     });
+    pending = handler.invoke(request, context());
+    try {
+      expect(await pending).toMatchObject({
+        ok: true,
+        hits: [{ path: "src/example.ts" }],
+        truncationReasons: ["time-limit"],
+      });
+    } finally {
+      now = 60;
+      controlled.release();
+      try {
+        await pending;
+      } finally {
+        await controlled.settle();
+      }
+    }
     expect(settledProof(events)).toMatchObject({
       state: "completed",
       progressStatus: "available",

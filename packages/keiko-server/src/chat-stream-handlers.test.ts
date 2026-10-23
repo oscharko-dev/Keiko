@@ -7,6 +7,7 @@ import {
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
 import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
+import { handleUpdateChat } from "./store-handlers.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -802,6 +803,50 @@ describe("desktop chat SSE streaming handler", () => {
         contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
       });
       store.markdownSkills.select(chatId, skill, 0);
+      const gateway = streamingModel("Must not dispatch");
+      const bufferedCall = vi.spyOn(gateway.model, "call");
+      const paired = pairedSkillFixture(gateway.model);
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[transport](
+        routeContext(
+          paired.request({
+            chatId,
+            projectPath: projectDir,
+            content: "Review boundary",
+            modelId: CHAT_MODEL,
+            clientTurnId: "stale-skill",
+            expectedSkillSelectionRevision,
+          }),
+          captureResWithEvents().res,
+        ),
+        paired.deps,
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+      });
+      expect(gateway.calls.count).toBe(0);
+      expect(gateway.recorded.request).toBeUndefined();
+      expect(bufferedCall).not.toHaveBeenCalled();
+      expect(store.listMessages(chatId)).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ["buffered", undefined],
+    ["streamed", undefined],
+    ["buffered", 1],
+    ["streamed", 1],
+  ] as const)(
+    "refuses a deleted skill selection before %s dispatch (observed %s)",
+    async (transport, expectedSkillSelectionRevision) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      store.markdownSkills.delete(skill.id, skill.revision);
       const gateway = streamingModel("Must not dispatch");
       const bufferedCall = vi.spyOn(gateway.model, "call");
       const paired = pairedSkillFixture(gateway.model);
@@ -2261,6 +2306,86 @@ describe("desktop chat SSE streaming handler", () => {
     );
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
   });
+
+  it.each(["buffered", "streamed", "regenerated"] as const)(
+    "cancels a %s readiness waiter on source change without cancelling the shared probe",
+    async (surface) => {
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "Earlier question");
+      seedMessage(chatId, "assistant", "Earlier answer");
+      const history = store.listMessages(chatId);
+      const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+      holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+      const response = deferred<Response>();
+      const events: ServerLogEvent[] = [];
+      let probeSignal: AbortSignal | null | undefined;
+      const model = streamingModel("must not run");
+      const handlerDeps = deps(model.model, {
+        gatewayConfig: holder,
+        gatewayReadinessFetch: (_input, init): Promise<Response> => {
+          probeSignal = init?.signal;
+          return response.promise;
+        },
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      });
+      initializeConfiguredConversationReadiness(handlerDeps, "scope-readiness-proof");
+      const body =
+        surface === "regenerated"
+          ? { chatId, projectPath: projectDir, assistantMessageId: history.at(-1)?.id }
+          : { chatId, projectPath: projectDir, content: "New question" };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      const pending = handlers[surface](routeContext(makeReq(body), captureRes().res), handlerDeps);
+      let outcome: Awaited<typeof pending> | undefined;
+      void pending.then((result) => {
+        outcome = result;
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(events.some((event) => event.op === "gateway.readiness.automatic.joined")).toBe(
+            true,
+          );
+        });
+        const patch = await handleUpdateChat(
+          {
+            ...routeContext(
+              makeReq({
+                connectedScopes: [{ kind: "workspace-root", relativePaths: [], connectedAtMs: 2 }],
+              }),
+              captureRes().res,
+            ),
+            url: new URL(`http://localhost/api/chats?id=${chatId}`),
+          },
+          handlerDeps,
+        );
+        expect(patch.status).toBe(200);
+        await vi.waitFor(
+          () => {
+            expect(outcome).toMatchObject({ status: 499 });
+          },
+          { timeout: 500 },
+        );
+        expect(probeSignal?.aborted).toBe(false);
+        expect(model.calls.count).toBe(0);
+        expect(store.listMessages(chatId)).toEqual(history);
+      } finally {
+        response.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+        await pending;
+      }
+    },
+  );
 
   it("joins initialization before regenerating without exposing the original turn to its probe", async () => {
     const chatId = seedChat();

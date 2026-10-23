@@ -141,28 +141,28 @@ describe("ring and listing decision evidence", () => {
       text: 'Find exact identifier "InvoiceReference".',
       files: { "manual.html": "InvoiceReference appears here." },
       reason: "complete-exact-lookup",
-      ringReason: "complete-exact-lookup",
+      ringReasons: [],
       git: true,
     },
     {
       text: 'Find exact identifier "InvoiceReference".',
       files: { "manual.html": "InvoiceReference appears here." },
       reason: "complete-exact-lookup",
-      ringReason: "no-git-metadata",
+      ringReasons: [],
       git: false,
     },
     {
       text: "What value is documented for InvoiceReference?",
       files: { "manual.html": "InvoiceReference appears here." },
       reason: "ordinary-document",
-      ringReason: "no-git-metadata",
+      ringReasons: ["ordinary-document"],
       git: false,
     },
     {
       text: 'Find exact identifier "ABSENT_PRIVATE_METRIC".',
       files: { "manual.html": "Unrelated handbook content." },
       reason: "literal-absence",
-      ringReason: "no-git-metadata",
+      ringReasons: [],
       git: false,
     },
   ])("records actual $reason decisions", async (test) => {
@@ -179,7 +179,19 @@ describe("ring and listing decision evidence", () => {
       "search.connected-context.completion-details.line",
       formatActivityLogProofLine(result.details ?? {}),
     );
-    expect(result.completed?.extra?.ringSkipReasons).toContain(test.ringReason);
+    expect(result.completed?.extra?.ringSkipReasons).toEqual(test.ringReasons);
+    expect(result.output.plan.rings.map((ring) => ring.kind)).not.toContain("git-history");
+    assertCanonical(result);
+  });
+
+  it("records unavailable Git history when history was explicitly requested", async () => {
+    const result = await retrieve("Show recent Git history for InvoiceReference.", {
+      "manual.html": "InvoiceReference appears here.",
+    });
+    assertPartition(result);
+    expect(result.output.plan.rings.map((ring) => ring.kind)).toContain("git-history");
+    expect(result.completed?.extra?.skippedRingKinds).toContain("git-history");
+    expect(result.completed?.extra?.ringSkipReasons).toContain("no-git-metadata");
     assertCanonical(result);
   });
 

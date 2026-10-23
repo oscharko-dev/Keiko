@@ -2,7 +2,8 @@
 // the explicit management window and awaited at the canonical server route; the test
 // never injects trusted client state or calls the route directly.
 
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 
 import {
   cleanupEditorWorkspaces,

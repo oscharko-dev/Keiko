@@ -18,11 +18,13 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 
 export interface MarkdownSkillLibrary {
   readonly skills: readonly MarkdownSkillMetadata[];
   readonly preview: MarkdownSkillDocument | undefined;
   readonly busy: boolean;
+  readonly available: boolean;
   readonly error: "request" | "file" | undefined;
   readonly refresh: () => Promise<void>;
   readonly inspect: (skill: MarkdownSkillMetadata) => Promise<void>;
@@ -82,24 +84,47 @@ function useLibraryRequest(): {
 export function useMarkdownSkillLibrary(onChange: () => Promise<void>): MarkdownSkillLibrary {
   const [skills, setSkills] = useState<readonly MarkdownSkillMetadata[]>([]);
   const [preview, setPreview] = useState<MarkdownSkillDocument>();
+  const [available, setAvailable] = useState(false);
   const request = useLibraryRequest();
   const { active, run } = request;
   const reload = useCallback(async (): Promise<void> => {
+    if (active.current) setAvailable(false);
     const next = await fetchMarkdownSkills();
-    if (active.current) setSkills(next);
+    if (active.current) {
+      setSkills(next);
+      setAvailable(true);
+    }
   }, [active]);
   const refresh = useCallback(() => run(reload), [run, reload]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  useLibrarySessionRefresh(request.busy, refresh, setPreview);
   return {
-    skills,
-    preview,
+    skills: available ? skills : [],
+    preview: available ? preview : undefined,
     busy: request.busy,
+    available,
     error: request.error,
     refresh,
     ...libraryActions({ ...request, reload, setPreview, onChange }),
   };
+}
+
+/** Coalesce session refreshes behind an in-flight request; never replay a mutation. */
+function useLibrarySessionRefresh(
+  busy: boolean,
+  refresh: () => Promise<void>,
+  setPreview: (value: MarkdownSkillDocument | undefined) => void,
+): void {
+  const redemptions = useCodingAppSessionRedemptions();
+  const refreshed = useRef(redemptions);
+  useEffect(() => {
+    if (busy || refreshed.current === redemptions) return;
+    refreshed.current = redemptions;
+    setPreview(undefined);
+    void refresh();
+  }, [busy, redemptions, refresh, setPreview]);
 }
 
 function libraryActions({

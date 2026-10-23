@@ -1,5 +1,6 @@
 import { deepFreeze } from "./deep-freeze.js";
 import type { CodingWorkbenchActionClass } from "./coding-workbench.js";
+import type { ToolDefinition } from "./gateway.js";
 
 declare const canonicalToolIdBrand: unique symbol;
 declare const catalogDigestBrand: unique symbol;
@@ -14,6 +15,11 @@ export type CatalogJsonValue =
   | readonly CatalogJsonValue[]
   | { readonly [key: string]: CatalogJsonValue };
 export type CatalogJsonObject = Readonly<Record<string, CatalogJsonValue>>;
+
+/** A catalog-compiled gateway definition retains its admitted recursive JSON schema. */
+export interface CatalogGatewayToolDefinition extends ToolDefinition {
+  readonly parameters: CatalogJsonObject;
+}
 
 /** Safety ceilings from ADR-0175; measured performance targets remain separately owned. */
 export const TOOL_CATALOG_LIMITS = Object.freeze({

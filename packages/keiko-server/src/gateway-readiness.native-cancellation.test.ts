@@ -5,7 +5,15 @@ import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { cancellableConversationProbeDeps, runGatewayReadiness } from "./gateway-readiness.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
+  cancellableConversationProbeDeps,
+  probeInconclusive,
+  runGatewayReadiness,
+} from "./gateway-readiness.js";
 
 interface NativeDispatcher {
   dispatch(options: unknown, handler: unknown): boolean;
@@ -74,7 +82,7 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${String(address.port)}/v1`;
 }
 
-function readinessDeps(baseUrl: string): UiHandlerDeps {
+function readinessDeps(baseUrl: string): UiHandlerDeps & { readonly config: GatewayConfig } {
   const config: GatewayConfig = {
     providers: [
       {
@@ -171,13 +179,47 @@ it.each(["outer", "inner"])(
     );
     await receipt;
     (owner === "outer" ? outer : inner).abort();
-    expect(await pending).toMatchObject({
+    const report = await pending;
+    expect(report).toMatchObject({
       overallStatus: "failed",
       probes: [{ status: "failed" }],
     });
+    if ("status" in report) throw new Error("Expected a readiness report.");
+    expect(report.probes.every(probeInconclusive)).toBe(true);
     await disconnect;
   },
 );
+
+it("classifies a native provider deadline as inconclusive rather than refuting readiness", async () => {
+  const events: ServerLogEvent[] = [];
+  const baseUrl = await listen(createServer((request) => request.resume()));
+  const deps = readinessDeps(baseUrl);
+  const config = {
+    ...deps.config,
+    providers: deps.config.providers.map((provider) => ({ ...provider, timeoutMs: 100 })),
+  };
+  const report = await runGatewayReadiness(
+    { modelId: "native-readiness", options: { probes: ["chat"] } },
+    { ...deps, config, activityLog: { write: (event): void => void events.push(event) } },
+    "native-readiness-deadline",
+    "settings",
+  );
+  expect(report).toMatchObject({
+    overallStatus: "failed",
+    probes: [{ warning: "The probe timed out before the provider answered." }],
+  });
+  if ("status" in report) throw new Error("Expected a readiness report.");
+  expect(report.probes.every(probeInconclusive)).toBe(true);
+  const event = events.find((entry) => entry.op === "gateway.readiness.completed");
+  expect(event).toMatchObject({
+    correlationId: "native-readiness-deadline",
+    extra: { overallStatus: "failed", inconclusiveProbeCount: 1 },
+  });
+  expectActivityLogProof(
+    "gateway.readiness.completed.line",
+    formatActivityLogProofLine(event ?? {}),
+  );
+});
 
 it("preserves an injected readiness fetch and composes both owner cancellation signals", async () => {
   const outer = new AbortController();

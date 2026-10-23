@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   assertMeasurableBudget,
@@ -207,9 +207,8 @@ describe("assertMeasurableBudget", () => {
   });
 });
 
-// The runner, driven end to end over the REAL pipeline with a one-iteration budget so the suite pays
-// for two evaluations rather than fifteen. This is what covers collectSamples, the reporting, and
-// the failure branch — the pure helpers above cannot reach any of it.
+// The positive runner control uses the committed warmup and sampling methodology over the real
+// pipeline. Negative controls keep bounded one-sample fixtures; pure decision pins stay unchanged.
 describe("runGroundedRetrievalLatencyGate", () => {
   // A named no-op: an empty arrow is a lint error, and the point is that these runs discard their
   // log output rather than that nothing happens.
@@ -238,7 +237,7 @@ describe("runGroundedRetrievalLatencyGate", () => {
   };
 
   it("measures the real pipeline, reports both percentiles, and proves the probe fires", async () => {
-    await withBudgetFile(FAST, async (budgetPath) => {
+    await withBudgetFile({}, async (budgetPath) => {
       const logs = [];
       const failures = [];
       const result = await runGroundedRetrievalLatencyGate({
@@ -281,6 +280,94 @@ describe("runGroundedRetrievalLatencyGate", () => {
       },
     );
   }, 180_000);
+
+  function scenarioFixture(scenarioBudget, sampleOptions, probeOptions, offset) {
+    const measured = Array.from(
+      { length: scenarioBudget.iterations },
+      (_, index) => offset + index + 1,
+    );
+    const warmups = Array.from(
+      { length: scenarioBudget.warmupIterations },
+      () => scenarioBudget.p95BudgetMs + 1000,
+    );
+    const probeMs = scenarioBudget.p95BudgetMs + offset + 1;
+    return {
+      measured,
+      probeMs,
+      steps: [
+        ...[...warmups, ...measured].map((totalMs) => ({ totalMs, options: sampleOptions })),
+        { totalMs: probeMs, options: probeOptions },
+      ],
+    };
+  }
+
+  it("excludes warmups and measures every sample before its distinct probe", async () => {
+    const semantic = scenarioFixture(
+      budget,
+      {},
+      { injectedJudgeDelayMs: budget.regressionProbe.judgeDelayMs },
+      0,
+    );
+    const followUp = scenarioFixture(
+      budget.boundedFollowUp,
+      { scenario: "bounded-follow-up" },
+      {
+        scenario: "bounded-follow-up",
+        injectedFollowUpDelayMs: budget.boundedFollowUp.regressionProbe.followUpDelayMs,
+      },
+      budget.iterations,
+    );
+    const steps = [...semantic.steps, ...followUp.steps];
+    let started = 0;
+    let settled = 0;
+    const producer = vi.fn(async (options) => {
+      expect(settled).toBe(started);
+      const step = steps[started++];
+      if (step === undefined) throw new RangeError("finite latency fixture exhausted");
+      expect(options).toEqual(step.options);
+      await Promise.resolve();
+      settled += 1;
+      return { totalMs: step.totalMs };
+    });
+    vi.doMock("@oscharko-dev/keiko-server", () => ({ runGroundedRetrievalLatencyEval: producer }));
+    vi.resetModules();
+    try {
+      const isolated = await import("../check-grounded-retrieval-latency.mjs");
+      await withBudgetFile({}, async (budgetPath) => {
+        const failures = [];
+        const result = await isolated.runGroundedRetrievalLatencyGate({
+          budgetPath,
+          log: () => discard(),
+          fail: (message) => failures.push(message),
+        });
+        for (const [actual, fixture, scenarioBudget] of [
+          [result, semantic, budget],
+          [result.boundedFollowUp, followUp, budget.boundedFollowUp],
+        ]) {
+          const expected = evaluateGroundedLatency({
+            samples: fixture.measured,
+            budget: scenarioBudget,
+          });
+          expect(actual.p50).toBe(expected.p50);
+          expect(actual.p95).toBe(expected.p95);
+          expect(actual.p50).toBeGreaterThan(0);
+          expect(actual.ok).toBe(true);
+          expect(actual.failures).toEqual([]);
+          expect(actual.probe.regressedMs).toBe(fixture.probeMs);
+          expect(actual.probe.detected).toBe(true);
+        }
+        expect(failures).toEqual([]);
+        expect(producer).toHaveBeenCalledTimes(steps.length);
+        expect(settled).toBe(steps.length);
+        for (const [index, step] of steps.entries()) {
+          expect(producer).toHaveBeenNthCalledWith(index + 1, step.options);
+        }
+      });
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-server");
+      vi.resetModules();
+    }
+  });
 
   // An absent or malformed budget aborts the run either way. The point of catching it is that CI
   // shows a named gate failure instead of a bare JSON-parser stack trace.

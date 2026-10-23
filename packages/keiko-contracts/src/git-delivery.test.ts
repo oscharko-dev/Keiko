@@ -918,3 +918,99 @@ describe("protected-branch constraint", () => {
     expect(isGitDeliveryConstraint({ kind: "protected-branch" })).toBe(false);
   });
 });
+
+import * as g2PublicDelivery from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+
+describe("G2 resolved input dispatch observations", () => {
+  for (const [surface, parse] of [
+    ["source", parseGitDeliveryResolvedInputs],
+    ["public", g2PublicDelivery.parseGitDeliveryResolvedInputs],
+  ] as const) {
+    it(`${surface} retains the healthy two-read dispatch and original reference`, () => {
+      let reads = 0;
+      const input = {
+        get kind(): unknown {
+          reads += 1;
+          return "commit";
+        },
+        messageByteLength: 1,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      };
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy resolved input refused");
+      expect(result.value).toBe(input);
+      expect(reads).toBe(2);
+      if (result.value.kind !== "commit") throw new Error("healthy commit kind changed");
+      expect(result.value.messageByteLength).toBe(1);
+      expect(reads).toBe(3);
+    });
+    it(`${surface} refuses an inherited dispatch-table key on the second observation`, () => {
+      let reads = 0;
+      const input = {
+        get kind(): unknown {
+          reads += 1;
+          return reads === 1 ? "commit" : "toString";
+        },
+        messageByteLength: 1,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      };
+      expect(parse(input)).toEqual({
+        ok: false,
+        errors: [`resolvedInputs for kind "toString" has invalid fields`],
+      });
+      expect(reads).toBe(3);
+    });
+  }
+});
+
+import { isGitDeliveryNonEmptyConstraints } from "./git-delivery.js";
+
+describe("G2 original positive constraint extent condition", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryNonEmptyConstraints],
+    ["public", g2PublicDelivery.isGitDeliveryNonEmptyConstraints],
+  ] as const) {
+    it(`${surface} preserves dense nonempty constraints and refuses empty constraints`, () => {
+      expect(validate([{ kind: "risk-class-ceiling", maxRiskClass: "local-mutation" }])).toBe(true);
+      expect(validate([])).toBe(false);
+    });
+    it(`${surface} refuses a negative first observed extent without a later read`, () => {
+      let reads = 0;
+      const input = new Proxy([], {
+        get(target, key, receiver): unknown {
+          if (key === "length") {
+            reads += 1;
+            return -1;
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          return value;
+        },
+      });
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(1);
+    });
+  }
+});
+
+import { isGitPreflightFindingCode } from "./git-preflight.js";
+import * as g2PublicPreflight from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+
+describe("G2 actual preflight code vocabulary", () => {
+  for (const [surface, validate] of [
+    ["source", isGitPreflightFindingCode],
+    ["public", g2PublicPreflight.isGitPreflightFindingCode],
+  ] as const) {
+    it(`${surface} admits the existing closed preflight code`, () => {
+      expect(validate("detached-head")).toBe(true);
+    });
+    it.each(["", "unknown-code", 7, undefined])(
+      `${surface} refuses non-vocabulary input %s`,
+      (value) => {
+        expect(validate(value)).toBe(false);
+      },
+    );
+  }
+});

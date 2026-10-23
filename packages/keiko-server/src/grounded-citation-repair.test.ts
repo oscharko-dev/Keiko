@@ -19,6 +19,17 @@ function citationIndexForPath(scopePath: string): PackCitationIndex {
 }
 
 describe("bounded marker-only citation repair", () => {
+  it.each([false, true])("retains the repaired UTF-16 size boundary (astral=%s)", (astral) => {
+    const marker = " [src/Feature.ts:3]";
+    const padding = astral ? "𐐀".repeat(65_500) : "x".repeat(131_000);
+    const original = padding + "x".repeat(131_072 - marker.length - padding.length);
+    const repaired = original + marker;
+    expect(repaired).toHaveLength(131_072);
+    expect(validateCitationRepair(original, repaired, index)).toBe(true);
+    expect(validateCitationRepair(original + "x", original + "x" + marker, index)).toBe(false);
+    expect(validateCitationRepair(repaired + "x", repaired + "x" + marker, index)).toBe(false);
+  });
+
   it("never inserts a source citation inside the preserved own-assessment block", () => {
     const original = "Feature returns true.\n\n<assessment>General advice.</assessment>";
     expect(

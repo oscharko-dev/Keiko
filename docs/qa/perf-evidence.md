@@ -279,8 +279,12 @@ It discovers the approved OpenCode payload through the production dev lane, crea
 Git repository and managed task workspace for each sample, pairs through the real launcher
 attestation, and exercises the mounted BFF. The only substituted execution is a deterministic model
 response: 64 chunks of 32 ASCII characters, one gateway call, no tool requests. The exact 2,048
-characters must arrive in the protected activity channel. No prompts, responses, paths, endpoints,
-bearers, raw CPU model names or customer content are written to the evidence.
+characters must arrive in the protected activity channel. Before the timed operations, a fixture-owned
+loopback provider answers the real startup conversation-readiness probe. Its configuration uses the
+canonical tool-calling fingerprint, and preparation awaits the same holder that admits the runtime
+run. A failed provider still refuses admission. The readiness provider is separate from the one
+measured gateway call and remains alive until dependency disposal. No prompts, responses, paths,
+endpoints, bearers, raw CPU model names or customer content are written to the evidence.
 
 | Metric                | Start                       | End                                          | What it proves                                                                                        |
 | --------------------- | --------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -366,13 +370,13 @@ ceiling is rejected by the judge even when its calibration digest is valid. Use 
 for an explicitly reviewed ruler change; never recalibrate simply to erase a regression or change
 the reference class.
 
-When the reference environment itself no longer exists — the reference Mac's operating system was
-upgraded, so `--recalibrate`, which demands the exact previous environment, can no longer run — the
-reference is re-established, never improvised. It is an owner decision recorded here, dated, with
+When the reference environment itself no longer exists, or the owner explicitly selects a
+replacement reference machine, `--recalibrate` cannot establish the replacement because it demands
+the exact previous environment. Reference re-establishment is an owner decision recorded here, dated, with
 the old and new ceilings side by side so a regression cannot hide in the move, in the same pull
 request as the new evidence:
 
-1. Record the decision and the reason the previous environment is gone (below).
+1. Record the decision and the reason for replacing the previous environment (below).
 2. From a clean checkout at the head under review, with the pinned Node/npm installation: delete
    `docs/release/2952-coding-runtime-calibration.json`, `scripts/coding-runtime-performance-budget.json`
    and `docs/release/2952-coding-runtime-perf-evidence.json` (the one sanctioned removal), then run
@@ -405,6 +409,81 @@ test support, not the BFF route or the event stream); the policy's allowance is 
 variance of the new kernel. The two workload metrics that the change could plausibly affect, the
 cold start and the bounded throughput, both tightened. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
+
+**Replacement reference measured, 2026-10-15 (owner decision, PR #4013).** The owner selected the
+available 18-core, 64 GiB Mac to replace the former 16-core, 128 GiB reference. This is an explicit
+replacement decision, not evidence that the former machine is unavailable. Both environments use
+darwin arm64, kernel 27.0.0, Node 24.18.0, npm 11.16.0, Git 2.54.0 and the same approved OpenCode
+2.0.10 payload. The CPU digest and secure-read helper digest differ. The helper's source has also
+changed since the previous measured subject, so its new digest is not attributed solely to a
+compiler rebuild. Source and ruler changes accompany the machine replacement; their effects must
+not be presented as a controlled hardware-only comparison.
+
+The first calibration attempt at `e7eca009c` stopped before its first completed warmup because the
+old fixture left the real startup readiness probe pointed at an unreachable placeholder provider.
+It produced no timing samples or new ceilings. The fixture now supplies a local provider before
+production dependency construction and awaits actual admission readiness before timing; the
+measurement boundaries, workload, sample counts and ceiling formula are unchanged. This fixture
+repair is a ruler change and is included in the replacement calibration's provenance.
+
+Calibration and the independent candidate were measured at signed `7dcbb6d5676ed7461b7860258b4add6ebf5f7cf3`,
+with source-tree digest `205007c7d4b4d821b9086274701de98c61782f26f13d8f437974fbdc1e1e6060`
+and ruler digest `1a1a2032ca3f7c7f2a26eaaa204a7ac871a6b08ac59b689a8a55dbc898820b3c`.
+Each completed two warmups and thirty retained samples, and the unchanged strict source-freshness
+judge passed. Values below are milliseconds, rounded for display; the three generated JSON files
+retain full precision and own the actual evaluation.
+
+| Metric                | Previous ceiling | Replacement ceiling | Change    | Previous candidate p95 | Replacement candidate p95 |
+| --------------------- | ---------------- | ------------------- | --------- | ---------------------- | ------------------------- |
+| `coldStartMs`         | 1562.408         | 3337.702            | +113.63 % | 1326.390               | 1428.089                  |
+| `readinessMs`         | 3.259            | 3.250               | −0.25 %   | 1.841                  | 1.835                     |
+| `sseFirstByteMs`      | 4.654            | 4.073               | −12.47 %  | 2.505                  | 2.415                     |
+| `boundedThroughputMs` | 98.354           | 98.702              | +0.35 %   | 67.917                 | 66.485                    |
+
+All replacement candidate p95 values also pass the previous absolute ceilings. The cold-start
+calibration minimum is 1185.857 ms, maximum 2261.779 ms and p95 1319.719 ms (previous calibration
+p95 1308.069 ms). Retained sample 30 owns that maximum; the next-largest is 1319.719 ms. The frozen
+`maximum + range` policy therefore produces the larger ceiling. That sample remains in the
+calibration. Throughput's calibration range is 59.150–78.926 ms, producing the 0.348 ms ceiling
+increase; its independent candidate p95 is lower than the previous candidate's.
+
+A bounded diagnostic profile examined the changed startup path before accepting those increases.
+The existing Activity Log query for the actual calibration tail reports supported integrity,
+complete diagnostic sufficiency, no loss or truncation, and one sequence anomaly; it is not claimed
+to be an anomaly-free process record. It places 1242 ms between native confinement spawn and the
+first readiness phase, then 43 ms to the gateway challenge and 316 ms to the tool-facade challenge.
+A separate instrumented functional sample, excluded from calibration and candidate evidence,
+records 267 ms, 42 ms and 315 ms for those same intervals, a 1298.679 ms cold start and 63.677 ms
+bounded throughput. Its real Activity Log query is supported and complete with no sequence anomaly,
+loss or truncation. The parent CPU profile is approximately 89 % idle between the run-start event
+and workload gateway admission (1266 ms); its wall-clock alignment has a 17.25 ms uncertainty.
+This localizes the observed tail chiefly before the first native readiness phase and shows waiting
+in the separate parent profile. It does not determine the original tail's CPU, native-process or
+scheduler cause, and it does not establish hardware-only causation. No sample was removed, no
+calibration was repeated to replace a slow value, and no ceiling was hand-edited. Subsequent
+recalibration on this reference uses the existing shrink-only ratchet.
+
+**Ruler refresh measured, 2026-10-16 (PR #4013).** The diagnostic-forwarding repair in
+`productionOpenCodeBackend.functional/_support.ts` changed the measurement closure. The existing
+replacement reference above matched every environment field, including the payload and secure-read
+helper digests. On clean signed `fcc4a6974f9a7adf74ae2a920e67222eb14607c7`, the existing
+`--recalibrate` operation and one independent candidate each completed two warmups and thirty retained
+samples in one quiet window. Source digest
+`e56c203e7fb3d653e8353c52a1d4b22cdd3180ef44fe3b2197d795ea1c3a5063` and ruler digest
+`cb17ca87d406aba1e1e9caf2171c59bef1ca29ee4e34e307a0eb861715f86bd5` remained unchanged through
+both runs, and the strict source-freshness gate passed. No samples were removed or runs repeated.
+
+| Metric                | Previous ceiling | Refreshed ceiling | Candidate p95 |
+| --------------------- | ---------------- | ----------------- | ------------- |
+| `coldStartMs`         | 3337.702         | 1422.539          | 1293.756      |
+| `readinessMs`         | 3.250            | 3.250             | 1.968         |
+| `sseFirstByteMs`      | 4.073            | 4.073             | 2.566         |
+| `boundedThroughputMs` | 98.702           | 76.698            | 65.576        |
+
+Values are milliseconds, rounded for display; generated documents retain full precision. The
+existing shrink-only ratchet preserved or tightened every ceiling. This source/ruler refresh uses
+the same reference and does not establish a controlled performance improvement over the previous
+subject.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

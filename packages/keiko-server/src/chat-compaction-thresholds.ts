@@ -8,3 +8,6 @@ export const AUTOMATIC_COMPACTION_THRESHOLD = 0.9;
 
 /** Automatic compaction targets this share of the input budget. */
 export const AUTOMATIC_COMPACTION_TARGET = 0.7;
+
+/** Explicit maintenance is useful once half of the conversation capacity is occupied. */
+export const MANUAL_COMPACTION_THRESHOLD = 0.5;

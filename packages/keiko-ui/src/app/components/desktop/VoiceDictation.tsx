@@ -19,6 +19,7 @@ import { useEffect, useRef, type ReactNode, type Ref, type RefObject } from "rea
 import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i18n";
 import { Icons } from "./Icons";
 import { NATIVE_FIELDSET_STYLE } from "./native-element-styles";
+import styles from "./VoiceDictation.module.css";
 import type {
   DictationController,
   DictationError,
@@ -27,7 +28,6 @@ import type {
 } from "./hooks/useDictation";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const CloseIcon = Icons.close;
 const MicIcon = Icons.mic;
 
 // Stable id for the local-only privacy disclosure so the mic button can reference it via
@@ -56,20 +56,20 @@ function micLabel(phase: DictationPhase, t: I18nTranslate): string {
 
 interface VoiceDictationButtonProps {
   readonly phase: DictationPhase;
-  readonly audioLevel?: number | undefined;
   readonly onStart: () => void;
   readonly onStop: () => void;
   readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
   readonly compact?: boolean | undefined;
+  readonly insertionPending?: boolean | undefined;
 }
 
 export function VoiceDictationButton({
   phase,
-  audioLevel = 0,
   onStart,
   onStop,
   buttonRef,
   compact = false,
+  insertionPending = false,
 }: VoiceDictationButtonProps): ReactNode {
   const t = useTranslate();
   const recording = phase === "recording";
@@ -77,7 +77,7 @@ export function VoiceDictationButton({
   // Interactive only when there is a clear action: start from idle/preview/error, stop while
   // recording. The transient requesting / transcribing states are announced but not clickable.
   const busy = phase === "requesting" || phase === "finalizing" || phase === "transcribing";
-  const label = micLabel(phase, t);
+  const label = insertionPending ? t("voice.dictation.insertAria") : micLabel(phase, t);
   return (
     <button
       type="button"
@@ -103,19 +103,33 @@ export function VoiceDictationButton({
         }
       }}
     >
-      {live ? (
-        <span className="cmp-voice-recording" aria-hidden="true">
-          <span className="cmp-voice-dot" />
-          <VoiceLevelMeter level={audioLevel} compact />
-          <CloseIcon size={14} />
-        </span>
-      ) : (
-        <MicIcon size={16} />
-      )}
+      {live ? <span className={styles.cmpStop} aria-hidden="true" /> : <MicIcon size={16} />}
       <span id={VOICE_PRIVACY_HINT_ID} className="sr-only">
         {t("voice.dictation.privacy")}
       </span>
     </button>
+  );
+}
+
+/** Ordinary Chat keeps errors inline and retries through the same microphone button. */
+export function VoiceDictationComposerStatus({
+  error,
+  emptyResult = false,
+}: {
+  readonly error: DictationError | undefined;
+  readonly emptyResult?: boolean | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (error === undefined) {
+    return emptyResult ? <output>{t("voice.dictation.empty")}</output> : null;
+  }
+  return (
+    <p className="cmp-voice-error-text" role="alert">
+      {errorHeadline(error.reason, t)}
+      {error.correlationId === undefined ? null : (
+        <> {t("voice.dictation.error.supportId", { correlationId: error.correlationId })}</>
+      )}
+    </p>
   );
 }
 
@@ -155,6 +169,8 @@ function errorHeadline(reason: DictationErrorReason, t: I18nTranslate): string {
       return t("voice.dictation.error.negotiationFailed");
     case "connection-failed":
       return t("voice.dictation.error.connectionFailed");
+    case "draft-too-long":
+      return t("voice.dictation.error.draftTooLong");
     case "transcribe-failed":
     case "capture-failed":
       return t("voice.dictation.error.failed");

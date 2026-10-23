@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   createMemoryVault,
+  MEMORY_DB_FILENAME,
   MemoryStorageError,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
@@ -2184,6 +2187,49 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     expect(typeof records[0]?.correlationId).toBe("string");
     expect(records[0]?.correlationId.length).toBeGreaterThan(0);
   });
+  it("returns a correlated opaque storage failure for an actual reopened schema-mismatched row (#3918)", () => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-handler-admission-"));
+    tmpDirs.push(memoryDir);
+    const vaultKey = randomBytes(32);
+    const open = (): MemoryVaultStore =>
+      createMemoryVault({ memoryDir, vaultKey, redactString: (s) => s });
+    const record = makeMemory("private-row-id-canary", "private-memory-body-canary");
+    const { records, diagnostics } = recordingSink();
+    const context = withCorrelation(
+      makeCtx("/api/memory/:id", {}, { id: record.id }),
+      "memory-admission-request",
+    );
+    const writer = open();
+    try {
+      writer.insertMemory(record);
+      expect(handleGetMemory(context, makeDeps({ memoryVault: writer, diagnostics })).status).toBe(
+        200,
+      );
+      expect(records).toHaveLength(0);
+    } finally {
+      writer.close();
+    }
+    const database = new DatabaseSync(join(memoryDir, MEMORY_DB_FILENAME));
+    try {
+      database.prepare("UPDATE memories SET schema_version = ? WHERE id = ?").run("2", record.id);
+    } finally {
+      database.close();
+    }
+    const reopened = open();
+    try {
+      const result = handleGetMemory(context, makeDeps({ memoryVault: reopened, diagnostics }));
+      expect(result).toEqual({
+        status: 500,
+        body: { error: { code: "MEMORY_ERROR", message: "Failed to read memory." } },
+      });
+      expectMemoryStorageDiagnostic(records, "memory-admission-request", "memory.get");
+      const evidence = JSON.stringify({ result, records });
+      for (const marker of [record.id, record.body, memoryDir, "schemaVersion must"])
+        expect(evidence).not.toContain(marker);
+    } finally {
+      reopened.close();
+    }
+  });
 });
 
 // Request JSON is data even when it resembles an HTTP response.
@@ -2199,6 +2245,57 @@ describe("memory request response-shape isolation", () => {
       );
       expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
       expect(result.body).not.toEqual(body);
+    },
+  );
+});
+
+describe("checked Memory acceptance override consumer (#3918)", () => {
+  it("forwards the checked override into the real accepted memory", async () => {
+    const vault = makeVault();
+    const proposal = vault.insertMemory(
+      makeMemory("override-3918", "original fixture body", {
+        status: "proposed",
+      }),
+    );
+    const result = await handleAcceptMemoryProposal(
+      makeCtx(
+        `/api/memory/proposals/${proposal.id}/accept`,
+        {
+          bodyOverride: "reviewed fixture body 3918",
+        },
+        { id: proposal.id },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(proposal.id)).toMatchObject({
+      status: "accepted",
+      body: "reviewed fixture body 3918",
+    });
+  });
+
+  it.each([null, 12, "\u0000"])(
+    "refuses malformed override %j before mutation",
+    async (bodyOverride) => {
+      const vault = makeVault();
+      const proposal = vault.insertMemory(
+        makeMemory("override-refusal-3918", "original fixture body", {
+          status: "proposed",
+        }),
+      );
+      const before = vault.getMemory(proposal.id);
+      const result = await handleAcceptMemoryProposal(
+        makeCtx(
+          `/api/memory/proposals/${proposal.id}/accept`,
+          { bodyOverride },
+          { id: proposal.id },
+        ),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+      expect(vault.getMemory(proposal.id)).toEqual(before);
+      expect(vault.listOutgoingEdges(proposal.id)).toEqual([]);
     },
   );
 });

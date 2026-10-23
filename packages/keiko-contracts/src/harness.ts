@@ -36,8 +36,10 @@ export const TERMINAL_STATES: readonly TerminalState[] = Object.freeze([
   "limit-exceeded",
 ] as const satisfies readonly TerminalState[]);
 
+const TERMINAL_STATE_VALUES: readonly HarnessStateName[] = TERMINAL_STATES;
+
 export function isTerminalHarnessState(state: HarnessStateName): boolean {
-  return (TERMINAL_STATES as readonly HarnessStateName[]).includes(state);
+  return TERMINAL_STATE_VALUES.includes(state);
 }
 
 export interface StateTransition {

@@ -273,7 +273,10 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
     const walk = ensureAnyConversationReadyChatModel(deps, "m1").then(() => {
       settled = true;
     });
-    await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 1);
+    expect(settled).toBe(false);
+    expect(probed).toEqual(["m1", "m2"]);
+    await vi.advanceTimersByTimeAsync(1);
     await walk;
     expect(settled).toBe(true);
     // The requested model and the FIRST walk candidate were probed; the budget expired while

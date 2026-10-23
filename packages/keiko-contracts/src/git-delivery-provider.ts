@@ -160,24 +160,42 @@ function isProviderCapability(value: unknown): boolean {
   return isGitDeliveryProviderCapability(value);
 }
 
+function isCapabilityArray(value: unknown): value is readonly GitDeliveryProviderCapability[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isProviderCapability(value[index])) return false;
+  }
+  return true;
+}
+
+function isPatternArray(value: unknown): value is readonly GitDeliveryBranchPattern[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryBranchPattern(value[index])) return false;
+  }
+  return true;
+}
+
 // ─── Guards ──────────────────────────────────────────────────────────────────────
 
 export function isGitDeliveryChecksOverallStatus(
   value: unknown,
 ): value is GitDeliveryChecksOverallStatus {
-  return (
-    isNonEmptyString(value) &&
-    (GIT_DELIVERY_CHECKS_OVERALL_STATUSES as readonly string[]).includes(value)
-  );
+  const gitDeliveryChecksOverallStatusesValues: readonly string[] =
+    GIT_DELIVERY_CHECKS_OVERALL_STATUSES;
+  return isNonEmptyString(value) && gitDeliveryChecksOverallStatusesValues.includes(value);
 }
 
 export function isGitDeliveryPullRequestStatus(
   value: unknown,
 ): value is GitDeliveryPullRequestStatus {
-  return (
-    isNonEmptyString(value) &&
-    (GIT_DELIVERY_PULL_REQUEST_STATUSES as readonly string[]).includes(value)
-  );
+  const gitDeliveryPullRequestStatusesValues: readonly string[] =
+    GIT_DELIVERY_PULL_REQUEST_STATUSES;
+  return isNonEmptyString(value) && gitDeliveryPullRequestStatusesValues.includes(value);
 }
 
 export function isGitDeliveryBranchProtection(
@@ -250,7 +268,7 @@ export function isGitDeliveryProviderDescriptor(
     value.schemaVersion === GIT_DELIVERY_PROVIDER_SCHEMA_VERSION &&
     isNonEmptyString(value.providerInstanceId) &&
     Array.isArray(value.capabilities) &&
-    value.capabilities.every(isProviderCapability)
+    isCapabilityArray(value.capabilities)
   );
 }
 
@@ -260,7 +278,7 @@ export function isGitDeliveryRemoteTargetPolicy(
   return (
     isRecord(value) &&
     Array.isArray(value.allowedPushTargetPatterns) &&
-    value.allowedPushTargetPatterns.every(isGitDeliveryBranchPattern) &&
+    isPatternArray(value.allowedPushTargetPatterns) &&
     typeof value.forcePushGloballyDenied === "boolean"
   );
 }

@@ -24,6 +24,7 @@ import {
   persistHtmlManualSourceMetadata,
   resolveKnowledgeStorePath,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import { createRunRegistry } from "./runs.js";
@@ -178,7 +179,7 @@ async function seedManualCitation(runtimeStateDir: string): Promise<string> {
         maxDepth: 3,
         maxBytes: 2_000_000,
         maxLinkSample: 50,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs,
         followRedirects: false,
       },
       sourceFingerprint: "fp-docs-browser-manual",
@@ -232,7 +233,7 @@ async function seedMismatchedChunkCitation(runtimeStateDir: string): Promise<str
         maxDepth: 3,
         maxBytes: 2_000_000,
         maxLinkSample: 50,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs,
         followRedirects: false,
       },
       sourceFingerprint: "fp-docs-browser-mismatch-target",
@@ -428,5 +429,16 @@ describe("POST /api/docs-browser/navigate — request validation and CSRF", () =
     const fx = await fixture();
     const res = await navigate(fx, { target: `https://intranet/${"a".repeat(9000)}` });
     expect(res.status).toBe(413);
+  });
+});
+
+describe("documentation checked navigation consumer (#3918)", () => {
+  it("refuses malformed ports before the existing backend probe", async () => {
+    const fx = await fixture();
+    const response = await navigate(fx, { target: "http://127.0.0.1:8080/docs", cdpPort: 65536 });
+    expect(response.status).toBe(400);
+    const body: unknown = await response.json();
+    expect(body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    expect(fx.fakeBrowser.checkedPorts).toEqual([]);
   });
 });

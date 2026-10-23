@@ -400,20 +400,32 @@ export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownL
 
 export const CLIENT_COMPOSER_ACTIVITIES = [
   "initialized",
+  "draft-notifications-ready",
   "input-limit",
   "code-ready",
   "code-language-detected",
   "format-removed",
   "cursor-collision",
   "workspace-scroll-ready",
+  "workspace-viewport-fitted",
   "workspace-layout-locked",
   "workspace-layout-unlocked",
   "literal-input-preserved",
   "draft-resynchronized",
+  "context-details-expanded",
+  "context-details-collapsed",
+  "dictation-inserted",
+  "dictation-empty",
+  "dictation-context-changed",
   "scope-refusal-restored",
   "scope-refusal-skipped-owner",
   "scope-refusal-skipped-draft",
   "scope-refusal-skipped-unproven",
+  "send-failure-restored",
+  "send-failure-skipped-owner",
+  "send-failure-skipped-draft",
+  "send-failure-skipped-unproven",
+  "send-cancel-requested",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
@@ -1309,7 +1321,8 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && (values as readonly string[]).includes(value);
+  const vocabulary: readonly string[] = values;
+  return typeof value === "string" && vocabulary.includes(value);
 }
 
 // Only a server-issued UUID (raw, found again through its fingerprint, or chosen by the person) can

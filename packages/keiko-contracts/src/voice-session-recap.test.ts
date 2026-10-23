@@ -172,3 +172,74 @@ describe("voice-session-recap contract", () => {
     }
   });
 });
+
+describe("voice-session-recap version responsibility", () => {
+  it.each(["source", "public"])(
+    "admits string versions and refuses unsupported schema values through %s",
+    async (entrypoint) => {
+      const publicApi = await import("@oscharko-dev/keiko-contracts/runtime/voice-session-recap");
+      const supported =
+        entrypoint === "source"
+          ? isVoiceSessionRecapSchemaVersionSupported
+          : publicApi.isVoiceSessionRecapSchemaVersionSupported;
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceSessionRecapAuditRecord
+          : publicApi.validateVoiceSessionRecapAuditRecord;
+
+      expect(supported("1")).toBe(true);
+      expect(supported("2")).toBe(true);
+      expect(supported("3")).toBe(false);
+      expect(supported(2)).toBe(false);
+      expect(validate(validAuditRecord())).toEqual({ ok: true });
+      expect(validate(validAuditRecord({ schemaVersion: "3" }))).toEqual({
+        ok: false,
+        reason: "schemaVersion: unsupported",
+      });
+      expect(validate(validAuditRecord({ schemaVersion: 2 }))).toEqual({
+        ok: false,
+        reason: "schemaVersion: unsupported",
+      });
+      expect(validate(validAuditRecord({ triggeredByUser: false }))).toEqual({
+        ok: false,
+        reason: "triggeredByUser: must be true (recap is user-triggered only)",
+      });
+    },
+  );
+
+  it.each(["source", "public"])(
+    "preserves true legacy omission and current required counts through %s",
+    async (entrypoint) => {
+      const publicApi = await import("@oscharko-dev/keiko-contracts/runtime/voice-session-recap");
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceSessionRecapAuditRecord
+          : publicApi.validateVoiceSessionRecapAuditRecord;
+      const legacy = validAuditRecord({ schemaVersion: "1" });
+      const current = validAuditRecord();
+      if (
+        typeof legacy !== "object" ||
+        legacy === null ||
+        Array.isArray(legacy) ||
+        typeof current !== "object" ||
+        current === null ||
+        Array.isArray(current)
+      ) {
+        throw new TypeError("Expected object audit fixtures");
+      }
+
+      expect(Object.hasOwn(legacy, "candidatesAccepted")).toBe(true);
+      expect(Reflect.deleteProperty(legacy, "candidatesAccepted")).toBe(true);
+      expect(Object.hasOwn(legacy, "candidatesAccepted")).toBe(false);
+      expect(validate(legacy)).toEqual({ ok: true });
+      expect(Object.hasOwn(legacy, "candidatesAccepted")).toBe(false);
+      expect(Object.hasOwn(current, "candidatesAccepted")).toBe(true);
+      expect(Reflect.deleteProperty(current, "candidatesAccepted")).toBe(true);
+      expect(validate(current)).toEqual({
+        ok: false,
+        reason: "candidatesAccepted: must be a non-negative integer",
+      });
+      expect(Object.hasOwn(current, "candidatesAccepted")).toBe(false);
+    },
+  );
+});

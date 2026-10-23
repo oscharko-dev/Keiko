@@ -9,7 +9,6 @@ import {
   invalid,
   isOneOf,
   isRecord,
-  result,
   validateSafeId,
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
@@ -101,20 +100,33 @@ export function validateCodingWorkbenchRuntimeApprovalReviewChannelPayload(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeApprovalReviewChannelPayload> {
   if (!isRecord(value)) return invalid("approval review channel payload must be an object");
   const errors = exactKeys(value, ["session", "pending"], "approvalReviewChannelPayload");
-  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_APPROVAL_REVIEW_SESSION_STATES)) {
+  const admitted = checkApprovalReviewChannel(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkApprovalReviewChannel(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeApprovalReviewChannelPayload {
+  const session = isOneOf(value.session, CODING_WORKBENCH_RUNTIME_APPROVAL_REVIEW_SESSION_STATES);
+  if (!session) {
     errors.push("approvalReviewChannelPayload.session is invalid");
   }
   if (value.session === "unpaired" && value.pending !== undefined) {
     errors.push("approvalReviewChannelPayload.pending must be absent when the session is unpaired");
   }
-  if (value.pending !== undefined) validatePendingApprovalReview(value.pending, errors);
-  return result(value, errors);
+  const pending =
+    value.pending === undefined || validatePendingApprovalReview(value.pending, errors);
+  return session && pending;
 }
 
-function validatePendingApprovalReview(value: unknown, errors: string[]): void {
+function validatePendingApprovalReview(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimePendingApprovalReview {
   if (!isRecord(value)) {
     errors.push("approvalReviewChannelPayload.pending must be an object");
-    return;
+    return false;
   }
   errors.push(
     ...exactKeys(
@@ -132,45 +144,48 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
       "pendingApprovalReview",
     ),
   );
-  validateSafeId(
+  const request = validateSafeId(
     value.requestId,
     "pendingApprovalReview.requestId",
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  if (value.draftDelivery === undefined) validateReviewPaths(value.paths, errors);
-  else validateDraftReview(value, errors);
-  if (typeof value.pathsTruncated !== "boolean") {
+  const paths =
+    value.draftDelivery === undefined
+      ? validateReviewPaths(value.paths, errors)
+      : validateDraftReview(value, errors);
+  const truncated = typeof value.pathsTruncated === "boolean";
+  if (!truncated) {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
   }
-  validateReviewCount(value.fileCount, "fileCount", errors);
-  validateReviewCount(value.addedLines, "addedLines", errors);
-  validateReviewCount(value.deletedLines, "deletedLines", errors);
+  const fileCount = validateReviewCount(value.fileCount, "fileCount", errors);
+  const added = validateReviewCount(value.addedLines, "addedLines", errors);
+  const deleted = validateReviewCount(value.deletedLines, "deletedLines", errors);
   validateReviewFileCountConsistency(value, errors);
-  if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
+  const commit = value.verifiedCommit === undefined || validateCommitReview(value, errors);
+  return [request, paths, truncated, fileCount, added, deleted, commit].every(Boolean);
 }
 
-function validateCommitReview(pending: Record<string, unknown>, errors: string[]): void {
+function validateCommitReview(pending: Record<string, unknown>, errors: string[]): boolean {
   const value = pending.verifiedCommit;
   if (!isRecord(value)) {
     errors.push("verifiedCommit must be an object");
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["result", "message"], "verifiedCommit"));
-  if (
-    !isVerifiedCommitResult(value.result) ||
-    value.result.status !== "approval-required" ||
-    value.result.proposalId !== pending.requestId
-  )
-    errors.push("verifiedCommit result must match the pending proposal");
-  if (!validateUntrustedDisplayText(value.message, 8192))
-    errors.push("verifiedCommit.message is invalid");
-  if (
-    typeof value.message !== "string" ||
-    value.message.trim().length === 0 ||
-    value.message.includes("\0")
-  )
-    errors.push("verifiedCommit.message is invalid");
+  const result =
+    isVerifiedCommitResult(value.result) &&
+    value.result.status === "approval-required" &&
+    value.result.proposalId === pending.requestId;
+  if (!result) errors.push("verifiedCommit result must match the pending proposal");
+  const display = validateUntrustedDisplayText(value.message, 8192);
+  if (!display) errors.push("verifiedCommit.message is invalid");
+  const message =
+    typeof value.message === "string" &&
+    value.message.trim().length !== 0 &&
+    !value.message.includes("\0");
+  if (!message) errors.push("verifiedCommit.message is invalid");
+  return [result, display, message].every(Boolean);
 }
 
 /**
@@ -190,23 +205,29 @@ function validateReviewFileCountConsistency(
   }
 }
 
-function validateReviewPaths(value: unknown, errors: string[]): void {
+function validateReviewPaths(value: unknown, errors: string[]): value is readonly string[] {
   if (!Array.isArray(value) || value.length === 0) {
     errors.push("pendingApprovalReview.paths must be a non-empty array");
-    return;
+    return false;
   }
   if (value.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS) {
     errors.push("pendingApprovalReview.paths exceeds the reviewable path cap");
-    return;
+    return false;
   }
   if (new Set(value).size !== value.length) {
     errors.push("pendingApprovalReview.paths must be unique");
   }
-  value.forEach((path, index) => {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const path: unknown = value[index];
     if (!isReviewablePath(path)) {
       errors.push(`pendingApprovalReview.paths[${String(index)}] is not a contained relative path`);
+      admitted = false;
+      if (!(index in value)) return false;
     }
-  });
+  }
+  return admitted;
 }
 
 /**
@@ -214,7 +235,7 @@ function validateReviewPaths(value: unknown, errors: string[]): void {
  * home-anchored, backslash-bearing, NUL-bearing, empty/dot/dot-dot segments, and anything past the
  * length bound. A review surface must never be able to render a path the runtime would refuse.
  */
-function isReviewablePath(value: unknown): boolean {
+function isReviewablePath(value: unknown): value is string {
   return (
     validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
     !value.includes(":") &&
@@ -222,29 +243,32 @@ function isReviewablePath(value: unknown): boolean {
   );
 }
 
-function validateReviewCount(value: unknown, key: string, errors: string[]): void {
+function validateReviewCount(value: unknown, key: string, errors: string[]): value is number {
   if (
     !Number.isSafeInteger(value) ||
     Number(value) < 0 ||
     Number(value) > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT
   ) {
     errors.push(`pendingApprovalReview.${key} must be a bounded non-negative integer`);
+    return false;
   }
+  return true;
 }
 
-function validateDraftReview(pending: Record<string, unknown>, errors: string[]): void {
+function validateDraftReview(pending: Record<string, unknown>, errors: string[]): boolean {
   const value = pending.draftDelivery;
-  if (!isCodingRuntimeDeliveryReview(value) || value.record.proposalId !== pending.requestId)
-    errors.push("draftDelivery must match the exact pending proposal");
+  const delivery =
+    isCodingRuntimeDeliveryReview(value) && value.record.proposalId === pending.requestId;
+  if (!delivery) errors.push("draftDelivery must match the exact pending proposal");
   if (pending.verifiedCommit !== undefined)
     errors.push("delivery review cannot carry commit authority");
-  if (
-    !Array.isArray(pending.paths) ||
-    pending.paths.length !== 0 ||
-    pending.pathsTruncated !== false ||
-    pending.fileCount !== 0 ||
-    pending.addedLines !== 0 ||
-    pending.deletedLines !== 0
-  )
-    errors.push("delivery review must not claim workspace edit counts");
+  const counts =
+    Array.isArray(pending.paths) &&
+    pending.paths.length === 0 &&
+    pending.pathsTruncated === false &&
+    pending.fileCount === 0 &&
+    pending.addedLines === 0 &&
+    pending.deletedLines === 0;
+  if (!counts) errors.push("delivery review must not claim workspace edit counts");
+  return [delivery, counts].every(Boolean);
 }

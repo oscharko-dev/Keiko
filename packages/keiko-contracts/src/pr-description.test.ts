@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   validatePrDescriptionCandidate,
   prDescriptionArtifactDigestFields,
@@ -198,4 +198,163 @@ describe("PR description candidate boundary", () => {
     expect(JSON.stringify(evidence)).not.toContain("private");
     expect(evidence).not.toHaveProperty("candidate");
   });
+});
+
+import * as g2PublicDescription from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+
+describe("G2 physical narrative candidate admission", () => {
+  for (const [surface, validate] of [
+    ["source", validatePrDescriptionCandidate],
+    ["public", g2PublicDescription.validatePrDescriptionCandidate],
+  ] as const) {
+    it(`${surface} preserves the healthy narrative and section references`, () => {
+      const result = validate(candidate, [ID]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy narrative refused");
+      expect(result.value).toBe(candidate);
+      expect(result.value.summary).toBe(candidate.summary);
+      expect(result.value.summary[0]?.evidenceIds).toBe(statement.evidenceIds);
+    });
+    it(`${surface} refuses a malformed physical statement hidden by an iterator`, () => {
+      const summary = [{}];
+      Object.defineProperty(summary, Symbol.iterator, {
+        value: function* () {
+          yield statement;
+        },
+      });
+      expect(validate({ ...candidate, summary }, [ID])).toEqual({
+        ok: false,
+        reason: "invalid-model-output",
+      });
+    });
+    it(`${surface} refuses a malformed physical reference hidden by an iterator`, () => {
+      const evidenceIds = [42];
+      Object.defineProperty(evidenceIds, Symbol.iterator, {
+        value: function* () {
+          yield ID;
+        },
+      });
+      expect(validate({ ...candidate, summary: [{ ...statement, evidenceIds }] }, [ID])).toEqual({
+        ok: false,
+        reason: "invalid-model-output",
+      });
+    });
+  }
+});
+
+describe("G2 healthy inherited narrative members", () => {
+  for (const [surface, validate] of [
+    ["source", validatePrDescriptionCandidate],
+    ["public", g2PublicDescription.validatePrDescriptionCandidate],
+  ] as const) {
+    it(`${surface} preserves inherited-present statements and reference members`, () => {
+      const evidenceIds = [ID];
+      Reflect.deleteProperty(evidenceIds, "0");
+      Object.setPrototypeOf(evidenceIds, [ID]);
+      const entry = { ...statement, evidenceIds };
+      const summary = [entry];
+      Reflect.deleteProperty(summary, "0");
+      Object.setPrototypeOf(summary, [entry]);
+      const input = { ...candidate, summary };
+      const result = validate(input, [ID]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy inherited narrative refused");
+      expect(result.value).toBe(input);
+    });
+  }
+});
+
+describe("G2 original positive reference extent condition", () => {
+  for (const [surface, validate] of [
+    ["source", validatePrDescriptionCandidate],
+    ["public", g2PublicDescription.validatePrDescriptionCandidate],
+  ] as const) {
+    it(`${surface} preserves the actual healthy narrative reference`, () => {
+      const result = validate(candidate, [ID]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy narrative refused");
+      expect(result.value).toBe(candidate);
+    });
+    it(`${surface} refuses a negative first observed reference extent`, () => {
+      let reads = 0;
+      const evidenceIds = new Proxy([ID], {
+        get(target, key, receiver): unknown {
+          if (key === "length") {
+            reads += 1;
+            return reads === 1 ? -1 : 0;
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          return value;
+        },
+      });
+      expect(validate({ ...candidate, summary: [{ ...statement, evidenceIds }] }, [ID])).toEqual({
+        ok: false,
+        reason: "invalid-model-output",
+      });
+      expect(reads).toBe(1);
+    });
+  }
+});
+
+describe("PR description digest field evidence", () => {
+  it("retains the closed owner-derived source and public return types", () => {
+    type Fields = Readonly<
+      Omit<PrDescriptionArtifact, "artifactDigest"> & { readonly domain: "keiko-pr-description-v1" }
+    >;
+    type Source = ReturnType<typeof prDescriptionArtifactDigestFields>;
+    type Public = ReturnType<typeof g2PublicDescription.prDescriptionArtifactDigestFields>;
+    expectTypeOf<Source>().toEqualTypeOf<Fields>();
+    expectTypeOf<Public>().toEqualTypeOf<Fields>();
+    expectTypeOf<keyof Source>().toEqualTypeOf<keyof Fields>();
+    expectTypeOf<keyof Public>().toEqualTypeOf<keyof Fields>();
+    expectTypeOf<Source["domain"]>().toEqualTypeOf<"keiko-pr-description-v1">();
+    expectTypeOf<Public["binding"]>().toEqualTypeOf<PrDescriptionArtifact["binding"]>();
+    expectTypeOf<Source["candidate"]>().toEqualTypeOf<PrDescriptionArtifact["candidate"]>();
+    expectTypeOf<Public["coverage"]>().toEqualTypeOf<PrDescriptionArtifact["coverage"]>();
+  });
+
+  const artifactKeys = [
+    "schemaVersion",
+    "renderingVersion",
+    "binding",
+    "language",
+    "outcome",
+    "reason",
+    "coverage",
+    "candidate",
+    "markdown",
+  ] as const;
+
+  for (const [surface, project] of [
+    ["source", prDescriptionArtifactDigestFields],
+    ["public", g2PublicDescription.prDescriptionArtifactDigestFields],
+  ] as const) {
+    it(`${surface} retains projection order, single observations and nested identities`, () => {
+      const value = artifact();
+      const expected = prDescriptionArtifactDigestFields(value);
+      const reads: string[] = [];
+      for (const key of artifactKeys) {
+        const captured = value[key];
+        Object.defineProperty(value, key, {
+          get: (): typeof captured => {
+            reads.push(key);
+            return captured;
+          },
+        });
+      }
+      Object.defineProperty(value, "artifactDigest", {
+        get: (): never => {
+          throw new Error("digest projection must not read its output digest");
+        },
+      });
+      const fields = project(value);
+      expect(reads).toEqual(artifactKeys);
+      expect(Object.keys(fields)).toEqual(["domain", ...artifactKeys]);
+      expect(fields).not.toHaveProperty("artifactDigest");
+      expect(fields.binding).toBe(expected.binding);
+      expect(fields.coverage).toBe(expected.coverage);
+      expect(fields.candidate).toBe(expected.candidate);
+      expect(JSON.stringify(fields)).toBe(JSON.stringify(expected));
+    });
+  }
 });

@@ -308,3 +308,153 @@ describe("isDeliveredDraftDeliveryPhase", () => {
     expect(isDeliveredDraftDeliveryPhase(value)).toBe(false);
   });
 });
+
+import * as g2PublicDraft from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+
+describe("G2 final draft phase lookup", () => {
+  for (const [surface, validate] of [
+    ["source", isDraftDeliveryRecord],
+    ["public", g2PublicDraft.isDraftDeliveryRecord],
+  ] as const) {
+    it(`${surface} preserves the healthy phase observations`, () => {
+      let reads = 0;
+      const input = {
+        ...proposed,
+        get phase(): unknown {
+          reads += 1;
+          return "push-proposed";
+        },
+      };
+      expect(validate(input)).toBe(true);
+      expect(reads).toBe(4);
+    });
+    it(`${surface} refuses an invalid phase at the actual reason-map lookup`, () => {
+      let reads = 0;
+      const input = {
+        ...proposed,
+        get phase(): unknown {
+          reads += 1;
+          return reads < 3 ? "push-proposed" : "not-a-phase";
+        },
+      };
+      let admitted: unknown;
+      expect(() => {
+        admitted = validate(input);
+      }).not.toThrow();
+      expect(admitted).toBe(false);
+      expect(reads).toBe(3);
+    });
+  }
+});
+
+describe("G2 final draft revision admission", () => {
+  for (const [surface, validate] of [
+    ["source", isDraftDeliveryRecord],
+    ["public", g2PublicDraft.isDraftDeliveryRecord],
+  ] as const) {
+    it.each([0.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+      `${surface} refuses final revision %s`,
+      (last) => {
+        let reads = 0;
+        const input = {
+          ...proposed,
+          get revision(): unknown {
+            reads += 1;
+            return reads < 3 ? 0 : last;
+          },
+        };
+        expect(validate(input)).toBe(false);
+        expect(reads).toBe(3);
+      },
+    );
+    it(`${surface} retains valid changing integer revisions`, () => {
+      let reads = 0;
+      const input = {
+        ...proposed,
+        get revision(): unknown {
+          reads += 1;
+          return reads < 3 ? 0 : 1;
+        },
+      };
+      expect(validate(input)).toBe(true);
+      expect(reads).toBe(3);
+    });
+    it(`${surface} refuses a malformed binding on its second property observation`, () => {
+      let reads = 0;
+      const input = {
+        ...proposed,
+        get binding(): unknown {
+          reads += 1;
+          return reads === 1 ? binding : {};
+        },
+      };
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(2);
+    });
+  }
+});
+
+it("G2 source/public preserve a valid later draft phase", () => {
+  for (const validate of [isDraftDeliveryRecord, g2PublicDraft.isDraftDeliveryRecord]) {
+    let reads = 0;
+    const input = {
+      ...proposed,
+      reason: "completed",
+      get phase(): unknown {
+        reads += 1;
+        return reads < 3 ? "push-proposed" : "pushed";
+      },
+    };
+    expect(validate(input)).toBe(true);
+    expect(reads).toBe(4);
+  }
+});
+
+describe("G2 healthy observed draft binding", () => {
+  for (const [surface, validate] of [
+    ["source", isDraftDeliveryRecord],
+    ["public", g2PublicDraft.isDraftDeliveryRecord],
+  ] as const) {
+    it(`${surface} preserves a same-reference and alternate valid second binding`, () => {
+      for (const later of [binding, { ...binding, issueNumber: 18 }]) {
+        let reads = 0;
+        const input = {
+          ...proposed,
+          get binding(): unknown {
+            reads += 1;
+            return reads === 1 ? binding : later;
+          },
+        };
+        expect(validate(input)).toBe(true);
+        expect(reads).toBe(2);
+      }
+    });
+  }
+});
+
+it("keeps public delivered classification aligned with the actual source phase table", () => {
+  for (const phase of phases) {
+    expect(g2PublicDraft.isDeliveredDraftDeliveryPhase(phase)).toBe(
+      isDeliveredDraftDeliveryPhase(phase),
+    );
+  }
+  for (const phase of ["constructor", "__proto__", "toString", "not-a-phase"]) {
+    expect(g2PublicDraft.isDeliveredDraftDeliveryPhase(phase)).toBe(false);
+  }
+});
+
+it("refuses prototype names in the freshly captured draft phase on both surfaces", () => {
+  for (const validate of [isDraftDeliveryRecord, g2PublicDraft.isDraftDeliveryRecord]) {
+    for (const phase of ["constructor", "__proto__"]) {
+      let reads = 0;
+      const input = {
+        ...proposed,
+        get phase(): unknown {
+          return ++reads < 3 ? "push-proposed" : phase;
+        },
+      };
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(3);
+    }
+  }
+});

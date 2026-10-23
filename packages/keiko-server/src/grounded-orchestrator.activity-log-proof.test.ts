@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
   type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
@@ -109,6 +110,44 @@ function fixtureDeps(activityLog: BufferedServerLogSink): OrchestratorDeps {
 }
 
 describe("retrieveConnectedContextPack Activity Log proofs", () => {
+  it("records independent compound-source selection on the existing body-free completion", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const input = fixtureInput();
+    const targets = ["src/backend/RefundPolicy.java", "src/frontend/RefundSummary.tsx"];
+    const files = Object.fromEntries(targets.map((path) => [path, "// Maple partner refunds.\n"]));
+    for (let index = 0; index < 40; index += 1) {
+      files[`src/backend/Catalog${String(index)}.java`] = "// Other partner refunds.\n".repeat(100);
+    }
+    const output = await retrieveConnectedContextPack(
+      {
+        ...input,
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 2, excerptBytesMax: 4096 },
+        scope: {
+          ...input.scope,
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        },
+        query: { ...input.query, text: "Maple-Partner" },
+      },
+      { ...fixtureDeps(activityLog), fs: memFs(FIXTURE_ROOT, files) },
+    );
+    expect(output.pack.files.map((file) => file.scopePath).sort()).toEqual(targets);
+    const completed = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    const proof = expectActivityLogProof(
+      "search.connected-context.completed.line",
+      formatActivityLogProofLine(completed ?? {}),
+    );
+    expect(proof.selectedFileCount).toBe(2);
+    expect(proof.usageFilesRead).toBe(output.pack.usage.filesRead);
+    expect(proof.usageExcerptBytes).toBe(output.pack.usage.excerptBytes);
+    const serialized = activityLog.lines().join("\n");
+    expect(serialized).not.toContain("Maple");
+    for (const path of targets) expect(serialized).not.toContain(path);
+  });
+
   it("records citation-only subject normalization without query or source bodies", async () => {
     const activityLog = createBufferedServerLogSink();
     const input = fixtureInput();

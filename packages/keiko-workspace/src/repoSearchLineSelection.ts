@@ -1,4 +1,7 @@
-import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  isLexicalQueryGroupKey,
+  type ContextCoverageTruncationReason,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import type { LineMatcher } from "./repoSearchMatchers.js";
 import {
   repositorySourceLines,
@@ -32,6 +35,30 @@ export interface ScoredLine {
   readonly startLine: number;
   readonly endLine: number;
   readonly score: number;
+  readonly queryGroupKey?: string | undefined;
+}
+
+/** Two or more matched query groups can support bounded same-query source diversity. */
+export function lexicalQueryGroupKey(groups: readonly number[]): string | undefined {
+  if (groups.length < 2 || groups.length > 128) return undefined;
+  let mask = 0n;
+  for (const group of groups) {
+    if (!Number.isSafeInteger(group) || group < 0 || group >= 128) return undefined;
+    mask |= 1n << BigInt(group);
+  }
+  const key = mask.toString(16);
+  return isLexicalQueryGroupKey(key) ? key : undefined;
+}
+
+function withQueryGroupIdentity(
+  match: ScoredLine,
+  lines: readonly string[],
+  matcher: LineMatcher,
+): ScoredLine {
+  if (matcher.matchedQueryGroups === undefined) return match;
+  const content = lines.slice(match.startLine - 1, match.endLine).join("\n");
+  const key = lexicalQueryGroupKey(matcher.matchedQueryGroups(content));
+  return key === undefined ? match : { ...match, queryGroupKey: key };
 }
 
 class ScoredLineCollector {
@@ -820,5 +847,5 @@ export function collectBestLines(
       });
     }
   }
-  return best.sorted();
+  return best.sorted().map((match) => withQueryGroupIdentity(match, lines, runner.matcher));
 }

@@ -96,10 +96,13 @@ function change(value: unknown): value is GitChangedFile {
     )
   );
 }
-function changes(value: unknown): boolean {
-  return (
-    Array.isArray(value) && value.length <= CODING_RUNTIME_GIT_MAX_PATHS && value.every(change)
-  );
+function changes(value: unknown): value is readonly GitChangedFile[] {
+  if (!Array.isArray(value) || value.length > CODING_RUNTIME_GIT_MAX_PATHS) return false;
+  const count = value.length;
+  for (let index = 0; index < count; index += 1) {
+    if (!(index in value) || !change(value[index])) return false;
+  }
+  return true;
 }
 function status(value: Record<string, unknown>): boolean {
   return (
@@ -126,10 +129,12 @@ function stage(value: Record<string, unknown>): boolean {
     value.pathCount <= CODING_RUNTIME_GIT_MAX_PATHS
   );
 }
+function isStageStatus(value: unknown): value is CodingRuntimeGitStage["status"] {
+  return typeof value === "string" && Object.hasOwn(STAGE_STATUS_REASONS, value);
+}
 function stageStatusReason(status: unknown, reason: unknown): boolean {
-  if (typeof status !== "string" || !Object.hasOwn(STAGE_STATUS_REASONS, status)) return false;
-  const allowed: readonly unknown[] =
-    STAGE_STATUS_REASONS[status as CodingRuntimeGitStage["status"]];
+  if (!isStageStatus(status)) return false;
+  const allowed: readonly unknown[] = STAGE_STATUS_REASONS[status];
   return allowed.includes(reason);
 }
 export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntimeGitResult {

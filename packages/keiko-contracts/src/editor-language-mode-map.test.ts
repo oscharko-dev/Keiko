@@ -158,3 +158,14 @@ describe("isEditorLanguageModeId", () => {
     expect(isEditorLanguageModeId("")).toBe(false);
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    expect(Object.getPrototypeOf(publicOwner.EDITOR_LANGUAGE_MODE_BY_EXTENSION)).toBeNull();
+    expect(publicOwner.inferEditorLanguageModeId("src/main.ts")).toBe("typescript");
+    expect(publicOwner.inferEditorLanguageModeId("a.constructor")).toBeNull();
+  });
+});

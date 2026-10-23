@@ -238,9 +238,26 @@ export const REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN = Object.freeze({
   referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
 });
 
+// Observed on win25-vs2026/20261018.275; compatibility is not presumed.
+// The two isolated rebuilds below must still equal the unchanged committed assembly.
+const CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN = Object.freeze({
+  compilerSha256: "a13d1edf3ef5dd0d0e09886251f03fa18877d46ba2dacee075b4c8a5add21457",
+  compilerDistribution: Object.freeze({
+    fileCount: 111,
+    sha256: "6d96789fadf839936d7e980a511d8d1b19a13d4691a338531fc4dc13650dce6a",
+    totalBytes: 36401120,
+  }),
+  referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
+});
+
 export function selectReviewedVerifierToolchain(observed) {
+  const compilerSha256 = observed.compilerSha256;
+  if (compilerSha256 === CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN.compilerSha256) {
+    assertPinnedToolchain(observed, CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN);
+    return CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN;
+  }
   const expected =
-    observed.compilerSha256 === REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerSha256
+    compilerSha256 === REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerSha256
       ? REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN
       : {
           compilerSha256: COMMITTED_VERIFIER_ASSET.compilerSha256,

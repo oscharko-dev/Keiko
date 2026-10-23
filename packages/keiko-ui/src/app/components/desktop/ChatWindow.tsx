@@ -1,5 +1,6 @@
 "use client";
 
+import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
 import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
 import { ChatScopeNotice } from "./ChatScopeNotice";
@@ -63,7 +64,11 @@ import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { useConnectedEvidenceReferences } from "./hooks/useConnectedEvidenceReferences";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
-import { chatSkillBlocksSend, expectedMarkdownSkillSelection } from "./hooks/useChatMarkdownSkill";
+import {
+  chatSkillBlocksSend,
+  expectedMarkdownSkillSelection,
+  type ChatMarkdownSkill,
+} from "./hooks/useChatMarkdownSkill";
 import { MarkdownSkillControl } from "./skills/MarkdownSkillControl";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
@@ -118,10 +123,16 @@ import {
   supportsSpeechOutput,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
-import { useDictation, type DictationController } from "./hooks/useDictation";
+import {
+  useDictation,
+  dictationInsertionPending,
+  remainingDictationCharacters,
+  type DictationController,
+} from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
 import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
-import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
+import { VoiceDictationButton, VoiceDictationComposerStatus } from "./VoiceDictation";
+import { VoiceDictationWaveform } from "./VoiceDictationWaveform";
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
@@ -217,7 +228,6 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
@@ -238,6 +248,7 @@ const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
 
 // Stable id for the "type a message" send-button hint for aria-describedby.
 const SEND_HINT_ID = "cmp-send-hint";
+const SKILL_SEND_HINT_ID = "cmp-skill-send-hint";
 
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
@@ -2340,9 +2351,11 @@ function sendDescribedById(
   noEligibleModels: boolean,
   loading: boolean,
   draftEmpty: boolean,
+  skillBlocked: boolean,
 ): string | undefined {
   if (noEligibleModels) return NO_MODEL_ALERT_ID;
   if (loading) return LOADING_STATUS_ID;
+  if (skillBlocked) return SKILL_SEND_HINT_ID;
   if (draftEmpty) return SEND_HINT_ID;
   return undefined;
 }
@@ -2353,6 +2366,16 @@ function sendButtonTip(noEligibleModels: boolean, loading: boolean, t: I18nTrans
   if (noEligibleModels) return t("chat.send.noModel");
   if (loading) return t("chat.send.connecting");
   return t("chat.send.label");
+}
+
+function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void {
+  // Cancellation can synchronously turn this same DOM button into a submit button. Prevent the
+  // click's default activation before that render so it cannot submit a waiting draft (#4038).
+  event.preventDefault();
+  cancelSend();
+  reportClientDiagnostic("Keiko composer cancellation requested.", {
+    composerActivity: "send-cancel-requested",
+  });
 }
 
 // Extracted from ComposerBar (SonarCloud S3776) — the primary action button, which flips between
@@ -2386,7 +2409,7 @@ function ComposerSendButton({
         data-on
         aria-label={t("chat.send.cancel")}
         data-tip={t("chat.send.cancel")}
-        onClick={cancelSend}
+        onClick={(event) => cancelComposerSend(event, cancelSend)}
       >
         <CloseIcon size={16} />
       </button>
@@ -2405,6 +2428,10 @@ function ComposerSendButton({
       <ArrowUpIcon size={16} />
     </button>
   );
+}
+
+function skillSendHint(skill: ChatMarkdownSkill | undefined, t: I18nTranslate): string {
+  return t(skill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked");
 }
 
 function ComposerBar({
@@ -2439,7 +2466,12 @@ function ComposerBar({
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
-  const sendDescribedBy = sendDescribedById(noEligibleModels, loading, draftEmpty);
+  const sendDescribedBy = sendDescribedById(
+    noEligibleModels,
+    loading,
+    draftEmpty,
+    chatSkillBlocksSend(session.markdownSkill),
+  );
 
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
@@ -2452,6 +2484,7 @@ function ComposerBar({
         onAttachFiles={onAttachFiles}
         controlsNarrow={controlsNarrow}
       />
+      <VoiceDictationWaveform controller={dictation} visible={voiceDictationVisible} />
       <div className="cmp-bar-main">
         {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
             speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
@@ -2460,7 +2493,7 @@ function ComposerBar({
         {voiceDictationVisible ? (
           <VoiceDictationButton
             phase={dictation.phase}
-            audioLevel={dictation.audioLevel}
+            insertionPending={dictationInsertionPending(dictation)}
             onStart={dictation.start}
             onStop={dictation.stop}
             buttonRef={micButtonRef}
@@ -2499,6 +2532,11 @@ function ComposerBar({
           sendDescribedBy={sendDescribedBy}
         />
       </div>
+      {sendDescribedBy === SKILL_SEND_HINT_ID ? (
+        <span id={SKILL_SEND_HINT_ID} className="sr-only">
+          {skillSendHint(session.markdownSkill, t)}
+        </span>
+      ) : null}
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
         <span id={SEND_HINT_ID} className="sr-only">
@@ -2726,6 +2764,7 @@ function resolveRepositoryMentionInsertion(
 function composerBoxClassNameFor(compact: boolean, voiceDialogActive: boolean): string {
   return [
     "cmp-box",
+    styles.cmpBox,
     compact ? "cmp-box-compact" : "",
     voiceDialogActive ? styles.voiceDialogBox : "",
   ]
@@ -2809,29 +2848,23 @@ function composerDictationVisibility(
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer's post-textarea status row:
-// the send-lifecycle announcement (hidden during Voice Dialogue) and the dictation transcript
-// preview (hidden during Voice Dialogue or when dictation isn't available).
+// the send-lifecycle announcement and inline dictation errors (hidden during Voice Dialogue).
 function ComposerStatusRow({
   voiceDialogActive,
   sendStatus,
   voiceDictationVisible,
   dictation,
-  onAfterDictationDiscard,
 }: {
   readonly voiceDialogActive: boolean;
   readonly sendStatus: SendStatus;
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
-  readonly onAfterDictationDiscard: () => void;
 }): ReactNode {
   return (
     <>
       {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
       {!voiceDialogActive && voiceDictationVisible ? (
-        <VoiceDictationPreviewFromController
-          controller={dictation}
-          onAfterDiscard={onAfterDictationDiscard}
-        />
+        <VoiceDictationComposerStatus error={dictation.error} emptyResult={dictation.emptyResult} />
       ) : null}
     </>
   );
@@ -3204,7 +3237,7 @@ function ComposerCoreImpl({
   const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const normalVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const voiceCaptureOwner = useId();
-  // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
+  // Stop appends the completed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
     (text: string): void => {
@@ -3218,6 +3251,9 @@ function ComposerCoreImpl({
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
+    insertOnComplete: true,
+    availableCharacters: remainingDictationCharacters(draft),
+    contextKey: activeChat?.id,
     captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },
   });
@@ -3786,13 +3822,12 @@ function ComposerCoreImpl({
               <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
               {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement next to the textarea so
                 SR users hear the state without losing composer focus. Issue #495 — dictation
-                transcript review / transcribing status / error. */}
+                inline dictation error. */}
               <ComposerStatusRow
                 voiceDialogActive={voiceDialogActive}
                 sendStatus={sendStatus}
                 voiceDictationVisible={voiceDictationVisible}
                 dictation={dictation}
-                onAfterDictationDiscard={() => micButtonRef.current?.focus()}
               />
             </>
           }
@@ -4406,7 +4441,7 @@ function LocalKnowledgeScopeControl({
       />
       <GroundingCatalogStatus
         loading={loading}
-        empty={catalogEmpty}
+        empty={catalogEmpty && !connected}
         error={displayedError}
         onRetry={error === null && loadFailure !== null ? refresh : undefined}
         t={t}
@@ -4433,19 +4468,8 @@ function connectorScopeLabels(
   return labels;
 }
 
-function ChatGroundingHelp({ chat }: { readonly chat: Chat }): ReactNode {
-  const t = useTranslate();
-  if (effectiveConnectedScopes(chat).length === 0) return null;
-  return (
-    <p className={scopeNoticeStyles.cmpHelp} data-testid="grounding-help" tabIndex={-1}>
-      {t("chat.grounding.help")}
-    </p>
-  );
-}
-
 interface ChatScopeHeaderProps {
   readonly chat: Chat;
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly onChatChanged: (chat: Chat) => void;
   readonly memoryControl?: ReactNode;
   readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
@@ -4456,7 +4480,6 @@ function ChatScopeHeaderImpl({
   onChatChanged,
   memoryControl,
   pendingGitChangeComparisons,
-  onKeepFolderChange,
 }: ChatScopeHeaderProps): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
@@ -4480,12 +4503,7 @@ function ChatScopeHeaderImpl({
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}
-      <ChatGroundingHelp chat={chat} />
-      <ChatScopeNotice
-        chat={chat}
-        onChatChanged={onChatChanged}
-        onKeepFolderChange={onKeepFolderChange}
-      />
+      <ChatScopeNotice chat={chat} />
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
       <ConnectorScopePill
         chat={chat}
@@ -5268,7 +5286,6 @@ function composerPlaceholder(visibleCount: number, loading: boolean, t: I18nTran
 // Extracted from ChatWindow (SonarCloud S3776) — the chat-scope header, memory panel, and
 // no-model/loading alerts that sit above the scrollable log.
 function ChatWindowStatusHeader({
-  onKeepFolderChange,
   activeChat,
   replaceChat,
   memoryControl,
@@ -5283,7 +5300,6 @@ function ChatWindowStatusHeader({
   noEligibleModels,
   loading,
 }: {
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
@@ -5304,7 +5320,6 @@ function ChatWindowStatusHeader({
         <ChatScopeHeader
           chat={activeChat}
           onChatChanged={replaceChat}
-          onKeepFolderChange={onKeepFolderChange}
           memoryControl={memoryControl}
           pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
@@ -5512,6 +5527,17 @@ function EmptySessionFeedback({
   return null;
 }
 
+function ComposerSkillNotice(): ReactNode {
+  const { markdownSkill } = useChatSessionComposer();
+  const t = useTranslate();
+  if (!chatSkillBlocksSend(markdownSkill)) return null;
+  return (
+    <output className={styles.sessionNotice}>
+      {t(markdownSkill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked")}
+    </output>
+  );
+}
+
 function ComposerSendNotice({
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
@@ -5602,7 +5628,7 @@ function ChatWindowComposerFooter({
   return (
     <>
       {visible.length > 0 || activeChat !== undefined ? (
-        <div className="chatw-foot">
+        <div className={`chatw-foot ${styles.cmpFooter}`}>
           <form
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
@@ -5620,6 +5646,7 @@ function ChatWindowComposerFooter({
               controlsNarrow={effectiveControlsNarrow}
               barCompact={effectiveBarCompact}
             />
+            <ComposerSkillNotice />
             <ComposerSendNotice
               canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry}
               retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
@@ -5650,7 +5677,6 @@ function ChatWindowComposerFooter({
 }
 
 export function ChatWindow({
-  onKeepFolderChange,
   windowId,
   suspended = false,
   mini = false,
@@ -5838,7 +5864,6 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       <ChatWindowStatusHeader
-        onKeepFolderChange={onKeepFolderChange}
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}
@@ -5912,6 +5937,7 @@ export function ChatWindow({
         draft={draft}
         focusComposer={() => composerInputRef.current?.focus()}
       />
+      <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}

@@ -43,7 +43,7 @@ export const PROMPT_CRITIC_DIMENSIONS: readonly PromptCriticDimension[] = [
 ] as const;
 
 export const isPromptCriticDimension = (value: unknown): value is PromptCriticDimension =>
-  typeof value === "string" && (PROMPT_CRITIC_DIMENSIONS as readonly string[]).includes(value);
+  typeof value === "string" && new Set<string>(PROMPT_CRITIC_DIMENSIONS).has(value);
 
 // ─── Per-dimension score ───────────────────────────────────────────────────────────
 // One dimension's deterministic score plus an inspectable rationale. `score` is a finite value in the
@@ -107,8 +107,7 @@ export const PROMPT_CANDIDATE_REJECTION_REASONS: readonly PromptCandidateRejecti
 export const isPromptCandidateRejectionReason = (
   value: unknown,
 ): value is PromptCandidateRejectionReason =>
-  typeof value === "string" &&
-  (PROMPT_CANDIDATE_REJECTION_REASONS as readonly string[]).includes(value);
+  typeof value === "string" && new Set<string>(PROMPT_CANDIDATE_REJECTION_REASONS).has(value);
 
 // One rejected alternative, auditable with its reason. `aggregateScore` is null when the candidate was
 // never scored (e.g. skipped because it would exceed the token budget).

@@ -17,7 +17,11 @@ import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js
 import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 import { insertMemoryRow } from "./memories.js";
 import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
-import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import type {
+  MemoryVaultLogEvent,
+  MemoryVaultLogTransport,
+  MemoryVaultLogSink,
+} from "./vault-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -179,7 +183,7 @@ describe("openMemoryDatabase corruption path", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     writeFileSync(dbPath, "garbage that is not a sqlite header");
-    const events: MemoryVaultLogEvent[] = [];
+    const events: MemoryVaultLogTransport[] = [];
     const sink: MemoryVaultLogSink = {
       write: (event): void => {
         events.push(event);
@@ -197,7 +201,7 @@ describe("openMemoryDatabase corruption path", () => {
       errorKind: "read-failed",
       extra: { reopened: true },
     });
-    expect(typeof events[0]?.extra?.failureKind).toBe("string");
+    expect(typeof normalFixtureEvent(events[0])?.extra?.failureKind).toBe("string");
     const persisted = expectActivityLogProof(
       "memory-vault.store.quarantined.recovery",
       formatActivityLogProofLine(events[0] ?? {}),
@@ -265,7 +269,7 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     seedLegacyPlaintextDb(dbPath);
-    const events: MemoryVaultLogEvent[] = [];
+    const events: MemoryVaultLogTransport[] = [];
     const sink: MemoryVaultLogSink = {
       write: (event): void => {
         events.push(event);
@@ -288,7 +292,7 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
   it("does not emit the encryption migration op for a fresh DB with nothing to migrate", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
-    const events: MemoryVaultLogEvent[] = [];
+    const events: MemoryVaultLogTransport[] = [];
     const sink: MemoryVaultLogSink = {
       write: (event): void => {
         events.push(event);
@@ -489,3 +493,16 @@ describe("ordinary WAL concurrency (two live connections)", () => {
     }
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: MemoryVaultLogTransport): MemoryVaultLogEvent;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined {
+  if (event?.op === "server-log.write-failed")
+    throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -156,10 +156,15 @@ function boundRemote(binding: GitJourneyBinding, remote: GitJourneyRemoteFacts):
     remote.issue.number === binding.issueNumber
   );
 }
-function state(value: Record<string, unknown>): boolean {
+const JOURNEY_REASON_STATES: Readonly<Record<string, JourneyOutcome["state"]>> =
+  GIT_JOURNEY_REASON_STATES;
+
+function state(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Pick<JourneyOutcome, "state" | "reason"> {
   if (typeof value.reason !== "string" || !Object.hasOwn(GIT_JOURNEY_REASON_STATES, value.reason))
     return false;
-  return value.state === GIT_JOURNEY_REASON_STATES[value.reason as GitJourneyReason];
+  return value.state === JOURNEY_REASON_STATES[value.reason];
 }
 function remoteState(
   value: Record<string, unknown>,
@@ -182,7 +187,18 @@ function window(value: Record<string, unknown>): boolean {
   const duration = Date.parse(value.expiresAt) - Date.parse(value.observedAt);
   return duration > 0 && duration <= 60_000;
 }
-function productiveState(value: JourneyOutcome): boolean {
+function productiveState(
+  value: Pick<
+    JourneyOutcome,
+    | "remote"
+    | "readiness"
+    | "binding"
+    | "observedAt"
+    | "description"
+    | "state"
+    | "keikoDescriptionApplied"
+  >,
+): boolean {
   const { remote, readiness, binding } = value;
   if (remote === null) return !value.keikoDescriptionApplied;
   const now = Date.parse(value.observedAt);
@@ -229,12 +245,25 @@ const OUTCOME_KEYS = [
   "description",
   "keikoDescriptionApplied",
 ];
-function outcomeIdentity(value: Record<string, unknown>): boolean {
+function outcomeIdentity(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> &
+  Pick<
+    JourneyOutcome,
+    "schemaVersion" | "evidenceRef" | "observedAt" | "expiresAt" | "state" | "reason"
+  > {
   return (
     value.schemaVersion === "1" && pattern(value.evidenceRef, ID) && window(value) && state(value)
   );
 }
-function subSnapshots(value: Record<string, unknown>, binding: GitJourneyBinding): boolean {
+function subSnapshots(
+  value: Record<string, unknown>,
+  binding: GitJourneyBinding,
+): value is Record<string, unknown> &
+  Pick<
+    JourneyOutcome,
+    "readiness" | "description" | "observationFailure" | "keikoDescriptionApplied"
+  > {
   if (
     value.readiness !== null &&
     (!isReadinessSnapshot(value.readiness) ||
@@ -262,22 +291,37 @@ const NULL_REMOTE_REASONS: ReadonlySet<GitJourneyReason> = new Set([
   "cancelled",
   "ready-effect-uncertain",
 ]);
-function outcomeRemote(value: Record<string, unknown>, binding: GitJourneyBinding): boolean {
+type JourneyPreparedOutcome = Record<string, unknown> & Omit<JourneyOutcome, "remote">;
+const NULL_REMOTE_REASON_VALUES: ReadonlySet<string> = NULL_REMOTE_REASONS;
+
+function observedOutcomeRemote(
+  value: JourneyPreparedOutcome,
+): value is JourneyPreparedOutcome & { readonly remote: GitJourneyRemoteFacts } {
+  return isGitJourneyRemoteFacts(value.remote);
+}
+
+function outcomeRemote(
+  value: JourneyPreparedOutcome,
+  binding: GitJourneyBinding,
+): value is JourneyPreparedOutcome & Pick<JourneyOutcome, "remote"> {
   if (value.remote === null)
-    return (
-      !value.keikoDescriptionApplied && NULL_REMOTE_REASONS.has(value.reason as GitJourneyReason)
-    );
+    return !value.keikoDescriptionApplied && NULL_REMOTE_REASON_VALUES.has(value.reason);
   return (
     value.observationFailure === null &&
-    isGitJourneyRemoteFacts(value.remote) &&
+    observedOutcomeRemote(value) &&
     boundRemote(binding, value.remote) &&
     remoteState(value, value.remote, binding) &&
-    productiveState(value as unknown as JourneyOutcome)
+    productiveState(value)
   );
 }
+function outcomeBinding(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Pick<JourneyOutcome, "binding"> {
+  return isGitJourneyBinding(value.binding);
+}
+
 export function isJourneyOutcome(value: unknown): value is JourneyOutcome {
-  if (!record(value) || !keys(value, OUTCOME_KEYS) || !isGitJourneyBinding(value.binding))
-    return false;
+  if (!record(value) || !keys(value, OUTCOME_KEYS) || !outcomeBinding(value)) return false;
   return (
     outcomeIdentity(value) &&
     subSnapshots(value, value.binding) &&

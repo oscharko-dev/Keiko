@@ -1,4 +1,4 @@
-# Public API surface — 1.2.2
+# Public API surface — 1.2.4
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,16 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.2.4: the root exports and CLI entrypoints remain unchanged. Chat gateway waiting,
+  connected-source selection, restored source presentation and repository retrieval are hardened
+  through existing contracts. Java/Spring Boot and React/MUI/Vitest Markdown skill candidates
+  remain reviewable instructions, with qualification limits tracked in #4040. Windows OpenCode
+  metadata and home resolution remain confined to private host state.
+- 1.2.3: the root exports and CLI entrypoints are unchanged from v1.2.2. Authenticated
+  local Chat routes add private draft revision handling, backed by forward-only SQLite migration
+  V44. Speech transcription retains its route contract while browser clips are normalized before
+  upload. Skill recovery and source-reference validation extend existing application contracts;
+  no public package entrypoint or execution authority is added.
 - 1.2.2: the root runtime/declaration export contract and CLI entrypoints are unchanged from
   v1.2.1. Private Markdown skills extend authenticated local Chat routes and the existing UI
   store, including explicit per-chat selection and protected context accounting. Document-to-skill

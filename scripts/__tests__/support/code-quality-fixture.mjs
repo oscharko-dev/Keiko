@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import ts from "typescript";
 import { URL } from "node:url";
@@ -70,12 +70,37 @@ export function createRuntimePolicyFixture(helper, linkage = "runtime") {
   return root;
 }
 
+export function fixtureOwnedPolicy(records = [], owners = ["alpha"]) {
+  const { upstream, runner, rules } = JSON.parse(
+    readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
+  );
+  // The base fixture owns alpha, not every migrated production package. Keep package activations
+  // only for declared fixture owners; global production and native-host guards remain intact.
+  const fixtureRules = rules.map((rule) => ({
+    ...rule,
+    activeScopes: rule.activeScopes.filter(
+      (scope) => !scope.startsWith("package:") || owners.includes(scope.slice("package:".length)),
+    ),
+  }));
+  return { version: 2, upstream, runner, rules: fixtureRules, responsibilities: records };
+}
+
 export function configureEnforcingPolicyFixture(root) {
+  const owners = readdirSync(join(root, "packages"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map(
+      (entry) =>
+        JSON.parse(readFileSync(join(root, "packages", entry.name, "package.json"), "utf8")).name,
+    );
   mkdirSync(join(root, "scripts"), { recursive: true });
   writeFileSync(
     join(root, "scripts/code-quality-policy.json"),
-    readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
+    JSON.stringify(fixtureOwnedPolicy([], owners)),
   );
+  copyNativePolicyFixtureSources(root);
+}
+
+export function copyNativePolicyFixtureSources(root) {
   const owner = "native/opencode-service-host";
   mkdirSync(join(root, owner), { recursive: true });
   for (const name of ["host.mjs", "entry.mjs", "guard-seams.mjs"])

@@ -2270,3 +2270,422 @@ function safetySnapshot(): EditorAgentSessionSnapshot {
     updatedAt: source.updatedAt,
   };
 }
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const data = queryGitData();
+    const parsed = publicOwner.parseEditorAgentQueryGitData(data);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toBe(data);
+    const retainedSafety = publicOwner.parseEditorAgentSnapshotRequest({
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      snapshot: safetySnapshot(),
+    });
+    expect(retainedSafety.ok).toBe(true);
+    expect(
+      publicOwner.isEditorBufferSafetySnapshot({ ...safetySnapshot(), text: "excluded" }),
+    ).toBe(false);
+  });
+});
+
+describe.each([
+  ["source", isEditorAgentAction],
+  ["public", publicOwner.isEditorAgentAction],
+] as const)("3918 original-first physical action edit membership %s", (_surface, parse) => {
+  it("refuses a missing physical edit slot", () => {
+    expect(parse(baseAction({ type: "applyTextEdits", textEdits: Array(1) }))).toBe(false);
+  });
+  it("refuses a malformed edit hidden by the caller's every method", () => {
+    const edits = [{}];
+    Object.defineProperty(edits, "every", { value: (): boolean => true });
+    const value = baseAction({ type: "applyTextEdits", textEdits: [] });
+    Object.defineProperty(value, "textEdits", { value: edits });
+    expect(parse(value)).toBe(false);
+  });
+  it("retains a healthy dense physical edit", () => {
+    const edit = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+      newText: "x",
+    };
+    expect(parse(baseAction({ type: "applyTextEdits", textEdits: [edit] }))).toBe(true);
+  });
+});
+
+function observeConsumedExtent(
+  values: readonly unknown[],
+  laterExtent: number,
+): {
+  readonly array: readonly unknown[];
+  readonly snapshot: () => { readonly lengthReads: number; readonly indexReads: number };
+} {
+  let lengthReads = 0;
+  let indexReads = 0;
+  const array = new Proxy([...values], {
+    get(target, property, receiver): unknown {
+      if (property === "length") return ++lengthReads === 2 ? laterExtent : target.length;
+      if (typeof property === "string" && /^\d+$/u.test(property)) indexReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  return { array, snapshot: () => ({ lengthReads, indexReads }) };
+}
+
+describe.each([
+  ["source", isEditorAgentAction],
+  ["public", publicOwner.isEditorAgentAction],
+] as const)("3918 consumed owning extent %s", (_surface, parse) => {
+  it("retains healthy native bounded observations", () => {
+    const observed = observeConsumedExtent(
+      [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          newText: "x",
+        },
+      ],
+      1,
+    );
+    const value = baseAction({ type: "applyTextEdits", textEdits: [] });
+    Object.defineProperty(value, "textEdits", { value: observed.array });
+    expect(parse(value)).toBe(true);
+    expect(observed.snapshot().indexReads).toBeGreaterThan(0);
+  });
+  it.each([0.5, EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS + 1])(
+    "refuses actual consumed extent %s before member work",
+    (extent) => {
+      const observed = observeConsumedExtent(
+        [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            newText: "x",
+          },
+        ],
+        extent,
+      );
+      const value = baseAction({ type: "applyTextEdits", textEdits: [] });
+      Object.defineProperty(value, "textEdits", { value: observed.array });
+      expect(parse(value)).toBe(false);
+      expect(observed.snapshot().indexReads).toBe(0);
+    },
+  );
+});
+
+describe.each([
+  ["source", isEditorAgentChangeset, isEditorAgentPreparedChangeset],
+  ["public", publicOwner.isEditorAgentChangeset, publicOwner.isEditorAgentPreparedChangeset],
+] as const)("3918 final changeset collections %s", (_surface, changeset, prepared) => {
+  it("refuses malformed files consumed after the changeset member pass", () => {
+    const good = [{ file: "src/a.ts", expectedContentHash: HASH }];
+    let reads = 0;
+    const value = {
+      patch: "patch",
+      get files(): readonly unknown[] {
+        return ++reads <= 4 ? good : [{ file: "src/a.ts" }];
+      },
+    };
+    expect(changeset(value)).toBe(false);
+    expect(reads).toBe(5);
+  });
+  it("refuses malformed files consumed after the prepared member pass", () => {
+    const good = [
+      {
+        file: "src/a.ts",
+        kind: "modify",
+        textEdits: [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            newText: "x",
+          },
+        ],
+      },
+    ];
+    let reads = 0;
+    const value = {
+      get files(): readonly unknown[] {
+        return ++reads <= 5 ? good : [{ file: "src/a.ts", textEdits: [] }];
+      },
+    };
+    expect(prepared(value)).toBe(false);
+    expect(reads).toBe(6);
+  });
+  it("retains changing valid final file collections without identity tightening", () => {
+    const good = [{ file: "src/a.ts", expectedContentHash: HASH }];
+    const later = [{ file: "src/b.ts", expectedContentHash: HASH }];
+    let reads = 0;
+    const value = {
+      patch: "patch",
+      get files(): readonly unknown[] {
+        return ++reads <= 4 ? good : later;
+      },
+    };
+    expect(changeset(value)).toBe(true);
+    expect(reads).toBe(5);
+  });
+});
+
+describe("3918 complete public queryGit admission", () => {
+  it("refuses a malformed actual target before typed success", () => {
+    expect(
+      publicOwner.parseEditorAgentQueryGitData({ ...queryGitData(), target: undefined }),
+    ).toEqual({ ok: false, errors: ["queryGit data is malformed or exceeds agent caps"] });
+  });
+});
+
+// #3918 physical admission uses actual members, independent of caller array methods.
+import { isEditorBufferSafetySnapshot } from "./editor-agent.js";
+function callerEvery(entries: unknown[]): unknown[] {
+  Object.defineProperty(entries, "every", { value: (): boolean => true });
+  return entries;
+}
+
+function rawQueryGitMembers(site: string, entries: unknown[]): unknown {
+  const value = queryGitData();
+  const staged = value.aspects.diff?.staged;
+  const file = staged?.files[0];
+  const blame = value.aspects.blame;
+  if (!staged || !file || !blame) throw new Error("queryGit fixture must have diff and blame");
+  if (site === "omissions") return { ...value, omissions: entries };
+  if (site === "blame")
+    return { ...value, aspects: { ...value.aspects, blame: { ...blame, lines: entries } } };
+  const files = site === "hunks" ? [{ ...file, hunks: entries }] : entries;
+  return {
+    ...value,
+    aspects: { ...value.aspects, diff: { ...value.aspects.diff, staged: { ...staged, files } } },
+  };
+}
+
+const physicalAgentCases = [
+  [
+    "dirty paths",
+    (entries: unknown[]): unknown => ({ ...snapshot(), dirtyFiles: entries }),
+    isEditorAgentSessionSnapshot,
+    publicOwner.isEditorAgentSessionSnapshot,
+    [7],
+  ],
+  [
+    "open paths",
+    (entries: unknown[]): unknown => ({
+      ...snapshot(),
+      panes: [{ ...snapshot().panes[0], openFiles: entries }],
+    }),
+    isEditorAgentSessionSnapshot,
+    publicOwner.isEditorAgentSessionSnapshot,
+    [7],
+  ],
+  [
+    "diagnostic detail",
+    (entries: unknown[]): unknown => ({ items: entries, truncated: false }),
+    isEditorAgentDiagnosticsDetail,
+    publicOwner.isEditorAgentDiagnosticsDetail,
+    [{}],
+  ],
+  [
+    "pane shape",
+    (entries: unknown[]): unknown => ({ ...snapshot(), panes: entries }),
+    isEditorAgentSessionSnapshot,
+    publicOwner.isEditorAgentSessionSnapshot,
+    [{ paneId: 7, activeFile: null, openFiles: [] }],
+  ],
+  [
+    "pane closed keys",
+    (entries: unknown[]): unknown => ({ ...safetySnapshot(), panes: entries }),
+    isEditorBufferSafetySnapshot,
+    publicOwner.isEditorBufferSafetySnapshot,
+    [{ ...snapshot().panes[0], content: "excluded" }],
+  ],
+  [
+    "selected containment",
+    (entries: unknown[]): unknown => ({
+      patch: "patch",
+      files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      selectedFiles: entries,
+    }),
+    isEditorAgentChangeset,
+    publicOwner.isEditorAgentChangeset,
+    ["../outside.ts"],
+  ],
+  [
+    "selected ownership",
+    (entries: unknown[]): unknown => ({
+      patch: "patch",
+      files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      selectedFiles: entries,
+    }),
+    isEditorAgentChangeset,
+    publicOwner.isEditorAgentChangeset,
+    ["src/missing.ts"],
+  ],
+  [
+    "include globs",
+    (entries: unknown[]): unknown => ({
+      ...searchWorkspaceAction(),
+      searchWorkspace: { mode: "text", query: "needle", maxResults: 10, includeGlobs: entries },
+    }),
+    isEditorAgentAction,
+    publicOwner.isEditorAgentAction,
+    [7],
+  ],
+  [
+    "exclude globs",
+    (entries: unknown[]): unknown => ({
+      ...searchWorkspaceAction(),
+      searchWorkspace: { mode: "text", query: "needle", maxResults: 10, excludeGlobs: entries },
+    }),
+    isEditorAgentAction,
+    publicOwner.isEditorAgentAction,
+    [7],
+  ],
+  [
+    "language diagnostics",
+    (entries: unknown[]): unknown => ({
+      ...navigateSymbolAction(),
+      navigateSymbol: {
+        operation: "codeActions",
+        document: { path: "src/a.ts", languageId: "typescript" },
+        position: { line: 0, character: 0 },
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+        diagnostics: entries,
+      },
+    }),
+    isEditorAgentAction,
+    publicOwner.isEditorAgentAction,
+    [{}],
+  ],
+  [
+    "query aspects",
+    (entries: unknown[]): unknown => ({
+      ...queryGitAction(),
+      queryGit: { path: "src/a.ts", aspects: entries },
+    }),
+    isEditorAgentAction,
+    publicOwner.isEditorAgentAction,
+    ["invented"],
+  ],
+  [
+    "file results",
+    (entries: unknown[]): unknown => ({
+      schemaVersion: "1",
+      actionId: "action-1",
+      sessionId: "session-1",
+      status: "succeeded",
+      files: entries,
+    }),
+    isEditorAgentActionResult,
+    publicOwner.isEditorAgentActionResult,
+    [{ file: "src/a.ts", status: "invented" }],
+  ],
+] as const;
+
+describe("#3918 forward physical member admission", () => {
+  it.each(physicalAgentCases)(
+    "healthy ordinary refusal %s",
+    (_name, make, source, published, malformed) => {
+      expect(source(make([...malformed]))).toBe(false);
+      expect(published(make([...malformed]))).toBe(false);
+    },
+  );
+  for (const surface of ["source", "public"]) {
+    it.each(physicalAgentCases)(
+      `finite caller every refusal ${surface} %s`,
+      (_name, make, source, published, malformed) => {
+        const guard = surface === "source" ? source : published;
+        expect(guard(make(callerEvery([...malformed])))).toBe(false);
+      },
+    );
+    it.each(["hunks", "files", "blame", "omissions"])(
+      `finite query caller every refusal ${surface} %s`,
+      (site) => {
+        const entries = callerEvery(site === "files" ? [{ hunks: [] }] : [{}]);
+        const parse =
+          surface === "source"
+            ? parseEditorAgentQueryGitData
+            : publicOwner.parseEditorAgentQueryGitData;
+        expect(parse(rawQueryGitMembers(site, entries))).toEqual({
+          ok: false,
+          errors: ["queryGit data is malformed or exceeds agent caps"],
+        });
+      },
+    );
+  }
+  it.each(["hunks", "files", "blame", "omissions"])("healthy query ordinary refusal %s", (site) => {
+    const entries = site === "files" ? [{ hunks: [] }] : [{}];
+    const expected = { ok: false, errors: ["queryGit data is malformed or exceeds agent caps"] };
+    expect(parseEditorAgentQueryGitData(rawQueryGitMembers(site, entries))).toEqual(expected);
+    expect(publicOwner.parseEditorAgentQueryGitData(rawQueryGitMembers(site, entries))).toEqual(
+      expected,
+    );
+  });
+  it("healthy current ordinary producers remain admitted", () => {
+    for (const owner of [publicOwner]) {
+      expect(owner.isEditorAgentSessionSnapshot(snapshot())).toBe(true);
+      expect(owner.isEditorBufferSafetySnapshot(safetySnapshot())).toBe(true);
+      expect(owner.isEditorAgentAction(searchWorkspaceAction())).toBe(true);
+      expect(owner.isEditorAgentAction(navigateSymbolAction())).toBe(true);
+      expect(owner.isEditorAgentAction(queryGitAction())).toBe(true);
+      const data = queryGitData();
+      expect(owner.parseEditorAgentQueryGitData(data)).toEqual({ ok: true, value: data });
+    }
+    expect(isEditorAgentSessionSnapshot(snapshot())).toBe(true);
+    expect(parseEditorAgentQueryGitData(queryGitData()).ok).toBe(true);
+  });
+});
+
+function observedRelationExtent(
+  values: readonly unknown[],
+  phase: number,
+  extent: number,
+): {
+  readonly array: readonly unknown[];
+  readonly reads: () => number;
+} {
+  let reads = 0;
+  const array = new Proxy([...values], {
+    get(target, key, receiver): unknown {
+      if (key === "length") return ++reads === phase ? extent : target.length;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  return { array, reads: (): number => reads };
+}
+
+describe.each([
+  ["source", isEditorAgentChangeset, isEditorBufferSafetySnapshot],
+  ["public", publicOwner.isEditorAgentChangeset, publicOwner.isEditorBufferSafetySnapshot],
+] as const)("#3918 relation consumed extent %s", (_surface, changesetGuard, safetyGuard) => {
+  it("healthy selected membership uses original ninth length observation", () => {
+    const observed = observedRelationExtent(["src/a.ts"], 9, 1);
+    expect(
+      changesetGuard({
+        patch: "patch",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+        selectedFiles: observed.array,
+      }),
+    ).toBe(true);
+    expect(observed.reads()).toBe(9);
+  });
+  it("healthy pane closed keys use original fourth length observation", () => {
+    const observed = observedRelationExtent(safetySnapshot().panes, 4, 1);
+    expect(safetyGuard({ ...safetySnapshot(), panes: observed.array })).toBe(true);
+    expect(observed.reads()).toBe(4);
+  });
+  it("finite selected membership refuses fractional consumed extent", () => {
+    const observed = observedRelationExtent(["src/a.ts"], 9, 0.5);
+    expect(
+      changesetGuard({
+        patch: "patch",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+        selectedFiles: observed.array,
+      }),
+    ).toBe(false);
+    expect(observed.reads()).toBe(9);
+  });
+  it("finite pane closed keys refuse fractional consumed extent", () => {
+    const observed = observedRelationExtent(safetySnapshot().panes, 4, 0.5);
+    expect(safetyGuard({ ...safetySnapshot(), panes: observed.array })).toBe(false);
+    expect(observed.reads()).toBe(4);
+  });
+});

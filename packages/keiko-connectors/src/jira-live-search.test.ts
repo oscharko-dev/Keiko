@@ -170,6 +170,12 @@ describe("executeJiraLiveSearch — result mapping and parity (Issue #2248 AC3/A
     expect(live.result.truncated).toBe(false);
     expect(live.result.totalMatched).toBe(2);
     expect(validateJiraLiveSearchResult(live.result).ok).toBe(true);
+    const checked = validateJiraLiveSearchResult(live.result);
+    if (!checked.ok) throw new TypeError("actual live producer failed public validation");
+    expect(checked.value).toBe(live.result);
+    expect(checked.value.issues).toBe(live.result.issues);
+    expect(checked.value.issues[0]).toBe(live.result.issues[0]);
+    expect(checked.value.issues[0]?.metadata).toBe(live.result.issues[0]?.metadata);
     const serialized = JSON.stringify(live.result);
     expect(serialized).not.toContain("urgent ORDER BY");
   });

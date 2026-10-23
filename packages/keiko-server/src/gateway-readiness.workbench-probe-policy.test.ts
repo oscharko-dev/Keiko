@@ -65,6 +65,15 @@ describe("probeProvider — probe timeout floors", () => {
     );
   });
 
+  it.each(["on-demand", "coding-workbench-auto"] as const)(
+    "allows a three-minute response-start delay for %s readiness",
+    (purpose) => {
+      expect(probeProvider(provider(30_000), "chat", { purpose }).timeoutMs).toBeGreaterThan(
+        180_000,
+      );
+    },
+  );
+
   it("keeps a configured timeout that already clears the floor, and the same object", () => {
     const generous = provider(LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS + 1);
     expect(probeProvider(generous, "long_context", undefined)).toBe(generous);

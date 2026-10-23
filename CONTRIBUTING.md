@@ -32,21 +32,37 @@ only whole-repository enforcement. Source, parser, plugin, scope and inventory f
 
 ### Activity Log runtime changes
 
+Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
+The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
+concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+The private draft notification subscription mounts in layout before browser input or passive effects;
+`client.composer.activity` records `draft-notifications-ready` without draft text.
+
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
-APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
+APIs in `keiko-contracts`. Event construction returns the registration-derived event or a closed
+rejection arm; injected ports retain that distinction and the physical writer rejects the latter.
+The checked-in
 `docs/observability/op-catalog.generated.json` is generated from those canonical declarations and
 emitters. Its typed registry is authoritative; the legacy literal scan is migration input only.
 Adapters rebind events with `withActivityLogCorrelation` or `withActivityLogParentCorrelation`,
 preserving producer-owned ids and the non-enumerable registration/rejection markers. Test the
 forwarded event through the real registered formatter: a buffer alone cannot detect a marker
 lost by an object spread.
+For other forwarding copies, use `copyActivityLogEventMetadata` to preserve both raw registration
+and closed rejection markers. `activityLogEventRegistration` admits complete structural metadata
+and preserves its reference; it does not grant canonical write authority. Keep malformed raw
+attachments until the physical writer can report their existing closed rejection reason.
 
 Each registration owns exact fields, bounds, data classes and vocabularies, causal and lifecycle
 semantics, analyzer projection, failure classes, proof ids, and release impact. Unknown or dynamic
 operations, arbitrary metadata, nested objects, missing required fields, unbounded strings, and
 unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
 digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
+STT dispatch evidence includes the sent container class and audio byte count; completion evidence
+includes the provider HTTP status only when a response was received. Browser dictation converts
+completed recordings to PCM16 WAV locally and reports normalization failures through the existing
+client diagnostic sink, without retaining audio or provider error bodies (ADR-0100 D8).
 Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
 the catalog with `npm run generate:op-catalog`, then run `npm run check:activity-log`, the Activity
 Log implementation gate, which required CI runs unchanged. Every run builds the packages and
@@ -548,6 +564,14 @@ alone); the `coding-workbench` latency profile selects timeout floors only.
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
 events. Neither path records customer diffs or generated text.
+
+Shared browser BFF response validation reports a refused contract through the existing
+`client.diagnostic` operation before throwing `CONTRACT_VALIDATION_FAILED` (502). The report
+uses `kind: other`, `errorKind: validation-failed`, redacted error evidence and the response
+correlation when available. It never includes the request path, query, response body, diff or
+validation reason. Healthy responses emit no refusal. Delivery retains the existing bounded
+client transport and explicit loss accounting; it does not promise persistence when that
+transport is unavailable.
 
 Closed failure outcomes and positive failure counters that would otherwise be optional context must
 be declared with the owning operation's exact `diagnosticWhen` condition. Regression proofs exercise

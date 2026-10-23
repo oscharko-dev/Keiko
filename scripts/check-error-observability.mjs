@@ -121,6 +121,30 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateScorecard",
+    "Pure scorecard inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+  ],
+  [
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateSelection",
+    "Pure selection inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+  ],
+  [
+    "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest",
+    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskCatalog",
+    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskRunResult",
+    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass",
+    "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
+  ],
+  [
     "packages/keiko-server/src/grounded-preselection-reranker.ts:rerankGroundedCandidates",
     "The catch preserves the original error in PreselectionRerankerResult.failure. The connected-context owner persists failureKind, frames and causeChain on selection-details; cancellation is rethrown.",
   ],
@@ -175,6 +199,14 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
     "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
     "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
+  ],
+  [
+    "packages/keiko-contracts/src/observability.ts:completeRegistrationShape",
+    "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind",
+    "An unreadable error kind becomes the closed registration-mismatch refusal carried by the rejection sentinel to the physical writer.",
   ],
   [
     "packages/keiko-contracts/src/opencode-service-host.ts:dataRecord",
@@ -472,8 +504,60 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   ],
 ]);
 
-function isReviewedFailurePath(path, owner) {
-  return REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`);
+function isReviewedFailurePath(path, owner, node) {
+  if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`)) return false;
+  if (path === "packages/keiko-contracts/src/git-editor.ts" && owner === "parserInspectionClass")
+    return exactFailureFallback(node, "unknown error");
+  if (path === "packages/keiko-contracts/src/command-runner.ts")
+    return exactCommandInspectionRefusal(node);
+  if (path === "packages/keiko-contracts/src/prompt-enhancer-validation.ts")
+    return exactCommandInspectionRefusal(node);
+  if (path !== "packages/keiko-contracts/src/observability.ts") return true;
+  if (owner === "completeRegistrationShape") return exactFailureFallback(node, false);
+  if (owner === "rejectedActivityLogEventKind")
+    return exactFailureFallback(node, "registration-mismatch");
+  return true;
+}
+
+function namedFailureProperty(property, name) {
+  return (
+    ts.isPropertyAssignment(property) &&
+    ts.isIdentifier(property.name) &&
+    property.name.text === name
+  );
+}
+
+function exactInspectionErrors(property) {
+  if (!namedFailureProperty(property, "errors")) return false;
+  const value = property.initializer;
+  return (
+    ts.isArrayLiteralExpression(value) &&
+    value.elements.length === 1 &&
+    ts.isStringLiteral(value.elements[0]) &&
+    value.elements[0].text === "payload could not be inspected"
+  );
+}
+
+function exactCommandInspectionRefusal(node) {
+  if (node.block.statements.length !== 1) return false;
+  const statement = node.block.statements[0];
+  if (!ts.isReturnStatement(statement) || statement.expression === undefined) return false;
+  const expression = statement.expression;
+  if (!ts.isObjectLiteralExpression(expression) || expression.properties.length !== 2) return false;
+  const [ok, errors] = expression.properties;
+  return (
+    namedFailureProperty(ok, "ok") &&
+    ok.initializer.kind === ts.SyntaxKind.FalseKeyword &&
+    exactInspectionErrors(errors)
+  );
+}
+
+function exactFailureFallback(node, value) {
+  if (node.block.statements.length !== 1) return false;
+  const statement = node.block.statements[0];
+  if (!ts.isReturnStatement(statement) || statement.expression === undefined) return false;
+  if (value === false) return statement.expression.kind === ts.SyntaxKind.FalseKeyword;
+  return ts.isStringLiteral(statement.expression) && statement.expression.text === value;
 }
 
 function hasRawConsoleCall(node) {
@@ -783,7 +867,7 @@ function failurePathFinding(sourceFile, node, path) {
   const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const owner = catchFunctionName(node);
   if (hasRawConsoleCall(node)) return { path, line, owner, kind: "raw-console-catch" };
-  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner)) {
+  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner, node)) {
     return { path, line, owner, kind: "unregistered-catch" };
   }
   return undefined;

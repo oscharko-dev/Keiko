@@ -217,3 +217,45 @@ describe("validateCodingWorkbenchRuntimeSkillsChannelPayload (#3417)", () => {
     expect(channelValidates(smuggled)).toBe(false);
   });
 });
+
+describe("C2 skill collection admission", () => {
+  it("refuses malformed capabilities skipped by caller-owned methods", () => {
+    const capabilities: unknown[] = [42];
+    Object.defineProperty(capabilities, "flatMap", { value: (): unknown[] => [] });
+    Object.defineProperty(capabilities, "every", { value: (): boolean => true });
+    expect(isSkillCapabilitySet(capabilities)).toBe(false);
+  });
+  it("refuses a malformed skill entry skipped by a caller-owned flatMap", () => {
+    const skills = [{ skillId: "skl_repo-structure-summary@1" }];
+    Object.defineProperty(skills, "flatMap", { value: (): unknown[] => [] });
+    expect(validateSkillDiscoveryResultV1(listing(skills)).ok).toBe(false);
+  });
+  it("preserves a canonical listing and member reference", () => {
+    const member = entry();
+    const value = listing([member]);
+    const result = validateSkillDiscoveryResultV1(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(value);
+      expect(result.value.skills[0]).toBe(member);
+    }
+  });
+});
+
+describe("C2 Sonar comparison preservation", () => {
+  it("keeps previous-member NaN refusal and healthy sorted observations", async () => {
+    const { isSkillCapabilitySet: publicCapabilitySet } =
+      await import("@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery");
+    for (const check of [isSkillCapabilitySet, publicCapabilitySet]) {
+      for (const invalid of [false, true]) {
+        const capabilities = ["keiko.repo.search", "keiko.workspace.read"];
+        let reads = 0;
+        Object.defineProperty(capabilities, "0", {
+          get: (): unknown => (++reads === 3 && invalid ? Number.NaN : "keiko.repo.search"),
+        });
+        expect(check(capabilities)).toBe(!invalid);
+        expect(reads).toBe(3);
+      }
+    }
+  });
+});

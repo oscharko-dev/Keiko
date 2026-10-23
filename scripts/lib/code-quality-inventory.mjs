@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
@@ -16,7 +16,7 @@ const TOOL_CATALOG_FIXTURES = new Set([
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
 ]);
 export function policyDigest(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
+  return hash("sha256", bytes, "hex");
 }
 
 function policyGit(root, args) {
@@ -178,10 +178,31 @@ function safePolicyFile(root, path) {
 export function collectPolicyMembership(root) {
   const tracked = new Set(policyGit(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
   const additions = policyGit(root, ["ls-files", "-z", "--others", "--exclude-standard"]);
-  const paths = [...new Set([...tracked, ...additions.split("\0").filter(Boolean)])].sort(
-    (left, right) => left.localeCompare(right),
-  );
+  const paths = sortedPolicyPaths([...tracked, ...additions.split("\0").filter(Boolean)]);
   return { tracked, paths };
+}
+
+function sortedPolicyPaths(paths) {
+  return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
+}
+
+export function collectPolicyPaths(root) {
+  const output = policyGit(root, [
+    "ls-files",
+    "-z",
+    "-t",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  ]);
+  const tracked = [];
+  const additions = [];
+  for (const entry of output.split("\0").filter(Boolean)) {
+    if (!/^[HSMRCK?] /u.test(entry)) throw new TypeError("invalid-membership-status");
+    (entry.startsWith("? ") ? additions : tracked).push(entry.slice(2));
+  }
+  // Git emits others first. Preserve collection's tracked-first order for locale-equal names.
+  return sortedPolicyPaths([...tracked, ...additions]);
 }
 
 export async function collectPolicySubject(root) {

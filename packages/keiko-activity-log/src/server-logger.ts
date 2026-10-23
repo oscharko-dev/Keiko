@@ -32,7 +32,7 @@ import { performance } from "node:perf_hooks";
 import {
   activityLogEventRegistration,
   activityLogEventWillBeRejected,
-  attachActivityLogEventRegistration,
+  copyActivityLogEventMetadata,
   recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ActivityLogWriterKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
@@ -224,7 +224,7 @@ function buildEvent(
     errorKind: input.errorKind,
     extra: mergeExtra(binding, input, registeredFields),
   };
-  return attachActivityLogEventRegistration(event, registration);
+  return copyActivityLogEventMetadata(input, event);
 }
 
 export interface ServerLoggerOptions {

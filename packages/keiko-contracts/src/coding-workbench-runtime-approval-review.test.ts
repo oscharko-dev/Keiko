@@ -135,3 +135,19 @@ describe("coding workbench runtime approval review channel", () => {
     );
   });
 });
+
+describe("C2 approval path member admission", () => {
+  it("refuses a numeric path skipped by a caller-owned iterator", () => {
+    const paths: unknown[] = [42];
+    Object.defineProperty(paths, "forEach", { value: (): void => undefined });
+    expect(
+      validateCodingWorkbenchRuntimeApprovalReviewChannelPayload(activeReview({ paths })).ok,
+    ).toBe(false);
+  });
+  it("retains canonical path and channel references", () => {
+    const value = activeReview();
+    const result = validateCodingWorkbenchRuntimeApprovalReviewChannelPayload(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+});

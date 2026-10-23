@@ -20,7 +20,8 @@ afterEach(() => {
 });
 const QUERY: RetrievalQuery = {
   kind: "natural-language",
-  text: "Vesper temperature",
+  // Isolate entry-count pressure; multi-group metadata has its own capacity case below.
+  text: "Vesper",
   caseSensitive: false,
   maxResults: 20,
   emittedAtMs: 0,
@@ -54,7 +55,7 @@ function indexFixture(persistent: boolean): {
   return { index: reopen(), reopen };
 }
 
-async function fullRetiredShard(persistent = false): Promise<ChurnFixture> {
+async function fullRetiredShard(persistent = false, query = QUERY): Promise<ChurnFixture> {
   const root = mkdtempSync(join(tmpdir(), "keiko-streaming-index-churn-"));
   roots.push(root);
   writeFileSync(join(root, "manual.html"), "Vesper temperature is 73.5 C.\n");
@@ -66,7 +67,7 @@ async function fullRetiredShard(persistent = false): Promise<ChurnFixture> {
   const reads = vi.fn(nodeWorkspaceFs.readFileBytes);
   const fs = { ...nodeWorkspaceFs, readFileBytes: reads };
   const { index, reopen } = indexFixture(persistent);
-  const first = await producedSnapshot(scope, fs, index);
+  const first = await producedSnapshot(scope, fs, index, query);
   const records = retiredRecords(first.snapshot);
   await index.saveSnapshot(first.key, {
     ...first.snapshot,
@@ -82,9 +83,10 @@ async function producedSnapshot(
   scope: SearchScope,
   fs: WorkspaceFs,
   index: ReturnType<typeof createWorkspaceIndex>,
+  query: RetrievalQuery,
 ): Promise<{ readonly key: WorkspaceIndexScopeKey; readonly snapshot: WorkspaceIndexSnapshot }> {
   const saved: { key: WorkspaceIndexScopeKey; snapshot: WorkspaceIndexSnapshot }[] = [];
-  await searchText(scope, QUERY, LIMITS, {
+  await searchText(scope, query, LIMITS, {
     fs,
     nowMs: NOW,
     workspaceIndex: {
@@ -112,6 +114,36 @@ function retiredRecords(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnapsho
 }
 
 describe("bounded matching-index capacity under ordinary-folder churn", () => {
+  it.each([false, true])(
+    "recovers capacity with query-group metadata (encrypted=%s)",
+    async (encrypted) => {
+      const query = { ...QUERY, text: "Vesper temperature" };
+      const { scope, fs, reads, reopen } = await fullRetiredShard(encrypted, query);
+      const first = await searchText(scope, query, LIMITS, {
+        fs,
+        workspaceIndex: reopen(),
+        nowMs: NOW,
+      });
+      expect(first.workspaceIndex?.droppedRecords).toBeGreaterThanOrEqual(1);
+      expect(first.atoms[0]?.metrics?.lexicalQueryGroupKey).toMatch(/^[1-9a-f][a-f0-9]{0,31}$/u);
+      const second = await searchText(scope, query, LIMITS, {
+        fs,
+        workspaceIndex: reopen(),
+        nowMs: NOW,
+      });
+      expect(second.atoms).toEqual(first.atoms);
+      reads.mockClear();
+      const warm = await searchText(scope, query, LIMITS, {
+        fs,
+        workspaceIndex: reopen(),
+        nowMs: NOW,
+      });
+      expect(warm.atoms).toEqual(first.atoms);
+      expect(warm.workspaceIndex?.reusedRecords).toBe(1);
+      expect(reads).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "recovers reusable capacity after churn (encrypted=%s)",
     async (encrypted) => {

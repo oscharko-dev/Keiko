@@ -52,9 +52,9 @@ against code that was already proven.
 
 An integration run (`push` to a protected integration branch, or `merge_group`) resolves, before any
 gate starts, whether this commit's tree is already bound to complete green evidence. When it is, the
-jobs whose verdict that evidence carries do not run: `semantic-duplication`, `core-quality`,
+jobs whose verdict that evidence carries do not run: `semantic-duplication`, `core-quality`, `code-quality-policy`,
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
-`cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, and `ui`.
+`cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, `firefox-smoke`, and `ui`.
 
 `protected-branch-gate`, `secret-scan`, `change-scope`, and the resolver itself always run: they cost
 under two minutes in total and they judge the integration commit's own identity and history rather
@@ -68,7 +68,7 @@ never advances `dev`'s branch history, new-code period or version events. After 
 (eleven merges, 2026-09-20 to 2026-09-25) the `dev` overview on SonarCloud still showed the last
 full run, so the whole-project measures nobody's diff gate watches — overall coverage, duplication,
 debt trend — had gone unobserved. The coverage chain is that analysis's input, so it runs with it;
-the other six jobs remain reused, and a merge group or a push to another integration branch keeps
+the remaining jobs stay reused, and a merge group or a push to another integration branch keeps
 the plain guard. Cost: about 25 minutes of wall time per `dev` merge for this chain. The `ci`
 aggregate needs no change: it already accepts `success` from a gated job that ran anyway and fails
 closed on any other state, so a red `dev` analysis turns the integration run red.
@@ -85,6 +85,10 @@ closed on any other state, so a red `dev` analysis turns the integration run red
 5. that run _executed_ every job D1 skips — a candidate that skipped one is not evidence, which
    forecloses a chain in which one reuse authorizes the next.
 
+The static code-quality policy matrix requires successful evidence for both exact Node 24.18.0 and
+Node 26.8.1 job names. Missing, failed, cancelled or skipped evidence for either leg forces fresh
+execution; one successful leg cannot authorize reuse for the other.
+
 The Node 26 compatibility matrix requires successful evidence for both exact shard job names.
 Each shard runs its partition of the full hermetic test inventory and independently retains the
 complete toolchain, typecheck, CLI, UI, offline preparation and native installable-package proofs.
@@ -96,6 +100,11 @@ not merely one matching matrix prefix. Missing or unsuccessful evidence for eith
 architecture, Linux x64, or Windows x64 forces fresh execution. Its fixture is shared with the
 post-merge portable workflow, while archive identity, staging, signing, and attestation remain
 release-specific proofs outside this reuse claim.
+
+The Firefox smoke matrix requires successful evidence for both exact names,
+`Firefox smoke (shard 1/2)` and `Firefox smoke (shard 2/2)`. Missing, failed, cancelled or skipped
+evidence for either leg forces fresh execution. A duplicate first leg, an unrelated name sharing
+the prefix or a successful `ui` aggregate cannot substitute for either partition.
 
 ### D3 — Every uncertainty runs the full matrix
 

@@ -9,8 +9,7 @@
 // evaluation-harness diffs.
 //
 // Operation envelope validators (proposal/acceptance/rejection/update/etc.) live in the
-// sibling module `memory-operations-validation.ts` to keep both files under the 400-LOC
-// budget.
+// sibling module `memory-operations-validation.ts` to keep operation-specific checks separate.
 
 import type {
   MemoryEdge,
@@ -151,136 +150,206 @@ export function checkStatusTransition(from: MemoryStatus, to: MemoryStatus): Sta
   return { ok: true };
 }
 
+interface MemoryObservationDiagnostics {
+  errors: string[];
+}
+
 // ─── Scope ────────────────────────────────────────────────────────────────────
 // The validator checks that the coordinate field that MUST be present for the given kind
 // is a non-empty string. Scope-CROSSING legality (i.e. "can a request at scope X read a
 // record at scope Y") is an authorization decision belonging to downstream layers; this
 // validator only proves the scope itself is well-formed.
-function validateScopeCoordinate(input: Record<string, unknown>, errors: string[]): void {
+function validateScopeCoordinate(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   const kind = input.kind;
   if (kind === "global") {
-    return;
+    return true;
   }
   if (kind === "user" && !isNonEmptyTrimmedString(input.userId)) {
     errors.push("scope.userId must be a non-empty string for kind=user");
+    valid = false;
   }
   if (kind === "workspace" && !isNonEmptyTrimmedString(input.workspaceId)) {
     errors.push("scope.workspaceId must be a non-empty string for kind=workspace");
+    valid = false;
   }
   if (kind === "project" && !isNonEmptyTrimmedString(input.projectId)) {
     errors.push("scope.projectId must be a non-empty string for kind=project");
+    valid = false;
   }
   if (kind === "workflow" && !isNonEmptyTrimmedString(input.workflowDefinitionId)) {
     errors.push("scope.workflowDefinitionId must be a non-empty string for kind=workflow");
+    valid = false;
   }
+  return valid;
+}
+
+function observeMemoryScope(
+  input: unknown,
+  diagnostics: MemoryObservationDiagnostics,
+): input is MemoryScope {
+  if (!isRecord(input)) {
+    diagnostics.errors = ["scope must be an object"];
+    return false;
+  }
+  if (!isMember(input.kind, MEMORY_SCOPE_KINDS)) {
+    diagnostics.errors = [`scope.kind must be one of ${MEMORY_SCOPE_KINDS.join("|")}`];
+    return false;
+  }
+  const errors = diagnostics.errors;
+  return validateScopeCoordinate(input, errors);
 }
 
 export function validateMemoryScope(input: unknown): MemoryValidation<MemoryScope> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["scope must be an object"] };
+  const diagnostics: MemoryObservationDiagnostics = { errors: [] };
+  if (!observeMemoryScope(input, diagnostics)) {
+    return { ok: false, errors: diagnostics.errors };
   }
-  if (!isMember(input.kind, MEMORY_SCOPE_KINDS)) {
-    return { ok: false, errors: [`scope.kind must be one of ${MEMORY_SCOPE_KINDS.join("|")}`] };
-  }
-  const errors: string[] = [];
-  validateScopeCoordinate(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as MemoryScope };
+  return { ok: true, value: input };
 }
 
 // ─── Validity interval ────────────────────────────────────────────────────────
-export function validateMemoryValidityInterval(
+function observeMemoryValidityInterval(
   input: unknown,
-): MemoryValidation<MemoryValidityInterval> {
+  diagnostics: MemoryObservationDiagnostics,
+): input is MemoryValidityInterval {
   if (!isRecord(input)) {
-    return { ok: false, errors: ["validity must be an object"] };
+    diagnostics.errors = ["validity must be an object"];
+    return false;
   }
-  const errors: string[] = [];
+  const errors = diagnostics.errors;
+  let valid = true;
   if (!isFiniteNonNegativeNumber(input.validFrom)) {
     errors.push("validity.validFrom must be a finite non-negative number");
+    valid = false;
   }
   if (input.validUntil !== undefined) {
     if (!isFiniteNonNegativeNumber(input.validUntil)) {
       errors.push("validity.validUntil must be a finite non-negative number when set");
+      valid = false;
     } else if (isFiniteNonNegativeNumber(input.validFrom) && input.validUntil < input.validFrom) {
       errors.push("validity.validUntil must be greater than or equal to validFrom");
+      valid = false;
     }
   }
-  if (errors.length > 0) {
-    return { ok: false, errors };
+  return valid;
+}
+
+export function validateMemoryValidityInterval(
+  input: unknown,
+): MemoryValidation<MemoryValidityInterval> {
+  const diagnostics: MemoryObservationDiagnostics = { errors: [] };
+  if (!observeMemoryValidityInterval(input, diagnostics)) {
+    return { ok: false, errors: diagnostics.errors };
   }
-  return { ok: true, value: input as unknown as MemoryValidityInterval };
+  return { ok: true, value: input };
 }
 
 // ─── Provenance ───────────────────────────────────────────────────────────────
-function validateModelIdentity(input: Record<string, unknown>, errors: string[]): void {
+function validateModelIdentity(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   const identity = input.modelIdentity;
   if (identity === undefined) {
-    return;
+    return true;
   }
   if (!isRecord(identity)) {
     errors.push("provenance.modelIdentity must be an object when set");
-    return;
+    return false;
   }
   if (!isNonEmptyTrimmedString(identity.provider)) {
     errors.push("provenance.modelIdentity.provider must be a non-empty string");
+    valid = false;
   }
   if (!isNonEmptyTrimmedString(identity.modelId)) {
     errors.push("provenance.modelIdentity.modelId must be a non-empty string");
+    valid = false;
   }
   if (identity.modelRevision !== undefined && !isNonEmptyTrimmedString(identity.modelRevision)) {
     errors.push("provenance.modelIdentity.modelRevision must be a non-empty string when set");
+    valid = false;
   }
+  return valid;
 }
 
-export function validateMemoryProvenance(input: unknown): MemoryValidation<MemoryProvenance> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["provenance must be an object"] };
-  }
-  const errors: string[] = [];
-  if (!isMember(input.sourceKind, MEMORY_SOURCE_KINDS)) {
-    errors.push(`provenance.sourceKind must be one of ${MEMORY_SOURCE_KINDS.join("|")}`);
-  }
-  validateOptionalReference("provenance.sourceConversationId", input.sourceConversationId, errors);
-  validateOptionalReference("provenance.sourceWorkflowRunId", input.sourceWorkflowRunId, errors);
-  validateOptionalReference(
-    "provenance.sourceEvidenceManifestId",
-    input.sourceEvidenceManifestId,
-    errors,
-  );
-  if (!isFiniteNonNegativeNumber(input.capturedAt)) {
-    errors.push("provenance.capturedAt must be a finite non-negative number");
-  }
-  validateModelIdentity(input, errors);
-  if (!isUnitInterval(input.confidence)) {
-    errors.push("provenance.confidence must be a finite number in [0, 1]");
-  }
-  if (!isMember(input.sensitivity, MEMORY_SENSITIVITIES)) {
-    errors.push(`provenance.sensitivity must be one of ${MEMORY_SENSITIVITIES.join("|")}`);
-  }
+function validateProvenanceRationale(input: Record<string, unknown>, errors: string[]): boolean {
   if (
     input.captureRationale !== undefined &&
     !isSafeText(input.captureRationale, MEMORY_RATIONALE_MAX_CHARS)
   ) {
     errors.push("provenance.captureRationale must be a bounded control-free string when set");
+    return false;
   }
-  if (errors.length > 0) {
-    return { ok: false, errors };
+  return true;
+}
+
+function validateProvenanceReferences(input: Record<string, unknown>, errors: string[]): boolean {
+  const conversationOk = validateOptionalReference(
+    "provenance.sourceConversationId",
+    input.sourceConversationId,
+    errors,
+  );
+  const workflowOk = validateOptionalReference(
+    "provenance.sourceWorkflowRunId",
+    input.sourceWorkflowRunId,
+    errors,
+  );
+  const evidenceOk = validateOptionalReference(
+    "provenance.sourceEvidenceManifestId",
+    input.sourceEvidenceManifestId,
+    errors,
+  );
+  return conversationOk && workflowOk && evidenceOk;
+}
+
+function observeMemoryProvenance(
+  input: unknown,
+  diagnostics: MemoryObservationDiagnostics,
+): input is MemoryProvenance {
+  if (!isRecord(input)) {
+    diagnostics.errors = ["provenance must be an object"];
+    return false;
   }
-  return { ok: true, value: input as unknown as MemoryProvenance };
+  const errors = diagnostics.errors;
+  let valid = true;
+  if (!isMember(input.sourceKind, MEMORY_SOURCE_KINDS)) {
+    errors.push(`provenance.sourceKind must be one of ${MEMORY_SOURCE_KINDS.join("|")}`);
+    valid = false;
+  }
+  const referencesOk = validateProvenanceReferences(input, errors);
+  if (!isFiniteNonNegativeNumber(input.capturedAt)) {
+    errors.push("provenance.capturedAt must be a finite non-negative number");
+    valid = false;
+  }
+  const modelOk = validateModelIdentity(input, errors);
+  if (!isUnitInterval(input.confidence)) {
+    errors.push("provenance.confidence must be a finite number in [0, 1]");
+    valid = false;
+  }
+  if (!isMember(input.sensitivity, MEMORY_SENSITIVITIES)) {
+    errors.push(`provenance.sensitivity must be one of ${MEMORY_SENSITIVITIES.join("|")}`);
+    valid = false;
+  }
+  const rationaleOk = validateProvenanceRationale(input, errors);
+  return valid && referencesOk && modelOk && rationaleOk;
+}
+
+export function validateMemoryProvenance(input: unknown): MemoryValidation<MemoryProvenance> {
+  const diagnostics: MemoryObservationDiagnostics = { errors: [] };
+  if (!observeMemoryProvenance(input, diagnostics)) {
+    return { ok: false, errors: diagnostics.errors };
+  }
+  return { ok: true, value: input };
 }
 
 // ─── Structured payload ───────────────────────────────────────────────────────
-function validateStringListPayload(input: Record<string, unknown>, errors: string[]): void {
+function validateStringListPayload(input: Record<string, unknown>, errors: string[]): boolean {
   if (!Array.isArray(input.items)) {
     errors.push("payload.items must be an array for kind=string-list");
-    return;
+    return false;
   }
   if (input.items.length > MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES) {
     errors.push("payload.items exceeds the maximum entry count");
-    return;
+    return false;
   }
   for (const item of input.items) {
     if (
@@ -290,9 +359,10 @@ function validateStringListPayload(input: Record<string, unknown>, errors: strin
       FORBIDDEN_CONTROL_RE.test(item)
     ) {
       errors.push("payload.items entry must be a non-empty bounded control-free string");
-      return;
+      return false;
     }
   }
+  return true;
 }
 
 function isValidKeyValuePayloadEntry(entry: unknown): boolean {
@@ -307,54 +377,65 @@ function isValidKeyValuePayloadEntry(entry: unknown): boolean {
   );
 }
 
-function validateKeyValuePayload(input: Record<string, unknown>, errors: string[]): void {
+function validateKeyValuePayload(input: Record<string, unknown>, errors: string[]): boolean {
   if (!Array.isArray(input.entries)) {
     errors.push("payload.entries must be an array for kind=key-value");
-    return;
+    return false;
   }
   if (input.entries.length > MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES) {
     errors.push("payload.entries exceeds the maximum entry count");
-    return;
+    return false;
   }
   for (const entry of input.entries) {
     if (!isValidKeyValuePayloadEntry(entry)) {
       errors.push("payload.entries entry must have a bounded control-free key and string value");
-      return;
+      return false;
     }
   }
+  return true;
+}
+
+function observeMemoryStructuredPayload(
+  input: unknown,
+  diagnostics: MemoryObservationDiagnostics,
+): input is MemoryStructuredPayload {
+  if (!isRecord(input)) {
+    diagnostics.errors = ["payload must be an object"];
+    return false;
+  }
+  if (!isMember(input.kind, MEMORY_STRUCTURED_PAYLOAD_KINDS)) {
+    diagnostics.errors = [
+      `payload.kind must be one of ${MEMORY_STRUCTURED_PAYLOAD_KINDS.join("|")}`,
+    ];
+    return false;
+  }
+  const errors = diagnostics.errors;
+  if (input.kind === "string-list") {
+    return validateStringListPayload(input, errors);
+  }
+  return validateKeyValuePayload(input, errors);
 }
 
 export function validateMemoryStructuredPayload(
   input: unknown,
 ): MemoryValidation<MemoryStructuredPayload> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["payload must be an object"] };
+  const diagnostics: MemoryObservationDiagnostics = { errors: [] };
+  if (!observeMemoryStructuredPayload(input, diagnostics)) {
+    return { ok: false, errors: diagnostics.errors };
   }
-  if (!isMember(input.kind, MEMORY_STRUCTURED_PAYLOAD_KINDS)) {
-    return {
-      ok: false,
-      errors: [`payload.kind must be one of ${MEMORY_STRUCTURED_PAYLOAD_KINDS.join("|")}`],
-    };
-  }
-  const errors: string[] = [];
-  if (input.kind === "string-list") {
-    validateStringListPayload(input, errors);
-  } else {
-    validateKeyValuePayload(input, errors);
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as MemoryStructuredPayload };
+  return { ok: true, value: input };
 }
 
 // ─── Edge ─────────────────────────────────────────────────────────────────────
-function validateEdgeEndpoints(input: Record<string, unknown>, errors: string[]): void {
+function validateEdgeEndpoints(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isNonEmptyTrimmedString(input.fromMemoryId)) {
     errors.push("edge.fromMemoryId must be a non-empty string");
+    valid = false;
   }
   if (!isNonEmptyTrimmedString(input.toMemoryId)) {
     errors.push("edge.toMemoryId must be a non-empty string");
+    valid = false;
   }
   if (
     isNonEmptyTrimmedString(input.fromMemoryId) &&
@@ -362,44 +443,64 @@ function validateEdgeEndpoints(input: Record<string, unknown>, errors: string[])
     input.fromMemoryId === input.toMemoryId
   ) {
     errors.push("edge.fromMemoryId and edge.toMemoryId must differ");
+    valid = false;
   }
+  return valid;
 }
 
-function validateEdgeOptionalFields(input: Record<string, unknown>, errors: string[]): void {
+function validateEdgeOptionalFields(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (input.confidence !== undefined && !isUnitInterval(input.confidence)) {
     errors.push("edge.confidence must be a finite number in [0, 1] when set");
+    valid = false;
   }
   if (
     input.provenanceSummary !== undefined &&
     !isSafeText(input.provenanceSummary, MEMORY_RATIONALE_MAX_CHARS)
   ) {
     errors.push("edge.provenanceSummary must be a bounded control-free string when set");
+    valid = false;
   }
+  return valid;
 }
 
-export function validateMemoryEdge(input: unknown): MemoryValidation<MemoryEdge> {
+function observeMemoryEdge(
+  input: unknown,
+  diagnostics: MemoryObservationDiagnostics,
+): input is MemoryEdge {
   if (!isRecord(input)) {
-    return { ok: false, errors: ["edge must be an object"] };
+    diagnostics.errors = ["edge must be an object"];
+    return false;
   }
-  const errors: string[] = [];
+  const errors = diagnostics.errors;
+  let valid = true;
   if (input.schemaVersion !== "1") {
     errors.push('edge.schemaVersion must be the literal "1"');
+    valid = false;
   }
   if (!isNonEmptyTrimmedString(input.id)) {
     errors.push("edge.id must be a non-empty string");
+    valid = false;
   }
-  validateEdgeEndpoints(input, errors);
+  const endpointsOk = validateEdgeEndpoints(input, errors);
   if (!isMember(input.kind, MEMORY_EDGE_KINDS)) {
     errors.push(`edge.kind must be one of ${MEMORY_EDGE_KINDS.join("|")}`);
+    valid = false;
   }
   if (!isFiniteNonNegativeNumber(input.createdAt)) {
     errors.push("edge.createdAt must be a finite non-negative number");
+    valid = false;
   }
-  validateEdgeOptionalFields(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
+  const optionalOk = validateEdgeOptionalFields(input, errors);
+  return valid && endpointsOk && optionalOk;
+}
+
+export function validateMemoryEdge(input: unknown): MemoryValidation<MemoryEdge> {
+  const diagnostics: MemoryObservationDiagnostics = { errors: [] };
+  if (!observeMemoryEdge(input, diagnostics)) {
+    return { ok: false, errors: diagnostics.errors };
   }
-  return { ok: true, value: input as unknown as MemoryEdge };
+  return { ok: true, value: input };
 }
 
 // ─── Stale model metadata heuristic ───────────────────────────────────────────

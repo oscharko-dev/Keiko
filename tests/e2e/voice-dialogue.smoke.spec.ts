@@ -14,7 +14,8 @@
 // integration suites cover parser, turn-manager, and BFF persistence behavior; this smoke proves the
 // user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
-import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,16 @@ import type { Chat, ChatMessage, GroundedAnswer } from "@oscharko-dev/keiko-cont
 import { evidenceScreenshotPath } from "./support/evidence.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
+import { e2eStateDir } from "./support/e2e-state-dir.js";
+import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  type SupportQueryResult,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  executeSupportQuery,
+  resolveSupportSelection,
+} from "../../packages/keiko-cli/src/support-query-cli.js";
+import { groundedSynthesisAttemptUsage } from "../../packages/keiko-server/src/grounded-answer.js";
 
 const MEMORY_CAPTURE_TRANSCRIPT =
   "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.";
@@ -515,11 +526,15 @@ function captureVoiceChatSends(page: Page): VoiceChatSendCapture {
 }
 
 interface GroundedSendCapture {
+  readonly responseCorrelations: () => readonly string[];
+  readonly requestCorrelations: () => readonly (string | undefined)[];
   readonly payloads: () => readonly Record<string, unknown>[];
   readonly legacyPaths: () => readonly string[];
 }
 
 function captureGroundedSends(page: Page): GroundedSendCapture {
+  const responseCorrelations: string[] = [];
+  const requestCorrelations: (string | undefined)[] = [];
   const payloads: Record<string, unknown>[] = [];
   const legacyPaths: string[] = [];
   page.on("request", (request) => {
@@ -532,8 +547,19 @@ function captureGroundedSends(page: Page): GroundedSendCapture {
     const payload: unknown = request.postDataJSON();
     if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
     payloads.push(payload as Record<string, unknown>);
+    requestCorrelations.push(request.headers()["x-keiko-correlation-id"]);
   });
-  return { payloads: () => payloads, legacyPaths: () => legacyPaths };
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname !== "/api/chats/messages/grounded") return;
+    const correlation = response.headers()["x-keiko-correlation-id"];
+    if (correlation !== undefined) responseCorrelations.push(correlation);
+  });
+  return {
+    payloads: () => payloads,
+    legacyPaths: () => legacyPaths,
+    responseCorrelations: () => responseCorrelations,
+    requestCorrelations: () => requestCorrelations,
+  };
 }
 
 type ConnectedGroundedAnswer = Extract<
@@ -552,6 +578,7 @@ type GroundingCoverageIdentity =
   Omit<NonNullable<ConnectedGroundedAnswer["contextPack"]["coverage"]>, "elapsedMs"> | undefined;
 
 interface GroundingIdentity {
+  readonly promptContext: ConnectedGroundedAnswer["promptContext"];
   readonly citations: readonly GroundingCitationIdentity[];
   readonly content: string;
   readonly contextPack: {
@@ -573,9 +600,14 @@ interface GroundingIdentity {
   readonly uncertainty: ConnectedGroundedAnswer["uncertainty"];
 }
 
-type RetrievalParityIdentity = Omit<GroundingIdentity, "citations" | "contextPack"> & {
+type RetrievalParityIdentity = Omit<
+  GroundingIdentity,
+  "citations" | "contextPack" | "promptContext"
+> & {
   readonly citations: readonly Omit<GroundingCitationIdentity, "stableId">[];
-  readonly contextPack: Omit<GroundingIdentity["contextPack"], "scopeId">;
+  readonly contextPack: Omit<GroundingIdentity["contextPack"], "scopeId" | "usage"> & {
+    readonly usage: Omit<GroundingIdentity["contextPack"]["usage"], "modelInputTokens">;
+  };
 };
 
 interface PersistedGroundingSnapshot {
@@ -596,6 +628,7 @@ function groundingCoverageIdentity(
 function groundingIdentity(answer: ConnectedGroundedAnswer): GroundingIdentity {
   const { contextPack } = answer;
   return {
+    promptContext: answer.promptContext,
     citations: answer.citations.map((citation) => ({
       lineRange: citation.lineRange,
       scopePath: citation.scopePath,
@@ -632,6 +665,8 @@ function groundingIdentity(answer: ConnectedGroundedAnswer): GroundingIdentity {
 
 function retrievalParityIdentity(identity: GroundingIdentity): RetrievalParityIdentity {
   const { scopeId, ...contextPack } = identity.contextPack;
+  const { modelInputTokens, ...usage } = contextPack.usage;
+  if (!Number.isSafeInteger(modelInputTokens)) throw new TypeError("Grounding charge was invalid");
   if (scopeId.length === 0) throw new Error("Grounding scope identity was empty");
   return {
     citations: identity.citations.map((citation) => ({
@@ -640,10 +675,134 @@ function retrievalParityIdentity(identity: GroundingIdentity): RetrievalParityId
       score: citation.score,
     })),
     content: identity.content,
-    contextPack,
+    // Elapsed-dependent request accounting is proven independently for each turn below.
+    contextPack: { ...contextPack, usage },
     omittedCount: identity.omittedCount,
     uncertainty: identity.uncertainty,
   };
+}
+
+async function groundingAccountingQuery(correlationId: string): Promise<SupportQueryResult> {
+  const stateId = process.env.KEIKO_E2E_VALIDATED_STATE_ID;
+  if (stateId === undefined || stateId.length === 0)
+    throw new TypeError("Grounding accounting requires the validated fixture state");
+  const stateDir = e2eStateDir(stateId);
+  const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
+  return executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
+    trigger: "query",
+  }).result;
+}
+
+async function requireGroundingAccounting(correlationId: string): Promise<SupportQueryResult> {
+  let result: SupportQueryResult | undefined;
+  await expect
+    .poll(async () => {
+      result = await groundingAccountingQuery(correlationId);
+      return {
+        status: result.diagnosticSufficiency.status,
+        answerRecorded: result.events.some(
+          (event) =>
+            event.parsed.correlationId === correlationId &&
+            event.parsed.view.op === "search.connected-context.answer-details",
+        ),
+      };
+    })
+    .toEqual({ status: "complete", answerRecorded: true });
+  if (result === undefined) throw new TypeError("Grounding accounting query was unavailable");
+  expect(result.integrity).toMatchObject({ classification: "supported", loss: "none" });
+  expect(result.truncation.state).toBe("none");
+  expect(result.loss.state).toBe("none");
+  return result;
+}
+
+function groundingActivity(
+  result: SupportQueryResult,
+  correlationId: string,
+  op: string,
+): Readonly<Record<string, unknown>> {
+  const events = result.events.filter(
+    (event) => event.parsed.correlationId === correlationId && event.parsed.view.op === op,
+  );
+  expect(events, `one registered ${op} for the grounded turn`).toHaveLength(1);
+  const fields = events[0]?.parsed.view.extra;
+  if (fields === undefined) throw new TypeError("Grounding activity fields were unavailable");
+  return fields;
+}
+
+function groundingActivityCount(fields: Readonly<Record<string, unknown>>, key: string): number {
+  const value = fields[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new TypeError("Grounding activity count was invalid");
+  return value;
+}
+
+function expectSingleGroundingSynthesis(result: SupportQueryResult, correlationId: string): void {
+  expect(
+    groundingActivity(result, correlationId, "search.connected-context.completed"),
+  ).toMatchObject({
+    usageModelInputTokens: 0,
+    usageModelOutputTokens: 0,
+  });
+  expect(
+    groundingActivity(result, correlationId, "search.connected-context.answer-details"),
+  ).toMatchObject({
+    synthesisCallCount: 1,
+    completedSynthesisCallCount: 1,
+    followUpPassCount: 0,
+    followUpAdmittedPathCount: 0,
+    followUpOutcome: "not-needed",
+    citationRepairDisposition: "not-needed",
+  });
+  groundingActivity(result, correlationId, "gateway.chat.started");
+  expect(
+    result.events
+      .map((event) => event.parsed.view.op)
+      .filter((op) => op.startsWith("gateway.retry.")),
+  ).toEqual([]);
+}
+
+function expectGroundingCharge(
+  identity: GroundingIdentity,
+  result: SupportQueryResult,
+  correlationId: string,
+): void {
+  const prompt = identity.promptContext;
+  const estimate = prompt?.estimatedPromptTokens;
+  if (prompt === undefined || estimate === undefined)
+    throw new TypeError("Persisted grounded prompt accounting was unavailable");
+  const admission = groundingActivity(result, correlationId, "gateway.prompt.admission");
+  const completed = groundingActivity(result, correlationId, "gateway.chat.completed");
+  const reported = {
+    promptTokens: groundingActivityCount(completed, "promptTokens"),
+    completionTokens: groundingActivityCount(completed, "completionTokens"),
+  };
+  expect(reported.promptTokens).toBeGreaterThan(0);
+  expect(prompt.promptTokensMeasured).toBe(true);
+  expect(prompt.promptTokens).toBe(reported.promptTokens);
+  expect(estimate).toBe(groundingActivityCount(admission, "localPromptTokens"));
+  expect(estimate).toBe(groundingActivityCount(admission, "fallbackPromptTokens"));
+  const charged = groundedSynthesisAttemptUsage(estimate, reported);
+  expect(charged.promptTokens).toBe(groundingActivityCount(admission, "promptTokens"));
+  expect(charged.promptTokens).toBeLessThan(identity.contextPack.budget.modelInputTokensMax);
+  expect(charged.completionTokens).toBeLessThan(identity.contextPack.budget.modelOutputTokensMax);
+  expect(identity.contextPack.usage.modelInputTokens).toBe(charged.promptTokens);
+  expect(identity.contextPack.usage.modelOutputTokens).toBe(charged.completionTokens);
+}
+
+async function expectGroundingAccounting(
+  identity: GroundingIdentity,
+  capture: GroundedSendCapture,
+): Promise<void> {
+  await expect.poll(() => capture.responseCorrelations()).toHaveLength(1);
+  const correlationId = capture.responseCorrelations()[0];
+  if (correlationId === undefined || correlationId.length === 0)
+    throw new TypeError("Grounded response correlation was unavailable");
+  expect(capture.requestCorrelations()).toHaveLength(1);
+  const requested = capture.requestCorrelations()[0];
+  if (requested !== undefined) expect(correlationId).toBe(requested);
+  const result = await requireGroundingAccounting(correlationId);
+  expectSingleGroundingSynthesis(result, correlationId);
+  expectGroundingCharge(identity, result, correlationId);
 }
 
 function connectedGroundedAnswer(message: ChatMessage): ConnectedGroundedAnswer | undefined {
@@ -1105,6 +1264,8 @@ async function groundingParityFlow(page: Page, request: APIRequestContext): Prom
   expectGroundingCitationIdentity(voiceIdentity);
   expect(voiceIdentity.contextPack.scopeId).not.toBe(typedIdentity.contextPack.scopeId);
   expect(voiceIdentity.citations[0]?.stableId).not.toBe(typedIdentity.citations[0]?.stableId);
+  await expectGroundingAccounting(typedIdentity, typedSends);
+  await expectGroundingAccounting(voiceIdentity, voiceSends);
   expect(retrievalParityIdentity(voiceIdentity)).toEqual(retrievalParityIdentity(typedIdentity));
   await voicePage.close();
 }

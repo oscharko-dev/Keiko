@@ -304,8 +304,10 @@ function isVerificationKindValue(value: unknown): value is VerificationKind {
   return typeof value === "string" && VERIFICATION_KIND_SET.has(value);
 }
 
+const VERIFICATION_STATUS_VALUES: readonly string[] = VERIFICATION_STATUSES;
+
 function isVerificationStatusValue(value: unknown): value is VerificationStatus {
-  return typeof value === "string" && VERIFICATION_STATUSES.includes(value as VerificationStatus);
+  return typeof value === "string" && VERIFICATION_STATUS_VALUES.includes(value);
 }
 
 function isResourceDimension(value: unknown): value is ResourceDimension {

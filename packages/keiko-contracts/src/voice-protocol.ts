@@ -1149,15 +1149,11 @@ const VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS: Record<
 };
 
 export function isVoiceControlMessageKind(value: unknown): value is VoiceControlMessageKind {
-  return (
-    typeof value === "string" && (VOICE_CONTROL_MESSAGE_KINDS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(VOICE_CONTROL_MESSAGE_KINDS).has(value);
 }
 
 export function isVoiceMessageDirection(value: unknown): value is VoiceMessageDirection {
-  return (
-    typeof value === "string" && (VOICE_MESSAGE_DIRECTIONS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(VOICE_MESSAGE_DIRECTIONS).has(value);
 }
 
 export function isVoiceNegotiationMode(value: unknown): value is VoiceNegotiationMode {
@@ -1238,6 +1234,8 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
   const { kind } = value;
   if (isVoiceControlMessageKind(kind)) {
     VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS[kind](value, reasons);
+  } else if (!reasons.includes("kind invalid")) {
+    reasons.push("kind invalid");
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

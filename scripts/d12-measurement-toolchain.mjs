@@ -21,6 +21,7 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "scripts/lib/compare-strings.mjs",
   "scripts/lib/git-changed-paths.mjs",
   "scripts/lib/host-executable.mjs",
+  "scripts/lib/is-main-module.mjs",
   "scripts/lib/json.mjs",
   "scripts/run-d12-perf-comparison.mjs",
   "tests/e2e/config/playwright.editor-performance.config.ts",

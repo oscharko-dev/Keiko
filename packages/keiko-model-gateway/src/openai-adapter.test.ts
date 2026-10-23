@@ -4,7 +4,7 @@ import { OpenAiAdapter, ResponseRedactionError, STREAM_IDLE_TIMEOUT_MS } from ".
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { executeWithRetry } from "./resilience.js";
 import { createScriptedGatewayClock } from "./replay.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -76,7 +76,7 @@ function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
 async function retryHeaderEvidence(
   header: string | undefined,
   httpStatus: number,
-): Promise<{ events: ModelGatewayLogEvent[]; error: RateLimitError | ProviderError }> {
+): Promise<{ events: ModelGatewayLogTransport[]; error: RateLimitError | ProviderError }> {
   const adapter = adapterWith(() =>
     Promise.resolve(
       jsonResponse(
@@ -92,7 +92,7 @@ async function retryHeaderEvidence(
   if (!(error instanceof RateLimitError || error instanceof ProviderError)) {
     throw new TypeError("Expected a typed provider rejection.");
   }
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   let calls = 0;
   await executeWithRetry(
     () => {

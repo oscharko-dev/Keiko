@@ -29,6 +29,7 @@ import {
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { listChangedGitPaths } from "./lib/git-changed-paths.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-toolchain.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -2996,7 +2997,7 @@ export function evaluateFreshness(evidence, options = {}) {
 // The gate CLI moved to scripts/perf-evidence-gate.mjs. Executing this library directly used to BE
 // the gate, so a silent exit 0 here would read as a pass while checking nothing — the one failure
 // mode this repository never accepts. Refuse loudly instead.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   console.error(
     "check-perf-evidence.mjs is the measurement/digest library and has no CLI. " +
       "Run the gate instead: npm run check:perf-evidence (scripts/perf-evidence-gate.mjs).",

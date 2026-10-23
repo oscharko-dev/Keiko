@@ -422,6 +422,14 @@ check closes post-construction mutation and protects JavaScript callers that did
 the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
 echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
 
+The constructor's public type preserves that distinction: a valid registration-derived event or
+a closed rejected-event arm, carried through the existing injected ports. Malformed or unreadable
+error-kind observations become the existing `registration-mismatch` refusal, never an unchecked
+marker value. The metadata reader admits complete structural declarations and preserves their
+reference, including declarations not yet generated into the registry; this grants no canonical
+write authority. Forwarding copies preserve raw attachments even when that checked reader refuses
+them, so final validation retains the existing rejection classification.
+
 Every generated operation schema includes required `completeness` and `loss` contracts. The event
 constructor supplies the safe defaults `complete` and `none`, while a producer that observed
 partial evidence or known loss overrides those values explicitly. Central ownership makes the two
@@ -480,7 +488,8 @@ production sink refused.
 
 Adapters preserve the event's non-enumerable registration and rejection markers when adding
 correlation context. `withActivityLogCorrelation` and `withActivityLogParentCorrelation` share one
-copying implementation; producer-owned ids remain authoritative. A plain spread is not a valid
+copying implementation through `copyActivityLogEventMetadata`, also used by ordinary logger
+forwarding copies; producer-owned ids remain authoritative. A plain spread is not a valid
 forwarding operation. Readiness initialization forwards both its own lifecycle events and nested
 HTTP transport events through this path. Its regression validates the forwarded events with the
 real registered formatter, and the installed Workbench journey requires complete exported and
@@ -605,6 +614,9 @@ answers. `citationKind` identifies `numeric` or `file`; hybrid may emit one of e
 reference, attached and dangling counts share the closed reconciliation outcome. File lines add
 `ambiguousMarkerCount` and `droppedImplicitCount`; optional weak-overlap/grouped counts describe
 only measurements actually made. Omitted metrics must not be interpreted as measured zeroes.
+
+`client.composer.activity` records `draft-notifications-ready` when the private draft notification
+subscription mounts in layout, before browser input or passive effects, without draft text.
 
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
@@ -741,7 +753,10 @@ action; degraded history protection retains its contextual action.
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000
 containers, 3,000,000 values and 256 keys per object. The shape bounds are checked on the raw text
-before `JSON.parse` allocates anything, and every string is printable ASCII. Derived ordinary
+before `JSON.parse` allocates anything, and every string is printable ASCII. Canonicalization
+constructs ordinary arrays by bounded numeric-index traversal instead of dispatching caller-owned
+mapping methods or array species. Sparse positions retain their canonical `null` bytes and consume
+the same scalar-value budget as those bytes do in the parser. Derived ordinary
 and update timelines share an additional ceiling of 80,000 record occurrences and 64 MiB of UTF-8
 record-view payloads; parent fan-out is charged before expansion. A producer that exceeds these
 limits emits explicitly insufficient evidence, while an incoming report is rejected before output.
@@ -1371,6 +1386,12 @@ request":
   without making another provider call. Both successful and failed probes remain traceable from create, send and
   regeneration requests. Assistant-response links accept only validated correlation identities;
   malformed response bodies and invalid identities produce no fabricated link.
+  Shared BFF response validation reports contract refusals through this same operation before
+  throwing the existing `CONTRACT_VALIDATION_FAILED` error (502). Its closed fields are
+  `kind: other` and `errorKind: validation-failed`; redacted error evidence and the available
+  response correlation preserve the failure's identity. Request paths, queries, response bodies,
+  diffs and validator reasons never enter the diagnostic. Healthy responses emit no refusal;
+  unavailable delivery retains the existing transport bounds and explicit loss accounting.
   Known browser prerequisite failures use closed structured fields. Git validators record
   `moduleLoadFailure: git-read`, `git-history`, or `git-sync` before any Git request, preserving the
   caller's correlation ID or minting one shared by the UI error and diagnostic. Optional widget

@@ -48,6 +48,53 @@ export interface ValidationFail {
 export type LocalKnowledgeValidation<T> = ValidationOk<T> | ValidationFail;
 
 // ─── Shared primitive guards ──────────────────────────────────────────────────
+type CapsuleStructure = Omit<KnowledgeCapsule, "id" | "sourceIds"> & {
+  readonly id: string;
+  readonly sourceIds: readonly string[];
+};
+type CapsuleSetStructure = Omit<CapsuleSet, "id" | "capsuleIds"> & {
+  readonly id: string;
+  readonly capsuleIds: readonly string[];
+};
+type ReindexStructure = Omit<CapsuleReindexRequest, "capsuleId"> & { readonly capsuleId: string };
+type GraphNodeStructure =
+  | Exclude<ConnectorNode, { readonly kind: "local-knowledge" }>
+  | {
+      readonly kind: "local-knowledge";
+      readonly nodeId: string;
+      readonly target:
+        | { readonly kind: "capsule"; readonly capsuleId: string }
+        | { readonly kind: "capsule-set"; readonly capsuleSetId: string };
+    };
+type GraphStructure = Omit<ConnectorGraphState, "nodes"> & {
+  readonly nodes: readonly GraphNodeStructure[];
+};
+
+function isCapturedExtent(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validateStableExtent(
+  members: readonly unknown[],
+  extent: number,
+  field: string,
+  errors: string[],
+): boolean {
+  if (members.length !== extent)
+    return reject(errors, `${field} must not change length during validation`);
+  return true;
+}
+
+function combineAdmissions(previous: boolean, current: boolean): boolean {
+  return previous && current;
+}
+
+// A refusal records the original diagnostic and actual failed field evidence.
+function reject(errors: string[], ...reasons: string[]): false {
+  errors.push(...reasons);
+  return false;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -65,7 +112,13 @@ function isFinitePositiveInteger(value: unknown): value is number {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  if (!isCapturedExtent(extent)) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (typeof value[index] !== "string") return false;
+  }
+  return value.length === extent;
 }
 
 // Soft-cap chosen to keep browser surfaces safe (matches the upper bound a Conversation
@@ -94,60 +147,80 @@ function isSafeDisplayString(value: unknown): value is string {
   return isNonEmptyTrimmedString(value) && isSafeDisplaySummary(value);
 }
 
-function validateSafeDisplayStringField(errors: string[], field: string, value: unknown): void {
+function validateSafeDisplayStringField(errors: string[], field: string, value: unknown): boolean {
+  let valid = true;
   if (!isSafeDisplayString(value)) {
-    errors.push(`${field} must be a browser-safe non-empty trimmed string`);
+    valid = reject(errors, `${field} must be a browser-safe non-empty trimmed string`);
   }
+  return valid;
 }
 
 function validateSafeDisplayStringArrayField(
   errors: string[],
   field: string,
   value: unknown,
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push(`${field} must be a string array`);
-    return;
+    valid = reject(errors, `${field} must be a string array`);
+    return valid;
   }
-  for (const entry of value) {
+  const members = value;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, `${field} must have a valid array length`);
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = members[index];
+
     if (!isSafeDisplayString(entry)) {
-      errors.push(`${field} entry must be a browser-safe non-empty trimmed string`);
-      return;
+      valid = reject(errors, `${field} entry must be a browser-safe non-empty trimmed string`);
+      return valid;
     }
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, field, errors));
+  return valid;
 }
 
-function validateSafeMetadataMap(errors: string[], field: string, value: unknown): void {
+function validateSafeMetadataMap(errors: string[], field: string, value: unknown): boolean {
+  let valid = true;
   if (value === undefined) {
-    return;
+    return valid;
   }
   if (!isRecord(value)) {
-    errors.push(`${field} must be an object when set`);
-    return;
+    valid = reject(errors, `${field} must be an object when set`);
+    return valid;
   }
   const entries = Object.entries(value);
   if (entries.length > CAPSULE_METADATA_MAX_KEYS) {
-    errors.push(`${field} may contain at most ${String(CAPSULE_METADATA_MAX_KEYS)} entries`);
-    return;
+    valid = reject(
+      errors,
+      `${field} may contain at most ${String(CAPSULE_METADATA_MAX_KEYS)} entries`,
+    );
+    return valid;
   }
   for (const [key, entryValue] of entries) {
     if (!isSafeDisplayString(key) || key.length > CAPSULE_METADATA_KEY_MAX_CHARS) {
-      errors.push(
+      valid = reject(
+        errors,
         `${field} keys must be browser-safe non-empty strings no longer than ${String(CAPSULE_METADATA_KEY_MAX_CHARS)} characters`,
       );
-      return;
+      return valid;
     }
     if (
       typeof entryValue !== "string" ||
       !isSafeDisplaySummary(entryValue) ||
       entryValue.length > CAPSULE_METADATA_VALUE_MAX_CHARS
     ) {
-      errors.push(
+      valid = reject(
+        errors,
         `${field} values must be browser-safe strings no longer than ${String(CAPSULE_METADATA_VALUE_MAX_CHARS)} characters`,
       );
-      return;
+      return valid;
     }
   }
+  return valid;
 }
 
 function validatePositiveIntegerMax(
@@ -155,10 +228,12 @@ function validatePositiveIntegerMax(
   field: string,
   value: unknown,
   max: number,
-): void {
+): boolean {
+  let valid = true;
   if (!isFinitePositiveInteger(value) || value > max) {
-    errors.push(`${field} must be a positive integer no greater than ${String(max)}`);
+    valid = reject(errors, `${field} must be a positive integer no greater than ${String(max)}`);
   }
+  return valid;
 }
 
 // Exported so the sibling Local Knowledge validators reuse this single allowlist-key check
@@ -189,144 +264,247 @@ function pushBadEnum(
   field: string,
   value: unknown,
   allowed: readonly string[],
-): void {
+): boolean {
+  let valid = true;
   if (typeof value !== "string" || !allowed.includes(value)) {
-    errors.push(`${field} must be one of ${allowed.join("|")}`);
+    valid = reject(errors, `${field} must be one of ${allowed.join("|")}`);
   }
+  return valid;
 }
 
 // eslint-disable-next-line max-lines-per-function, complexity
-export function validateEmbeddingModelIdentity(
-  input: unknown,
-): LocalKnowledgeValidation<EmbeddingModelIdentity> {
-  const errors: string[] = [];
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["embeddingModelIdentity must be an object"] };
-  }
+function admitsEmbeddingModelIdentity(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & EmbeddingModelIdentity {
+  let valid = true;
   if (!isNonEmptyTrimmedString(input.provider)) {
-    errors.push("embeddingModelIdentity.provider must be a non-empty string");
+    valid = reject(errors, "embeddingModelIdentity.provider must be a non-empty string");
   }
   if (!isNonEmptyTrimmedString(input.modelId)) {
-    errors.push("embeddingModelIdentity.modelId must be a non-empty string");
+    valid = reject(errors, "embeddingModelIdentity.modelId must be a non-empty string");
   }
   if (!isFinitePositiveInteger(input.vectorDimensions)) {
-    errors.push("embeddingModelIdentity.vectorDimensions must be a positive integer");
+    valid = reject(errors, "embeddingModelIdentity.vectorDimensions must be a positive integer");
   }
-  pushBadEnum(
-    errors,
-    "embeddingModelIdentity.vectorMetric",
-    input.vectorMetric,
-    EMBEDDING_VECTOR_METRICS,
-  );
-  if (input.modelRevision !== undefined && !isNonEmptyTrimmedString(input.modelRevision)) {
-    errors.push("embeddingModelIdentity.modelRevision must be a non-empty string when set");
-  }
-  if (input.normalization !== undefined) {
+  valid =
     pushBadEnum(
       errors,
-      "embeddingModelIdentity.normalization",
-      input.normalization,
-      EMBEDDING_VECTOR_NORMALIZATIONS,
+      "embeddingModelIdentity.vectorMetric",
+      input.vectorMetric,
+      EMBEDDING_VECTOR_METRICS,
+    ) && valid;
+  if (input.modelRevision !== undefined && !isNonEmptyTrimmedString(input.modelRevision)) {
+    valid = reject(
+      errors,
+      "embeddingModelIdentity.modelRevision must be a non-empty string when set",
     );
+  }
+  if (input.normalization !== undefined) {
+    valid =
+      pushBadEnum(
+        errors,
+        "embeddingModelIdentity.normalization",
+        input.normalization,
+        EMBEDDING_VECTOR_NORMALIZATIONS,
+      ) && valid;
   }
   if (
     input.instructionVersion !== undefined &&
     !isNonEmptyTrimmedString(input.instructionVersion)
   ) {
-    errors.push("embeddingModelIdentity.instructionVersion must be a non-empty string when set");
+    valid = reject(
+      errors,
+      "embeddingModelIdentity.instructionVersion must be a non-empty string when set",
+    );
   }
   if (
     input.embeddingSpaceFingerprint !== undefined &&
     !isNonEmptyTrimmedString(input.embeddingSpaceFingerprint)
   ) {
-    errors.push(
+    valid = reject(
+      errors,
       "embeddingModelIdentity.embeddingSpaceFingerprint must be a non-empty string when set",
     );
   }
   if (input.dimensionsParam !== undefined && !isFinitePositiveInteger(input.dimensionsParam)) {
-    errors.push("embeddingModelIdentity.dimensionsParam must be a positive integer when set");
+    valid = reject(
+      errors,
+      "embeddingModelIdentity.dimensionsParam must be a positive integer when set",
+    );
   }
-  if (errors.length > 0) {
+
+  return valid;
+}
+
+export function validateEmbeddingModelIdentity(
+  input: unknown,
+): LocalKnowledgeValidation<EmbeddingModelIdentity> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["embeddingModelIdentity must be an object"] };
+  }
+  const errors: string[] = [];
+  if (!admitsEmbeddingModelIdentity(input, errors) || errors.length > 0)
     return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as EmbeddingModelIdentity };
+  return { ok: true, value: input };
 }
 
 // ─── KnowledgeSourceScope ─────────────────────────────────────────────────────
-function validateGlobs(field: string, globs: unknown, errors: string[]): void {
+function isSafeRelativeGlob(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length !== 0 &&
+    !value.includes("\0") &&
+    isSafeStorageReference(value)
+  );
+}
+
+function validateGlobs(field: string, globs: unknown, errors: string[]): boolean {
+  let valid = true;
   if (globs === undefined) {
-    return;
+    return valid;
   }
   if (!isStringArray(globs)) {
-    errors.push(`${field} must be a string array when set`);
-    return;
+    valid = reject(errors, `${field} must be a string array when set`);
+    return valid;
   }
   if (globs.length === 0) {
-    errors.push(`${field} must be omitted instead of set to an empty array`);
-    return;
+    valid = reject(errors, `${field} must be omitted instead of set to an empty array`);
+    return valid;
   }
   const seen = new Set<string>();
-  for (const glob of globs) {
-    if (glob.length === 0 || glob.includes("\0") || !isSafeStorageReference(glob)) {
-      errors.push(`${field} entry must be a safe relative NUL-free glob`);
-      return;
+  const members = globs;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, `${field} must have a valid array length`);
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const glob: unknown = members[index];
+    if (!isSafeRelativeGlob(glob)) {
+      valid = reject(errors, `${field} entry must be a safe relative NUL-free glob`);
+      return valid;
     }
     if (seen.has(glob)) {
-      errors.push(`${field} entries must be unique`);
-      return;
+      valid = reject(errors, `${field} entries must be unique`);
+      return valid;
     }
     seen.add(glob);
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, field, errors));
+  return valid;
 }
 
-function validateGlobOverlap(input: Record<string, unknown>, errors: string[]): void {
+function validateGlobOverlap(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isStringArray(input.includeGlobs) || !isStringArray(input.excludeGlobs)) {
-    return;
+    return valid;
   }
-  const include = new Set(input.includeGlobs);
-  for (const exclude of input.excludeGlobs) {
+  const include = new Set<string>();
+  const includeMembers = input.includeGlobs;
+  const includeExtent = includeMembers.length;
+  for (let index = 0; index < includeExtent; index += 1) {
+    const entry = includeMembers[index];
+    if (typeof entry !== "string")
+      return reject(errors, "scope.includeGlobs must be a string array when set");
+    include.add(entry);
+  }
+  const members = input.excludeGlobs;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "scope.excludeGlobs must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const exclude: unknown = members[index];
+    if (typeof exclude !== "string")
+      return reject(errors, "scope.excludeGlobs must be a string array when set");
+
     if (include.has(exclude)) {
-      errors.push("scope.excludeGlobs entries must not exactly cancel includeGlobs entries");
-      return;
+      valid = reject(
+        errors,
+        "scope.excludeGlobs entries must not exactly cancel includeGlobs entries",
+      );
+      return valid;
     }
   }
+  valid = combineAdmissions(
+    valid,
+    validateStableExtent(members, extent, "scope.excludeGlobs", errors),
+  );
+  return valid;
 }
 
-function validateFolderScope(input: Record<string, unknown>, errors: string[]): void {
+function validateFolderScope(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (typeof input.rootPath !== "string" || !isSafeScopePath(input.rootPath)) {
-    errors.push("scope.rootPath is unsafe or empty");
+    valid = reject(errors, "scope.rootPath is unsafe or empty");
   }
   if (typeof input.recursive !== "boolean") {
-    errors.push("scope.recursive must be a boolean");
+    valid = reject(errors, "scope.recursive must be a boolean");
   }
-  validateGlobs("scope.includeGlobs", input.includeGlobs, errors);
-  validateGlobs("scope.excludeGlobs", input.excludeGlobs, errors);
-  validateGlobOverlap(input, errors);
+  valid = combineAdmissions(valid, validateGlobs("scope.includeGlobs", input.includeGlobs, errors));
+  valid = combineAdmissions(valid, validateGlobs("scope.excludeGlobs", input.excludeGlobs, errors));
+  valid = combineAdmissions(valid, validateGlobOverlap(input, errors));
+  return valid;
 }
 
-function validateRepositoryScope(input: Record<string, unknown>, errors: string[]): void {
+function validateRepositoryScope(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (typeof input.repositoryRoot !== "string" || !isSafeScopePath(input.repositoryRoot)) {
-    errors.push("scope.repositoryRoot is unsafe or empty");
+    valid = reject(errors, "scope.repositoryRoot is unsafe or empty");
   }
-  validateGlobs("scope.includeGlobs", input.includeGlobs, errors);
-  validateGlobs("scope.excludeGlobs", input.excludeGlobs, errors);
-  validateGlobOverlap(input, errors);
+  valid = combineAdmissions(valid, validateGlobs("scope.includeGlobs", input.includeGlobs, errors));
+  valid = combineAdmissions(valid, validateGlobs("scope.excludeGlobs", input.excludeGlobs, errors));
+  valid = combineAdmissions(valid, validateGlobOverlap(input, errors));
+  return valid;
 }
 
-function validateFilesScope(input: Record<string, unknown>, errors: string[]): void {
+function validateFilesScope(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (typeof input.rootPath !== "string" || !isSafeScopePath(input.rootPath)) {
-    errors.push("scope.rootPath is unsafe or empty");
+    valid = reject(errors, "scope.rootPath is unsafe or empty");
   }
   if (!Array.isArray(input.files) || input.files.length === 0) {
-    errors.push("scope.files must be a non-empty array");
-    return;
+    valid = reject(errors, "scope.files must be a non-empty array");
+    return valid;
   }
-  for (const entry of input.files) {
+  const members = input.files;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "scope.files must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = members[index];
+
     if (typeof entry !== "string" || !isSafeStorageReference(entry)) {
-      errors.push("scope.files entry is unsafe or empty");
-      return;
+      valid = reject(errors, "scope.files entry is unsafe or empty");
+      return valid;
     }
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, "scope.files", errors));
+  return valid;
+}
+
+function admitsKnowledgeSourceScope(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & KnowledgeSourceScope {
+  let valid = true;
+  const kind = input.kind;
+  if (!KNOWLEDGE_SOURCE_SCOPE_KINDS_ADMISSION.includes(kind)) {
+    return reject(errors, `scope.kind must be one of ${KNOWLEDGE_SOURCE_SCOPE_KINDS.join("|")}`);
+  }
+  if (kind === "folder") {
+    valid = combineAdmissions(valid, validateFolderScope(input, errors));
+  } else if (kind === "repository") {
+    valid = combineAdmissions(valid, validateRepositoryScope(input, errors));
+  } else {
+    valid = combineAdmissions(valid, validateFilesScope(input, errors));
+  }
+
+  return valid;
 }
 
 export function validateKnowledgeSourceScope(
@@ -335,25 +513,9 @@ export function validateKnowledgeSourceScope(
   if (!isRecord(input)) {
     return { ok: false, errors: ["scope must be an object"] };
   }
-  const kind = input.kind;
-  if (!KNOWLEDGE_SOURCE_SCOPE_KINDS.includes(kind as KnowledgeSourceScope["kind"])) {
-    return {
-      ok: false,
-      errors: [`scope.kind must be one of ${KNOWLEDGE_SOURCE_SCOPE_KINDS.join("|")}`],
-    };
-  }
   const errors: string[] = [];
-  if (kind === "folder") {
-    validateFolderScope(input, errors);
-  } else if (kind === "repository") {
-    validateRepositoryScope(input, errors);
-  } else {
-    validateFilesScope(input, errors);
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as KnowledgeSourceScope };
+  if (!admitsKnowledgeSourceScope(input, errors) || errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
 // ─── KnowledgeCapsule ─────────────────────────────────────────────────────────
@@ -369,34 +531,69 @@ const CONTEXTUAL_RETRIEVAL_KEYS = [
 function validateContextualRetrievalStrings(
   input: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.modelId !== undefined && !isSafeDisplayString(input.modelId)) {
-    errors.push("contextualRetrieval.modelId must be a browser-safe non-empty string when set");
+    valid = reject(
+      errors,
+      "contextualRetrieval.modelId must be a browser-safe non-empty string when set",
+    );
   }
   if (input.promptVersion !== undefined && !isSafeDisplayString(input.promptVersion)) {
-    errors.push(
+    valid = reject(
+      errors,
       "contextualRetrieval.promptVersion must be a browser-safe non-empty string when set",
     );
   }
+  return valid;
 }
 
-function validateContextualRetrievalLimits(input: Record<string, unknown>, errors: string[]): void {
+function validateContextualRetrievalLimits(
+  input: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (input.maxContextChars !== undefined) {
-    validatePositiveIntegerMax(
-      errors,
-      "contextualRetrieval.maxContextChars",
-      input.maxContextChars,
-      CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
+    valid = combineAdmissions(
+      valid,
+      validatePositiveIntegerMax(
+        errors,
+        "contextualRetrieval.maxContextChars",
+        input.maxContextChars,
+        CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
+      ),
     );
   }
   if (input.documentContextMaxChars !== undefined) {
-    validatePositiveIntegerMax(
-      errors,
-      "contextualRetrieval.documentContextMaxChars",
-      input.documentContextMaxChars,
-      CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+    valid = combineAdmissions(
+      valid,
+      validatePositiveIntegerMax(
+        errors,
+        "contextualRetrieval.documentContextMaxChars",
+        input.documentContextMaxChars,
+        CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+      ),
     );
   }
+  return valid;
+}
+
+function admitsCapsuleContextualRetrievalSettings(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & CapsuleContextualRetrievalSettings {
+  let valid = true;
+  validateOnlyKeys(input, CONTEXTUAL_RETRIEVAL_KEYS, "contextualRetrieval", errors);
+  if (typeof input.enabled !== "boolean") {
+    valid = reject(errors, "contextualRetrieval.enabled must be a boolean");
+  }
+  valid = combineAdmissions(valid, validateContextualRetrievalStrings(input, errors));
+  if (input.strict !== undefined && typeof input.strict !== "boolean") {
+    valid = reject(errors, "contextualRetrieval.strict must be a boolean when set");
+  }
+  valid = combineAdmissions(valid, validateContextualRetrievalLimits(input, errors));
+
+  return valid;
 }
 
 export function validateCapsuleContextualRetrievalSettings(
@@ -406,100 +603,168 @@ export function validateCapsuleContextualRetrievalSettings(
     return { ok: false, errors: ["contextualRetrieval must be an object"] };
   }
   const errors: string[] = [];
-  validateOnlyKeys(input, CONTEXTUAL_RETRIEVAL_KEYS, "contextualRetrieval", errors);
-  if (typeof input.enabled !== "boolean") {
-    errors.push("contextualRetrieval.enabled must be a boolean");
-  }
-  validateContextualRetrievalStrings(input, errors);
-  if (input.strict !== undefined && typeof input.strict !== "boolean") {
-    errors.push("contextualRetrieval.strict must be a boolean when set");
-  }
-  validateContextualRetrievalLimits(input, errors);
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input as unknown as CapsuleContextualRetrievalSettings };
+  if (!admitsCapsuleContextualRetrievalSettings(input, errors) || errors.length > 0)
+    return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
-function validateCapsuleEnums(input: Record<string, unknown>, errors: string[]): void {
-  pushBadEnum(errors, "capsule.retrievalEffort", input.retrievalEffort, CAPSULE_RETRIEVAL_EFFORTS);
-  pushBadEnum(errors, "capsule.outputMode", input.outputMode, CAPSULE_OUTPUT_MODES);
-  pushBadEnum(
-    errors,
-    "capsule.answerGroundingPolicy",
-    input.answerGroundingPolicy,
-    CAPSULE_ANSWER_GROUNDING_POLICIES,
-  );
-  pushBadEnum(errors, "capsule.lifecycleState", input.lifecycleState, CAPSULE_LIFECYCLE_STATES);
+function validateCapsuleEnums(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid =
+    pushBadEnum(
+      errors,
+      "capsule.retrievalEffort",
+      input.retrievalEffort,
+      CAPSULE_RETRIEVAL_EFFORTS,
+    ) && valid;
+  valid =
+    pushBadEnum(errors, "capsule.outputMode", input.outputMode, CAPSULE_OUTPUT_MODES) && valid;
+  valid =
+    pushBadEnum(
+      errors,
+      "capsule.answerGroundingPolicy",
+      input.answerGroundingPolicy,
+      CAPSULE_ANSWER_GROUNDING_POLICIES,
+    ) && valid;
+  valid =
+    pushBadEnum(errors, "capsule.lifecycleState", input.lifecycleState, CAPSULE_LIFECYCLE_STATES) &&
+    valid;
+  return valid;
 }
 
-function validateCapsuleTimestamps(input: Record<string, unknown>, errors: string[]): void {
+function validateCapsuleTimestamps(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isFiniteNonNegativeNumber(input.createdAt)) {
-    errors.push("capsule.createdAt must be a finite non-negative number");
+    valid = reject(errors, "capsule.createdAt must be a finite non-negative number");
   }
   if (!isFiniteNonNegativeNumber(input.updatedAt)) {
-    errors.push("capsule.updatedAt must be a finite non-negative number");
+    valid = reject(errors, "capsule.updatedAt must be a finite non-negative number");
   }
+  return valid;
 }
 
-function validateCapsuleSourceLineage(input: Record<string, unknown>, errors: string[]): void {
+function validateCapsuleSourceLineage(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(input.sourceIds) || input.sourceIds.length === 0) {
-    errors.push("capsule.sourceIds must be a non-empty array");
-    return;
+    valid = reject(errors, "capsule.sourceIds must be a non-empty array");
+    return valid;
   }
-  for (const id of input.sourceIds) {
+  const members = input.sourceIds;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "capsule.sourceIds must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const id: unknown = members[index];
+
     if (!isNonEmptyTrimmedString(id)) {
-      errors.push("capsule.sourceIds entry must be a non-empty string");
-      return;
+      valid = reject(errors, "capsule.sourceIds entry must be a non-empty string");
+      return valid;
     }
   }
+  valid = combineAdmissions(
+    valid,
+    validateStableExtent(members, extent, "capsule.sourceIds", errors),
+  );
+  return valid;
 }
 
 function validateKnowledgeCapsuleDisplayMetadata(
   input: Record<string, unknown>,
   errors: string[],
-): void {
-  validateSafeDisplayStringField(errors, "capsule.displayName", input.displayName);
+): boolean {
+  let valid = true;
+  valid = combineAdmissions(
+    valid,
+    validateSafeDisplayStringField(errors, "capsule.displayName", input.displayName),
+  );
   if (input.description !== undefined) {
-    validateSafeDisplayStringField(errors, "capsule.description", input.description);
-  }
-  if (input.sourceRoutingInstructions !== undefined) {
-    validateSafeDisplayStringField(
-      errors,
-      "capsule.sourceRoutingInstructions",
-      input.sourceRoutingInstructions,
+    valid = combineAdmissions(
+      valid,
+      validateSafeDisplayStringField(errors, "capsule.description", input.description),
     );
   }
-  validateSafeDisplayStringArrayField(errors, "capsule.tags", input.tags);
-  validateSafeMetadataMap(errors, "capsule.metadata", input.metadata);
+  if (input.sourceRoutingInstructions !== undefined) {
+    valid = combineAdmissions(
+      valid,
+      validateSafeDisplayStringField(
+        errors,
+        "capsule.sourceRoutingInstructions",
+        input.sourceRoutingInstructions,
+      ),
+    );
+  }
+  valid = combineAdmissions(
+    valid,
+    validateSafeDisplayStringArrayField(errors, "capsule.tags", input.tags),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateSafeMetadataMap(errors, "capsule.metadata", input.metadata),
+  );
+  return valid;
 }
 
 function validateKnowledgeCapsuleOptionalSettings(
   input: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.contextualRetrieval !== undefined) {
     const contextualResult = validateCapsuleContextualRetrievalSettings(input.contextualRetrieval);
     if (!contextualResult.ok) {
-      errors.push(...contextualResult.errors.map((error) => `capsule.${error}`));
+      valid = reject(errors, ...contextualResult.errors.map((error) => `capsule.${error}`));
     }
   }
   if (input.modelUsePolicy !== undefined) {
     const policyResult = validateKnowledgePodModelUsePolicy(input.modelUsePolicy);
     if (!policyResult.ok) {
-      errors.push(...policyResult.errors.map((error) => `capsule.${error}`));
+      valid = reject(errors, ...policyResult.errors.map((error) => `capsule.${error}`));
     }
   }
+  return valid;
 }
 
 function validateKnowledgeCapsuleStorageReference(
   input: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     typeof input.storageReference !== "string" ||
     !isSafeStorageReference(input.storageReference)
   ) {
-    errors.push("capsule.storageReference must be a safe relative path");
+    valid = reject(errors, "capsule.storageReference must be a safe relative path");
   }
+  return valid;
+}
+
+function admitsKnowledgeCapsule(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & CapsuleStructure {
+  let valid = true;
+  if (!isNonEmptyTrimmedString(input.id)) {
+    valid = reject(errors, "capsule.id must be a non-empty string");
+  }
+  valid = combineAdmissions(valid, validateKnowledgeCapsuleDisplayMetadata(input, errors));
+  valid = combineAdmissions(valid, validateKnowledgeCapsuleOptionalSettings(input, errors));
+  if (input.alwaysQuery !== undefined && typeof input.alwaysQuery !== "boolean") {
+    valid = reject(errors, "capsule.alwaysQuery must be a boolean when set");
+  }
+  valid = combineAdmissions(valid, validateCapsuleSourceLineage(input, errors));
+  valid = combineAdmissions(valid, validateCapsuleEnums(input, errors));
+  const identityResult = validateEmbeddingModelIdentity(input.embeddingModelIdentity);
+  if (!identityResult.ok) {
+    for (const reason of identityResult.errors) {
+      valid = reject(errors, `capsule.${reason}`);
+    }
+  }
+  valid = combineAdmissions(valid, validateKnowledgeCapsuleStorageReference(input, errors));
+  valid = combineAdmissions(valid, validateCapsuleTimestamps(input, errors));
+
+  return valid;
 }
 
 export function validateKnowledgeCapsule(
@@ -509,39 +774,71 @@ export function validateKnowledgeCapsule(
     return { ok: false, errors: ["capsule must be an object"] };
   }
   const errors: string[] = [];
-  if (!isNonEmptyTrimmedString(input.id)) {
-    errors.push("capsule.id must be a non-empty string");
-  }
-  validateKnowledgeCapsuleDisplayMetadata(input, errors);
-  validateKnowledgeCapsuleOptionalSettings(input, errors);
-  validateCapsuleSourceLineage(input, errors);
-  validateCapsuleEnums(input, errors);
-  const identityResult = validateEmbeddingModelIdentity(input.embeddingModelIdentity);
-  if (!identityResult.ok) {
-    for (const reason of identityResult.errors) {
-      errors.push(`capsule.${reason}`);
-    }
-  }
-  validateKnowledgeCapsuleStorageReference(input, errors);
-  validateCapsuleTimestamps(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as KnowledgeCapsule };
+  if (!admitsKnowledgeCapsule(input, errors) || errors.length > 0) return { ok: false, errors };
+  // All non-brand fields are admitted above; this attaches only erased ID brands.
+  const admitted: CapsuleStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
+  return { ok: true, value: admitted as KnowledgeCapsule };
 }
 
 // ─── CapsuleSet ───────────────────────────────────────────────────────────────
-function validateCapsuleSetCapsuleIds(input: Record<string, unknown>, errors: string[]): void {
+function validateCapsuleSetCapsuleIds(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(input.capsuleIds) || input.capsuleIds.length === 0) {
-    errors.push("capsuleSet.capsuleIds must be a non-empty array");
-    return;
+    valid = reject(errors, "capsuleSet.capsuleIds must be a non-empty array");
+    return valid;
   }
-  for (const id of input.capsuleIds) {
+  const members = input.capsuleIds;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "capsuleSet.capsuleIds must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const id: unknown = members[index];
+
     if (!isNonEmptyTrimmedString(id)) {
-      errors.push("capsuleSet.capsuleIds entry must be a non-empty string");
-      return;
+      valid = reject(errors, "capsuleSet.capsuleIds entry must be a non-empty string");
+      return valid;
     }
   }
+  valid = combineAdmissions(
+    valid,
+    validateStableExtent(members, extent, "capsuleSet.capsuleIds", errors),
+  );
+  return valid;
+}
+
+function admitsCapsuleSet(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & CapsuleSetStructure {
+  let valid = true;
+  if (!isNonEmptyTrimmedString(input.id)) {
+    valid = reject(errors, "capsuleSet.id must be a non-empty string");
+  }
+  if (!isSafeDisplayString(input.displayName)) {
+    valid = reject(
+      errors,
+      "capsuleSet.displayName must be a browser-safe non-empty trimmed string",
+    );
+  }
+  if (input.description !== undefined && !isSafeDisplayString(input.description)) {
+    valid = reject(
+      errors,
+      "capsuleSet.description must be a browser-safe non-empty trimmed string",
+    );
+  }
+  valid = combineAdmissions(
+    valid,
+    validateSafeDisplayStringArrayField(errors, "capsuleSet.tags", input.tags),
+  );
+  valid = combineAdmissions(valid, validateCapsuleSetCapsuleIds(input, errors));
+  if (!isFiniteNonNegativeNumber(input.composedAt)) {
+    valid = reject(errors, "capsuleSet.composedAt must be a finite non-negative number");
+  }
+
+  return valid;
 }
 
 export function validateCapsuleSet(input: unknown): LocalKnowledgeValidation<CapsuleSet> {
@@ -549,24 +846,30 @@ export function validateCapsuleSet(input: unknown): LocalKnowledgeValidation<Cap
     return { ok: false, errors: ["capsuleSet must be an object"] };
   }
   const errors: string[] = [];
-  if (!isNonEmptyTrimmedString(input.id)) {
-    errors.push("capsuleSet.id must be a non-empty string");
+  if (!admitsCapsuleSet(input, errors) || errors.length > 0) return { ok: false, errors };
+  // All non-brand fields are admitted above; this attaches only erased ID brands.
+  const admitted: CapsuleSetStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
+  return { ok: true, value: admitted as CapsuleSet };
+}
+
+function admitsCapsuleReindexRequest(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & ReindexStructure {
+  let valid = true;
+  if (!isNonEmptyTrimmedString(input.capsuleId)) {
+    valid = reject(errors, "reindexRequest.capsuleId must be a non-empty string");
   }
-  if (!isSafeDisplayString(input.displayName)) {
-    errors.push("capsuleSet.displayName must be a browser-safe non-empty trimmed string");
+  if (input.mode !== undefined && !CAPSULE_REINDEX_MODES_ADMISSION.includes(input.mode)) {
+    valid = reject(errors, `reindexRequest.mode must be one of ${CAPSULE_REINDEX_MODES.join("|")}`);
   }
-  if (input.description !== undefined && !isSafeDisplayString(input.description)) {
-    errors.push("capsuleSet.description must be a browser-safe non-empty trimmed string");
+  if (input.force !== undefined && typeof input.force !== "boolean") {
+    valid = reject(errors, "reindexRequest.force must be a boolean when provided");
   }
-  validateSafeDisplayStringArrayField(errors, "capsuleSet.tags", input.tags);
-  validateCapsuleSetCapsuleIds(input, errors);
-  if (!isFiniteNonNegativeNumber(input.composedAt)) {
-    errors.push("capsuleSet.composedAt must be a finite non-negative number");
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as CapsuleSet };
+  valid = combineAdmissions(valid, validateResumeJobId(input, errors));
+
+  return valid;
 }
 
 export function validateCapsuleReindexRequest(
@@ -576,47 +879,44 @@ export function validateCapsuleReindexRequest(
     return { ok: false, errors: ["reindexRequest must be an object"] };
   }
   const errors: string[] = [];
-  if (!isNonEmptyTrimmedString(input.capsuleId)) {
-    errors.push("reindexRequest.capsuleId must be a non-empty string");
-  }
-  if (
-    input.mode !== undefined &&
-    !CAPSULE_REINDEX_MODES.includes(input.mode as (typeof CAPSULE_REINDEX_MODES)[number])
-  ) {
-    errors.push(`reindexRequest.mode must be one of ${CAPSULE_REINDEX_MODES.join("|")}`);
-  }
-  if (input.force !== undefined && typeof input.force !== "boolean") {
-    errors.push("reindexRequest.force must be a boolean when provided");
-  }
-  validateResumeJobId(input, errors);
-  if (errors.length > 0) {
+  if (!admitsCapsuleReindexRequest(input, errors) || errors.length > 0)
     return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as CapsuleReindexRequest };
+  // All non-brand fields are admitted above; this attaches only erased ID brands.
+  const admitted: ReindexStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
+  return { ok: true, value: admitted as CapsuleReindexRequest };
 }
 
-function validateResumeJobId(input: Record<string, unknown>, errors: string[]): void {
-  if (input.resumeJobId === undefined) return;
+function validateResumeJobId(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (input.resumeJobId === undefined) return valid;
   if (!isNonEmptyTrimmedString(input.resumeJobId) || input.mode !== "resume") {
-    errors.push("reindexRequest.resumeJobId requires mode resume and a non-empty job id");
+    valid = reject(
+      errors,
+      "reindexRequest.resumeJobId requires mode resume and a non-empty job id",
+    );
   }
+  return valid;
 }
 
 // ─── ConnectorGraphState ──────────────────────────────────────────────────────
-function validateFilesWindowNode(node: Record<string, unknown>, errors: string[]): void {
+function validateFilesWindowNode(node: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   validateOnlyKeys(node, ["kind", "nodeId", "scope"], "graph.nodes entry.files-window", errors);
   const scopeResult = validateKnowledgeSourceScope(node.scope);
   if (!scopeResult.ok) {
     for (const reason of scopeResult.errors) {
-      errors.push(`graph.nodes entry.files-window.${reason}`);
+      valid = reject(errors, `graph.nodes entry.files-window.${reason}`);
     }
   }
+  return valid;
 }
 
-function validateLocalKnowledgeNodeTarget(target: unknown, errors: string[]): void {
+function validateLocalKnowledgeNodeTarget(target: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(target)) {
-    errors.push("graph.nodes entry.local-knowledge.target must be an object");
-    return;
+    valid = reject(errors, "graph.nodes entry.local-knowledge.target must be an object");
+    return valid;
   }
   if (target.kind === "capsule") {
     validateOnlyKeys(
@@ -626,9 +926,12 @@ function validateLocalKnowledgeNodeTarget(target: unknown, errors: string[]): vo
       errors,
     );
     if (!isNonEmptyTrimmedString(target.capsuleId)) {
-      errors.push("graph.nodes entry.local-knowledge.target.capsuleId must be a non-empty string");
+      valid = reject(
+        errors,
+        "graph.nodes entry.local-knowledge.target.capsuleId must be a non-empty string",
+      );
     }
-    return;
+    return valid;
   }
   if (target.kind === "capsule-set") {
     validateOnlyKeys(
@@ -638,21 +941,29 @@ function validateLocalKnowledgeNodeTarget(target: unknown, errors: string[]): vo
       errors,
     );
     if (!isNonEmptyTrimmedString(target.capsuleSetId)) {
-      errors.push(
+      valid = reject(
+        errors,
         "graph.nodes entry.local-knowledge.target.capsuleSetId must be a non-empty string",
       );
     }
-    return;
+    return valid;
   }
-  errors.push('graph.nodes entry.local-knowledge.target.kind must be "capsule" or "capsule-set"');
+  valid = reject(
+    errors,
+    'graph.nodes entry.local-knowledge.target.kind must be "capsule" or "capsule-set"',
+  );
+  return valid;
 }
 
-function validateLocalKnowledgeNode(node: Record<string, unknown>, errors: string[]): void {
+function validateLocalKnowledgeNode(node: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   validateOnlyKeys(node, ["kind", "nodeId", "target"], "graph.nodes entry.local-knowledge", errors);
-  validateLocalKnowledgeNodeTarget(node.target, errors);
+  valid = combineAdmissions(valid, validateLocalKnowledgeNodeTarget(node.target, errors));
+  return valid;
 }
 
-function validateConversationCenterNode(node: Record<string, unknown>, errors: string[]): void {
+function validateConversationCenterNode(node: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   validateOnlyKeys(
     node,
     ["kind", "nodeId", "conversationId", "route"],
@@ -660,54 +971,70 @@ function validateConversationCenterNode(node: Record<string, unknown>, errors: s
     errors,
   );
   if (!isNonEmptyTrimmedString(node.conversationId)) {
-    errors.push("graph.nodes entry.conversation-center.conversationId must be a non-empty string");
+    valid = reject(
+      errors,
+      "graph.nodes entry.conversation-center.conversationId must be a non-empty string",
+    );
   }
   if (!isNonEmptyTrimmedString(node.route)) {
-    errors.push("graph.nodes entry.conversation-center.route must be a non-empty string");
+    valid = reject(
+      errors,
+      "graph.nodes entry.conversation-center.route must be a non-empty string",
+    );
   }
+  return valid;
 }
 
-function collectNodeKinds(
-  nodes: readonly unknown[],
-  errors: string[],
-): ReadonlyMap<string, ConnectorNode["kind"]> {
-  const nodeKinds = new Map<string, ConnectorNode["kind"]>();
-  for (const node of nodes) {
+interface GraphNodeKindObservations {
+  readonly nodeKinds: ReadonlyMap<string, unknown>;
+  readonly valid: boolean;
+}
+
+function collectNodeKinds(nodes: readonly unknown[], errors: string[]): GraphNodeKindObservations {
+  let valid = true;
+  const nodeKinds = new Map<string, unknown>();
+  const members = nodes;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "graph.nodes must have a valid array length");
+    return { nodeKinds, valid: false };
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const node: unknown = members[index];
+
     if (!isRecord(node)) {
-      errors.push("graph.nodes entry must be an object");
+      valid = reject(errors, "graph.nodes entry must be an object");
       continue;
     }
     if (!isNonEmptyTrimmedString(node.nodeId)) {
-      errors.push("graph.nodes entry must have a non-empty nodeId");
+      valid = reject(errors, "graph.nodes entry must have a non-empty nodeId");
       continue;
     }
     if (nodeKinds.has(node.nodeId)) {
-      errors.push(`graph.nodes contains a duplicate nodeId: ${node.nodeId}`);
+      valid = reject(errors, `graph.nodes contains a duplicate nodeId: ${node.nodeId}`);
       continue;
     }
-    if (
-      typeof node.kind !== "string" ||
-      !(CONNECTOR_NODE_KINDS as readonly string[]).includes(node.kind)
-    ) {
-      errors.push("graph.nodes entry has an unknown kind");
+    if (typeof node.kind !== "string" || !CONNECTOR_NODE_KINDS_ADMISSION.includes(node.kind)) {
+      valid = reject(errors, "graph.nodes entry has an unknown kind");
       continue;
     }
-    nodeKinds.set(node.nodeId, node.kind as ConnectorNode["kind"]);
+    nodeKinds.set(node.nodeId, node.kind);
     if (node.kind === "files-window") {
-      validateFilesWindowNode(node, errors);
+      valid = combineAdmissions(valid, validateFilesWindowNode(node, errors));
     } else if (node.kind === "local-knowledge") {
-      validateLocalKnowledgeNode(node, errors);
+      valid = combineAdmissions(valid, validateLocalKnowledgeNode(node, errors));
     } else {
-      validateConversationCenterNode(node, errors);
+      valid = combineAdmissions(valid, validateConversationCenterNode(node, errors));
     }
   }
-  return nodeKinds;
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, "graph.nodes", errors));
+  return { nodeKinds, valid };
 }
 
 function validateEdgeNodeId(
   field: "from" | "to",
   nodeId: unknown,
-  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  nodeKinds: ReadonlyMap<string, unknown>,
   errors: string[],
 ): string | undefined {
   if (typeof nodeId !== "string" || !nodeKinds.has(nodeId)) {
@@ -721,46 +1048,95 @@ function validateEdgeNodeKind(
   field: "from" | "to",
   kind: unknown,
   nodeId: string | undefined,
-  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  nodeKinds: ReadonlyMap<string, unknown>,
   errors: string[],
-): void {
-  if (typeof kind !== "string" || !(CONNECTOR_NODE_KINDS as readonly string[]).includes(kind)) {
-    errors.push(`graph.edges ${field}.kind must be a known node kind`);
-    return;
+): boolean {
+  let valid = true;
+  if (typeof kind !== "string" || !CONNECTOR_NODE_KINDS_ADMISSION.includes(kind)) {
+    valid = reject(errors, `graph.edges ${field}.kind must be a known node kind`);
+    return valid;
   }
   if (nodeId !== undefined && nodeKinds.get(nodeId) !== kind) {
-    errors.push(`graph.edges ${field}.kind must match the referenced node kind`);
+    valid = reject(errors, `graph.edges ${field}.kind must match the referenced node kind`);
   }
+  return valid;
 }
 
 function validateEdgeRecord(
   edge: Record<string, unknown>,
-  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  nodeKinds: ReadonlyMap<string, unknown>,
   errors: string[],
-): void {
-  const from = edge.from as Record<string, unknown>;
-  const to = edge.to as Record<string, unknown>;
+): boolean {
+  let valid = true;
+  const from = edge.from;
+  const to = edge.to;
+  if (!isRecord(from) || !isRecord(to)) {
+    return reject(errors, "graph.edges entry must have from/to objects");
+  }
   const fromId = validateEdgeNodeId("from", from.nodeId, nodeKinds, errors);
   const toId = validateEdgeNodeId("to", to.nodeId, nodeKinds, errors);
-  validateEdgeNodeKind("from", from.kind, fromId, nodeKinds, errors);
-  validateEdgeNodeKind("to", to.kind, toId, nodeKinds, errors);
+  valid = fromId !== undefined && toId !== undefined && valid;
+  valid = combineAdmissions(
+    valid,
+    validateEdgeNodeKind("from", from.kind, fromId, nodeKinds, errors),
+  );
+  valid = combineAdmissions(valid, validateEdgeNodeKind("to", to.kind, toId, nodeKinds, errors));
   if (!isFiniteNonNegativeNumber(edge.createdAt)) {
-    errors.push("graph.edges entry must have a finite non-negative createdAt");
+    valid = reject(errors, "graph.edges entry must have a finite non-negative createdAt");
   }
+  return valid;
 }
 
 function validateEdges(
   edges: readonly unknown[],
-  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  nodeKinds: ReadonlyMap<string, unknown>,
   errors: string[],
-): void {
-  for (const edge of edges) {
+): boolean {
+  let valid = true;
+  const members = edges;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "graph.edges must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const edge: unknown = members[index];
+
     if (!isRecord(edge) || !isRecord(edge.from) || !isRecord(edge.to)) {
-      errors.push("graph.edges entry must have from/to objects");
+      valid = reject(errors, "graph.edges entry must have from/to objects");
       continue;
     }
-    validateEdgeRecord(edge, nodeKinds, errors);
+    valid = combineAdmissions(valid, validateEdgeRecord(edge, nodeKinds, errors));
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, "graph.edges", errors));
+  return valid;
+}
+
+function admitsConnectorGraphState(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & GraphStructure {
+  let valid = true;
+  if (input.schemaVersion !== "1") {
+    valid = reject(errors, 'graph.schemaVersion must be the literal "1"');
+  }
+  if (!Array.isArray(input.nodes)) {
+    reject(errors, "graph.nodes must be an array");
+    return false;
+  }
+  if (!Array.isArray(input.edges)) {
+    reject(errors, "graph.edges must be an array");
+    return false;
+  }
+  const collected = collectNodeKinds(input.nodes, errors);
+  valid = combineAdmissions(valid, collected.valid);
+  const nodeKinds = collected.nodeKinds;
+  valid = combineAdmissions(valid, validateEdges(input.edges, nodeKinds, errors));
+  if (!isFiniteNonNegativeNumber(input.updatedAt)) {
+    valid = reject(errors, "graph.updatedAt must be a finite non-negative number");
+  }
+
+  return valid;
 }
 
 export function validateConnectorGraphState(
@@ -770,26 +1146,17 @@ export function validateConnectorGraphState(
     return { ok: false, errors: ["graph must be an object"] };
   }
   const errors: string[] = [];
-  if (input.schemaVersion !== "1") {
-    errors.push('graph.schemaVersion must be the literal "1"');
-  }
-  if (!Array.isArray(input.nodes)) {
-    return { ok: false, errors: [...errors, "graph.nodes must be an array"] };
-  }
-  if (!Array.isArray(input.edges)) {
-    return { ok: false, errors: [...errors, "graph.edges must be an array"] };
-  }
-  const nodeKinds = collectNodeKinds(input.nodes, errors);
-  validateEdges(input.edges, nodeKinds, errors);
-  if (!isFiniteNonNegativeNumber(input.updatedAt)) {
-    errors.push("graph.updatedAt must be a finite non-negative number");
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as ConnectorGraphState };
+  if (!admitsConnectorGraphState(input, errors) || errors.length > 0) return { ok: false, errors };
+  // All non-brand fields are admitted above; this attaches only erased ID brands.
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
+  return { ok: true, value: input as ConnectorGraphState };
 }
 
 // Re-export the connector node alias so consumers of this validator module can narrow
 // without dipping back into the types file when they already imported the validator.
 export type { ConnectorNode };
+
+const CAPSULE_REINDEX_MODES_ADMISSION: readonly unknown[] = CAPSULE_REINDEX_MODES;
+const CONNECTOR_NODE_KINDS_ADMISSION: readonly unknown[] = CONNECTOR_NODE_KINDS;
+
+const KNOWLEDGE_SOURCE_SCOPE_KINDS_ADMISSION: readonly unknown[] = KNOWLEDGE_SOURCE_SCOPE_KINDS;

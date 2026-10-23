@@ -4,7 +4,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
+import type { GatewayFailureEvidence, ModelGatewayLogTransport } from "./observability.js";
 import { describe, expect, it, vi } from "vitest";
 import { countProviderPromptTokens } from "./provider-token-counter.js";
 import type { ModelProviderConfig } from "./types.js";
@@ -143,9 +143,9 @@ it("bounds counting latency by cancellation and records a fallback on transport 
 });
 
 it("records a body-free counter failure before falling back", async () => {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const sink = {
-    write: (event: ModelGatewayLogEvent): void => {
+    write: (event: ModelGatewayLogTransport): void => {
       events.push(event);
     },
   };
@@ -169,9 +169,9 @@ it("records a body-free counter failure before falling back", async () => {
 });
 
 it.each([403, 200])("logs counter fallback evidence for HTTP %s", async (status) => {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const sink = {
-    write: (event: ModelGatewayLogEvent): void => {
+    write: (event: ModelGatewayLogTransport): void => {
       events.push(event);
     },
     errorEvidence: (error: unknown): GatewayFailureEvidence => ({
@@ -190,12 +190,12 @@ it.each([403, 200])("logs counter fallback evidence for HTTP %s", async (status)
 });
 
 it("retains safe frames and causes from a counter reader failure", async () => {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const error = new TypeError("private-body", { cause: new RangeError("private-cause") });
   error.stack =
     "TypeError: private-body\n at reader (/private/install/packages/keiko-model-gateway/dist/http.js:80:4)";
   const sink = {
-    write: (event: ModelGatewayLogEvent): void => {
+    write: (event: ModelGatewayLogTransport): void => {
       events.push(event);
     },
     errorEvidence: (value: unknown): GatewayFailureEvidence => ({

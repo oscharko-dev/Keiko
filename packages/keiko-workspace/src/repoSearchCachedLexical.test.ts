@@ -287,11 +287,25 @@ describe("repoSearchCachedLexical", () => {
       ["release handler", "unrelated", "release", "release handler", "handler"].join("\n"),
     );
 
-    expect(bestCachedLexicalLines(record, prepared)).toEqual([
-      { line: 1, startLine: 1, endLine: 1, score: 1 },
+    const lines = bestCachedLexicalLines(record, prepared);
+    expect(lines).toMatchObject([
+      {
+        line: 1,
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+      },
       { line: 3, startLine: 3, endLine: 3, score: 0.5 },
-      { line: 4, startLine: 4, endLine: 4, score: 1 },
+      {
+        line: 4,
+        startLine: 4,
+        endLine: 4,
+        score: 1,
+      },
     ]);
+    expect(lines[0]?.queryGroupKey).toMatch(/^[1-9a-f][a-f0-9]{0,31}$/u);
+    expect(lines[1]?.queryGroupKey).toBeUndefined();
+    expect(lines[2]?.queryGroupKey).toBe(lines[0]?.queryGroupKey);
     expect(cachedLexicalRecordMatches(record, prepared)).toBe(true);
   });
 

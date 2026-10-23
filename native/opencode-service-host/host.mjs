@@ -201,6 +201,7 @@ function readFixedConfig(binding) {
 function hostEnvironment(binding) {
   return Object.freeze({
     HOME: join(binding.stateRoot, "home"),
+    USERPROFILE: join(binding.stateRoot, "home"),
     XDG_CONFIG_HOME: join(binding.stateRoot, "config"),
     XDG_DATA_HOME: join(binding.stateRoot, "data"),
     XDG_STATE_HOME: join(binding.stateRoot, "state"),

@@ -88,6 +88,19 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
     const coverage = await loadConfig(JUDGING_COVERAGE_CONFIG);
     expect(coverage.test.coverage.exclude).toContain("**/*.generated.*");
   });
+
+  it("keeps script shards and merge on the unchanged script coverage configuration", async () => {
+    const scripts = readPackageScripts();
+    expect(scripts["test:coverage:scripts:shard"]).toMatch(/^npm run build && /u);
+    for (const name of ["test:coverage:scripts:shard", "test:coverage:scripts:merge"]) {
+      expect(scripts[name]).toContain("--config vitest.coverage.scripts.config.ts --coverage");
+    }
+    expect(scripts["test:coverage:scripts:shard"]).toContain("--reporter=blob");
+    expect(scripts["test:coverage:scripts:merge"]).toContain(
+      "--mergeReports=.vitest-reports-scripts",
+    );
+    expect(await loadMaxWorkers("vitest.coverage.scripts.config.ts")).toBe(2);
+  });
 });
 
 // KEIKO-0251: the root suite's `include` list collected zero *.test.tsx files while the package

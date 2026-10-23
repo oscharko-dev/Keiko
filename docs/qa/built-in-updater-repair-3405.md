@@ -1835,3 +1835,30 @@ Full root and UI `npm run lint` completed successfully, exit zero:
 `/tmp/keiko-3405-frozen-root-lint.log`. Full `npm run format:check` passed:
 `/tmp/keiko-3405-frozen-format-check.log`; this final ledger update was formatted
 again afterward.
+
+### October 2026 Windows compiler candidate — native equality pending (#3918)
+
+Required Windows run `39756448217`, job `119751322959`, on head `85d44a1` observed
+runner image `20261018.275.1` and rejected its unrecognized Roslyn fingerprint before
+assembly regeneration. A separate job `119747939844` on the same merge revision used
+image `20261007.264.1` and passed the existing verifier check. These are different pool
+images, not evidence that repeating a failed job repairs it. The logs do not establish
+a precise Visual Studio version, and the image-document URLs were unavailable when
+investigated.
+
+The exact new compiler/distribution fingerprint is a candidate for the existing
+byte-equality check, not a claim of compatible assembly output. Compiler SHA-256 is
+`a13d1edf3ef5dd0d0e09886251f03fa18877d46ba2dacee075b4c8a5add21457`;
+distribution SHA-256 is
+`6d96789fadf839936d7e980a511d8d1b19a13d4691a338531fc4dc13650dce6a`,
+with 111 files and 36,401,120 bytes. The four framework-reference hashes remain the
+committed pins. Existing committed and reviewed-alternate pins are unchanged; unknown
+compilers and differing distributions/references still fail closed.
+
+Matching Visual Studio generation cannot run on the current macOS host. Local selector,
+source-binding, lint and analyzer checks do not substitute for Windows generation.
+The required Windows gate must build twice in isolated temporary directories, require
+those assemblies to match each other and the unchanged committed assembly, and verify
+the canonical generated asset. Until that actual result exists, native compatibility
+remains pending. No generated C# source, embedded assembly, trust validation, discovery
+path, compiler bound or gate may be changed merely to make the candidate pass.

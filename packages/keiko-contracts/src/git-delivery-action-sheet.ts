@@ -355,7 +355,13 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every(isString);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isString(value[index])) return false;
+  }
+  return true;
 }
 
 function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
@@ -363,7 +369,8 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 }
 
 function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Exported enum guards ────────────────────────────────────────────────────────────
@@ -427,6 +434,26 @@ export const GIT_DELIVERY_POLICY_DECISION_OUTCOMES: readonly GitDeliveryPolicyDe
 
 export const isGitDeliveryPolicyDecisionOutcome = isInSet(GIT_DELIVERY_POLICY_DECISION_OUTCOMES);
 
+function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryConstraint(value[index])) return false;
+  }
+  return true;
+}
+
+function isRecoveryHintArray(value: unknown): value is readonly GitDeliveryRecoveryHint[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryRecoveryHint(value[index])) return false;
+  }
+  return true;
+}
+
 export function isGitDeliveryPolicyExplanation(
   value: unknown,
 ): value is GitDeliveryPolicyExplanation {
@@ -435,13 +462,19 @@ export function isGitDeliveryPolicyExplanation(
     isGitDeliveryPolicyDecisionOutcome(value.decision) &&
     isStringArray(value.requiredApprovers) &&
     Array.isArray(value.constraints) &&
-    value.constraints.every(isGitDeliveryConstraint) &&
+    isConstraintArray(value.constraints) &&
     isUndefinedOr(isGitDeliveryBlockReason)(value.blockReason)
   );
 }
 
 function isExpectedBlockerArray(value: unknown): value is readonly GitDeliveryExpectedBlocker[] {
-  return Array.isArray(value) && value.every(isGitDeliveryExpectedBlocker);
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryExpectedBlocker(value[index])) return false;
+  }
+  return true;
 }
 
 function previewProviderFieldsValid(value: Record<string, unknown>): boolean {
@@ -509,7 +542,7 @@ function actionSheetCompositeFieldsValid(value: Record<string, unknown>): boolea
     isGitDeliveryApprovalSummary(value.approval) &&
     isGitDeliveryPolicyExplanation(value.policyExplanation) &&
     Array.isArray(value.recovery) &&
-    value.recovery.every(isGitDeliveryRecoveryHint) &&
+    isRecoveryHintArray(value.recovery) &&
     isUndefinedOr(isGitDeliveryBlockedDetail)(value.blocked)
   );
 }
@@ -547,7 +580,8 @@ const REMOTE_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
 ];
 
 function actionTouchesRemote(kind: GitDeliveryActionKind): boolean {
-  return (REMOTE_ACTION_KINDS as readonly string[]).includes(kind);
+  const remoteActionKindsValues: readonly string[] = REMOTE_ACTION_KINDS;
+  return remoteActionKindsValues.includes(kind);
 }
 
 function affectedBranchOf(inputs: GitDeliveryResolvedInputs): string | undefined {

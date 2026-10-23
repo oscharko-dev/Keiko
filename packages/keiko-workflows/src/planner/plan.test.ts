@@ -324,7 +324,6 @@ describe("createExplorationPlan", () => {
     "Where are WindowFrame and ChatPanel defined and called by their callers?",
     "Where are WindowFrame and ChatPanel implemented and imported?",
     "Where are WindowFrame and ChatPanel defined and exercised by integration tests?",
-    "Where are WindowFrameTest and ChatPanelSpec implemented?",
     "Where are WindowFrame and ChatPanel defined and how have they changed?",
     "Where are WindowFrame and ChatPanel defined and why do they fail?",
     "Trace the implementation of WindowFrame and ChatPanel from route to handler.",
@@ -334,6 +333,14 @@ describe("createExplorationPlan", () => {
       query: happyQuery({ text }),
     });
     expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
+  });
+
+  it("keeps structural test-implementation lookup without implicit Git history", () => {
+    const result = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text: "Where are WindowFrameTest and ChatPanelSpec implemented?" }),
+    });
+    expect(result.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural"]);
   });
 
   it("explicitConnection: workspace-root allows lowercase definition lookups", () => {
@@ -524,15 +531,40 @@ describe("createExplorationPlan", () => {
     expect(p.clarification?.reason).toBe("no-anchors");
   });
 
-  it("workspace-root scope + 2+ anchors → lexical + git-history (no structural unless ident/path)", () => {
+  it("workspace-root facts do not implicitly request Git history", () => {
     const scope = happyScope({ kind: "workspace-root", relativePaths: [] });
     const q = happyQuery({ text: '"alpha bravo" "charlie delta"' });
     const p = plan({ scope, query: q });
     expect(p.state).toBe("ready");
     const ringKinds = p.rings.map((r) => r.kind);
     expect(ringKinds).toContain("lexical");
-    expect(ringKinds).toContain("git-history");
+    expect(ringKinds).not.toContain("git-history");
     expect(ringKinds).not.toContain("structural");
+  });
+
+  it.each([
+    "Welche aktuell freigegebene Rückerstattungsfrist und welcher Höchstbetrag gelten für Datura-Partner? Prüfe Backend und Frontend und unterscheide abgelehnte Vorschläge. Belege die Antwort mit Quellen.",
+    "What refund period and maximum amount apply to Datura partners? Compare backend and frontend with rejected proposals.",
+  ])("keeps repository-wide current policy retrieval independent of Git metadata: %s", (text) => {
+    const result = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(result.state).toBe("ready");
+    expect(result.rings.map((ring) => ring.kind)).toContain("lexical");
+    expect(result.rings.map((ring) => ring.kind)).not.toContain("git-history");
+  });
+
+  it.each([
+    "Why does RefundService fail with an exception?",
+    "Show recent Git history for RefundService.",
+    "Which callers reference RefundService?",
+  ])("retains diagnostic, history and relationship enrichment: %s", (text) => {
+    const result = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(result.rings.map((ring) => ring.kind)).toContain("git-history");
   });
 
   it("same input → same planId (determinism)", () => {

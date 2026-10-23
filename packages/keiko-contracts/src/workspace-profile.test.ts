@@ -122,3 +122,20 @@ describe("public entrypoint surface", () => {
     expect(redaction.settingId).toBe("profileDisplayName");
   });
 });
+
+import {
+  validateWorkspaceProfileManifest as publicProfileValidation,
+  redactWorkspaceProfileForExport as publicProfileExport,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
+
+import { isWorkspaceProfileRef as publicProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+
+it("preserves actual public profile portability and refusal", () => {
+  const source = profile();
+  const ref: string = source.profileRef;
+  if (!publicProfileRef(ref)) throw new Error("invalid public fixture profile ref");
+  const input = { ...source, profileRef: ref, settings: { ...source.settings, profileRef: ref } };
+  expect(publicProfileValidation(input)).toEqual({ ok: true });
+  expect(publicProfileExport(input)).toEqual(input);
+  expect(publicProfileValidation({ ...input, root: "/private/repo" }).ok).toBe(false);
+});

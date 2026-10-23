@@ -6,7 +6,7 @@ import {
 } from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -255,7 +255,7 @@ describe("requestTextToSpeech", () => {
 
   it("uses an Ogg container signature when Azure mislabels Opus audio as MPEG", async () => {
     const oggAudio = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]);
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -312,7 +312,7 @@ describe("requestTextToSpeech", () => {
       },
     });
     expect(events[2]?.extra).not.toHaveProperty("failureKind");
-    expect(events[2]?.errorKind).toBeUndefined();
+    expect(normalFixtureEvent(events[2])?.errorKind).toBeUndefined();
 
     // Activity Log proof (#3532): the MIME-correction line as the production file sink would
     // persist it.
@@ -355,7 +355,7 @@ describe("requestTextToSpeech", () => {
     ["MP3 ID3", [0x49, 0x44, 0x33], "audio/mpeg", "mp3"],
     ["MP3 frame", [0xff, 0xfb, 0x90, 0x64], "audio/mpeg", "mp3"],
   ] as const)("corrects a %s container mislabeled as PCM", async (_label, bytes, mime, kind) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -386,7 +386,7 @@ describe("requestTextToSpeech", () => {
     ["a malformed Ogg version", [0x4f, 0x67, 0x67, 0x53, 0x01, 0x02]],
     ["hostile leading bytes before OggS", [0x00, 0x00, 0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]],
   ])("does not correct the declared MIME for %s", async (_label, bytes) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -419,7 +419,7 @@ describe("requestTextToSpeech", () => {
     ["reserved sample rate", [0xff, 0xfb, 0x9c, 0x64]],
     ["incomplete frame", [0xff, 0xfb, 0x90]],
   ])("does not infer MP3 from %s", async (_label, bytes) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -599,7 +599,7 @@ describe("requestTextToSpeech", () => {
   // rate limit, and an invalid response indistinguishable from a still-running call). Proves the
   // timeout path specifically, since that is the scenario the finding names.
   it("logs the completed line with a timeout failureKind and errorKind on a timeout outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -631,7 +631,7 @@ describe("requestTextToSpeech", () => {
   // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate
   // limit from a timeout instead of collapsing every failure into one shape.
   it("logs the completed line with a rate-limited failureKind and errorKind on a 429 outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -661,7 +661,7 @@ describe("requestTextToSpeech", () => {
   // TTS-only failure kind (a 2xx response with no audio bytes): proves the completed line's
   // closed vocabulary covers a value the STT adapter does not have.
   it("logs the completed line with an empty-audio failureKind and errorKind on an empty-audio outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -693,7 +693,7 @@ describe("requestTextToSpeech", () => {
   // stream was indistinguishable from a call still in flight). One case per exit class of the
   // dispatch: the timeout, a provider rejection, and an opened stream.
   it("logs the streamed call's completed line with a timeout failureKind on a timeout outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeechStream({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -727,7 +727,7 @@ describe("requestTextToSpeech", () => {
   });
 
   it("logs the streamed call's completed line with a rate-limited failureKind on a 429 outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeechStream({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -750,7 +750,7 @@ describe("requestTextToSpeech", () => {
   });
 
   it("logs the streamed call's completed line as succeeded once the audio stream has opened", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestTextToSpeechStream({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -840,7 +840,7 @@ describe("requestTextToSpeechStream", () => {
       new Uint8Array([0x11, 0x22, 0x33]),
     ];
     const expected = new Uint8Array(chunks.flatMap((chunk) => [...chunk]));
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const stream = new ReadableStream<Uint8Array>({
       start(controller): void {
         for (const chunk of chunks) controller.enqueue(chunk);
@@ -907,7 +907,7 @@ describe("requestTextToSpeechStream", () => {
   });
 
   it("logs a correlated body-free failure when the response prefix cannot be read", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const stream = new ReadableStream<Uint8Array>({
       start(controller): void {
         controller.error(new TypeError("provider response prefix failed"));
@@ -998,3 +998,15 @@ describe("requestTextToSpeechStream", () => {
     await expect(collect(outcome.value.body)).rejects.toThrow();
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

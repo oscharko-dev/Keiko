@@ -11,6 +11,8 @@ import type {
 import { UPDATE_STATE_STORES } from "./update-local-state.js";
 import { validTargetVersion } from "./update-session.js";
 
+const releaseImpactRemediations: readonly string[] = RELEASE_IMPACT_REMEDIATIONS;
+
 export const UPDATE_REMEDIATION_SCHEMA_VERSION = 1 as const;
 
 export const UPDATE_REMEDIATION_ACTION_KINDS = [
@@ -153,14 +155,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function everyPhysicalMember(
+  value: readonly unknown[],
+  valid: (entry: unknown) => boolean,
+): boolean {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !valid(value[index])) return false;
+  }
+  return true;
+}
+
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  return Array.isArray(value) && everyPhysicalMember(value, (entry) => typeof entry === "string");
 }
 
 function isReleaseImpactRemediation(value: unknown): value is ReleaseImpactRemediation {
-  return (
-    typeof value === "string" && (RELEASE_IMPACT_REMEDIATIONS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set(releaseImpactRemediations).has(value);
 }
 
 function isStateImpact(value: unknown): value is ReleaseImpactStateImpact {
@@ -180,12 +192,16 @@ function parseAffectedStateStores(value: unknown, errors: string[]): readonly st
   return undefined;
 }
 
+function isStateImpactArray(value: unknown): value is readonly ReleaseImpactStateImpact[] {
+  return Array.isArray(value) && everyPhysicalMember(value, isStateImpact);
+}
+
 function parseStateImpact(
   value: unknown,
   errors: string[],
 ): readonly ReleaseImpactStateImpact[] | undefined {
   if (value === undefined) return undefined;
-  if (Array.isArray(value) && value.every(isStateImpact)) return value;
+  if (isStateImpactArray(value)) return value;
   errors.push("impact.stateImpact must contain release-impact state entries");
   return undefined;
 }
@@ -247,15 +263,22 @@ function parseActionId(input: unknown, errors: string[]): string | undefined {
 
 function parseDecision(input: unknown, errors: string[]): UpdateRemediationDecision | undefined {
   if (input === undefined) return undefined;
-  if (UPDATE_REMEDIATION_DECISIONS.includes(input as never)) {
-    return input as UpdateRemediationDecision;
+  if (isUpdateRemediationDecision(input)) {
+    return input;
   }
   errors.push("decision must be run or defer");
   return undefined;
 }
 
+const updateStateStores: readonly string[] = UPDATE_STATE_STORES;
+const updateRemediationDecisions: readonly unknown[] = UPDATE_REMEDIATION_DECISIONS;
+
+function isUpdateRemediationDecision(value: unknown): value is UpdateRemediationDecision {
+  return new Set(updateRemediationDecisions).has(value);
+}
+
 export function isUpdateStateStore(value: unknown): value is UpdateStateStore {
-  return typeof value === "string" && (UPDATE_STATE_STORES as readonly string[]).includes(value);
+  return typeof value === "string" && new Set(updateStateStores).has(value);
 }
 
 export function isUpdateRemediationStatus(value: unknown): value is UpdateRemediationStatus {
@@ -276,14 +299,24 @@ export function parseUpdateRemediationStatusRequest(
     errors.push("persist must be a boolean");
   }
   if (errors.length > 0) return { ok: false, errors };
+  const persist = observedOutputPersist(input);
+  if (!persist.ok) return { ok: false, errors: ["persist must be a boolean"] };
   return {
     ok: true,
     value: {
       ...(targetVersion === undefined ? {} : { targetVersion }),
       ...(impact === undefined ? {} : { impact }),
-      ...(typeof input.persist === "boolean" ? { persist: input.persist } : {}),
+      ...(persist.value === undefined ? {} : { persist: persist.value }),
     },
   };
+}
+
+function observedOutputPersist(
+  input: Record<string, unknown>,
+): { readonly ok: true; readonly value: boolean | undefined } | { readonly ok: false } {
+  if (typeof input.persist !== "boolean") return { ok: true, value: undefined };
+  const value = input.persist;
+  return typeof value === "boolean" ? { ok: true, value } : { ok: false };
 }
 
 export function parseUpdateRemediationActionRequest(

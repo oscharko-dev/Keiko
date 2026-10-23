@@ -1,8 +1,20 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  parseCodingWorkbenchRuntimeQuestionAnswerRequest as publicQuestionAnswer,
+  validateCodingWorkbenchRuntimeQuestionsChannelPayload as publicQuestionsChannel,
+  validateCodingWorkbenchRuntimeQuestionsResponse as publicQuestionsResponse,
+  type CodingWorkbenchRuntimeQuestionAnswerRequest,
+  type CodingWorkbenchRuntimeQuestionsChannelPayload,
+  type CodingWorkbenchRuntimeQuestionsResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import {
+  CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
   parseCodingWorkbenchRuntimeQuestionAnswerRequest,
   unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeQuestionsChannelPayload,
@@ -353,5 +365,411 @@ describe("coding workbench runtime questions module structure (KEIKO-0532)", () 
       "utf8",
     );
     expect(/^function isQuestionId/m.test(source)).toBe(false);
+  });
+});
+
+describe("C2 owning question member admissions", () => {
+  it.each(["requests", "questions", "options"] as const)(
+    "refuses skipped malformed %s",
+    (surface) => {
+      const entries: unknown[] = [null];
+      Object.defineProperty(entries, "forEach", { value: (): void => undefined });
+      const request = response.questions[0];
+      const question = request?.questions[0];
+      if (request === undefined || question === undefined)
+        throw new Error("expected question fixture");
+      const value =
+        surface === "requests"
+          ? { questions: entries }
+          : surface === "questions"
+            ? { questions: [{ ...request, questions: entries }] }
+            : { questions: [{ ...request, questions: [{ ...question, options: entries }] }] };
+      expect(validateCodingWorkbenchRuntimeQuestionsResponse(value).ok).toBe(false);
+    },
+  );
+
+  it("refuses skipped malformed answer lists", () => {
+    const answers: unknown[] = [null];
+    Object.defineProperty(answers, "forEach", { value: (): void => undefined });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({ ...VALID_ANSWER_BASE, answers }).ok,
+    ).toBe(false);
+  });
+
+  it("refuses a numeric selection hidden by the caller's every", () => {
+    const answer: unknown[] = [3];
+    Object.defineProperty(answer, "every", { value: (): boolean => true });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({ ...VALID_ANSWER_BASE, answers: [answer] })
+        .ok,
+    ).toBe(false);
+  });
+
+  it("retains a healthy response and its nested collection references", () => {
+    const result = validateCodingWorkbenchRuntimeQuestionsResponse(response);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(response);
+      expect(result.value.questions).toBe(response.questions);
+    }
+  });
+
+  it.each(["0", null, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
+    "refuses an invalid observed second revision",
+    (second) => {
+      let reads = 0;
+      const value = { ...VALID_ANSWER_BASE, answers: [["Continue"]] };
+      Object.defineProperty(value, "expectedRevision", {
+        get: (): unknown => (++reads === 1 ? 0 : second),
+      });
+      expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest(value).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+type PublicQuestionAnswerParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionAnswerRequest>;
+type PublicQuestionsResponseParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsResponse>;
+type PublicQuestionsChannelParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload>;
+
+export function parsePublicRuntimeQuestionAnswer(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionAnswerRequest> {
+  const result = publicQuestionAnswer(input);
+  return result;
+}
+
+export function parsePublicRuntimeQuestionsResponse(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsResponse> {
+  const result = publicQuestionsResponse(input);
+  return result;
+}
+
+export function parsePublicRuntimeQuestionsChannel(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload> {
+  const result = publicQuestionsChannel(input);
+  return result;
+}
+
+describe("runtime question answer public parser (#3918)", () => {
+  it("forwards the checked original answer and nested selections", () => {
+    const input = { ...VALID_ANSWER_BASE, answers: [["Continue"]] };
+    const result = parsePublicRuntimeQuestionAnswer(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public answer refused");
+    expect(result.value).toBe(input);
+    expect(result.value.answers).toBe(input.answers);
+    expect(result.value.answers[0]).toBe(input.answers[0]);
+  });
+
+  it("refuses malformed bodies with exact eager ordered diagnostics", () => {
+    for (const input of [null, [], "answer", 1])
+      expect(parsePublicRuntimeQuestionAnswer(input)).toEqual({
+        ok: false,
+        errors: ["question answer must be an object"],
+      });
+    expect(
+      parsePublicRuntimeQuestionAnswer({
+        requestId: "!",
+        expectedRevision: -1,
+        questionId: "",
+        answers: "invalid",
+        extra: true,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "questionAnswer.extra is not allowed",
+        "requestId must be a bounded safe identifier",
+        "expectedRevision must be a non-negative safe integer",
+        "questionId is invalid",
+        "answers must be a bounded non-empty array",
+      ],
+    });
+  });
+
+  it("retains the public second revision observation refusal", () => {
+    let reads = 0;
+    const input = {
+      ...VALID_ANSWER_BASE,
+      answers: [["Continue"]],
+      get expectedRevision(): unknown {
+        return ++reads === 1 ? 0 : "0";
+      },
+    };
+    expect(parsePublicRuntimeQuestionAnswer(input)).toEqual({
+      ok: false,
+      errors: ["expectedRevision must be a non-negative safe integer"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+    ).returns.toEqualTypeOf<PublicQuestionAnswerParse>();
+    expectTypeOf(publicQuestionAnswer).returns.toEqualTypeOf<PublicQuestionAnswerParse>();
+    expectTypeOf(
+      parsePublicRuntimeQuestionAnswer,
+    ).returns.toEqualTypeOf<PublicQuestionAnswerParse>();
+    const result = parsePublicRuntimeQuestionAnswer({
+      ...VALID_ANSWER_BASE,
+      answers: [["Continue"]],
+    });
+    if (!result.ok) throw new TypeError("healthy public answer types refused");
+    expectTypeOf(result.value.expectedRevision).toEqualTypeOf<number>();
+    expectTypeOf(result.value.answers).toEqualTypeOf<readonly (readonly string[])[]>();
+    type Failure = Extract<ReturnType<typeof publicQuestionAnswer>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("runtime questions response public parser (#3918)", () => {
+  it("retains the admitted response and nested question references", () => {
+    const result = parsePublicRuntimeQuestionsResponse(response);
+    expect(result).toEqual({ ok: true, value: response });
+    if (!result.ok) throw new TypeError("healthy public response refused");
+    expect(result.value).toBe(response);
+    expect(result.value.questions).toBe(response.questions);
+    expect(result.value.questions[0]?.questions).toBe(response.questions[0]?.questions);
+  });
+
+  it("refuses malformed responses with exact ordered diagnostics", () => {
+    for (const input of [null, [], "response", 1])
+      expect(parsePublicRuntimeQuestionsResponse(input)).toEqual({
+        ok: false,
+        errors: ["questions response must be an object"],
+      });
+    expect(parsePublicRuntimeQuestionsResponse({ questions: "invalid", extra: true })).toEqual({
+      ok: false,
+      errors: ["questionsResponse.extra is not allowed", "questions must be a bounded array"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodingWorkbenchRuntimeQuestionsResponse,
+    ).returns.toEqualTypeOf<PublicQuestionsResponseParse>();
+    expectTypeOf(publicQuestionsResponse).returns.toEqualTypeOf<PublicQuestionsResponseParse>();
+    expectTypeOf(
+      parsePublicRuntimeQuestionsResponse,
+    ).returns.toEqualTypeOf<PublicQuestionsResponseParse>();
+    type Success = Extract<ReturnType<typeof publicQuestionsResponse>, { readonly ok: true }>;
+    expectTypeOf<Success["value"]>().toEqualTypeOf<CodingWorkbenchRuntimeQuestionsResponse>();
+    type Failure = Extract<ReturnType<typeof publicQuestionsResponse>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("runtime questions channel public parser (#3918)", () => {
+  it("retains active and unpaired payload identity and optional flag presence", () => {
+    const base = { question: "Continue?", header: "Action", options: [] };
+    for (const question of [base, { ...base, multiple: undefined, custom: undefined }]) {
+      const input = { session: "active", questions: [{ id: "que_1", questions: [question] }] };
+      const result = parsePublicRuntimeQuestionsChannel(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy public channel refused");
+      expect(result.value).toBe(input);
+      const observed = result.value.questions[0]?.questions[0];
+      expect(observed).toBe(question);
+      expect(Object.hasOwn(observed ?? {}, "multiple")).toBe(Object.hasOwn(question, "multiple"));
+      expect(Object.hasOwn(observed ?? {}, "custom")).toBe(Object.hasOwn(question, "custom"));
+    }
+    const unpaired = unpairedCodingWorkbenchRuntimeQuestionsChannelPayload();
+    const result = parsePublicRuntimeQuestionsChannel(unpaired);
+    expect(result).toEqual({ ok: true, value: { session: "unpaired", questions: [] } });
+    if (!result.ok) throw new TypeError("healthy unpaired public channel refused");
+    expect(result.value).toBe(unpaired);
+  });
+
+  it("refuses malformed and content-bearing unpaired channels", () => {
+    for (const input of [null, [], "channel", 1])
+      expect(parsePublicRuntimeQuestionsChannel(input)).toEqual({
+        ok: false,
+        errors: ["questions channel payload must be an object"],
+      });
+    expect(
+      parsePublicRuntimeQuestionsChannel({ session: "guest", questions: "invalid", extra: true }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "questionsChannelPayload.extra is not allowed",
+        "questionsChannelPayload.session is invalid",
+        "questions must be a bounded array",
+      ],
+    });
+    expect(
+      parsePublicRuntimeQuestionsChannel({ session: "unpaired", questions: response.questions }),
+    ).toEqual({
+      ok: false,
+      errors: ["questionsChannelPayload.questions must be empty when the session is unpaired"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload,
+    ).returns.toEqualTypeOf<PublicQuestionsChannelParse>();
+    expectTypeOf(publicQuestionsChannel).returns.toEqualTypeOf<PublicQuestionsChannelParse>();
+    expectTypeOf(
+      parsePublicRuntimeQuestionsChannel,
+    ).returns.toEqualTypeOf<PublicQuestionsChannelParse>();
+    type Success = Extract<ReturnType<typeof publicQuestionsChannel>, { readonly ok: true }>;
+    expectTypeOf<Success["value"]>().toEqualTypeOf<CodingWorkbenchRuntimeQuestionsChannelPayload>();
+    type Failure = Extract<ReturnType<typeof publicQuestionsChannel>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+// The SOURCE entry points locate the aggregate boundary; no JSON/UTF-8 formula is copied here.
+function aggregateQuestionBudgetFixture(): CodingWorkbenchRuntimeQuestionsResponse {
+  const question = response.questions[0]?.questions[0];
+  if (!question) throw new Error("Missing question fixture");
+  const questions: CodingWorkbenchRuntimeQuestionsResponse["questions"][number][] = [];
+  for (let index = 0; index < CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT; index += 1) {
+    questions.push({
+      id: `que_${String(index)}`,
+      questions: [
+        { ...question, question: "é".repeat(CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS) },
+      ],
+    });
+    const input = { questions };
+    if (!validateCodingWorkbenchRuntimeQuestionsResponse(input).ok) return input;
+  }
+  throw new Error("No aggregate response refusal within the producer-owned request bound");
+}
+
+function aggregateAnswerBudgetFixture(): CodingWorkbenchRuntimeQuestionAnswerRequest {
+  const answers: string[][] = [];
+  for (let index = 0; index < CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT; index += 1) {
+    answers.push(["é".repeat(CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS)]);
+    const input = { ...VALID_ANSWER_BASE, answers };
+    if (!parseCodingWorkbenchRuntimeQuestionAnswerRequest(input).ok) return input;
+  }
+  throw new Error("No aggregate answer refusal within the producer-owned answer bound");
+}
+
+function questionReadPhaseFixture(channel: boolean): { input: unknown; reads: () => number } {
+  let count = 0;
+  const request = {
+    id: "que_1",
+    get questions(): (typeof response.questions)[0]["questions"] {
+      count += 1;
+      if (count > 1) throw new Error("Serialization reached an already refused fixture");
+      return response.questions[0]?.questions ?? [];
+    },
+  };
+  return {
+    input: channel
+      ? { session: "active", questions: [request], extra: true }
+      : { questions: [request], extra: true },
+    reads: () => count,
+  };
+}
+
+describe("runtime question aggregate object measurement (#3918)", () => {
+  it("refuses the public response aggregate after preserving legal UTF-8 input", () => {
+    const healthy = {
+      questions: [
+        { id: "que_utf8", questions: [{ question: "é", header: "Action", options: [] }] },
+      ],
+    };
+    expect(validateCodingWorkbenchRuntimeQuestionsResponse(healthy)).toEqual({
+      ok: true,
+      value: healthy,
+    });
+    expect(parsePublicRuntimeQuestionsResponse(healthy)).toEqual({ ok: true, value: healthy });
+    const input = aggregateQuestionBudgetFixture();
+    const refusal = {
+      ok: false,
+      errors: ["questions response exceeds the aggregate UTF-8 byte budget"],
+    };
+    expect(validateCodingWorkbenchRuntimeQuestionsResponse(input)).toEqual(refusal);
+    expect(parsePublicRuntimeQuestionsResponse(input)).toEqual(refusal);
+  });
+  it("refuses the public answer aggregate after preserving legal UTF-8 input", () => {
+    const healthy = { ...VALID_ANSWER_BASE, answers: [["é"]] };
+    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest(healthy)).toEqual({
+      ok: true,
+      value: healthy,
+    });
+    expect(parsePublicRuntimeQuestionAnswer(healthy)).toEqual({ ok: true, value: healthy });
+    const input = aggregateAnswerBudgetFixture();
+    const refusal = { ok: false, errors: ["answers exceed the aggregate UTF-8 byte budget"] };
+    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest(input)).toEqual(refusal);
+    expect(parsePublicRuntimeQuestionAnswer(input)).toEqual(refusal);
+  });
+  it("refuses the public channel aggregate after preserving legal UTF-8 input", () => {
+    const healthy = { session: "active", questions: response.questions };
+    expect(validateCodingWorkbenchRuntimeQuestionsChannelPayload(healthy)).toEqual({
+      ok: true,
+      value: healthy,
+    });
+    expect(parsePublicRuntimeQuestionsChannel(healthy)).toEqual({ ok: true, value: healthy });
+    const input = { session: "active", questions: aggregateQuestionBudgetFixture().questions };
+    const refusal = {
+      ok: false,
+      errors: ["questions response exceeds the aggregate UTF-8 byte budget"],
+    };
+    expect(validateCodingWorkbenchRuntimeQuestionsChannelPayload(input)).toEqual(refusal);
+    expect(parsePublicRuntimeQuestionsChannel(input)).toEqual(refusal);
+  });
+  it("retains the independent source channel aggregate refusal", () => {
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({
+        session: "active",
+        questions: aggregateQuestionBudgetFixture().questions,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: ["questions response exceeds the aggregate UTF-8 byte budget"],
+    });
+  });
+  it("defers serialization after an already rejected field across all three lanes", () => {
+    for (const validate of [
+      validateCodingWorkbenchRuntimeQuestionsResponse,
+      parsePublicRuntimeQuestionsResponse,
+    ]) {
+      const fixture = questionReadPhaseFixture(false);
+      expect(validate(fixture.input)).toEqual({
+        ok: false,
+        errors: ["questionsResponse.extra is not allowed"],
+      });
+      expect(fixture.reads()).toBe(1);
+    }
+    for (const validate of [
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload,
+      parsePublicRuntimeQuestionsChannel,
+    ]) {
+      const fixture = questionReadPhaseFixture(true);
+      expect(validate(fixture.input)).toEqual({
+        ok: false,
+        errors: ["questionsChannelPayload.extra is not allowed"],
+      });
+      expect(fixture.reads()).toBe(1);
+    }
+    for (const validate of [
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+      parsePublicRuntimeQuestionAnswer,
+    ]) {
+      let serializations = 0;
+      const answers = [["é"]];
+      Object.defineProperty(answers, "toJSON", {
+        value: (): never => {
+          serializations += 1;
+          throw new Error("Serialization reached an already refused answer");
+        },
+      });
+      expect(validate({ ...VALID_ANSWER_BASE, expectedRevision: -1, answers })).toEqual({
+        ok: false,
+        errors: ["expectedRevision must be a non-negative safe integer"],
+      });
+      expect(serializations).toBe(0);
+    }
   });
 });
