@@ -1362,7 +1362,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   refuses the edit before the runtime writes. That is the measure the mapped path charges for a
   materialized patch. An edit the producer attached no diff to cannot apply (no match, or an
   ambiguous one) and spends only its call; a diff the plugin cannot measure is a malformed ask and
-  is never allowed. A refused, revoked, expired, exhausted or aborted action is denied and
+  is never allowed. Only these edit effects are measured: a shell command is bounded by the
+  tool-call budget and the command policy, and the files it changes are not counted in patch
+  bytes. A refused, revoked, expired, exhausted or aborted action is denied and
   recorded as `authority-refused` or `cancelled`; a wiring without the owner refuses every action.
 - **A selected private skill reaches every productive dispatch.** The Markdown skill pinned on a
   Coding conversation (#4025) is bound to the run's task turn when the run begins, through the
