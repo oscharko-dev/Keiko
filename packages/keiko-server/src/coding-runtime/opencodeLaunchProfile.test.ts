@@ -6,6 +6,7 @@ import {
   createFixedOpenCodeV2Config,
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
+  openCodeConfigDirectory,
   resolveOpenCodeContextGeometry,
   type OpenCodeLaunchProfileInput,
 } from "./opencodeLaunchProfile.js";
@@ -166,16 +167,31 @@ describe("OpenCode launch profile", () => {
     });
     expect(config).not.toHaveProperty("tools");
     expect(Object.keys(record(config.providers))).toEqual(["keiko-runtime"]);
+    // The baseline is `ask`, never `allow`: a policy plugin that fails to load must leave every
+    // action waiting for a human, not silently allowed. The loaded hook sets the final effect of
+    // each evaluated action. Code Mode stays available (owner decision, 2026-10-23), so no rule
+    // names the `execute` action: it is governed by the same baseline and the policy plugin.
     expect(config.permissions).toEqual([
-      { action: "*", resource: "*", effect: "allow" },
+      { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
     ]);
-    for (const tool of ["read", "edit", "shell", "webfetch", "subagent", "todo", "execute"]) {
-      expect(finalPermissionAction(config.permissions, tool)).toBe("allow");
+    for (const tool of [
+      "read",
+      "edit",
+      "shell",
+      "webfetch",
+      "subagent",
+      "todo",
+      "execute",
+      "future_action",
+    ]) {
+      expect(finalPermissionAction(config.permissions, tool)).toBe("ask");
     }
     expect(finalPermissionAction(config.permissions, "external_directory")).toBe("deny");
     expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+    // The one definition of the directory: the kernel boundary protects exactly what OpenCode loads.
+    expect(openCodeConfigDirectory("/private/run")).toBe(profile.env.OPENCODE_CONFIG_DIR);
     expect(profile.env.npm_config_offline).toBe("true");
     const mapped = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
@@ -236,6 +252,15 @@ describe("OpenCode launch profile", () => {
         Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}",
       });
       expect(content.model).toBe("keiko-runtime/coding");
+    });
+
+    it("re-asserts the ask baseline on the highest layer", () => {
+      const content = JSON.parse(nativeProfile().env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly permissions: readonly { readonly action: string; readonly effect: string }[];
+      };
+      expect(finalPermissionAction(content.permissions, "shell")).toBe("ask");
+      expect(finalPermissionAction(content.permissions, "execute")).toBe("ask");
+      expect(finalPermissionAction(content.permissions, "external_directory")).toBe("deny");
     });
 
     it("keeps credentials and repository text out of the highest layer", () => {

@@ -5,7 +5,7 @@ import { openCodeCatalogAliasFor } from "../tool-catalog/catalogToolFacadeBridge
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import * as composition from "./opencodeRuntimeComposition.js";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -15,7 +15,10 @@ import type { CodingToolResult } from "./codingToolIpc.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as gatewayBackend from "./devLaneRuntimeProcessBackend.js";
 import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
-import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
+import {
+  createRuntimeGatewayConfinement,
+  type RuntimeGatewayFilesystem,
+} from "@oscharko-dev/keiko-sandbox";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -566,6 +569,11 @@ describe("production OpenCode backend composition", () => {
           },
         });
         expect(confinement?.filesystem?.deniedReadRoots).toContain(realpathSync(root));
+        expectNativeFilesystemHardening(
+          confinement?.filesystem,
+          root,
+          request.minted.authorityRef.runId,
+        );
       } finally {
         vi.unstubAllEnvs();
         rmSync(root, { force: true, recursive: true });
@@ -592,6 +600,29 @@ describe("production OpenCode backend composition", () => {
     }
   });
 });
+
+/**
+ * #3897 review (P1): the user's other agent state and credential files are denied, and the run's
+ * OpenCode configuration directory is protected from writes.
+ */
+function expectNativeFilesystemHardening(
+  filesystem: RuntimeGatewayFilesystem | undefined,
+  root: string,
+  runId: string,
+): void {
+  for (const entry of [
+    ".ssh",
+    ".config/gh",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".local/share/opencode",
+    ".local/state/gh",
+  ])
+    expect(filesystem?.deniedReadRoots).toContain(join(homedir(), entry));
+  const privateStateRoot = join(realpathSync(root), "coding-runtime", "opencode", runId);
+  expect(filesystem?.privateStateRoot).toBe(privateStateRoot);
+  expect(filesystem?.protectedWriteRoots).toEqual([join(privateStateRoot, "config", "opencode")]);
+}
 
 function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeRuntime {
   const installRoot = join(root, "install");

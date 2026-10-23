@@ -1009,11 +1009,36 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   explicit server selection, and the governed `keiko_*` catalog, the tool facade and Chat
   repository search stay in place for the surfaces that use them.
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
-  native profile (`opencodeLaunchProfile.ts`) allows every native action by rule, denies only the
-  mode-independent `external_directory` escape, keeps `update` and `share` off, keeps the single
-  `keiko-runtime` provider behind the Model Gateway, and enables native snapshots. Repository text
-  decides nothing about authority: the policy hook runs after OpenCode's own rule evaluation and
-  can only narrow the result.
+  native profile (`opencodeLaunchProfile.ts`) sets the permission baseline to `ask` for every
+  native action, denies the mode-independent `external_directory` escape, keeps `update` and
+  `share` off, keeps the single `keiko-runtime` provider behind the Model Gateway, and enables
+  native snapshots. The baseline is `ask`, never `allow`: the policy hook sets the final effect of
+  each action it evaluates, so a policy plugin that fails to load leaves every action waiting for
+  a human instead of silently allowed. The real-binary control with the plugin absent
+  (`opencodeNativeProjectBoundary.real.test.ts`) shows a pending `read` permission request and no
+  execution, where the former `allow` baseline ran the read and returned its content to the model.
+  A configured `deny` is applied before the hook and cannot be raised by it (an
+  `external_directory` read is refused with the facade never asked). Repository text decides
+  nothing about authority: the policy hook runs after OpenCode's own rule evaluation and decides
+  only the actions the baseline leaves to it.
+- **Code Mode stays available (owner decision, 2026-10-23); no rule names its `execute` action.**
+  The native profile offers the producer's `execute` tool with the ordinary tools, and its catalog
+  lists exactly the eight `tools.opencode.*` management tools (session rename and move, worktree
+  create, list and remove, model search, MCP resource listing and reading); `read`, `edit`,
+  `shell` and `write` are not callable inside it. Facts of the pinned producer that the policy
+  plugin's governance of Code Mode relies on, each pinned by the same real-binary suite through a
+  test-only probe plugin: `tool.hook("execute.before")` fires for the `execute` call (input
+  `{ code }`) and for every nested call, under the effective tool name (`opencode_worktree_create`)
+  and the nested input, with the outer call's id; the event has no verdict field, a throw blocks
+  the call (a nested throw reaches the script as a catchable error whose message is the model's
+  result, a throw for `execute` ends the script before it starts with the producer's error
+  envelope), and the call's `input` can be replaced while its `tool` cannot be renamed.
+  `permission.hook("evaluate")` fires only for the nested tools that assert a permission:
+  `opencode_read_mcp_resource`, `opencode_list_mcp_resources` (whose producer default is already
+  `allow`) and `worktree_remove` (as `edit` on the worktree directory); worktree creation, session
+  moves and renames, model search and the worktree listing assert nothing, and the `execute` call
+  itself evaluates no permission. `fetch` is a Code Mode primitive that neither hook sees: only
+  the enclosing `execute` code and the kernel egress rule govern it (loopback below Full access).
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
   standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
@@ -1078,13 +1103,34 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   never guards against, and the kernel boundary is a READ allowlist, not only a write restriction:
   the process reads the task workspace, the run's private state (its `tmp` is the runtime's
   `TMPDIR`), the runtime's own payload, the system software roots and the server-named toolchain
-  roots (the launcher's `PATH` directories reduced to install prefixes by
-  `nativeToolchainReadRoots`; never the home directory or an ancestor of it), and nothing else. The
+  roots, and nothing else. A toolchain root is a real install prefix that
+  `nativeToolchainReadRoots` derives from a `PATH` entry: Homebrew's shared prefix, a prefix
+  outside the home, or a directory at least two levels below it (`~/.nvm/versions/node/v24`, a
+  JDK, `~/.sdkman/candidates/java/21`). A user-generic bin directory directly under the home
+  (`~/bin`, `~/.local/bin`, `~/.cargo/bin`) admits only the bin directory itself, never its
+  parent, which holds the user's other state (`~/.local/share/opencode/auth.json`,
+  `~/.local/state/gh`, `~/.cargo/credentials.toml`); an executable in it that is a symbolic link
+  into a bin directory of a real install prefix additionally admits that prefix. The home
+  directory, an ancestor of it and any directory that contains or sits inside a denied location
+  are never roots. The
   shared system temporary directories are not admitted: another process's file there is as
   unrelated to the task as any file outside the workspace. Writes are limited to the workspace and
-  the private state. Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.azure`,
-  `~/.docker`, `~/.netrc`, `~/.pgpass`, `~/.git-credentials`, `~/.config/gh`, `~/.config/gcloud`,
-  keychains) and Keiko's own state directory are unreadable and unwritable even for a shell, and so
+  the private state, except the run's OpenCode configuration directory
+  (`<private state>/config/opencode`, named once by `openCodeConfigDirectory` for both the
+  environment and the kernel rule): it holds the generated policy plugin and the private
+  configuration the runtime only reads, so the filesystem capability's `protectedWriteRoots`
+  (bound into the policy digest, strict descendants of a writable root, native profile only) adds a
+  final denial of every write operation beneath it (create, overwrite, append, chmod, rename,
+  unlink, hard link) and of create and unlink on the intermediate directories, so the directory
+  cannot be moved away. A shell child is refused each of these by the real kernel
+  (`runtime-gateway.test.ts`, and through the real runtime's own shell tool in
+  `opencodeNativeProjectBoundary.real.test.ts`, whose control without the protected root rewrites
+  the plugin), while workspace and private-state writes outside it, and the runtime's loading of
+  its plugins, are unaffected. Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
+  `~/.azure`, `~/.docker`, `~/.netrc`, `~/.pgpass`, `~/.git-credentials`, `~/.config/gh`,
+  `~/.config/gcloud`, `~/.cargo/credentials` and `credentials.toml`, `~/.local/share/opencode`,
+  `~/.local/state/gh`, keychains; one list, `nativeHomeDeniedReadRoots`) and Keiko's own state
+  directory are unreadable and unwritable even for a shell, and so
   is every credential-named path inside the allowed trees: `CREDENTIAL_PATH_DENY_PATTERNS` in
   `keiko-contracts` (`.env`, `.env.*` except `.env.example`, keys, certificates, token and history
   files, `.npmrc`, ...) is the single list that the native read tool's `isDenied` and the kernel

@@ -23,6 +23,15 @@ const OPENCODE_COMPACTION_TAIL_TURNS = 2;
 const OPENCODE_COMPACTION_MIN_RECENT_TOKENS = 2_000;
 const OPENCODE_COMPACTION_MAX_RECENT_TOKENS = 8_000;
 
+/**
+ * The one definition of the directory OpenCode loads Keiko's generated plugins and private
+ * configuration from. The environment names it, and the native kernel boundary protects exactly
+ * this path from writes, so the two cannot drift apart.
+ */
+export function openCodeConfigDirectory(stateRoot: string): string {
+  return join(stateRoot, "config", "opencode");
+}
+
 export interface OpenCodeContextGeometry {
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
@@ -123,7 +132,7 @@ export function buildOpenCodeLaunchProfile(
       TMPDIR: join(input.stateRoot, "tmp"),
       TEMP: join(input.stateRoot, "tmp"),
       TMP: join(input.stateRoot, "tmp"),
-      OPENCODE_CONFIG_DIR: join(input.stateRoot, "config", "opencode"),
+      OPENCODE_CONFIG_DIR: openCodeConfigDirectory(input.stateRoot),
       // Repository configuration is data until the operator admits its executable effects
       // (#3903). The pinned runtime offers no per-item admission: its project layer discovers
       // `opencode.json`, `.opencode/` agents, commands, skills and `plugins/` modules together,
@@ -341,14 +350,19 @@ export function createFixedOpenCodeV2Config(
 }
 
 /**
- * Standalone-equivalent configuration (#3897): every native tool, agent and command stays enabled.
- * The repository's own OpenCode configuration layer stays off until #3903 admits its executable
- * effects (plugins would load before any permission); the workspace AGENTS.md reaches the model
- * through Keiko's bounded loader. The only
- * fixed rules are the ones Keiko owns regardless of mode: no self-update, no sharing, one
- * provider reached through the Model Gateway, and the mode-independent hard denial of external
- * directories. Every other permission is decided per call by the Keiko policy hook
- * (`keiko.native-policy`), which can only narrow what this ruleset allows.
+ * Standalone-equivalent configuration (#3897): every ordinary native tool, agent and command stays
+ * enabled. The repository's own OpenCode configuration layer stays off until #3903 admits its
+ * executable effects (plugins would load before any permission); the workspace AGENTS.md reaches
+ * the model through Keiko's bounded loader. The only fixed rules are the ones Keiko owns regardless
+ * of mode: no self-update, no sharing, one provider reached through the Model Gateway, and the
+ * mode-independent hard denial of external directories.
+ *
+ * The baseline for every other action is `ask`, never `allow`: the Keiko policy hook
+ * (`keiko.native-policy`) sets the final effect of each action it evaluates, so a policy plugin
+ * that fails to load leaves every action waiting for a human instead of silently allowed.
+ *
+ * Code Mode (the `execute` tool and the `opencode` management tools behind it) stays available for
+ * standalone parity (owner decision, 2026-10-23); its governance is the policy plugin's concern.
  */
 function createNativeOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
@@ -371,7 +385,7 @@ function createNativeOpenCodeV2Config(
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions: [
-      { action: "*", resource: "*", effect: "allow" },
+      { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
     ],
   };

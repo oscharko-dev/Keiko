@@ -12,7 +12,13 @@ export interface OpenCodeNativeToolDefinition {
   readonly id: string;
   /** The permission action OpenCode evaluates before the tool runs. */
   readonly action: string;
-  /** True for tools reachable only through the Code Mode `execute` tool. */
+  /**
+   * True for the Code Mode `execute` tool and the `opencode_*` management tools that exist only
+   * inside it. The native profile keeps Code Mode available (owner decision, 2026-10-23); the
+   * model sees these tools through the Code Mode catalog, never as top-level tools, and
+   * `opencodeNativeProjectBoundary.real.test.ts` pins that advertisement against the real
+   * executable.
+   */
   readonly codemode: boolean;
 }
 
@@ -57,7 +63,11 @@ export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefini
     ).map(([id, action, codemode]) => Object.freeze({ id, action, codemode })),
   );
 
-/** The model-visible native tools of the direct (non Code Mode) profile, in producer order. */
+/**
+ * The native tools outside Code Mode, in producer order: the registry the native profile draws its
+ * advertisement from. The producer advertises the subset it enables for the agent and model alias
+ * (the real-binary suite observed `patch` and `todo` registered but not advertised).
+ */
 export const OPENCODE_NATIVE_TOOL_NAMES: readonly string[] = Object.freeze(
   OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => !tool.codemode).map((tool) => tool.id),
 );

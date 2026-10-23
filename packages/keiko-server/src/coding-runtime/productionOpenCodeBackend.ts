@@ -19,6 +19,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createRuntimeGatewayConfinement,
+  nativeHomeDeniedReadRoots,
   nativeToolchainReadRoots,
   type LongLivedRuntimeSandboxAttestation,
   type RuntimeGatewayEgress,
@@ -63,7 +64,10 @@ import {
   openCodeVisibleToolNames,
   type OpenCodeToolProfile,
 } from "./opencodeToolSchemas.js";
-import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import {
+  openCodeConfigDirectory,
+  resolveOpenCodeContextGeometry,
+} from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
@@ -864,28 +868,12 @@ function appSandboxSupervisor(
 
 /**
  * Credential stores the native agent must never read, whatever it runs (ADR-0129 D3 hard denial):
- * the well-known secret locations under the user's home, mirrored from the shared sensitive-path
- * policy, plus Keiko's own state directory (gateway credentials, vault, the Activity Log).
+ * the well-known secret locations and the user's other agent state under the home
+ * (`nativeHomeDeniedReadRoots`, the same list that keeps a toolchain root from reopening them),
+ * plus Keiko's own state directory (gateway credentials, vault, the Activity Log).
  */
 function nativeDeniedReadRoots(runtimeStateRoot: string): readonly string[] {
-  const home = homedir();
-  return [
-    ...[
-      ".ssh",
-      ".aws",
-      ".gnupg",
-      ".kube",
-      ".azure",
-      ".docker",
-      ".netrc",
-      ".pgpass",
-      ".git-credentials",
-      ".config/gh",
-      ".config/gcloud",
-      "Library/Keychains",
-    ].map((entry) => join(home, entry)),
-    realpathSync(runtimeStateRoot),
-  ];
+  return [...nativeHomeDeniedReadRoots(homedir()), realpathSync(runtimeStateRoot)];
 }
 
 /**
@@ -908,21 +896,24 @@ function gatewayFilesystem(
   // Linux confines only the native profile, with a bubblewrap mount allowlist; the gateway profile
   // keeps its namespace bridge launcher there.
   if (!macos && !(native && portable.target === "linux-x64")) return {};
+  const privateStateRoot = join(
+    realpathSync(input.runtimeStateRoot),
+    "coding-runtime",
+    "opencode",
+    run.minted.authorityRef.runId,
+  );
   return {
     filesystem: {
       workspaceRoot: run.context.workspaceRoot,
       workspaceAccess: native ? "read-write" : "read-only",
-      privateStateRoot: join(
-        realpathSync(input.runtimeStateRoot),
-        "coding-runtime",
-        "opencode",
-        run.minted.authorityRef.runId,
-      ),
+      privateStateRoot,
       runtimeReadRoot: realpathSync(join(portable.installRoot, portable.sidecar.payloadRootPath)),
       ...(native
         ? {
             deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
             toolchainReadRoots: nativeToolchainReadRoots(process.env.PATH, homedir()),
+            // The policy plugin and the private configuration are read-only to the shell.
+            protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
           }
         : {}),
     },

@@ -93,6 +93,8 @@ const NATIVE_DEVICE_READS = [
   "/dev/tty",
 ] as const;
 const NATIVE_TOOLCHAIN_ROOTS_MAX = 64;
+const NATIVE_DENIED_READ_ROOTS_MAX = 64;
+const NATIVE_PROTECTED_WRITE_ROOTS_MAX = 64;
 
 const GATEWAY_FILESYSTEM_KEYS = new Set([
   "workspaceRoot",
@@ -100,7 +102,11 @@ const GATEWAY_FILESYSTEM_KEYS = new Set([
   "privateStateRoot",
   "runtimeReadRoot",
 ]);
-const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set(["deniedReadRoots", "toolchainReadRoots"]);
+const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set([
+  "deniedReadRoots",
+  "toolchainReadRoots",
+  "protectedWriteRoots",
+]);
 
 function validRoot(value: unknown): value is string {
   return (
@@ -148,8 +154,7 @@ function validGatewayFilesystem(
     !validRoot(value.workspaceRoot) ||
     !validRoot(value.privateStateRoot) ||
     !validRoot(value.runtimeReadRoot) ||
-    !validDeniedReadRoots(value.deniedReadRoots) ||
-    !validToolchainReadRoots(value.toolchainReadRoots)
+    !validOptionalRoots(value)
   )
     return false;
   // The normal <workspace>/.keiko private metadata subtree remains writable. It must never
@@ -161,29 +166,56 @@ function validGatewayFilesystem(
   );
 }
 
-function validDeniedReadRoots(value: unknown): boolean {
-  if (value === undefined) return true;
+function validOptionalRoots(value: Record<string, unknown>): boolean {
   return (
-    Array.isArray(value) &&
-    value.length <= 64 &&
-    value.every((root) => typeof root === "string" && validRoot(root))
+    validRootList(value.deniedReadRoots, NATIVE_DENIED_READ_ROOTS_MAX, () => true) &&
+    // A toolchain root is an install prefix (`/opt/homebrew`, `~/.nvm/versions/node/v24`), never a
+    // top-level directory such as `/Users` or `/opt` that would open everything beneath it.
+    validRootList(
+      value.toolchainReadRoots,
+      NATIVE_TOOLCHAIN_ROOTS_MAX,
+      (root) => root.split("/").length > 2,
+    ) &&
+    validProtectedWriteRoots(value)
   );
 }
 
-function validToolchainReadRoots(value: unknown): boolean {
+/** Own data only: a sparse slot reads as `undefined` and fails the string check. */
+function validRootList(value: unknown, max: number, accept: (root: string) => boolean): boolean {
   if (value === undefined) return true;
-  // A toolchain root is an install prefix (`/opt/homebrew`, `~/.nvm/versions/node/v24`), never a
-  // top-level directory such as `/Users` or `/opt` that would open everything beneath it.
   return (
     Array.isArray(value) &&
-    value.length <= NATIVE_TOOLCHAIN_ROOTS_MAX &&
-    value.every((root) => typeof root === "string" && validRoot(root) && root.split("/").length > 2)
+    value.length <= max &&
+    Array.from(value as readonly unknown[]).every(
+      (root) => typeof root === "string" && validRoot(root) && accept(root),
+    )
+  );
+}
+
+/**
+ * A protected root guards a directory the profile otherwise writes, so it must be a strict
+ * descendant of the workspace or the private state, and only the writable native profile has one.
+ */
+function validProtectedWriteRoots(value: Record<string, unknown>): boolean {
+  if (value.protectedWriteRoots === undefined) return true;
+  const writable = [value.workspaceRoot, value.privateStateRoot].filter(
+    (root): root is string => typeof root === "string",
+  );
+  return (
+    value.workspaceAccess === "read-write" &&
+    validRootList(value.protectedWriteRoots, NATIVE_PROTECTED_WRITE_ROOTS_MAX, (root) =>
+      writable.some((container) => strictlyInside(container, root)),
+    )
   );
 }
 
 function outsideRoot(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
   return path === ".." || path.startsWith("../") || isAbsolute(path);
+}
+
+function strictlyInside(root: string, candidate: string): boolean {
+  return candidate !== root && !outsideRoot(root, candidate);
 }
 
 /**
@@ -259,8 +291,43 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     // (their entry names), never their files or sibling subtrees: `literal` matches the directory
     // itself, and every denied subtree stays denied.
     `(allow file-read* ${pathFilters("literal", own.flatMap(ancestors))})` +
+    protectedWriteSeatbeltRules(closed) +
     CREDENTIAL_PATH_SEATBELT_RULE
   );
+}
+
+/**
+ * The run's OpenCode configuration directory holds the policy plugin and the private config, both
+ * loaded from the writable private state. The runtime only reads them, so a final denial of every
+ * write operation beneath each protected root (create, overwrite, truncate, chmod, rename, unlink,
+ * link) leaves them as the server materialized them, whatever a shell child runs. Renaming or
+ * removing an intermediate directory would move the protected root away, so the directories
+ * between the writable root and the protected root lose create/unlink on themselves (their
+ * other entries stay writable). The writable root itself cannot be renamed: its parent is not
+ * writable.
+ */
+function protectedWriteSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
+  const roots = closed.protectedWriteRoots ?? [];
+  if (roots.length === 0) return "";
+  const writable = [closed.workspaceRoot, closed.privateStateRoot];
+  const intermediates = roots.flatMap((root) => intermediateDirectories(root, writable));
+  return (
+    `(deny file-write* ${pathFilters("subpath", roots)})` +
+    (intermediates.length === 0
+      ? ""
+      : `(deny file-write-create file-write-unlink ${pathFilters("literal", intermediates)})`)
+  );
+}
+
+function intermediateDirectories(root: string, writable: readonly string[]): readonly string[] {
+  const container = writable
+    .filter((candidate) => strictlyInside(candidate, root))
+    .sort((a, b) => b.length - a.length)[0];
+  if (container === undefined) return [];
+  const directories: string[] = [];
+  for (let current = dirname(root); current !== container; current = dirname(current))
+    directories.push(current);
+  return directories;
 }
 
 export function executionRootSeatbeltProfile(

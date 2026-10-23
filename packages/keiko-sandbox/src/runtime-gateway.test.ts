@@ -23,6 +23,7 @@ import { resolveDarwinGitExecutable } from "./darwin-git.js";
 import { nativeToolchainReadRoots } from "./native-toolchain-roots.js";
 import { currentPlatform, probeBackends } from "./probe.js";
 import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
+import type { RuntimeGatewayFilesystem } from "./types.js";
 
 const input: RuntimeGatewayConfinementInput = {
   gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
@@ -161,6 +162,60 @@ describe("long-lived gateway network confinement", () => {
         filesystem: { ...filesystem, toolchainReadRoots: ["/opt/other"] },
       }),
     ).toBe(false);
+  });
+
+  it("binds the protected write roots into the policy digest and refuses roots outside the writable ones", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    const native = { ...input, profile: "keiko-native" as const };
+    const plain = createRuntimeGatewayConfinement({ ...native, filesystem });
+    const protectedRoots = ["/private/state/config/opencode"];
+    const guarded = createRuntimeGatewayConfinement({
+      ...native,
+      filesystem: { ...filesystem, protectedWriteRoots: protectedRoots },
+    });
+    expect(guarded.policyDigest).not.toBe(plain.policyDigest);
+    expect(guarded.filesystem?.protectedWriteRoots).toEqual(protectedRoots);
+    expect(
+      isRuntimeGatewayConfinement({
+        ...guarded,
+        filesystem: { ...filesystem, protectedWriteRoots: ["/private/state/config/other"] },
+      }),
+    ).toBe(false);
+    expect(isRuntimeGatewayConfinement({ ...guarded, filesystem: { ...filesystem } })).toBe(false);
+    // A protected root is a strict descendant of a writable root: anything else cannot guard what
+    // the profile writes, and the whole writable root would make the run unusable.
+    for (const invalid of [
+      ["/elsewhere/config"],
+      ["/private/state"],
+      ["/accepted/workspace"],
+      ["/private"],
+      ["relative/config"],
+      ["/"],
+      [`/private/state/${"x".repeat(5_000)}`],
+      Array.from({ length: 65 }, (_, index) => `/private/state/config/${String(index)}`),
+    ])
+      expect(() =>
+        createRuntimeGatewayConfinement({
+          ...native,
+          filesystem: { ...filesystem, protectedWriteRoots: invalid },
+        }),
+      ).toThrow("runtime-gateway-policy-invalid");
+    // The mapped gateway profile never writes the workspace and has no use for the field.
+    expect(() =>
+      createRuntimeGatewayConfinement({
+        ...input,
+        filesystem: {
+          ...filesystem,
+          workspaceAccess: "read-only",
+          protectedWriteRoots: protectedRoots,
+        },
+      }),
+    ).toThrow("runtime-gateway-policy-invalid");
   });
 
   it("refuses prototype-bearing filesystem input and a writable ancestor with a dot-prefix child", () => {
@@ -455,6 +510,61 @@ function createNativeProofTree(): NativeProofTree {
   };
 }
 
+/** The run's OpenCode configuration directory, laid out the way the composition materializes it. */
+function protectedConfigProbes(tree: NativeProofTree): Readonly<Record<string, string>> {
+  const config = join(tree.privateStateRoot, "config", "opencode");
+  const plugin = join(config, "plugins", "keiko_native_policy.ts");
+  const replacement = join(tree.workspaceRoot, "replacement.ts");
+  const alias = join(tree.workspaceRoot, "plugin-alias.ts");
+  const parent = join(tree.privateStateRoot, "config");
+  return {
+    pluginRead: readFact(plugin),
+    siblingConfigWrite: `fs.writeFileSync(${JSON.stringify(join(parent, "sibling.json"))}, 'x')`,
+    privateStateWrite: `fs.writeFileSync(${JSON.stringify(join(tree.privateStateRoot, "note.txt"))}, 'x')`,
+    workspaceWrite: `fs.writeFileSync(${JSON.stringify(join(tree.workspaceRoot, "note.txt"))}, 'x')`,
+    pluginOverwrite: `fs.writeFileSync(${JSON.stringify(plugin)}, 'x')`,
+    pluginAppend: `fs.appendFileSync(${JSON.stringify(plugin)}, 'x')`,
+    pluginChmod: `fs.chmodSync(${JSON.stringify(plugin)}, 0o644)`,
+    pluginReplaceByRename: `fs.writeFileSync(${JSON.stringify(replacement)}, 'x'); fs.renameSync(${JSON.stringify(replacement)}, ${JSON.stringify(plugin)})`,
+    hardLinkCreate: `fs.linkSync(${JSON.stringify(plugin)}, ${JSON.stringify(join(tree.workspaceRoot, "plugin-link.ts"))})`,
+    hardLinkedAliasWrite: `fs.linkSync(${JSON.stringify(plugin)}, ${JSON.stringify(alias)}); fs.writeFileSync(${JSON.stringify(alias)}, 'x')`,
+    configCreate: `fs.writeFileSync(${JSON.stringify(join(config, "plugins", "planted.ts"))}, 'x')`,
+    configMkdir: `fs.mkdirSync(${JSON.stringify(join(config, "agents"))})`,
+    settingsOverwrite: `fs.writeFileSync(${JSON.stringify(join(config, "opencode.json"))}, '{}')`,
+    shellOverwrite: shellFact(`echo x > ${JSON.stringify(plugin)}`, tree.workspaceRoot),
+    shellRemoveAndRecreate: shellFact(
+      `rm -f ${JSON.stringify(plugin)} && echo x > ${JSON.stringify(plugin)}`,
+      tree.workspaceRoot,
+    ),
+    pluginUnlink: `fs.unlinkSync(${JSON.stringify(plugin)})`,
+    configDirectoryRename: `fs.renameSync(${JSON.stringify(config)}, ${JSON.stringify(join(parent, "opencode-moved"))})`,
+    configParentRename: `fs.renameSync(${JSON.stringify(parent)}, ${JSON.stringify(join(tree.privateStateRoot, "config-moved"))})`,
+  };
+}
+
+function protectedConfigRun(guard: "protected" | undefined): unknown {
+  const tree = createNativeProofTree();
+  try {
+    const plugins = join(tree.privateStateRoot, "config", "opencode", "plugins");
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, "keiko_native_policy.ts"), "export default {};\n");
+    writeFileSync(join(plugins, "..", "opencode.json"), "{}");
+    const policy = nativeConfinement(
+      tree,
+      "loopback-only",
+      1983,
+      guard === undefined
+        ? {}
+        : { protectedWriteRoots: [join(tree.privateStateRoot, "config", "opencode")] },
+    );
+    const result = runNative(tree, policy, factScript(protectedConfigProbes(tree)));
+    expect(result.status).toBe(0);
+    return JSON.parse(result.stdout);
+  } finally {
+    tree.cleanup();
+  }
+}
+
 function nativeToolchainRoots(): readonly string[] {
   return nativeToolchainReadRoots(
     [dirname(process.execPath), process.env.PATH ?? ""].join(delimiter),
@@ -466,6 +576,7 @@ function nativeConfinement(
   tree: NativeProofTree,
   egress: NativeEgress | undefined,
   gatewayPort = 1983,
+  filesystem: Partial<RuntimeGatewayFilesystem> = {},
 ): RuntimeGatewayConfinement {
   return createRuntimeGatewayConfinement({
     ...input,
@@ -478,6 +589,7 @@ function nativeConfinement(
       privateStateRoot: tree.privateStateRoot,
       runtimeReadRoot: dirname(process.execPath),
       toolchainReadRoots: nativeToolchainRoots(),
+      ...filesystem,
     },
   });
 }
@@ -804,6 +916,115 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         ].join("");
         const result = runNative(tree, nativeConfinement(tree, "loopback-only"), script);
         expect(result.stdout).toBe("NPM_OK");
+      } finally {
+        tree.cleanup();
+      }
+    },
+    20_000,
+  );
+
+  // #3897 review (P1): the policy plugin and the private configuration live inside the writable
+  // private state. A prompt-injected shell command must not replace them, however it writes.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: a shell child cannot write, replace or move the run's OpenCode configuration",
+    () => {
+      const control = protectedConfigRun(undefined);
+      // Failing-before control: without the protected root every write below succeeds, so the
+      // refusals in the confined run are the boundary's doing and not the fixture's.
+      expect(control).toEqual({
+        pluginRead: true,
+        pluginOverwrite: true,
+        pluginAppend: true,
+        pluginChmod: true,
+        pluginReplaceByRename: true,
+        hardLinkCreate: true,
+        hardLinkedAliasWrite: true,
+        configCreate: true,
+        configMkdir: true,
+        settingsOverwrite: true,
+        shellOverwrite: true,
+        shellRemoveAndRecreate: true,
+        pluginUnlink: true,
+        configDirectoryRename: true,
+        configParentRename: true,
+        siblingConfigWrite: true,
+        privateStateWrite: true,
+        workspaceWrite: true,
+      });
+      expect(protectedConfigRun("protected")).toEqual({
+        pluginRead: true,
+        pluginOverwrite: false,
+        pluginAppend: false,
+        pluginChmod: false,
+        pluginReplaceByRename: false,
+        hardLinkCreate: false,
+        hardLinkedAliasWrite: false,
+        configCreate: false,
+        configMkdir: false,
+        settingsOverwrite: false,
+        shellOverwrite: false,
+        shellRemoveAndRecreate: false,
+        pluginUnlink: false,
+        configDirectoryRename: false,
+        configParentRename: false,
+        siblingConfigWrite: true,
+        privateStateWrite: true,
+        workspaceWrite: true,
+      });
+    },
+    30_000,
+  );
+
+  // #3897 review (P1): a PATH entry such as `~/.local/bin` must open that directory only. Its
+  // parent holds `share/opencode/auth.json`, `state/gh` and other user state unrelated to the task.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: a generic user bin directory opens only itself, never its parent",
+    () => {
+      const tree = createNativeProofTree();
+      try {
+        const home = join(tree.root, "synthetic-home");
+        const bin = join(home, ".local", "bin");
+        const share = join(home, ".local", "share", "opencode");
+        mkdirSync(bin, { recursive: true });
+        mkdirSync(share, { recursive: true });
+        const tool = join(bin, "synthetic-tool");
+        writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        writeFileSync(join(bin, "sibling-data.txt"), "synthetic");
+        writeFileSync(join(share, "state.json"), "synthetic");
+        const pathValue = [bin, dirname(process.execPath)].join(delimiter);
+        const roots = nativeToolchainReadRoots(pathValue, home);
+        expect(roots).toContain(bin);
+        expect(roots).not.toContain(join(home, ".local"));
+        const script = factScript({
+          toolRun: `cp.execFileSync(${JSON.stringify(tool)}, { stdio: 'ignore' })`,
+          binDirectoryRead: readFact(join(bin, "sibling-data.txt")),
+          shareRead: readFact(join(share, "state.json")),
+          shareListing: `fs.readdirSync(${JSON.stringify(share)})`,
+          shareWrite: `fs.writeFileSync(${JSON.stringify(join(share, "planted.json"))}, 'x')`,
+        });
+        // Failing-before control: the previous derivation opened the whole `~/.local`.
+        const previous = runNative(
+          tree,
+          nativeConfinement(tree, "loopback-only", 1983, {
+            toolchainReadRoots: [join(home, ".local"), ...nativeToolchainRoots()],
+          }),
+          script,
+        );
+        expect(JSON.parse(previous.stdout)).toMatchObject({ toolRun: true, shareRead: true });
+        const confined = runNative(
+          tree,
+          nativeConfinement(tree, "loopback-only", 1983, {
+            toolchainReadRoots: [...roots, ...nativeToolchainRoots()],
+          }),
+          script,
+        );
+        expect(JSON.parse(confined.stdout)).toEqual({
+          toolRun: true,
+          binDirectoryRead: true,
+          shareRead: false,
+          shareListing: false,
+          shareWrite: false,
+        });
       } finally {
         tree.cleanup();
       }

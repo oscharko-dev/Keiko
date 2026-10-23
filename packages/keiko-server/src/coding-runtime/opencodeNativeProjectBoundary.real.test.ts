@@ -1,5 +1,13 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,7 +18,8 @@ import {
   createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
-import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
@@ -20,10 +29,12 @@ import {
 } from "./opencodeV2HttpClient.js";
 
 /**
- * Original-runtime negative controls for the native repository-configuration boundary (#3897
- * review, P1): a repository must neither execute plugin modules nor select another model route
- * before an operator admits its executable effects (#3903). The pinned executable runs under the
- * real native Seatbelt wrapper with the profile `buildOpenCodeLaunchProfile` produces. Run with
+ * Original-runtime negative controls for the native profile (#3897 review): a repository must
+ * neither execute plugin modules nor select another model route before an operator admits its
+ * executable effects (#3903); the `ask` baseline holds an action when the policy plugin is absent;
+ * the agent's shell cannot rewrite the policy plugin; and the Code Mode facts the policy plugin
+ * relies on hold for the pinned producer. The pinned executable runs under the real native
+ * Seatbelt wrapper with the profile `buildOpenCodeLaunchProfile` produces. Run with
  * KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
  */
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
@@ -45,10 +56,19 @@ interface Stub {
   readonly requests: Recorded[];
 }
 
+interface ScriptedCall {
+  readonly name: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+}
+
 interface GatewayStub extends Stub {
   /** Tool-call turns still to script; each answers one request whose last message is the user's. */
   toolTurns: number;
+  /** The tool call a scripted turn issues; the fixture read unless a test replaces it. */
+  call: ScriptedCall;
 }
+
+const READ_FIXTURE_CALL: ScriptedCall = { name: "read", arguments: { path: FIXTURE_FILE } };
 
 interface Canaries {
   readonly filePlugin: string;
@@ -166,14 +186,14 @@ async function startGateway(): Promise<GatewayStub> {
         index: 0,
         id: `call_boundary_${String(self.requests.length)}`,
         type: "function",
-        function: { name: "read", arguments: JSON.stringify({ path: FIXTURE_FILE }) },
+        function: { name: gateway.call.name, arguments: JSON.stringify(gateway.call.arguments) },
       };
       streamedTurn(response, { tool_calls: [call] }, "tool_calls");
       return;
     }
     streamedTurn(response, { content: "Fixture turn completed." }, "stop");
   });
-  return Object.assign(stub, { toolTurns: 0 });
+  return Object.assign(stub, { toolTurns: 0, call: READ_FIXTURE_CALL });
 }
 
 async function startRefusingStub(): Promise<Stub> {
@@ -271,16 +291,33 @@ interface LaunchStubs {
   readonly facade: Stub;
 }
 
+interface LaunchOptions {
+  readonly projectLayer: "off" | "on";
+  /** `absent` is the negative control: the governing hook never loads. */
+  readonly policyPlugin: "present" | "absent";
+  /** `off` is the negative control: the run's configuration directory stays writable. */
+  readonly protectedConfig: "on" | "off";
+  /** `on` loads the throwaway observation plugin beside the policy plugin (never product code). */
+  readonly probe: "on" | "off";
+}
+
+const PRODUCTION_LAUNCH: LaunchOptions = {
+  projectLayer: "off",
+  policyPlugin: "present",
+  protectedConfig: "on",
+  probe: "off",
+};
+
 /** The production env, optionally without the project-layer switch (the control shape only). */
 function childEnvironment(
   profileEnv: Readonly<Record<string, string>>,
   stubs: LaunchStubs,
-  projectLayer: "off" | "on",
+  options: LaunchOptions,
   path: string,
 ): Record<string, string> {
   const env = Object.fromEntries(
     Object.entries(profileEnv).filter(
-      ([name]) => projectLayer === "off" || name !== "OPENCODE_DISABLE_PROJECT_CONFIG",
+      ([name]) => options.projectLayer === "off" || name !== "OPENCODE_DISABLE_PROJECT_CONFIG",
     ),
   );
   return {
@@ -295,7 +332,11 @@ function childEnvironment(
   };
 }
 
-function materializePrivateConfiguration(state: string, config: string): void {
+function materializePrivateConfiguration(
+  state: string,
+  config: string,
+  options: LaunchOptions,
+): void {
   const configRoot = join(state, "config", "opencode");
   for (const path of [
     join(configRoot, "plugins"),
@@ -305,8 +346,14 @@ function materializePrivateConfiguration(state: string, config: string): void {
   ])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   writeFileSync(join(configRoot, "opencode.json"), config, { mode: 0o600 });
-  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native")))
+  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native"))) {
+    if (options.policyPlugin === "absent" && name === "keiko_native_policy") continue;
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
+  }
+  if (options.probe === "on")
+    writeFileSync(join(configRoot, "plugins", "keiko_probe.ts"), probePluginSource(state), {
+      mode: 0o600,
+    });
 }
 
 function launch(
@@ -314,7 +361,7 @@ function launch(
   binary: string,
   runtimeRoot: string,
   stubs: LaunchStubs,
-  projectLayer: "off" | "on",
+  options: LaunchOptions,
 ): Launched {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
@@ -327,7 +374,7 @@ function launch(
     },
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
-  materializePrivateConfiguration(fixture.state, profile.config);
+  materializePrivateConfiguration(fixture.state, profile.config, options);
   const git = resolveDarwinGitExecutable();
   const policy = createRuntimeGatewayConfinement({
     gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
@@ -342,6 +389,10 @@ function launch(
       workspaceAccess: "read-write",
       privateStateRoot: fixture.state,
       runtimeReadRoot: runtimeRoot,
+      // The production shape: the shell cannot replace the governing plugin or the configuration.
+      ...(options.protectedConfig === "on"
+        ? { protectedWriteRoots: [openCodeConfigDirectory(fixture.state)] }
+        : {}),
     },
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
@@ -351,7 +402,7 @@ function launch(
     password,
     child: spawn(command.command, [...command.args], {
       cwd: fixture.workspace,
-      env: childEnvironment(profile.env, stubs, projectLayer, dirname(git.path)),
+      env: childEnvironment(profile.env, stubs, options, dirname(git.path)),
       stdio: ["ignore", "pipe", "pipe"],
     }),
   };
@@ -483,6 +534,39 @@ function expectGatewayOnlyModelRoute(gateway: Stub, evil: Stub): void {
   }
 }
 
+/** The tool names the runtime advertised to the model in its first request of the run. */
+function advertisedToolNames(gateway: Stub): readonly string[] {
+  const tools = object(gateway.requests[0]?.body)?.tools;
+  if (!Array.isArray(tools)) return [];
+  return tools.flatMap((tool: unknown) => {
+    const name = object(object(tool)?.function)?.name;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+/** What the runtime sent back to the model as the result of the scripted tool call. */
+function lastToolResult(gateway: Stub): string {
+  const messages = object(gateway.requests.at(-1)?.body)?.messages;
+  if (!Array.isArray(messages)) return "";
+  const result = messages
+    .map(object)
+    .filter((message) => message?.role === "tool")
+    .at(-1);
+  return typeof result?.content === "string" ? result.content : "";
+}
+
+/** Prompts one scripted tool-call turn without waiting for the follow-up request. */
+async function promptScripted(run: Run, call: ScriptedCall, prompt: string): Promise<void> {
+  run.gateway.call = call;
+  run.gateway.toolTurns = 1;
+  await run.service.client.prompt(run.sessionId, prompt);
+  await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBeGreaterThan(0);
+}
+
+const CODE_MODE_TOOL_NAMES = OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => tool.codemode).map(
+  (tool) => tool.id,
+);
+
 interface Run {
   readonly fixture: Fixture;
   readonly gateway: GatewayStub;
@@ -492,10 +576,195 @@ interface Run {
   readonly sessionId: string;
 }
 
+const WORKSPACE_WRITE_CANARY = "SHELL-WROTE-WORKSPACE";
+
+interface ConfigTargets {
+  readonly config: string;
+  readonly plugin: string;
+  readonly settings: string;
+  readonly moved: string;
+}
+
+/** The files a prompt-injected command would target: the governing plugin and the config. */
+function configTargets(run: Run): ConfigTargets {
+  const config = openCodeConfigDirectory(run.fixture.state);
+  return {
+    config,
+    plugin: join(config, "plugins", "keiko_native_policy.ts"),
+    settings: join(config, "opencode.json"),
+    moved: `${config}-moved`,
+  };
+}
+
+/** One shell call that tries to replace the plugin, drop the config and move its directory. */
+async function runShellAttempt(run: Run): Promise<string> {
+  const { config, plugin, settings, moved } = configTargets(run);
+  const command = [
+    `echo tampered > ${JSON.stringify(plugin)}`,
+    `rm -f ${JSON.stringify(settings)}`,
+    `mv ${JSON.stringify(config)} ${JSON.stringify(moved)}`,
+    `echo ok > ${JSON.stringify(join(run.fixture.workspace, WORKSPACE_WRITE_CANARY))}`,
+  ].join("; ");
+  const before = run.gateway.requests.length;
+  run.gateway.call = { name: "shell", arguments: { command } };
+  run.gateway.toolTurns = 1;
+  await run.service.client.prompt(run.sessionId, "Run the maintenance command.");
+  await expect
+    .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(before + 2);
+  return lastToolResult(run.gateway);
+}
+
+/**
+ * A throwaway observation plugin for the Code Mode facts (never product code). It records, body
+ * included, what the supported hooks receive, and obeys a mode file the test rewrites between
+ * turns: `throwOn` throws from `tool.execute.before` for one tool name, `mutateOn` replaces that
+ * call's input, `renameOn` renames the call. Its permission hook sets the final effect like the
+ * policy plugin it stands in for.
+ */
+function probePluginSource(state: string): string {
+  const log = JSON.stringify(join(state, "tmp", "probe.jsonl"));
+  const modeFile = JSON.stringify(join(state, "tmp", "probe-mode.json"));
+  return [
+    'import { appendFileSync, readFileSync } from "node:fs";',
+    `const LOG = ${log};`,
+    `const MODE = ${modeFile};`,
+    'function mode() { try { return JSON.parse(readFileSync(MODE, "utf8")); } catch { return {}; } }',
+    "function record(entry) { appendFileSync(LOG, JSON.stringify(entry) + String.fromCharCode(10)); }",
+    "export default {",
+    '  id: "keiko.probe",',
+    "  async setup(ctx) {",
+    '    await ctx.permission.hook("evaluate", (event) => {',
+    '      record({ hook: "permission.evaluate", action: event.action, resources: event.resources, configured: event.effect, source: event.source ?? null, agent: event.agent ?? null, metadata: event.metadata ?? null });',
+    '      event.effect = mode().permission ?? "allow";',
+    "    });",
+    '    await ctx.tool.hook("execute.before", (event) => {',
+    '      record({ hook: "tool.execute.before", tool: event.tool, keys: Object.keys(event).sort(), id: event.id, input: event.input });',
+    "      const m = mode();",
+    '      if (m.throwOn === event.tool) throw new Error("PROBE-THROW " + event.tool);',
+    "      if (m.mutateOn === event.tool) event.input = m.mutateInput;",
+    "      if (m.renameOn === event.tool) event.tool = m.renameTo;",
+    "    });",
+    '    await ctx.tool.hook("execute.after", (event) => {',
+    '      record({ hook: "tool.execute.after", tool: event.tool, status: event.status, keys: Object.keys(event).sort(), error: event.error === undefined ? null : String(event.error.message ?? event.error) });',
+    "    });",
+    "  },",
+    "};",
+  ].join("\n");
+}
+
+interface ProbeEntry {
+  readonly hook: string;
+  readonly tool?: string;
+  readonly action?: string;
+  readonly [key: string]: unknown;
+}
+
+function probeLog(run: Run): readonly ProbeEntry[] {
+  try {
+    return readFileSync(join(run.fixture.state, "tmp", "probe.jsonl"), "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as ProbeEntry);
+  } catch {
+    return [];
+  }
+}
+
+function setProbeMode(run: Run, mode: Readonly<Record<string, unknown>>): void {
+  writeFileSync(join(run.fixture.state, "tmp", "probe-mode.json"), JSON.stringify(mode));
+}
+
+/** Runs one scripted turn and returns what the model received as the tool result. */
+async function scriptedTurn(run: Run, call: ScriptedCall, prompt: string): Promise<string> {
+  const before = run.gateway.requests.length;
+  run.gateway.call = call;
+  run.gateway.toolTurns = 1;
+  await run.service.client.prompt(run.sessionId, prompt);
+  await expect
+    .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(before + 2);
+  return lastToolResult(run.gateway);
+}
+
+/** Runs Git in the fixture workspace with the same hermetic identity the fixture was created with. */
+function workspaceGit(fixture: Fixture, ...args: string[]): string {
+  const git = resolveDarwinGitExecutable();
+  const result = spawnSync(
+    git.path,
+    [
+      "-C",
+      fixture.workspace,
+      "-c",
+      "user.name=fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      ...args,
+    ],
+    {
+      env: {
+        HOME: fixture.state,
+        PATH: dirname(git.path),
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) throw new Error("fixture-git-failed");
+  return result.stdout;
+}
+
+/** A worktree and a session move need a commit to anchor the project the runtime derives. */
+function commitFixtureWorkspace(fixture: Fixture): void {
+  workspaceGit(fixture, "add", "-A");
+  workspaceGit(fixture, "commit", "-q", "-m", "fixture");
+}
+
+function worktreeCount(fixture: Fixture): number {
+  return workspaceGit(fixture, "worktree", "list").split("\n").filter(Boolean).length;
+}
+
+/** The system prompt of the model's first request. */
+function firstSystemPrompt(gateway: Stub): string {
+  const messages = object(gateway.requests[0]?.body)?.messages;
+  if (!Array.isArray(messages)) return "";
+  const system = object(messages[0]);
+  return system?.role === "system" && typeof system.content === "string" ? system.content : "";
+}
+
+function executeCall(code: string): ScriptedCall {
+  return { name: "execute", arguments: { code } };
+}
+
+/** The hook events one scripted turn produced, without the identity fields that vary per run. */
+async function probedTurn(
+  run: Run,
+  call: ScriptedCall,
+  mode: Readonly<Record<string, unknown>> = {},
+): Promise<{ readonly result: string; readonly events: readonly ProbeEntry[] }> {
+  setProbeMode(run, mode);
+  const before = probeLog(run).length;
+  const result = await scriptedTurn(run, call, "Run the scripted call.");
+  return { result, events: probeLog(run).slice(before) };
+}
+
+function hookTrail(events: readonly ProbeEntry[]): readonly string[] {
+  return events.map((event) => `${event.hook}:${event.tool ?? event.action ?? ""}`);
+}
+
+const NESTED_CODE_MODE_TOOLS = CODE_MODE_TOOL_NAMES.filter((name) => name !== "execute").map(
+  (name) => name.replace(/^opencode_/u, ""),
+);
+const ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE = ["read", "edit", "shell", "write"] as const;
+
 async function withRun(
-  projectLayer: "off" | "on",
+  overrides: Partial<LaunchOptions>,
   body: (run: Run) => Promise<void>,
 ): Promise<void> {
+  const options = { ...PRODUCTION_LAUNCH, ...overrides };
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
   expect(process.platform).toBe("darwin");
@@ -511,7 +780,7 @@ async function withRun(
     realpathSync(BINARY),
     realpathSync(RESOURCE_ROOT),
     { gateway, facade },
-    projectLayer,
+    options,
   );
   try {
     const service = serviceAt(await childEndpoint(launched.child), launched.password);
@@ -562,7 +831,7 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
   it.skipIf(skip)(
     "runs no project plugin and keeps the model route on the gateway across reloads",
     async () => {
-      await withRun("off", async (run) => {
+      await withRun({}, async (run) => {
         const { workspace, canaries } = run.fixture;
         // The hostile repository is on disk, but none of it is a configuration layer.
         expect(projectLayerPaths(await configLayers(run.service, workspace), workspace)).toEqual(
@@ -598,7 +867,7 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
   it.skipIf(skip)(
     "control: an admitted project layer would execute plugins but still cannot move the model route",
     async () => {
-      await withRun("on", async (run) => {
+      await withRun({ projectLayer: "on" }, async (run) => {
         const { workspace, canaries } = run.fixture;
         expect(
           projectLayerPaths(await configLayers(run.service, workspace), workspace),
@@ -609,6 +878,360 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
         await reloadWithChangedProjectConfig(run, "on");
         await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file again.");
         expectGatewayOnlyModelRoute(run.gateway, run.evil);
+      });
+    },
+    120_000,
+  );
+
+  // #3897 review (P1): the ordinary tools still run when the loaded hook answers, because the
+  // hook sets the final effect of every action the `ask` baseline leaves undecided.
+  it.skipIf(skip)(
+    "runs an ordinary read and edit through the hook under the ask baseline",
+    async () => {
+      await withRun({}, async (run) => {
+        await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file.");
+        expect(lastToolResult(run.gateway)).toContain("native boundary fixture");
+        const before = run.gateway.requests.length;
+        run.gateway.call = {
+          name: "edit",
+          arguments: { path: FIXTURE_FILE, oldString: "fixture", newString: "edited fixture" },
+        };
+        run.gateway.toolTurns = 1;
+        await run.service.client.prompt(run.sessionId, "Edit the fixture file.");
+        await expect
+          .poll(() => run.gateway.requests.length, { timeout: 30_000 })
+          .toBeGreaterThanOrEqual(before + 2);
+        expect(readFileSync(join(run.fixture.workspace, FIXTURE_FILE), "utf8")).toContain(
+          "native boundary edited fixture",
+        );
+        const asked = run.facade.requests.map((recorded) => object(recorded.body)?.permission);
+        expect(asked).toEqual(expect.arrayContaining(["read", "edit"]));
+        expect(await run.service.client.permissions()).toEqual([]);
+      });
+    },
+    120_000,
+  );
+
+  // #3897 review (P1), negative control: a policy plugin that never loads must not leave the
+  // baseline open. With the old `allow` baseline this very action executed and its result reached
+  // the model; with `ask` it waits for a human, so nothing executes.
+  it.skipIf(skip)(
+    "control: without the policy plugin an action is held for approval and not executed",
+    async () => {
+      await withRun({ policyPlugin: "absent" }, async (run) => {
+        await promptScripted(run, READ_FIXTURE_CALL, "Read the fixture file.");
+        await expect
+          .poll(async () => (await run.service.client.permissions()).length, { timeout: 30_000 })
+          .toBeGreaterThan(0);
+        const pending = await run.service.client.permissions();
+        expect(pending.map((request) => object(request)?.action)).toEqual(["read"]);
+        // The held call produced no result: the model saw no second request, no file content.
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        expect(run.gateway.requests).toHaveLength(1);
+        expect(JSON.stringify(run.gateway.requests)).not.toContain("native boundary fixture");
+        expect(run.facade.requests).toHaveLength(0);
+      });
+    },
+    120_000,
+  );
+
+  // #3897 review (P1): the policy plugin and the private configuration are read-only to the shell
+  // the agent starts, while the workspace stays writable through the same shell.
+  it.skipIf(skip)(
+    "keeps the policy plugin and configuration unwritable for the agent's own shell",
+    async () => {
+      await withRun({}, async (run) => {
+        const { plugin, settings, moved } = configTargets(run);
+        const [pluginBefore, settingsBefore] = [
+          readFileSync(plugin, "utf8"),
+          readFileSync(settings, "utf8"),
+        ];
+        const result = await runShellAttempt(run);
+        expect(readFileSync(plugin, "utf8")).toBe(pluginBefore);
+        expect(readFileSync(settings, "utf8")).toBe(settingsBefore);
+        expect(existsSync(moved)).toBe(false);
+        expect(existsSync(join(run.fixture.workspace, WORKSPACE_WRITE_CANARY))).toBe(true);
+        // Each of the three attempts was refused by the kernel, not skipped by the shell.
+        expect(result.match(/not permitted/giu)).toHaveLength(3);
+      });
+    },
+    120_000,
+  );
+
+  // The control proves the fixture can fail: with the protected root left out, which production
+  // never does, the same shell command rewrites the plugin, removes the configuration and moves
+  // the directory the policy plugin loads from.
+  it.skipIf(skip)(
+    "control: without the protected root the agent's shell rewrites the policy plugin",
+    async () => {
+      await withRun({ protectedConfig: "off" }, async (run) => {
+        const { plugin, settings, moved } = configTargets(run);
+        await runShellAttempt(run);
+        expect(existsSync(settings)).toBe(false);
+        expect(existsSync(plugin)).toBe(false);
+        expect(readFileSync(join(moved, "plugins", "keiko_native_policy.ts"), "utf8")).toBe(
+          "tampered\n",
+        );
+      });
+    },
+    120_000,
+  );
+
+  // A configured deny is applied before the hook: the permission is rejected without the policy
+  // service ever being asked, so no hook answer can raise it (the mode-independent hard denial).
+  it.skipIf(skip)(
+    "applies a configured external_directory denial before the hook and never asks the policy",
+    async () => {
+      await withRun({}, async (run) => {
+        const result = await scriptedTurn(
+          run,
+          { name: "read", arguments: { path: "/private/etc/hosts" } },
+          "Read an external file.",
+        );
+        expect(JSON.parse(result)).toEqual({
+          error: { type: "permission.rejected", message: "Permission denied: external_directory" },
+          content: [],
+        });
+        expect(run.facade.requests).toHaveLength(0);
+      });
+    },
+    120_000,
+  );
+});
+
+// The Code Mode facts the policy plugin's governance of `execute` relies on (owner decision,
+// 2026-10-23: Code Mode stays available). Observed on the pinned producer through a throwaway
+// probe plugin that stands in for the policy plugin; the probe is test-only and never product code.
+describe("pinned native OpenCode Code Mode semantics", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "advertises execute beside the ordinary tools and catalogs only the opencode management tools",
+    async () => {
+      await withRun({}, async (run) => {
+        await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file.");
+        const names = advertisedToolNames(run.gateway);
+        expect(names).toEqual(expect.arrayContaining(["execute", "read", "edit", "shell"]));
+        // The management tools exist only inside Code Mode, never as top-level tools.
+        expect(names.filter((name) => name.startsWith("opencode_"))).toEqual([]);
+        const catalog = firstSystemPrompt(run.gateway);
+        expect(catalog).toContain("They cannot be called directly");
+        expect(NESTED_CODE_MODE_TOOLS).toHaveLength(8);
+        for (const nested of NESTED_CODE_MODE_TOOLS)
+          expect(catalog).toContain(`tools.opencode.${nested}(`);
+        for (const ordinary of ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE)
+          expect(catalog).not.toContain(`tools.${ordinary}(`);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "fires tool.execute.before for execute and for every nested call, and a throw blocks the nested call",
+    async () => {
+      await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
+        commitFixtureWorkspace(run.fixture);
+        const create = executeCall('return await tools.opencode.worktree_create({ name: "wt" });');
+        const allowed = await probedTurn(run, create);
+        expect(hookTrail(allowed.events)).toEqual([
+          "tool.execute.before:execute",
+          "tool.execute.before:opencode_worktree_create",
+          "tool.execute.after:opencode_worktree_create",
+          "tool.execute.after:execute",
+        ]);
+        const [outer, nested] = allowed.events;
+        // The event carries no verdict field; the nested call reuses the outer call's id.
+        expect(nested?.keys).toEqual(["agent", "id", "input", "messageID", "sessionID", "tool"]);
+        expect(nested?.id).toBe(outer?.id);
+        expect(JSON.stringify(outer?.input)).toContain("worktree_create");
+        expect(nested?.input).toEqual({ name: "wt" });
+        expect(worktreeCount(run.fixture)).toBe(2);
+        const blocked = await probedTurn(
+          run,
+          executeCall('return await tools.opencode.worktree_create({ name: "wt-blocked" });'),
+          { throwOn: "opencode_worktree_create" },
+        );
+        // The nested call never ran: no worktree, no after event, and the thrown message reaches
+        // the model verbatim as the script's result.
+        expect(worktreeCount(run.fixture)).toBe(2);
+        expect(hookTrail(blocked.events)).toEqual([
+          "tool.execute.before:execute",
+          "tool.execute.before:opencode_worktree_create",
+          "tool.execute.after:execute",
+        ]);
+        expect(blocked.result).toBe("PROBE-THROW opencode_worktree_create");
+        const caught = await probedTurn(
+          run,
+          executeCall(
+            'try { await tools.opencode.worktree_list({}); return "ran"; } catch (e) { return e.message; }',
+          ),
+          { throwOn: "opencode_worktree_list" },
+        );
+        expect(caught.result).toBe("PROBE-THROW opencode_worktree_list");
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "blocks the whole script when the hook throws for execute, and honors input mutation",
+    async () => {
+      await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
+        const blocked = await probedTurn(
+          run,
+          executeCall("return await tools.opencode.worktree_list({});"),
+          {
+            throwOn: "execute",
+          },
+        );
+        // Nothing nested ran, the producer's error envelope carries the message, and there is no
+        // after event for a call that never started.
+        expect(hookTrail(blocked.events)).toEqual(["tool.execute.before:execute"]);
+        expect(JSON.parse(blocked.result)).toEqual({
+          error: { type: "unknown", message: "PROBE-THROW execute" },
+          content: [],
+        });
+        const replaced = await probedTurn(run, executeCall("return 'original';"), {
+          mutateOn: "execute",
+          mutateInput: { code: "return 'replaced';" },
+        });
+        expect(replaced.result).toBe("replaced");
+        const renamed = await probedTurn(
+          run,
+          executeCall('return await tools.opencode.session_rename({ title: "kept" });'),
+          {
+            mutateOn: "opencode_session_rename",
+            mutateInput: { title: "mutated" },
+          },
+        );
+        expect(renamed.result).toContain('"title": "mutated"');
+        // Renaming the call is not a verdict either: the original tool still ran.
+        const ignored = await probedTurn(
+          run,
+          executeCall('return await tools.opencode.session_rename({ title: "stays" });'),
+          {
+            renameOn: "opencode_session_rename",
+            renameTo: "opencode_worktree_list",
+          },
+        );
+        expect(ignored.result).toContain('"title": "stays"');
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "relocates the session on a nested move unless the hook throws",
+    async () => {
+      await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
+        commitFixtureWorkspace(run.fixture);
+        mkdirSync(join(run.fixture.workspace, "sub"));
+        const directory = async (): Promise<unknown> =>
+          object(object((await run.service.client.sessions())[0])?.location)?.directory;
+        const move = executeCall(
+          `return await tools.opencode.session_move({ directory: ${JSON.stringify(join(run.fixture.workspace, "sub"))} });`,
+        );
+        await probedTurn(run, move, { throwOn: "opencode_session_move" });
+        expect(await directory()).toBe(run.fixture.workspace);
+        const moved = await probedTurn(run, move);
+        expect(moved.result).toContain(join(run.fixture.workspace, "sub"));
+        expect(await directory()).toBe(join(run.fixture.workspace, "sub"));
+      });
+    },
+    120_000,
+  );
+
+  // Only the nested tools that assert a permission reach `permission.evaluate`, under their own
+  // tool name; the ordinary tools are not part of Code Mode at all, so nothing nested fires for them.
+  it.skipIf(skip)(
+    "evaluates a permission only for the nested tools that assert one and exposes no ordinary tool",
+    async () => {
+      await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
+        commitFixtureWorkspace(run.fixture);
+        const evaluated = async (code: string): Promise<readonly ProbeEntry[]> =>
+          (await probedTurn(run, executeCall(code))).events.filter(
+            (event) => event.hook === "permission.evaluate",
+          );
+        // The producer's own default already allows the listing, whatever the baseline says.
+        expect(await evaluated("return await tools.opencode.list_mcp_resources({});")).toEqual([
+          expect.objectContaining({
+            action: "opencode_list_mcp_resources",
+            resources: [],
+            configured: "allow",
+          }),
+        ]);
+        for (const silent of [
+          "tools.opencode.models({})",
+          'tools.opencode.session_rename({ title: "t" })',
+          "tools.opencode.worktree_list({})",
+        ])
+          expect(await evaluated(`return await ${silent};`)).toEqual([]);
+        const created = await probedTurn(
+          run,
+          executeCall('return await tools.opencode.worktree_create({ name: "wt" });'),
+        );
+        expect(created.events.some((event) => event.hook === "permission.evaluate")).toBe(false);
+        const directory = (JSON.parse(created.result) as { directory: string }).directory;
+        const removal = await evaluated(
+          `return await tools.opencode.worktree_remove({ directory: ${JSON.stringify(directory)} });`,
+        );
+        expect(removal).toEqual([
+          expect.objectContaining({ action: "edit", resources: [directory], configured: "ask" }),
+        ]);
+        const resource = await evaluated(
+          'return await tools.opencode.read_mcp_resource({ server: "none", uri: "none://x" });',
+        );
+        expect(resource).toEqual([
+          expect.objectContaining({
+            action: "opencode_read_mcp_resource",
+            resources: ["none:none://x"],
+            configured: "ask",
+          }),
+        ]);
+        for (const ordinary of ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE) {
+          const attempt = await probedTurn(run, executeCall(`return await tools.${ordinary}({});`));
+          expect(attempt.result).toContain(`Unknown tool '${ordinary}'`);
+          expect(hookTrail(attempt.events)).toEqual([
+            "tool.execute.before:execute",
+            "tool.execute.after:execute",
+          ]);
+        }
+      });
+    },
+    180_000,
+  );
+
+  // `fetch` is a Code Mode primitive. Neither hook sees it: the only governance is the enclosing
+  // `execute` call's code and the kernel's egress rule (loopback only below Full access).
+  it.skipIf(skip)(
+    "performs fetch without a permission event and leaves egress to the kernel boundary",
+    async () => {
+      await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
+        const loopback = await probedTurn(
+          run,
+          executeCall(
+            `return (await fetch("http://127.0.0.1:${String(run.evil.port)}/probe")).status;`,
+          ),
+        );
+        expect(run.evil.requests).toHaveLength(1);
+        expect(loopback.result).toBe("503");
+        expect(hookTrail(loopback.events)).toEqual([
+          "tool.execute.before:execute",
+          "tool.execute.after:execute",
+        ]);
+        const external = await probedTurn(
+          run,
+          executeCall(
+            'try { return String((await fetch("http://192.0.2.1/")).status); } catch (e) { return e.message; }',
+          ),
+        );
+        expect(external.result).toMatch(/EPERM/u);
+        // The confined interpreter exposes no process, environment or module access.
+        const identifiers = await probedTurn(
+          run,
+          executeCall("return [typeof process, typeof Bun, typeof require].join(',');"),
+        );
+        expect(identifiers.result).toBe("undefined,undefined,undefined");
       });
     },
     120_000,

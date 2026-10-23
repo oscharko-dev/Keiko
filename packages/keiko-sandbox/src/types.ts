@@ -50,6 +50,13 @@ export interface RuntimeGatewayFilesystem {
    * the workspace, the private state and the system roots stays unreadable (#3897).
    */
   readonly toolchainReadRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute directories strictly inside the writable roots (the workspace or
+   * the private state) that the process may read but never create, change, replace, remove or move
+   * entries in, so a shell child cannot rewrite the policy plugin or the configuration the runtime
+   * loads from its private state (#3897 review). Absent means the writable roots stay fully writable.
+   */
+  readonly protectedWriteRoots?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
