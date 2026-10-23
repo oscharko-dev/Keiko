@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ReleaseImpactCatalog } from "@oscharko-dev/keiko-contracts";
+import { impactFromCatalog } from "./update-preflight-impact.js";
+import { compareSemver } from "./update-preflight-registry.js";
 import {
   portableImpactMetadataValid,
   portableReleaseImpactCatalog,
@@ -19,6 +21,19 @@ function impact(): { entryId: string; catalog: ReleaseImpactCatalog } {
 }
 
 describe("authenticated future release impact", () => {
+  it("recognizes the real current release review after authenticated catalog admission", () => {
+    const source = impact();
+    const targetVersion = source.catalog.entries.at(-1)?.packageVersion ?? "";
+    const previousVersion = source.catalog.entries
+      .map(({ packageVersion }) => packageVersion)
+      .filter((version) => compareSemver(version, targetVersion) < 0)
+      .sort(compareSemver)
+      .at(-1);
+    if (previousVersion === undefined) throw new Error("previous catalog release is missing");
+    const catalog = portableReleaseImpactCatalog(source, targetVersion, true);
+    expect(impactFromCatalog(catalog, previousVersion, targetVersion).targetReviewed).toBe(true);
+  });
+
   it("retains intermediate state changes and the exact reviewed target entry", () => {
     const source = impact();
     const version = source.catalog.entries.at(-1)?.packageVersion ?? "";

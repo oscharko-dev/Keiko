@@ -280,3 +280,15 @@ localStorage while the first page can still persist its workspace layout. The jo
 the completed Composer page before opening and seeding the sequential Voice page. Its grounding,
 accounting, citation, persistence and playback assertions remain unchanged. These changes repair
 test preparation; they do not establish the pending production-release SSD acceptance.
+
+### Real catalog review admission before publication
+
+Passing the actual repository catalog through authenticated-catalog admission and update-impact
+resolution for 1.2.5 to 1.2.6 reports the target as unreviewed. Its approval reference is a GitHub
+URL, while installed readers require the existing canonical audit-reference form. The catalog now
+encodes that same owner comment as `github-issue-comment:oscharko-dev/Keiko#4056#6323955124`.
+Release authority and runtime admission guards remain unchanged. The existing real-catalog suite
+now resolves the actual latest target from its preceding stable version, so validation of the
+catalog shape alone cannot hide another review-admission mismatch. That regression fails before
+the metadata correction. The historical runtime comment now reflects ADR-0177's retirement of
+live GitHub authorship verification.
