@@ -9,6 +9,7 @@ import {
   openCodeConfigDirectory,
   resolveOpenCodeContextGeometry,
   type OpenCodeLaunchProfileInput,
+  openCodePlanDirectory,
 } from "./opencodeLaunchProfile.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
@@ -31,13 +32,20 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
   return value as Readonly<Record<string, unknown>>;
 }
 
+// The effect OpenCode resolves for `tool` on a generic resource: last match wins, and a rule naming
+// a specific resource (the plan directory) does not decide a generic one.
 function finalPermissionAction(
-  rules: readonly { readonly action: string; readonly effect: string }[],
+  rules: readonly {
+    readonly action: string;
+    readonly effect: string;
+    readonly resource?: string;
+  }[],
   tool: string,
 ): string | undefined {
   for (let index = rules.length - 1; index >= 0; index -= 1) {
     const rule = rules[index];
-    if (rule !== undefined && (rule.action === "*" || rule.action === tool)) {
+    const generic = rule?.resource === undefined || rule.resource === "*";
+    if (rule !== undefined && generic && (rule.action === "*" || rule.action === tool)) {
       return rule.effect;
     }
   }
@@ -171,9 +179,15 @@ describe("OpenCode launch profile", () => {
     // action waiting for a human, not silently allowed. The loaded hook sets the final effect of
     // each evaluated action. Code Mode stays available (owner decision, 2026-10-23), so no rule
     // names the `execute` action: it is governed by the same baseline and the policy plugin.
+    // Every external directory stays denied except the run's own plan directory (last match wins).
     expect(config.permissions).toEqual([
       { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
+      {
+        action: "external_directory",
+        resource: `${openCodePlanDirectory("/private/run")}/*`,
+        effect: "allow",
+      },
     ]);
     for (const tool of [
       "read",
@@ -260,7 +274,16 @@ describe("OpenCode launch profile", () => {
       };
       expect(finalPermissionAction(content.permissions, "shell")).toBe("ask");
       expect(finalPermissionAction(content.permissions, "execute")).toBe("ask");
-      expect(finalPermissionAction(content.permissions, "external_directory")).toBe("deny");
+      // The generic external directory stays denied on the highest layer; the one allow names
+      // exactly the run's plan directory.
+      expect(content.permissions.filter((rule) => rule.action === "external_directory")).toEqual([
+        { action: "external_directory", resource: "*", effect: "deny" },
+        {
+          action: "external_directory",
+          resource: `${openCodePlanDirectory("/private/run")}/*`,
+          effect: "allow",
+        },
+      ]);
     });
 
     it("keeps credentials and repository text out of the highest layer", () => {
@@ -601,4 +624,22 @@ it("threads the selected profile into the actual launch configuration", () => {
   if (!profile.ok) throw new Error("expected selected managed profile");
   expect(finalPermissionAction(v2Rules(profile.configValue), "execute")).toBe("allow");
   expect(profile.config).toBe(JSON.stringify(profile.configValue));
+});
+
+describe("plan agent directory (#3897)", () => {
+  it("admits exactly the run's plan directory after the external-directory denial", () => {
+    const fixed = createFixedOpenCodeV2Config;
+    const config = fixed(CONTEXT_GEOMETRY, undefined, "native", "/state/run-1");
+    expect(config.permissions).toEqual([
+      { action: "*", resource: "*", effect: "ask" },
+      { action: "external_directory", resource: "*", effect: "deny" },
+      {
+        action: "external_directory",
+        resource: `${openCodePlanDirectory("/state/run-1")}/*`,
+        effect: "allow",
+      },
+    ]);
+    expect(openCodePlanDirectory("/state/run-1")).toBe("/state/run-1/home/.opencode/plan");
+    expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(2);
+  });
 });

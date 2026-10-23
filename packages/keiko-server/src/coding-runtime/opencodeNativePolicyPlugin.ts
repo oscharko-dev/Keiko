@@ -13,6 +13,16 @@ export const OPENCODE_NATIVE_POLICY_MAX_MESSAGE_CHARS = 1_024;
 export const OPENCODE_NATIVE_POLICY_WAIT_MS =
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
 
+/**
+ * Code Mode's management tools that change state but assert no OpenCode permission (2.1.4, measured
+ * with the real runtime): the policy decides them through the tool hook instead. Every other Code
+ * Mode tool either asserts a permission the evaluate hook sees or only reads.
+ */
+export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
+  "opencode_session_move",
+  "opencode_worktree_create",
+] as const);
+
 /** Secrets and Keiko bindings never reach a shell the native agent starts. */
 export const OPENCODE_NATIVE_SHELL_ENV_DENYLIST = Object.freeze([
   "OPENCODE_SERVER_PASSWORD",
@@ -57,6 +67,7 @@ function pluginConstantsSource(): readonly string[] {
     `const DENY_MESSAGE = ${JSON.stringify(DENY_MESSAGE)};`,
     `const OVERSIZED_MESSAGE = ${JSON.stringify(OVERSIZED_MESSAGE)};`,
     `const ENV_DENYLIST = new Set(${JSON.stringify(OPENCODE_NATIVE_SHELL_ENV_DENYLIST)});`,
+    `const CODE_MODE_GOVERNED = new Set(${JSON.stringify(OPENCODE_CODE_MODE_GOVERNED_TOOLS)});`,
     "const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
@@ -120,6 +131,13 @@ function pluginBodySource(): readonly string[] {
     "      }",
     "      // The runtime's own package manager stays offline; at Full access a shell may reach registries.",
     "      if (fullAccess && event.env) delete event.env.npm_config_offline;",
+    "    });",
+    "    // Code Mode stays available; a nested management tool that asserts no permission is decided",
+    "    // by the same policy, and a refusal blocks the nested call with the policy's message.",
+    '    await ctx.tool.hook("execute.before", async (event) => {',
+    "      if (!CODE_MODE_GOVERNED.has(event.tool)) return;",
+    '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources: [], effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
+    '      if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
     "    });",
     "  },",
     "};",

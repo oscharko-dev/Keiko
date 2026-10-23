@@ -20,6 +20,15 @@ interface ShellEvent {
   env: Record<string, string>;
 }
 
+interface ToolEvent {
+  tool: string;
+  readonly sessionID: string;
+  readonly agent: string;
+  readonly messageID: string;
+  readonly id: string;
+  input: unknown;
+}
+
 interface PolicyPlugin {
   readonly setup: (context: {
     readonly permission: {
@@ -30,6 +39,9 @@ interface PolicyPlugin {
     };
     readonly shell: {
       readonly hook: (name: string, callback: (event: ShellEvent) => void) => Promise<void>;
+    };
+    readonly tool: {
+      readonly hook: (name: string, callback: (event: ToolEvent) => Promise<void>) => Promise<void>;
     };
   }) => Promise<void>;
 }
@@ -46,15 +58,19 @@ function isPolicyPlugin(value: unknown): value is PolicyPlugin {
 interface Harness {
   readonly evaluate: (event: PermissionEvent) => Promise<void>;
   readonly shell: (event: ShellEvent) => void;
+  readonly toolBefore: (event: ToolEvent) => Promise<void>;
   readonly requests: unknown[];
 }
 
 /** Runs the generated plugin against a fetch stub that answers `allow` to every request it sees. */
-async function pluginHarness(mode = "supervised-coding"): Promise<Harness> {
+async function pluginHarness(
+  mode = "supervised-coding",
+  answer: { readonly effect: "allow" | "deny"; readonly message?: string } = { effect: "allow" },
+): Promise<Harness> {
   const requests: unknown[] = [];
   const fetch = (_url: string, init: { body: string }): Promise<Response> => {
     requests.push(JSON.parse(init.body));
-    return Promise.resolve(new Response(JSON.stringify({ effect: "allow" }), { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
   };
   const source = createGeneratedOpenCodeNativePolicyPlugin();
   const value: unknown = new Script(
@@ -79,6 +95,7 @@ async function pluginHarness(mode = "supervised-coding"): Promise<Harness> {
   if (!isPolicyPlugin(value)) throw new TypeError("native policy plugin invalid");
   let evaluate: ((event: PermissionEvent) => Promise<void>) | undefined;
   let shell: ((event: ShellEvent) => void) | undefined;
+  let toolBefore: ((event: ToolEvent) => Promise<void>) | undefined;
   await value.setup({
     permission: {
       hook: (name, callback): Promise<void> => {
@@ -92,9 +109,16 @@ async function pluginHarness(mode = "supervised-coding"): Promise<Harness> {
         return Promise.resolve();
       },
     },
+    tool: {
+      hook: (name, callback): Promise<void> => {
+        if (name === "execute.before") toolBefore = callback;
+        return Promise.resolve();
+      },
+    },
   });
-  if (evaluate === undefined || shell === undefined) throw new Error("hooks missing");
-  return { evaluate, shell, requests };
+  if (evaluate === undefined || shell === undefined || toolBefore === undefined)
+    throw new Error("hooks missing");
+  return { evaluate, shell, toolBefore, requests };
 }
 
 function event(resources: unknown): PermissionEvent {
@@ -197,5 +221,50 @@ describe("generated native policy plugin forwarding and precedence (#3897 audit)
     const atFull = { env: env() };
     full.shell(atFull);
     expect(atFull.env).toEqual({ PATH: "/usr/bin" });
+  });
+});
+
+describe("generated native policy plugin Code Mode governance (#3897)", () => {
+  const nested = (tool: string): ToolEvent => ({
+    tool,
+    sessionID: "ses_plugin",
+    agent: "build",
+    messageID: "msg_code_mode",
+    id: "call_execute",
+    input: { name: "feature" },
+  });
+
+  it("asks policy for a state-changing management tool and blocks it on refusal", async () => {
+    const refused = await pluginHarness("autonomous-delivery", {
+      effect: "deny",
+      message: "managed by Keiko",
+    });
+    await expect(refused.toolBefore(nested("opencode_worktree_create"))).rejects.toThrow(
+      "managed by Keiko",
+    );
+    expect(refused.requests[0]).toMatchObject({
+      permission: "opencode_worktree_create",
+      resources: [],
+      source: { type: "tool", messageID: "msg_code_mode", id: "call_execute" },
+    });
+    const allowed = await pluginHarness("autonomous-delivery", { effect: "allow" });
+    await expect(allowed.toolBefore(nested("opencode_session_move"))).resolves.toBeUndefined();
+    expect(allowed.requests).toHaveLength(1);
+  });
+
+  it("leaves Code Mode itself and its read-only or self-asserting tools to the runtime", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "deny" });
+    for (const tool of [
+      "execute",
+      "opencode_models",
+      "opencode_worktree_list",
+      "opencode_session_rename",
+      "opencode_list_mcp_resources",
+      "opencode_read_mcp_resource",
+      "opencode_worktree_remove",
+    ]) {
+      await expect(harness.toolBefore(nested(tool)), tool).resolves.toBeUndefined();
+    }
+    expect(harness.requests).toHaveLength(0);
   });
 });

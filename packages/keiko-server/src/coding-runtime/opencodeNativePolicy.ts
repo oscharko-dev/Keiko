@@ -83,6 +83,11 @@ type NativeActionLabel =
   "native-read" | "native-edit" | "native-shell" | "native-egress" | "native-execute";
 
 const SEARCH_ACTIONS = new Set(["glob", "grep"]);
+/**
+ * Code Mode management tools that would move the session or create worktrees outside Keiko's
+ * workspace binding (ADR-0088/0089); the policy plugin routes them here through its tool hook.
+ */
+const CODE_MODE_KEIKO_OWNED = new Set(["opencode_session_move", "opencode_worktree_create"]);
 const READ_ACTIONS = new Set([
   "read",
   "list",
@@ -417,6 +422,12 @@ function parseSource(
 export interface OpenCodeNativePolicyInput {
   readonly mode: unknown;
   readonly workspaceRoot: string;
+  /**
+   * The run-private directory where OpenCode's plan agent keeps its plan (`~/.opencode/plan` under
+   * the run's private home), derived by the server, never by the runtime. Reads and edits there are
+   * admitted like workspace paths; absent, only the workspace is admitted.
+   */
+  readonly planRoot?: string | undefined;
   readonly request: OpenCodeNativePolicyRequest;
   readonly nowMs: number;
 }
@@ -427,7 +438,10 @@ export function decideOpenCodeNativePolicy(
   const { request } = input;
   if (!isCodingWorkbenchMode(input.mode))
     return deny("mode-denied", "Keiko refused this action: the run's autonomy mode is unknown.");
-  const classification = classifyNativeAction(request, input.workspaceRoot);
+  const classification = classifyNativeAction(request, {
+    workspaceRoot: input.workspaceRoot,
+    planRoot: input.planRoot,
+  });
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
   if (classification.actionClass === "workspace-read") return { effect: "allow", classification };
@@ -465,31 +479,29 @@ type Classified =
   | OpenCodeNativeActionClassification
   | { readonly reason: OpenCodeNativePolicyDenyReason; readonly message: string };
 
+interface AdmittedRoots {
+  readonly workspaceRoot: string;
+  readonly planRoot?: string | undefined;
+}
+
 function classifyNativeAction(
   request: OpenCodeNativePolicyRequest,
-  workspaceRoot: string,
+  roots: AdmittedRoots,
 ): Classified {
   const { permission, resources } = request;
+  if (CODE_MODE_KEIKO_OWNED.has(permission))
+    return {
+      reason: "unsupported-action",
+      message:
+        "Keiko refused this action: the task workspace and its worktrees are managed by Keiko. Keep working in the current workspace.",
+    };
   if (!KNOWN_ACTIONS.has(permission))
     return {
       reason: "unsupported-action",
       message: "Keiko refused this action: it is not a classified OpenCode action.",
     };
-  if (permission === "external_directory")
-    return {
-      reason: "workspace-escape",
-      message: "Keiko refused this action: files outside the task workspace are not accessible.",
-    };
-  // A glob/grep resource is a search pattern (`/api/users`, `*.pem`), not a path: only the searched
-  // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
-  if (SEARCH_ACTIONS.has(permission))
-    return guardedPaths(
-      request.searchPath === undefined ? [] : [request.searchPath],
-      workspaceRoot,
-      READ,
-    );
-  if (READ_ACTIONS.has(permission)) return guardedPaths(resources, workspaceRoot, READ);
-  if (EDIT_ACTIONS.has(permission)) return guardedPaths(resources, workspaceRoot, EDIT);
+  const pathAction = classifyPathAction(request, roots);
+  if (pathAction !== undefined) return pathAction;
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
   if (permission === "shell") return classifyShell(resources);
   return EXECUTE;
@@ -542,11 +554,11 @@ const SHELL_UNVETTED: OpenCodeNativeActionClassification = Object.freeze({
  */
 function guardedPaths(
   resources: readonly string[],
-  workspaceRoot: string,
+  roots: AdmittedRoots,
   classification: OpenCodeNativeActionClassification,
 ): Classified {
   for (const resource of resources) {
-    const contained = workspaceRelative(resource, workspaceRoot);
+    const contained = admittedRelative(resource, roots);
     if (contained === undefined)
       return {
         reason: "workspace-escape",
@@ -559,6 +571,64 @@ function guardedPaths(
       };
   }
   return classification;
+}
+
+/** The path-bearing actions; `undefined` for every other action. */
+function classifyPathAction(
+  request: OpenCodeNativePolicyRequest,
+  roots: AdmittedRoots,
+): Classified | undefined {
+  const { permission, resources } = request;
+  if (permission === "external_directory") return externalDirectory(resources, roots.planRoot);
+  // A glob/grep resource is a search pattern (`/api/users`, `*.pem`), not a path: only the searched
+  // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
+  if (SEARCH_ACTIONS.has(permission))
+    return guardedPaths(request.searchPath === undefined ? [] : [request.searchPath], roots, READ);
+  if (READ_ACTIONS.has(permission)) return guardedPaths(resources, roots, READ);
+  // The plan agent's notes live in the run's private plan directory, not in the workspace: writing
+  // them is planning, allowed in every mode like a read (standalone OpenCode does not ask either).
+  if (EDIT_ACTIONS.has(permission))
+    return guardedPaths(resources, roots, onlyInPlanRoot(resources, roots) ? READ : EDIT);
+  return undefined;
+}
+
+function onlyInPlanRoot(resources: readonly string[], roots: AdmittedRoots): boolean {
+  const { planRoot } = roots;
+  return (
+    planRoot !== undefined &&
+    resources.length > 0 &&
+    resources.every(
+      (resource) =>
+        isAbsolute(resource.trim()) && workspaceRelative(resource, planRoot) !== undefined,
+    )
+  );
+}
+
+/** Relative to the workspace, or to the plan root for an absolute path inside it. */
+function admittedRelative(resource: string, roots: AdmittedRoots): string | undefined {
+  const inWorkspace = workspaceRelative(resource, roots.workspaceRoot);
+  if (inWorkspace !== undefined || roots.planRoot === undefined) return inWorkspace;
+  return isAbsolute(resource.trim()) ? workspaceRelative(resource, roots.planRoot) : undefined;
+}
+
+/**
+ * OpenCode checks a directory outside the workspace before reading or editing in it. Only the
+ * run's plan directory is admitted; every other external directory stays a hard denial.
+ */
+function externalDirectory(resources: readonly string[], planRoot: string | undefined): Classified {
+  const insidePlan =
+    planRoot !== undefined &&
+    resources.length > 0 &&
+    resources.every((resource) => {
+      const directory = resource.trim().replace(/\/\*$/u, "");
+      return isAbsolute(directory) && workspaceRelative(directory, planRoot) !== undefined;
+    });
+  return insidePlan
+    ? READ
+    : {
+        reason: "workspace-escape",
+        message: "Keiko refused this action: files outside the task workspace are not accessible.",
+      };
 }
 
 /** Workspace-relative POSIX path, or undefined when the resource points outside the workspace. */

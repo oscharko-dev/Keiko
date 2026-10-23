@@ -32,6 +32,15 @@ export function openCodeConfigDirectory(stateRoot: string): string {
   return join(stateRoot, "config", "opencode");
 }
 
+/**
+ * Where OpenCode's plan agent keeps its plan: `~/.opencode/plan` under the run's private home. The
+ * native config admits exactly this external directory, and the native policy admits reads and
+ * edits inside it as planning (#3897).
+ */
+export function openCodePlanDirectory(stateRoot: string): string {
+  return join(stateRoot, "home", ".opencode", "plan");
+}
+
 export interface OpenCodeContextGeometry {
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
@@ -119,6 +128,7 @@ export function buildOpenCodeLaunchProfile(
     input.contextGeometry,
     input.unavailableOptionalTools,
     input.toolProfile,
+    input.stateRoot,
   );
   return {
     ok: true,
@@ -316,9 +326,10 @@ export function createFixedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
   profile: OpenCodeToolProfile = "direct",
+  stateRoot?: string,
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
-  if (profile === "native") return createNativeOpenCodeV2Config(contextGeometry);
+  if (profile === "native") return createNativeOpenCodeV2Config(contextGeometry, stateRoot);
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -366,6 +377,7 @@ export function createFixedOpenCodeV2Config(
  */
 function createNativeOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
+  stateRoot?: string,
 ): Readonly<Record<string, unknown>> {
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -387,6 +399,16 @@ function createNativeOpenCodeV2Config(
     permissions: [
       { action: "*", resource: "*", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "deny" },
+      // Last match wins: the plan agent's own plan directory is the one admitted external path.
+      ...(stateRoot === undefined
+        ? []
+        : [
+            {
+              action: "external_directory",
+              resource: `${openCodePlanDirectory(stateRoot)}/*`,
+              effect: "allow",
+            },
+          ]),
     ],
   };
 }

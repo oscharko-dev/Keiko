@@ -335,3 +335,64 @@ describe("native policy evidence", () => {
     expect(serialized).not.toContain("example.com");
   });
 });
+
+describe("Code Mode management tools owned by Keiko (#3897)", () => {
+  it("refuses session moves and worktree creation in every mode with an explanation", () => {
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+      for (const tool of ["opencode_session_move", "opencode_worktree_create"]) {
+        const decision = decide(mode, tool, []);
+        expect(decision.effect, `${mode} ${tool}`).toBe("deny");
+        expect(decision.effect === "deny" ? decision.message : "").toMatch(/managed by Keiko/u);
+      }
+    }
+  });
+});
+
+describe("plan agent notes in the run-private plan directory (#3897)", () => {
+  const PLAN = "/state/run-1/home/.opencode/plan";
+  const decideWithPlan = (
+    mode: string,
+    permission: string,
+    resources: readonly string[],
+    planRoot: string | null = PLAN,
+  ): string => {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: WORKSPACE,
+      ...(planRoot === null ? {} : { planRoot }),
+      request: request(permission, resources),
+      nowMs: 0,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  };
+
+  it("admits reading and writing the plan without asking in every mode", () => {
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+      expect(decideWithPlan(mode, "external_directory", [`${PLAN}/*`])).toBe("allow");
+      expect(decideWithPlan(mode, "edit", [`${PLAN}/feature.md`])).toBe("allow");
+      expect(decideWithPlan(mode, "read", [`${PLAN}/feature.md`])).toBe("allow");
+    }
+  });
+
+  it("keeps every other external path refused and the workspace rules unchanged", () => {
+    expect(decideWithPlan("autonomous-delivery", "external_directory", ["/etc/*"])).toBe(
+      "deny:workspace-escape",
+    );
+    expect(decideWithPlan("autonomous-delivery", "edit", [`${PLAN}/../escape.md`])).toBe(
+      "deny:workspace-escape",
+    );
+    expect(decideWithPlan("autonomous-delivery", "read", [`${PLAN}/.env`])).toBe(
+      "deny:sensitive-path",
+    );
+    expect(decideWithPlan("governed-assist", "edit", ["src/a.ts"])).toBe("ask");
+    expect(decideWithPlan("supervised-coding", "edit", [`${PLAN}/feature.md`, "src/a.ts"])).toBe(
+      "allow",
+    );
+    expect(decideWithPlan("governed-assist", "edit", [`${PLAN}/feature.md`, "src/a.ts"])).toBe(
+      "ask",
+    );
+    expect(decideWithPlan("autonomous-delivery", "external_directory", [`${PLAN}/*`], null)).toBe(
+      "deny:workspace-escape",
+    );
+  });
+});
