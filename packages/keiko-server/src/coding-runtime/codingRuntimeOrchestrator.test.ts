@@ -1,5 +1,9 @@
 import { createInMemoryUiStore } from "../store/index.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import {
+  createCodingSessionContinuity,
+  type CodingSessionContinuity,
+} from "./codingSessionContinuity.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -278,6 +282,8 @@ function fixture(
   // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
   // switch it while a run starts.
   activeRoot: () => string = (): string => "/workspace",
+  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  sessionContinuity?: CodingSessionContinuity,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -514,6 +520,7 @@ function fixture(
         runEffort,
       }),
       ...(history === undefined ? {} : { history }),
+      ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
@@ -8209,5 +8216,207 @@ describe("verification truth at task settlement", () => {
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1 + VERIFICATION_CONTINUATION_MAX);
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+});
+
+// S02/S03 (#3904): a start that continues a task asks its run to resume the task's saved session, a
+// start that forks one asks for a fork; whether the history is still replayed as context follows
+// from what the run's runtime reports it actually did.
+describe("native session continuity requested by a start", () => {
+  const PLAN = {
+    boundary: { kind: "turn", ordinal: 1, userTurnCount: 3 },
+    inheritedCount: 2,
+    sourceCount: 6,
+  } as const;
+  const FORKED_TASK = {
+    id: "task-forked",
+    title: "Forked",
+    projectPath: ACTIVE_REPOSITORY_ROOT,
+    modelId: "coding",
+    branch: "keiko/task/one",
+    workspaceId: "workspace-1",
+    taskId: "task-1",
+    status: "active",
+    createdAt: 1,
+    updatedAt: 1,
+  } as const;
+
+  interface World {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly history: CodingRuntimeHistory;
+    /** The history's spied methods, held apart so an assertion never reads one off the instance. */
+    readonly spies: {
+      readonly admits: ReturnType<typeof vi.spyOn>;
+      readonly begin: ReturnType<typeof vi.spyOn>;
+      readonly beginFork: ReturnType<typeof vi.spyOn>;
+      readonly initialContext: ReturnType<typeof vi.spyOn>;
+    };
+    readonly continuity: ReturnType<typeof createCodingSessionContinuity>;
+    readonly f: ReturnType<typeof fixture>;
+  }
+
+  function world(options: { admitted?: boolean; plan?: typeof PLAN | undefined } = {}): World {
+    const store = createInMemoryUiStore();
+    const history = new CodingRuntimeHistory(store, () => "operator", undefined);
+    const admits = vi.spyOn(history, "admits").mockReturnValue(options.admitted ?? true);
+    vi.spyOn(history, "planFork").mockReturnValue("plan" in options ? options.plan : PLAN);
+    vi.spyOn(history, "previousRunId").mockReturnValue("run-prior");
+    const begin = vi.spyOn(history, "begin").mockImplementation(() => undefined);
+    const beginFork = vi
+      .spyOn(history, "beginFork")
+      .mockReturnValue({ task: FORKED_TASK, ...PLAN });
+    const initialContext = vi.spyOn(history, "initialContext").mockReturnValue("HISTORY-CONTEXT");
+    const continuity = createCodingSessionContinuity({ taskOfRun: () => undefined });
+    const f = fixture(
+      undefined,
+      undefined,
+      [settledRow("run-prior", "2025-12-31T00:00:00.000Z", 3)],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      history,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      continuity,
+    );
+    return { store, history, spies: { admits, begin, beginFork, initialContext }, continuity, f };
+  }
+
+  /** The runtime reporting what it did, as the composition does while it prepares the run. */
+  function runtimeSettles(w: World, outcome: Parameters<typeof w.continuity.settle>[1]): void {
+    w.f.manager.start.mockImplementationOnce((request) => {
+      w.continuity.settle(request.runId, outcome);
+      return { ok: true, runId: request.runId, status: "ready" };
+    });
+  }
+
+  const fork = { fork: { taskId: "task-source", beforeMessageId: "message-2" } } as const;
+
+  it("declares a fork of the source task with its boundary and begins the task from a copy of it", async () => {
+    const w = world();
+    vi.spyOn(w.history, "forRun").mockReturnValue(FORKED_TASK);
+
+    const started = await w.f.orchestrator.start({ ...start, ...fork });
+
+    expect(started).toMatchObject({ ok: true });
+    expect(w.spies.admits).toHaveBeenCalledWith("task-source", expect.anything());
+    expect(w.spies.beginFork).toHaveBeenCalledOnce();
+    expect(w.spies.begin).not.toHaveBeenCalled();
+    expect(w.continuity.take("run-2")).toEqual({
+      kind: "fork",
+      sourceTaskId: "task-source",
+      boundary: PLAN.boundary,
+    });
+    // The run belongs to the NEW task, which is the conversation the browser follows.
+    expect(started).toMatchObject({ snapshot: { conversationId: "task-forked" } });
+  });
+
+  it("declares a resume of the task a start continues", async () => {
+    const w = world();
+
+    await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
+
+    expect(w.spies.begin).toHaveBeenCalledOnce();
+    expect(w.continuity.take("run-2")).toEqual({ kind: "resume", taskId: "task-prior" });
+  });
+
+  it("declares nothing for a start that continues nothing", async () => {
+    const w = world();
+
+    await w.f.orchestrator.start(start);
+
+    expect(w.continuity.take("run-2")).toBeUndefined();
+  });
+
+  it.each([
+    ["a resumed", { kind: "resumed" }],
+    ["a forked", { kind: "forked" }],
+  ] as const)(
+    "does not replay the history as context for %s run: its runtime holds it",
+    async (_name, outcome) => {
+      const w = world();
+      runtimeSettles(w, outcome);
+
+      await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
+
+      expect(w.spies.initialContext).not.toHaveBeenCalled();
+      expect(firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext).toBe(
+        undefined,
+      );
+    },
+  );
+
+  it.each([
+    ["a fresh fallback", { kind: "fresh", reason: "version-changed" }],
+    ["no report at all", undefined],
+  ] as const)("replays the history as context after %s, as before", async (_name, outcome) => {
+    const w = world();
+    if (outcome !== undefined) runtimeSettles(w, outcome);
+
+    await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
+
+    expect(w.spies.initialContext).toHaveBeenCalledOnce();
+    expect(
+      firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext,
+    ).toContain("HISTORY-CONTEXT");
+  });
+
+  it("replays the inherited conversation of a fork whose runtime could not fork it", async () => {
+    const w = world();
+    runtimeSettles(w, { kind: "fresh", reason: "no-retained-state" });
+
+    await w.f.orchestrator.start({ ...start, ...fork });
+
+    expect(
+      firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext,
+    ).toContain("HISTORY-CONTEXT");
+  });
+
+  it.each([
+    ["a source that is not a task of the active workspace", { admitted: false }],
+    ["a fork point that is not one of the source's user turns", { plan: undefined }],
+  ])("refuses a fork of %s before any run exists", async (_name, options) => {
+    const w = world(options);
+
+    const started = await w.f.orchestrator.start({ ...start, ...fork });
+
+    expect(started).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(w.f.manager.start).not.toHaveBeenCalled();
+    expect(w.spies.beginFork).not.toHaveBeenCalled();
+    expect(w.f.rows.has("run-2")).toBe(false);
+    expect(w.continuity.take("run-2")).toBeUndefined();
+  });
+
+  it("refuses a fork when there is no Coding History to fork", async () => {
+    const f = fixture();
+
+    const started = await f.orchestrator.start({ ...start, ...fork });
+
+    expect(started).toMatchObject({ ok: false });
+    expect(f.manager.start).not.toHaveBeenCalled();
+  });
+
+  it("fails the start when the fork cannot be begun, naming the history", async () => {
+    const w = world();
+    vi.spyOn(w.history, "beginFork").mockImplementation(() => {
+      throw new Error("Coding task cannot be forked.");
+    });
+
+    const started = await w.f.orchestrator.start({ ...start, ...fork });
+
+    // The run exists only to end: it failed before any runtime was asked for and declared nothing.
+    expect(started).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "runtime-failed" },
+    });
+    expect(w.f.manager.start).not.toHaveBeenCalled();
+    expect(w.continuity.take("run-2")).toBeUndefined();
   });
 });

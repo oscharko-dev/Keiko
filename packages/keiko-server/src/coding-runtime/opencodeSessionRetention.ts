@@ -175,6 +175,11 @@ export interface RetainedSessionStoreOptions {
   readonly root: string;
   readonly now?: (() => number) | undefined;
   readonly limits?: Partial<RetainedSessionLimits> | undefined;
+  /**
+   * Whether a task still exists. Every pruning, the one a retention ends with included, removes the
+   * entry of a task that does not.
+   */
+  readonly isLiveTask?: ((taskId: string) => boolean) | undefined;
 }
 
 export function retainedSessionKey(taskId: string): string {
@@ -209,10 +214,12 @@ class Store {
   private readonly root: string;
   private readonly now: () => number;
   private readonly limits: RetainedSessionLimits;
+  private readonly isLiveTask: ((taskId: string) => boolean) | undefined;
 
   public constructor(options: RetainedSessionStoreOptions) {
     this.root = options.root;
     this.now = options.now ?? Date.now;
+    this.isLiveTask = options.isLiveTask;
     this.limits = { ...RETAINED_SESSION_LIMITS, ...options.limits };
   }
 
@@ -263,7 +270,9 @@ class Store {
     rmSync(join(this.root, retainedSessionKey(taskId)), { recursive: true, force: true });
   }
 
-  public prune(isLiveTask?: (taskId: string) => boolean): PruneResult {
+  public prune(
+    isLiveTask: ((taskId: string) => boolean) | undefined = this.isLiveTask,
+  ): PruneResult {
     const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0 };
     if (!existsSync(this.root)) return { ...counts, entryCount: 0 };
     const entries: PrunableEntry[] = [];

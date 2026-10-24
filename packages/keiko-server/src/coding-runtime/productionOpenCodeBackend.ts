@@ -70,6 +70,7 @@ import {
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import {
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
   openCodeVisibleToolNames,
@@ -169,6 +170,12 @@ export interface ProductionOpenCodeBackendInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
+  /**
+   * The server's native session continuity service (S02/S03, #3904): how a run resumes or forks a
+   * task's retained session, and where a run that settled normally leaves its own. Absent keeps every
+   * run on a fresh session.
+   */
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   /**
    * The configured Authority Envelope duration (ms, #3873). The safe-activity projection this
@@ -368,6 +375,14 @@ function composeOpenCodeRun(
       run.onRuntimeEvent,
     ),
     safeActivity,
+    ...(input.sessionContinuity === undefined
+      ? {}
+      : {
+          sessionContinuity: {
+            service: input.sessionContinuity,
+            workspaceId: run.context.workspaceId,
+          },
+        }),
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
     supervisor: runtimeSupervisor(input, run, toolProfile),

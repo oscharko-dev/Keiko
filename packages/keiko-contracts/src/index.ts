@@ -1430,6 +1430,7 @@ export type {
   CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimeFollowUpRequest,
+  CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeProjectMemoryRequest,

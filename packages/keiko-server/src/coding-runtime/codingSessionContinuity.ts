@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
@@ -6,7 +8,11 @@ import {
 
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { retainedSessionKey, type RetainedSessionStore } from "./opencodeSessionRetention.js";
+import {
+  createRetainedSessionStore,
+  retainedSessionKey,
+  type RetainedSessionStore,
+} from "./opencodeSessionRetention.js";
 
 /**
  * Native session continuity of the Coding Workbench (S02/S03, #3904, ADR-0137 D10).
@@ -134,6 +140,60 @@ export function createCodingSessionContinuity(
  */
 export function sessionRetentionEnabled(value: string | undefined): boolean {
   return value === undefined || value === "on";
+}
+
+/** The environment variable that switches retention off; see `sessionRetentionEnabled`. */
+export const KEIKO_CODING_SESSION_RETENTION_ENV = "KEIKO_CODING_SESSION_RETENTION";
+
+/** Where a state directory keeps the retained entries: server-owned, beside the runs' private state. */
+export function retainedSessionRoot(stateDir: string): string {
+  return join(stateDir, "coding-runtime", "retained-sessions");
+}
+
+export interface StateCodingSessionContinuityInput {
+  readonly stateDir: string;
+  /** The value of `KEIKO_CODING_SESSION_RETENTION`. */
+  readonly retention: string | undefined;
+  /** The Coding History the retained entries belong to; an entry of a task it lacks is removed. */
+  readonly history:
+    | {
+        readonly get: (id: string) => unknown;
+        readonly forRun: (runId: string) => { readonly id: string } | undefined;
+      }
+    | undefined;
+  readonly activityLog: ServerLogSink | undefined;
+}
+
+/**
+ * The server's one continuity service over its state directory. Entries of tasks that no longer
+ * exist and entries past their bounds are removed once now, and again with every retention.
+ */
+export function createStateCodingSessionContinuity(
+  input: StateCodingSessionContinuityInput,
+): CodingSessionContinuity {
+  const store = sessionRetentionEnabled(input.retention)
+    ? createRetainedSessionStore({
+        root: retainedSessionRoot(input.stateDir),
+        isLiveTask: (taskId) => input.history?.get(taskId) !== undefined,
+      })
+    : undefined;
+  const pruned = store?.prune();
+  if (
+    pruned !== undefined &&
+    pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota > 0
+  ) {
+    recordSessionContinuity(input.activityLog, {
+      runId: "session-retention-startup",
+      action: "prune",
+      outcome: "pruned",
+      entryCount: pruned.entryCount,
+      prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
+    });
+  }
+  return createCodingSessionContinuity({
+    store,
+    taskOfRun: (runId) => input.history?.forRun(runId)?.id,
+  });
 }
 
 const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({

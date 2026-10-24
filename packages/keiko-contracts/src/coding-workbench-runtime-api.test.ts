@@ -87,6 +87,61 @@ describe("Coding Workbench runtime API contracts", () => {
     }
   });
 
+  // S03 (#3904): a fork names the task to fork and, optionally, the message to fork before.
+  it("accepts a fork of a task, with or without a message, and nothing else about it", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Try another approach",
+      requestedMode: "supervised-coding",
+    };
+    const wholeTask = { ...start, fork: { taskId: "chat-source-1" } };
+    const beforeMessage = {
+      ...start,
+      fork: { taskId: "chat-source-1", beforeMessageId: "message-7" },
+    };
+
+    expect(parseCodingWorkbenchRuntimeStartRequest(wholeTask)).toEqual({
+      ok: true,
+      value: wholeTask,
+    });
+    expect(parseCodingWorkbenchRuntimeStartRequest(beforeMessage)).toEqual({
+      ok: true,
+      value: beforeMessage,
+    });
+    expect(parseCodingWorkbenchRuntimeRetryRequest(beforeMessage)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["a fork that is not an object", "chat-source-1"],
+    ["a fork without a task", {}],
+    ["a fork of an unsafe task id", { taskId: "../source" }],
+    ["a fork of an oversized task id", { taskId: "a".repeat(129) }],
+    ["a fork before an unsafe message id", { taskId: "chat-source-1", beforeMessageId: "a b" }],
+    ["a fork carrying a session id", { taskId: "chat-source-1", sessionId: "ses_forged" }],
+    ["a fork carrying a forged boundary", { taskId: "chat-source-1", boundary: "end" }],
+  ])("rejects %s", (_name, fork) => {
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        requestId: "request-1",
+        taskIntent: "Try another approach",
+        requestedMode: "supervised-coding",
+        fork,
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("rejects a fork that also continues a conversation", () => {
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        requestId: "request-1",
+        taskIntent: "Try another approach",
+        requestedMode: "supervised-coding",
+        conversationId: "chat-source-1",
+        fork: { taskId: "chat-source-1" },
+      }),
+    ).toEqual({ ok: false, errors: ["fork cannot continue a conversation"] });
+  });
+
   it("accepts browser start intent only and rejects forged runtime authority", () => {
     const start = {
       requestId: "request-1",

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -7,7 +10,9 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import {
   createCodingSessionContinuity,
+  createStateCodingSessionContinuity,
   recordSessionContinuity,
+  retainedSessionRoot,
   sessionRetentionEnabled,
   type ContinuityIntent,
 } from "./codingSessionContinuity.js";
@@ -33,7 +38,11 @@ describe("the continuity declaration between the orchestrator and the compositio
   it("keeps declarations of different runs apart and takes nothing for a run that declared none", () => {
     const continuity = service();
     continuity.declare("run-a-000001", RESUME);
-    continuity.declare("run-b-000001", { kind: "fork", sourceTaskId: "t", boundary: { kind: "end" } });
+    continuity.declare("run-b-000001", {
+      kind: "fork",
+      sourceTaskId: "t",
+      boundary: { kind: "end" },
+    });
 
     expect(continuity.take("run-c-000001")).toBeUndefined();
     expect(continuity.take("run-b-000001")).toMatchObject({ kind: "fork" });
@@ -87,6 +96,105 @@ describe("the session retention setting", () => {
     ["true", false],
   ])("reads %j as enabled=%s and fails closed on anything it does not know", (value, enabled) => {
     expect(sessionRetentionEnabled(value)).toBe(enabled);
+  });
+});
+
+describe("the continuity service over a state directory", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function stateDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-continuity-state-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  it("keeps its retained entries beside the runs' private state, inside the state directory", () => {
+    expect(retainedSessionRoot("/state")).toBe(
+      join("/state", "coding-runtime", "retained-sessions"),
+    );
+  });
+
+  it.each([
+    [undefined, true],
+    ["on", true],
+    ["off", false],
+    ["unknown", false],
+  ])("offers a store when KEIKO_CODING_SESSION_RETENTION is %j: %s", (retention, offered) => {
+    const service = createStateCodingSessionContinuity({
+      stateDir: stateDir(),
+      retention,
+      history: undefined,
+      activityLog: undefined,
+    });
+
+    expect(service.store !== undefined).toBe(offered);
+  });
+
+  it("finds the task of a run through Coding History, and none without it", () => {
+    const history = {
+      get: (): unknown => undefined,
+      forRun: (runId: string): { readonly id: string } | undefined =>
+        runId === "run-known-1" ? { id: "task-known" } : undefined,
+    };
+    const withHistory = createStateCodingSessionContinuity({
+      stateDir: stateDir(),
+      retention: undefined,
+      history,
+      activityLog: undefined,
+    });
+    const without = createStateCodingSessionContinuity({
+      stateDir: stateDir(),
+      retention: undefined,
+      history: undefined,
+      activityLog: undefined,
+    });
+
+    expect(withHistory.taskOfRun("run-known-1")).toBe("task-known");
+    expect(withHistory.taskOfRun("run-other-1")).toBeUndefined();
+    expect(without.taskOfRun("run-known-1")).toBeUndefined();
+  });
+
+  it("removes what the state directory holds that is not a usable entry, once at startup, and says how much", () => {
+    const dir = stateDir();
+    const entry = join(retainedSessionRoot(dir), retainedSessionKey("task-without-manifest"));
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, "manifest.json"), "{}");
+    const log = createBufferedServerLogSink();
+
+    const service = createStateCodingSessionContinuity({
+      stateDir: dir,
+      retention: undefined,
+      history: { get: () => ({}), forRun: () => undefined },
+      activityLog: log,
+    });
+
+    expect(service.store).toBeDefined();
+    expect(existsSync(entry)).toBe(false);
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      extra: { action: "prune", outcome: "pruned", prunedCount: 1, entryCount: 0 },
+    });
+    expectActivityLogProof(
+      "coding-runtime.session-continuity.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  });
+
+  it("writes nothing at startup when there was nothing to remove", () => {
+    const log = createBufferedServerLogSink();
+
+    createStateCodingSessionContinuity({
+      stateDir: stateDir(),
+      retention: undefined,
+      history: undefined,
+      activityLog: log,
+    });
+
+    expect(log.events).toEqual([]);
   });
 });
 

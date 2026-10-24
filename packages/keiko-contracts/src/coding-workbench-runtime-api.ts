@@ -403,12 +403,33 @@ export interface CodingWorkbenchRuntimeProjectMemoryRequest {
   readonly enabled: boolean;
 }
 
+/**
+ * Starts a new task as a fork of another Coding History task (S03, #3904): the new task begins from
+ * the source task's saved native session, in the same workspace, and shows the source's conversation
+ * up to the fork point as its own earlier history. It names a task and optionally a message of it,
+ * nothing else: the fork is minted, bounded and approved like any other start, so it carries none of
+ * the source run's authority. A server that holds no saved session for the source still starts the
+ * task, with the source's history as context, exactly as a follow-up does.
+ */
+export interface CodingWorkbenchRuntimeForkRequest {
+  /** The Coding History task to fork; it must belong to the active workspace. */
+  readonly taskId: string;
+  /**
+   * The user message of that task (an id from its Coding History) to fork just before, so the new
+   * task carries what came ahead of it and not the message or anything after. Absent forks the task
+   * as it ended.
+   */
+  readonly beforeMessageId?: string | undefined;
+}
+
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
   readonly taskIntent: string;
   /** Durable conversation identity; never grants execution authority. */
   readonly conversationId?: string | undefined;
+  /** Forks another task into a new one; never combined with `conversationId`. */
+  readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
@@ -906,6 +927,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
       "agent",
       "references",
       "command",
+      "fork",
     ],
     "startRequest",
   );
@@ -935,6 +957,22 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   return result(value, errors);
 }
 
+// A fork names the task to fork and, optionally, the message to fork before; it starts a NEW task, so
+// it cannot also continue one.
+function validateForkRequest(value: Record<string, unknown>, errors: string[]): void {
+  if (value.fork === undefined) return;
+  if (value.conversationId !== undefined) errors.push("fork cannot continue a conversation");
+  if (!isRecord(value.fork)) {
+    errors.push("fork must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value.fork, ["taskId", "beforeMessageId"], "fork"));
+  validateSafeId(value.fork.taskId, "fork.taskId", errors, 128);
+  if (value.fork.beforeMessageId !== undefined) {
+    validateSafeId(value.fork.beforeMessageId, "fork.beforeMessageId", errors, 128);
+  }
+}
+
 // The first prompt's references and command (ADR-0137 D10): the same bounds as a follow-up's, and a
 // command turn carries none of an issue's context, so the two never combine.
 function validateStartPromptInputs(value: Record<string, unknown>, errors: string[]): void {
@@ -946,6 +984,7 @@ function validateStartPromptInputs(value: Record<string, unknown>, errors: strin
   if (value.command !== undefined && value.issueRef !== undefined) {
     errors.push("command cannot be combined with an issue reference");
   }
+  validateForkRequest(value, errors);
 }
 
 // A retry uses the identical request shape as the initial start; the distinct name documents the

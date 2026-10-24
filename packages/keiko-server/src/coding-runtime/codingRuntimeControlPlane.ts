@@ -1,3 +1,4 @@
+import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type { UiStore } from "../store/types.js";
 import type {
@@ -203,6 +204,8 @@ export interface CodingRuntimeToolFacadeBridge {
 
 export interface CodingRuntimeControlPlaneInput {
   readonly historyStore?: UiStore | undefined;
+  /** The server's native session continuity service, shared with the runtime host. */
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly snapshots: CodingRuntimeSnapshotStore;
@@ -282,6 +285,14 @@ export function createCodingRuntimeControlPlane(
   };
 }
 
+function controlPlaneHistory(
+  input: CodingRuntimeControlPlaneInput,
+): CodingRuntimeHistory | undefined {
+  return input.historyStore === undefined
+    ? undefined
+    : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog);
+}
+
 // eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
 function createControlPlaneOrchestrator(
   input: CodingRuntimeControlPlaneInput,
@@ -291,10 +302,8 @@ function createControlPlaneOrchestrator(
   launchResolver: CodingRuntimeLaunchResolver,
 ): CodingRuntimeOrchestrator {
   return createCodingRuntimeOrchestrator({
-    history:
-      input.historyStore === undefined
-        ? undefined
-        : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog),
+    history: controlPlaneHistory(input),
+    sessionContinuity: input.sessionContinuity,
     issueIntake: input.issueIntake,
     deploymentCeiling: input.deploymentCeiling,
     manager,

@@ -1,3 +1,4 @@
+import type { ForkBoundary } from "./codingSessionContinuity.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
@@ -3549,6 +3550,7 @@ export class CodingRuntimeOrchestrator {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
+    if (this.forkRefused(parsed.value)) return this.fail("invalid-intent");
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
     const scope = this.historyStartScope(parsed.value);
@@ -3652,12 +3654,56 @@ export class CodingRuntimeOrchestrator {
     runId: string,
   ): boolean {
     try {
-      this.deps.history?.begin(request, active, runId);
+      if (request.fork === undefined) this.deps.history?.begin(request, active, runId);
+      const fork =
+        request.fork === undefined
+          ? undefined
+          : this.deps.history?.beginFork(request, active, runId);
+      this.declareContinuity(request, runId, fork?.boundary);
       return true;
     } catch (error) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "history-initialization", error);
       return false;
     }
+  }
+
+  /**
+   * Tells the runtime side what this run asks for: to resume the task it continues, or to fork the
+   * task it was made from (S02/S03, #3904). It is a request, not authority: the run is minted and
+   * bounded as any other, and the composition answers with what it actually did.
+   */
+  private declareContinuity(
+    request: CodingWorkbenchRuntimeStartRequest,
+    runId: string,
+    forkBoundary: ForkBoundary | undefined,
+  ): void {
+    const continuity = this.deps.sessionContinuity;
+    if (continuity === undefined) return;
+    if (request.fork !== undefined && forkBoundary !== undefined) {
+      continuity.declare(runId, {
+        kind: "fork",
+        sourceTaskId: request.fork.taskId,
+        boundary: forkBoundary,
+      });
+    } else if (request.conversationId !== undefined) {
+      continuity.declare(runId, { kind: "resume", taskId: request.conversationId });
+    }
+  }
+
+  /**
+   * A fork starts a NEW task from another task's conversation, so its source must be this operator's
+   * task of the active workspace and its fork point one of the source's user turns. The check runs
+   * before any run exists: a fork that cannot be made refuses the start instead of failing a run.
+   */
+  private forkRefused(request: CodingWorkbenchRuntimeStartRequest): boolean {
+    if (request.fork === undefined) return false;
+    const active = this.activeWorkspaceOrUndefined();
+    // Without an active workspace the start's own scope check refuses with its own cause.
+    if (active === undefined) return false;
+    return (
+      this.deps.history?.admits(request.fork.taskId, active) !== true ||
+      this.deps.history.planFork(request.fork, active) === undefined
+    );
   }
 
   private historyStartScope(request: CodingWorkbenchRuntimeStartRequest):
@@ -3671,6 +3717,7 @@ export class CodingRuntimeOrchestrator {
     const principal = this.deps.serverPrincipal();
     if (!active || !principal) return undefined;
     if (request.conversationId === undefined) return { active, principal, request };
+    // (a fork has no conversation id: it begins a new task, see `beginHistory`)
     if (!this.deps.history?.admits(request.conversationId, active)) return undefined;
     const priorId = this.deps.history.previousRunId(request.conversationId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
@@ -3890,7 +3937,12 @@ export class CodingRuntimeOrchestrator {
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
-    const historyContext = this.deps.history?.initialContext(runId);
+    // A run whose runtime holds the task's conversation itself needs no replay of it (S02/S03).
+    const nativeHistory = this.deps.sessionContinuity?.outcome(runId)?.kind;
+    const historyContext =
+      nativeHistory === "resumed" || nativeHistory === "forked"
+        ? undefined
+        : this.deps.history?.initialContext(runId);
     // The repository's own AGENTS.md leads the context so its conventions frame the task; it is
     // loaded last so it can yield to the parts above under the sidecar prompt ceiling. No other
     // part can forge its frame: their `<repository-instructions` lookalikes are neutralized (#3873

@@ -1,4 +1,9 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import {
+  createStateCodingSessionContinuity,
+  KEIKO_CODING_SESSION_RETENTION_ENV,
+  type CodingSessionContinuity,
+} from "./coding-runtime/codingSessionContinuity.js";
 import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
@@ -4444,6 +4449,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
   readonly bootstrapCorrelationId: string;
+  /** The one native session continuity service the runtime host and the orchestrator share. */
+  readonly codingSessionContinuity: CodingSessionContinuity;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -5016,6 +5023,7 @@ function buildUiCodingRuntimeControlPlane(
   );
   return createCodingRuntimeControlPlane({
     historyStore: args.bundle.uiStore,
+    sessionContinuity: args.codingSessionContinuity,
     issueIntake: createProductionCodingRuntimeIssueIntake({
       store: args.bundle.uiStore,
       env: args.options.env,
@@ -5997,6 +6005,7 @@ function resolveProductionRuntimePorts(
   }
   const activation = resolveProductionOpenCodeActivation({
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
+    sessionContinuity: args.codingSessionContinuity,
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
@@ -6329,6 +6338,20 @@ function buildInitialGatewayState(
   };
 }
 
+/** The one native session continuity service of this server, over the state directory (S02/S03). */
+function buildCodingSessionContinuity(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  bundle: PersistenceBundle,
+): CodingSessionContinuity {
+  return createStateCodingSessionContinuity({
+    stateDir: dirname(resolvedUiDbPath),
+    retention: options.env[KEIKO_CODING_SESSION_RETENTION_ENV],
+    history: bundle.uiStore.codingHistory,
+    activityLog: processServerLogSink(),
+  });
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
@@ -6358,6 +6381,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
+  const codingSessionContinuity = buildCodingSessionContinuity(options, resolvedUiDbPath, bundle);
   const deps = assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
@@ -6374,6 +6398,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
     bootstrapCorrelationId,
+    codingSessionContinuity,
   });
   return deps;
 }

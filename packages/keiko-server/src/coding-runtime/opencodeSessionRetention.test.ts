@@ -582,6 +582,32 @@ describe("checking a retained entry out for a resuming run", () => {
 });
 
 describe("pruning the retained entries", () => {
+  it("removes the entry of a task that no longer exists with every retention, not only at startup", () => {
+    const f = fixture();
+    const live = new Set(["task-live", "task-gone"]);
+    const store = createRetainedSessionStore({
+      root: f.storeRoot,
+      now: () => f.clock.value,
+      isLiveTask: (taskId) => live.has(taskId),
+    });
+    const retainTask = (taskId: string): ReturnType<RetainedSessionStore["retain"]> =>
+      store.retain({
+        binding: binding({ taskId }),
+        sessionId: SESSION_ID,
+        directory: WORKSPACE,
+        sourceDatabase: f.source,
+      });
+    retainTask("task-gone");
+    retainTask("task-live");
+    expect(entryNames(f)).toHaveLength(2);
+    live.delete("task-gone");
+
+    const result = retainTask("task-live");
+
+    expect(result).toMatchObject({ ok: true, entryCount: 1, prunedCount: 1 });
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-live")]);
+  });
+
   it("removes expired, orphaned and unreadable entries and interrupted staging", () => {
     const f = fixture();
     for (const taskId of ["task-live", "task-old", "task-orphan"]) retain(f, { taskId });

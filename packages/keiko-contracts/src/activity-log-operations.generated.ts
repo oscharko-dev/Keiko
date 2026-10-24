@@ -7387,6 +7387,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "created",
           "continued",
+          "forked",
           "captured",
           "context-presented",
           "context-restored",

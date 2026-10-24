@@ -139,6 +139,8 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
 
 export interface ProductionOpenCodeActivationInput {
   readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
+  /** The server's native session continuity service (S02/S03, #3904); absent keeps fresh sessions. */
+  readonly sessionContinuity?: ProductionOpenCodeBackendInput["sessionContinuity"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -206,6 +208,7 @@ function activatedPorts(
   return {
     backend: createProductionOpenCodeBackend({
       historyCapture: input.historyCapture,
+      sessionContinuity: input.sessionContinuity,
       portable,
       runtimeStateRoot: input.runtimeStateDir,
       processEnv: input.env,

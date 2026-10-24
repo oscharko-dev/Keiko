@@ -1,4 +1,5 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import type {
   CodingWorkbenchAgent,
   CodingWorkbenchIssueBinding,
@@ -92,6 +93,12 @@ export interface CodingRuntimeApprovalAuthority {
 
 export interface CodingRuntimeOrchestratorDeps {
   readonly history?: CodingRuntimeHistory | undefined;
+  /**
+   * Native session continuity (S02/S03, #3904): how the orchestrator asks a run to resume a task's
+   * saved session or fork it, and learns whether the run's runtime holds the task's history itself.
+   * Absent leaves every run on a fresh session with the history replayed as context.
+   */
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
   readonly manager: CodingRuntimeManager;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly deploymentCeiling?: CodingWorkbenchRuntimeStartRequest["requestedMode"] | undefined;
