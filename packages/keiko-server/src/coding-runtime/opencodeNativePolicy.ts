@@ -497,17 +497,43 @@ const NON_EXECUTING_FLAGS: ReadonlySet<string> = new Set([
   "--question",
 ]);
 const PROGRAM_NON_EXECUTING: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["make", new Set(["-n", "-q"])],
-  ["gradle", new Set(["-m"])],
-  ["gradlew", new Set(["-m"])],
-  ["./gradlew", new Set(["-m"])],
+  ["make", new Set(["-n", "-q", "-t", "-v", "--touch"])],
+  ["gradle", new Set(["-m", "-v", "--task-graph"])],
+  ["gradlew", new Set(["-m", "-v", "--task-graph"])],
+  ["./gradlew", new Set(["-m", "-v", "--task-graph"])],
   ["npx", new Set(["list"])],
 ]);
+/** Stop at an operand: in `-fnotes` the `n` names a file, not make's dry-run switch. */
+const PROGRAM_SHORT_OPTION_OPERANDS: ReadonlyMap<string, string> = new Map([
+  ["make", "CEfIjloONW"],
+  ["gradle", "bcgIpDPx"],
+  ["gradlew", "bcgIpDPx"],
+  ["./gradlew", "bcgIpDPx"],
+]);
+
+function nonExecutingShortOptions(token: string, program: string): boolean {
+  const operands = PROGRAM_SHORT_OPTION_OPERANDS.get(program);
+  if (operands === undefined || !/^-[^-]/u.test(token)) return false;
+  const own = PROGRAM_NON_EXECUTING.get(program);
+  for (const letter of token.slice(1)) {
+    const option = `-${letter}`;
+    if (NON_EXECUTING_FLAGS.has(option) || own?.has(option)) return true;
+    if (operands.includes(letter)) return false;
+  }
+  return false;
+}
 
 function nonExecutingCheck(tokens: readonly string[]): boolean {
-  if (tokens.some((token) => NON_EXECUTING_FLAGS.has(token))) return true;
-  const own = PROGRAM_NON_EXECUTING.get(tokens[0] ?? "");
-  return own !== undefined && tokens.slice(1).some((token) => own.has(token));
+  const program = tokens[0] ?? "";
+  const own = PROGRAM_NON_EXECUTING.get(program);
+  return tokens.slice(1).some((token) => {
+    const option = token.startsWith("--") ? (token.split("=", 1)[0] ?? token) : token;
+    return (
+      NON_EXECUTING_FLAGS.has(option) ||
+      own?.has(option) === true ||
+      nonExecutingShortOptions(token, program)
+    );
+  });
 }
 
 function segmentVerificationKind(tokens: readonly string[]): VerificationKind | undefined {
