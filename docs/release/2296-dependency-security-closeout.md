@@ -74,9 +74,11 @@ On 2026-10-24 the required OSV scan newly matched the dev-only `fast-uri` 3.1.8 
 [GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h), and the dev-only `fallow`
 3.9.1 against [GHSA-h4fr-cmh5-qr62](https://github.com/advisories/GHSA-h4fr-cmh5-qr62) and
 [GHSA-jfwm-3p3c-6hx5](https://github.com/advisories/GHSA-jfwm-3p3c-6hx5). PR #4064 moves the
-existing `fast-uri` override to the patched 3.1.9 and `fallow` to 3.34.1, the patch release of the
-fixed 3.34 line; it adds the optional dev-only `fallow-type-aware` 3.34.1 (MIT) that `fallow` now
-declares. No waiver or gate threshold changed.
+existing `fast-uri` override to the patched 3.1.9. `fallow` stays at 3.9.1 under two time-boxed
+waivers (until 2026-11-21): the patched 3.34 line makes `dupes --fail-on-issues` fail, which 3.9.1
+never did, so adopting it switches on a repository-wide duplication gate (1,272 clone groups in the
+CI scope, most in generated registries). That gate decision is a separate follow-up; the waivers
+state why neither advisory reaches a user.
 
 The same day, [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685),
 [GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472) and
@@ -268,7 +270,7 @@ or peer graph).
 | `prettier`                    | root                  | 3.9.10  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `knip`                        | root                  | 6.41.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                                                       |
-| `fallow`                      | root                  | 3.34.1  | patch-deferred | 3.35.0 available; 3.34.1 fixes GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5 (2026-10-24). Backs `check:semantic-duplication`.                                                                                                                                                                                                                 |
+| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.35.0 available. The patched 3.34 line (GHSA-h4fr-cmh5-qr62, GHSA-jfwm-3p3c-6hx5) enforces `dupes --fail-on-issues`, which switches on a repository-wide gate; waived until 2026-11-21 pending that decision. Backs `check:semantic-duplication`.                                                                                           |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.11  | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.30  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                                                         |
