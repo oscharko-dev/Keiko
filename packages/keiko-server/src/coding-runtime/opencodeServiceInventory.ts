@@ -12,6 +12,12 @@
  * names an operation the producer no longer serves, and when the admitted set stops equalling the
  * pinned protocol surface; the real-binary test detects drift of the live document against the
  * fixture, and `diffOpenCodeServiceOperations` names what an upgrade added, removed or moved.
+ *
+ * The same holds for the producer's configuration (#3903 AC5, #3908 AC2): the fixture lists every
+ * setting path its configuration schema declares, and `OPENCODE_CONFIGURATION_DISPOSITIONS` says
+ * of each one whether Keiko composes it, a named Keiko product owner provides it, or it stays
+ * unavailable for a closed reason with its owning issue. An unavailable setting keeps the
+ * producer's own default, because no configuration layer the runtime loads can set it.
  */
 import { OPENCODE_V2_APPROVED_ENDPOINTS } from "./opencodeProtocolSurface.js";
 
@@ -29,6 +35,8 @@ export interface OpenCodeServiceInventory {
   readonly operations: readonly OpenCodeServiceOperation[];
   /** Leaf CLI command paths (`auth login`); absent for a version whose binary was not captured. */
   readonly cliCommands?: readonly string[];
+  /** Every setting path of the configuration schema (`extractOpenCodeConfigurationPaths`). */
+  readonly configurationPaths?: readonly string[];
 }
 
 const OPERATION_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
@@ -96,20 +104,133 @@ function isOperation(value: unknown): value is OpenCodeServiceOperation {
   );
 }
 
+const INVENTORY_MALFORMED = "opencode-service-inventory-malformed";
+
+function optionalNames(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new TypeError(INVENTORY_MALFORMED);
+  }
+  return value;
+}
+
 /** Parses a committed inventory fixture, refusing any shape other than the one written. */
 export function parseOpenCodeServiceInventory(json: string): OpenCodeServiceInventory {
   const parsed = record(JSON.parse(json) as unknown);
   const operations = parsed?.operations;
-  const cliCommands = parsed?.cliCommands;
   if (typeof parsed?.version !== "string" || !Array.isArray(operations)) {
-    throw new TypeError("opencode-service-inventory-malformed");
+    throw new TypeError(INVENTORY_MALFORMED);
   }
-  if (!operations.every(isOperation)) throw new TypeError("opencode-service-inventory-malformed");
-  if (cliCommands === undefined) return { version: parsed.version, operations };
-  if (!Array.isArray(cliCommands) || !cliCommands.every((c) => typeof c === "string")) {
-    throw new TypeError("opencode-service-inventory-malformed");
-  }
-  return { version: parsed.version, operations, cliCommands };
+  if (!operations.every(isOperation)) throw new TypeError(INVENTORY_MALFORMED);
+  const cliCommands = optionalNames(parsed.cliCommands);
+  const configurationPaths = optionalNames(parsed.configurationPaths);
+  return {
+    version: parsed.version,
+    operations,
+    ...(cliCommands === undefined ? {} : { cliCommands }),
+    ...(configurationPaths === undefined ? {} : { configurationPaths }),
+  };
+}
+
+const CONFIGURATION_ROOT_SCHEMA = "Config.InfoEncoded";
+const SCHEMA_REFERENCE_PREFIX = "#/components/schemas/";
+const SCHEMA_UNIONS = ["anyOf", "oneOf", "allOf"] as const;
+
+interface SchemaWalk {
+  readonly schemas: Readonly<Record<string, unknown>>;
+  readonly paths: Set<string>;
+}
+
+interface ResolvedSchema {
+  readonly schema: Readonly<Record<string, unknown>>;
+  /** The references expanded on the way here: a reference is expanded once per path. */
+  readonly expanded: readonly string[];
+}
+
+function resolveSchema(
+  node: unknown,
+  expanded: readonly string[],
+  walk: SchemaWalk,
+): ResolvedSchema | undefined {
+  const value = record(node);
+  if (value === undefined) return undefined;
+  const reference = value.$ref;
+  if (typeof reference !== "string") return { schema: value, expanded };
+  if (expanded.includes(reference)) return undefined;
+  const target = reference.startsWith(SCHEMA_REFERENCE_PREFIX)
+    ? record(walk.schemas[reference.slice(SCHEMA_REFERENCE_PREFIX.length)])
+    : undefined;
+  if (target === undefined) throw new TypeError("opencode-configuration-reference-unresolved");
+  return { schema: target, expanded: [...expanded, reference] };
+}
+
+/** The alternatives and the array items of a schema: each declares settings at the same path. */
+function schemaBranches(schema: Readonly<Record<string, unknown>>): readonly unknown[] {
+  const unions = SCHEMA_UNIONS.flatMap((key) => {
+    const branches = schema[key];
+    return Array.isArray(branches) ? (branches as readonly unknown[]) : [];
+  });
+  return schema.items === undefined ? unions : [...unions, schema.items];
+}
+
+function settingPath(prefix: string, key: string): string {
+  return prefix === "" ? key : `${prefix}.${key}`;
+}
+
+function visitSetting(
+  node: unknown,
+  path: string,
+  expanded: readonly string[],
+  walk: SchemaWalk,
+): void {
+  walk.paths.add(path);
+  visitSchema(node, path, expanded, walk);
+}
+
+function visitSchema(
+  node: unknown,
+  prefix: string,
+  expanded: readonly string[],
+  walk: SchemaWalk,
+): void {
+  const resolved = resolveSchema(node, expanded, walk);
+  if (resolved === undefined) return;
+  const { schema } = resolved;
+  for (const branch of schemaBranches(schema)) visitSchema(branch, prefix, resolved.expanded, walk);
+  for (const [key, child] of Object.entries(record(schema.properties) ?? {}))
+    visitSetting(child, settingPath(prefix, key), resolved.expanded, walk);
+  const named = record(schema.additionalProperties);
+  if (named !== undefined) visitSetting(named, settingPath(prefix, "*"), resolved.expanded, walk);
+}
+
+/**
+ * Every setting the producer's configuration schema declares (#3903 AC5, #3908 AC2): the dotted
+ * path of each named property, with `*` where the configuration names its own key (an agent, a
+ * provider, a header). It follows `$ref`, unions and array items, so an array of rules declares
+ * `permissions.action` and a union declares the settings of every alternative; a reference is
+ * expanded once per path, so a recursive schema ends. Derived from the producer's own
+ * `/openapi.json`, never typed by hand, and ordered by code unit.
+ */
+export function extractOpenCodeConfigurationPaths(document: unknown): readonly string[] {
+  const schemas = record(record(record(document)?.components)?.schemas);
+  if (schemas?.[CONFIGURATION_ROOT_SCHEMA] === undefined)
+    throw new TypeError("opencode-configuration-schema-missing");
+  const walk: SchemaWalk = { schemas, paths: new Set() };
+  visitSchema({ $ref: `${SCHEMA_REFERENCE_PREFIX}${CONFIGURATION_ROOT_SCHEMA}` }, "", [], walk);
+  return [...walk.paths].sort(compareCodeUnits);
+}
+
+/** The setting paths an upgrade added and removed; a removal can break a setting Keiko writes. */
+export function diffOpenCodeConfigurationPaths(
+  previous: readonly string[],
+  next: readonly string[],
+): { readonly added: readonly string[]; readonly removed: readonly string[] } {
+  const before: ReadonlySet<string> = new Set(previous);
+  const after: ReadonlySet<string> = new Set(next);
+  return {
+    added: next.filter((path) => !before.has(path)),
+    removed: previous.filter((path) => !after.has(path)),
+  };
 }
 
 /** An operation whose `operationId` stayed but whose method or path moved. */
@@ -202,21 +323,46 @@ export type OpenCodeServiceDisposition =
       readonly owner: number;
     };
 
-export interface OpenCodeServiceDispositionEntry {
-  /** An `operationId` of the HTTP inventory, or a leaf command path of the CLI inventory. */
+type KeikoOperationDisposition = Extract<
+  OpenCodeServiceDisposition,
+  { readonly kind: "keiko-operation" }
+>;
+type RefusedDisposition = Extract<OpenCodeServiceDisposition, { readonly kind: "refused" }>;
+
+/**
+ * Of one configuration setting: Keiko composes it for every native run (`keiko-set`, the value
+ * `createFixedOpenCodeV2Config` writes), a named Keiko product owner provides what it configures,
+ * or it is refused for a closed reason with its owner and keeps the producer's default.
+ */
+export type OpenCodeConfigurationDisposition =
+  { readonly kind: "keiko-set" } | KeikoOperationDisposition | RefusedDisposition;
+
+interface OpenCodeDispositionEntry<D> {
+  /** An `operationId`, a leaf command path, or a configuration setting path. */
   readonly name: string;
-  readonly disposition: Exclude<OpenCodeServiceDisposition, { readonly kind: "admitted" }>;
+  readonly disposition: D;
   /** Capability-matrix rows (`docs/qa/opencode-capability-parity.md`) that carry the status. */
   readonly rows: readonly string[];
 }
 
-interface DispositionGroup {
-  readonly disposition: OpenCodeServiceDispositionEntry["disposition"];
+export type OpenCodeServiceDispositionEntry = OpenCodeDispositionEntry<
+  Exclude<OpenCodeServiceDisposition, { readonly kind: "admitted" }>
+>;
+
+export type OpenCodeConfigurationDispositionEntry =
+  OpenCodeDispositionEntry<OpenCodeConfigurationDisposition>;
+
+interface DispositionGroup<D> {
+  readonly disposition: D;
   readonly rows: readonly string[];
   readonly names: readonly string[];
 }
 
-function covered(by: string, rows: string[], names: string[]): DispositionGroup {
+function covered(
+  by: string,
+  rows: string[],
+  names: string[],
+): DispositionGroup<OpenCodeServiceDispositionEntry["disposition"]> {
   return { disposition: { kind: "covered", by }, rows, names };
 }
 
@@ -225,7 +371,7 @@ function keikoOperation(
   source: string,
   rows: string[],
   names: string[],
-): DispositionGroup {
+): DispositionGroup<KeikoOperationDisposition> {
   return { disposition: { kind: "keiko-operation", operation, source }, rows, names };
 }
 
@@ -234,11 +380,20 @@ function refused(
   owner: number,
   rows: string[],
   names: string[],
-): DispositionGroup {
+): DispositionGroup<RefusedDisposition> {
   return { disposition: { kind: "refused", reason, owner }, rows, names };
 }
 
-function flatten(groups: readonly DispositionGroup[]): readonly OpenCodeServiceDispositionEntry[] {
+function keikoSet(
+  rows: string[],
+  names: string[],
+): DispositionGroup<OpenCodeConfigurationDisposition> {
+  return { disposition: { kind: "keiko-set" }, rows, names };
+}
+
+function flatten<D>(
+  groups: readonly DispositionGroup<D>[],
+): readonly OpenCodeDispositionEntry<D>[] {
   return groups.flatMap(({ disposition, rows, names }) =>
     names.map((name) => ({ name, disposition, rows })),
   );
@@ -249,7 +404,9 @@ function flatten(groups: readonly DispositionGroup[]): readonly OpenCodeServiceD
  * listed: `openCodeServiceDisposition` derives them from the pinned protocol surface, so this table
  * cannot restate (and drift from) it.
  */
-export const OPENCODE_SERVICE_DISPOSITIONS = flatten([
+export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
+  OpenCodeServiceDispositionEntry["disposition"]
+>([
   covered("session.list", ["S01"], ["session.get"]),
   covered("session.message.list", ["S01"], ["session.message.get"]),
   covered("form.list", ["T18"], ["session.form.list", "session.form.get"]),
@@ -462,7 +619,7 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten([
  * Every 2.1.4 CLI leaf command (`opencode --help`, walked recursively), by command path. `serve` is
  * the one surface Keiko starts; the rest are reached, if at all, through Keiko's own operations.
  */
-export const OPENCODE_CLI_DISPOSITIONS = flatten([
+export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry["disposition"]>([
   keikoOperation(
     "Coding runtime host starts the service",
     "coding-runtime/opencodeLaunchProfile.ts",
@@ -526,6 +683,373 @@ export const OPENCODE_CLI_DISPOSITIONS = flatten([
   refused("not-yet-implemented", 3904, ["S02"], ["session delete"]),
   refused("leaves-machine", 3904, ["S06"], ["upgrade"]),
 ]);
+
+/**
+ * Every setting path of the 2.1.4 configuration schema, by name. `keiko-set` is exactly what the
+ * native profile composes (the inventory test derives it from `createFixedOpenCodeV2Config` and the
+ * MCP admission, so this table cannot claim a setting the runtime is not given). A refused setting
+ * keeps the producer's own default: the runtime loads no configuration layer that could set it
+ * (`OPENCODE_DISABLE_PROJECT_CONFIG`, a private `HOME`), and the owner issue holds the decision.
+ */
+export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfigurationDisposition>([
+  keikoSet(["S06"], ["update"]),
+  // The gateway-only provider policy (`OPENCODE_GATEWAY_PROVIDER_POLICIES`).
+  keikoSet(["S11"], ["policies", "policies.action", "policies.effect", "policies.resource"]),
+  keikoSet(["S05"], ["share"]),
+  keikoSet(["S04"], ["snapshots"]),
+  keikoSet(["C07"], ["formatter"]),
+  keikoSet(["C01"], ["default_agent"]),
+  keikoSet(
+    ["S08"],
+    [
+      "compaction",
+      "compaction.auto",
+      "compaction.buffer",
+      "compaction.keep",
+      "compaction.keep.tokens",
+    ],
+  ),
+  keikoSet(["S09"], ["tool_output", "tool_output.max_bytes"]),
+  keikoSet(["T19"], ["experimental", "experimental.todo"]),
+  keikoSet(
+    ["C04"],
+    [
+      "mcp",
+      "mcp.servers",
+      "mcp.servers.*",
+      "mcp.servers.*.command",
+      "mcp.servers.*.oauth",
+      "mcp.servers.*.type",
+      "mcp.servers.*.url",
+    ],
+  ),
+  keikoSet(
+    ["S16", "C08"],
+    ["permissions", "permissions.action", "permissions.effect", "permissions.resource"],
+  ),
+  keikoSet(
+    ["S11"],
+    [
+      "model",
+      "providers",
+      "providers.*",
+      "providers.*.headers",
+      "providers.*.headers.*",
+      "providers.*.models",
+      "providers.*.models.*",
+      "providers.*.models.*.capabilities",
+      "providers.*.models.*.capabilities.input",
+      "providers.*.models.*.capabilities.output",
+      "providers.*.models.*.capabilities.tools",
+      "providers.*.models.*.cost",
+      "providers.*.models.*.cost.input",
+      "providers.*.models.*.cost.output",
+      "providers.*.models.*.limit",
+      "providers.*.models.*.limit.context",
+      "providers.*.models.*.limit.input",
+      "providers.*.models.*.limit.output",
+      "providers.*.models.*.name",
+      "providers.*.name",
+      "providers.*.package",
+      "providers.*.settings",
+      "providers.*.settings.*",
+      "providers.*.settings.chunkTimeout",
+    ],
+  ),
+  keikoOperation(
+    "Repository items, sanitized Markdown subagents",
+    "coding-runtime/codingRuntimeRepositoryItems.ts",
+    ["C01", "C06"],
+    ["agents", "agents.*", "agents.*.description", "agents.*.mode", "agents.*.system"],
+  ),
+  keikoOperation(
+    "Repository items, sanitized Markdown commands",
+    "coding-runtime/codingRuntimeRepositoryItems.ts",
+    ["C02", "C06"],
+    [
+      "commands",
+      "commands.*",
+      "commands.*.agent",
+      "commands.*.description",
+      "commands.*.subagent",
+      "commands.*.subtask",
+      "commands.*.template",
+    ],
+  ),
+  keikoOperation(
+    "Operator MCP server registry",
+    "coding-runtime/opencodeNativeMcp.ts",
+    ["C04"],
+    ["mcp.servers.*.disabled", "mcp.servers.*.environment", "mcp.servers.*.environment.*"],
+  ),
+  refused("keiko-owns-configuration", 3903, ["C06"], ["$schema"]),
+  refused("keiko-owns-configuration", 3901, ["T10", "T11"], ["shell"]),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["S11", "S12"],
+    ["model.model", "model.providerID", "model.variant"],
+  ),
+  refused("leaves-machine", 3904, ["S05"], ["enterprise", "enterprise.url"]),
+  refused("keiko-owns-configuration", 3906, ["C06"], ["username"]),
+  refused(
+    "keiko-owns-authority",
+    3903,
+    ["S16", "C06"],
+    [
+      "experimental.policies",
+      "experimental.policies.action",
+      "experimental.policies.effect",
+      "experimental.policies.resource",
+    ],
+  ),
+  refused(
+    "not-yet-implemented",
+    3903,
+    ["C01"],
+    ["agents.*.color", "agents.*.disabled", "agents.*.hidden", "agents.*.steps"],
+  ),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["C01", "S11"],
+    [
+      "agents.*.model",
+      "agents.*.model.model",
+      "agents.*.model.providerID",
+      "agents.*.model.variant",
+      "agents.*.request",
+      "agents.*.request.body",
+      "agents.*.request.headers",
+      "agents.*.request.headers.*",
+    ],
+  ),
+  refused(
+    "keiko-owns-authority",
+    3903,
+    ["C01", "S16"],
+    [
+      "agents.*.permissions",
+      "agents.*.permissions.action",
+      "agents.*.permissions.effect",
+      "agents.*.permissions.resource",
+    ],
+  ),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["C02", "S11"],
+    [
+      "commands.*.model",
+      "commands.*.model.model",
+      "commands.*.model.providerID",
+      "commands.*.model.variant",
+    ],
+  ),
+  refused(
+    "not-yet-implemented",
+    3900,
+    ["C07"],
+    [
+      "formatter.*",
+      "formatter.*.command",
+      "formatter.*.disabled",
+      "formatter.*.environment",
+      "formatter.*.environment.*",
+      "formatter.*.extensions",
+    ],
+  ),
+  refused(
+    "not-yet-implemented",
+    3900,
+    ["T20"],
+    [
+      "lsp",
+      "lsp.*",
+      "lsp.*.command",
+      "lsp.*.disabled",
+      "lsp.*.env",
+      "lsp.*.env.*",
+      "lsp.*.extensions",
+      "lsp.*.initialization",
+    ],
+  ),
+  refused("keiko-owns-configuration", 3900, ["C03"], ["instructions"]),
+  refused("keiko-owns-configuration", 3903, ["T17", "C06"], ["skills"]),
+  refused("not-yet-implemented", 3903, ["C04", "T21"], ["mcp.servers.*.codemode"]),
+  refused("keiko-owns-workspace-binding", 3903, ["C04"], ["mcp.servers.*.cwd"]),
+  refused(
+    "keiko-owns-credentials",
+    3903,
+    ["C04"],
+    [
+      "mcp.servers.*.headers",
+      "mcp.servers.*.headers.*",
+      "mcp.servers.*.oauth.auth_server_metadata_url",
+      "mcp.servers.*.oauth.callback_port",
+      "mcp.servers.*.oauth.client_id",
+      "mcp.servers.*.oauth.client_secret",
+      "mcp.servers.*.oauth.redirect_uri",
+      "mcp.servers.*.oauth.scope",
+    ],
+  ),
+  refused(
+    "not-yet-implemented",
+    3903,
+    ["C04"],
+    [
+      "mcp.servers.*.protocol",
+      "mcp.servers.*.timeout",
+      "mcp.servers.*.timeout.catalog",
+      "mcp.servers.*.timeout.execution",
+      "mcp.servers.*.timeout.startup",
+      "mcp.timeout",
+      "mcp.timeout.catalog",
+      "mcp.timeout.execution",
+      "mcp.timeout.startup",
+    ],
+  ),
+  refused(
+    "keiko-owns-configuration",
+    3906,
+    ["S14"],
+    [
+      "media",
+      "media.image",
+      "media.image.auto_resize",
+      "media.image.max_base64_bytes",
+      "media.image.max_height",
+      "media.image.max_width",
+    ],
+  ),
+  refused("keiko-owns-authority", 3903, ["C05"], ["plugins", "plugins.options", "plugins.package"]),
+  refused(
+    "keiko-owns-workspace-binding",
+    3902,
+    ["C08"],
+    [
+      "references",
+      "references.*",
+      "references.*.branch",
+      "references.*.description",
+      "references.*.hidden",
+      "references.*.path",
+    ],
+  ),
+  refused("leaves-machine", 3902, ["C08"], ["references.*.repository"]),
+  refused("keiko-owns-configuration", 3899, ["S09"], ["tool_output.max_lines"]),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["S10"],
+    ["warming", "warming.duration", "warming.interval", "warming.prompt"],
+  ),
+  refused("keiko-owns-configuration", 3900, ["C06"], ["watcher", "watcher.ignore"]),
+  refused("leaves-machine", 3900, ["T15"], ["websearch", "websearch.provider"]),
+  refused("keiko-owns-workspace-binding", 3902, ["S17"], ["worktree", "worktree.directory"]),
+  refused("experimental-unadmitted", 3904, ["S08"], ["experimental.background_compaction"]),
+  refused("experimental-unadmitted", 3899, ["S01"], ["experimental.location_idle_timeout"]),
+  refused("experimental-unadmitted", 3901, ["S16"], ["experimental.portable_shell_scanner"]),
+  refused("experimental-unadmitted", 3903, ["T16"], ["experimental.subagent_depth"]),
+  refused(
+    "keiko-owns-credentials",
+    3905,
+    ["S11"],
+    [
+      "providers.*.env",
+      "providers.*.models.*.headers",
+      "providers.*.models.*.headers.*",
+      "providers.*.models.*.variants.headers",
+      "providers.*.models.*.variants.headers.*",
+    ],
+  ),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["S12"],
+    [
+      "providers.*.compatibility.reasoningField",
+      "providers.*.models.*.capabilities.reasoning",
+      "providers.*.models.*.capabilities.reasoning.budget",
+      "providers.*.models.*.capabilities.reasoning.budget.max",
+      "providers.*.models.*.capabilities.reasoning.budget.min",
+      "providers.*.models.*.capabilities.reasoning.effort",
+      "providers.*.models.*.capabilities.reasoning.supported",
+      "providers.*.models.*.capabilities.reasoning.toggle",
+      "providers.*.models.*.compatibility.reasoningField",
+      "providers.*.models.*.variants",
+      "providers.*.models.*.variants.body",
+      "providers.*.models.*.variants.id",
+      "providers.*.models.*.variants.settings",
+      "providers.*.models.*.variants.settings.*",
+      "providers.*.models.*.variants.settings.compaction",
+      "providers.*.models.*.variants.settings.compaction.type",
+      "providers.*.models.*.variants.settings.encoding",
+    ],
+  ),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["S11"],
+    [
+      "providers.*.body",
+      "providers.*.canonical",
+      "providers.*.compatibility",
+      "providers.*.compatibility.cacheFormat",
+      "providers.*.compatibility.maxTokensField",
+      "providers.*.compatibility.requireAssistantAfterTool",
+      "providers.*.compatibility.requireFinishReason",
+      "providers.*.compatibility.requireReasoning",
+      "providers.*.compatibility.streamUsage",
+      "providers.*.compatibility.supportsPromptCacheKey",
+      "providers.*.models.*.body",
+      "providers.*.models.*.capabilities.temperature",
+      "providers.*.models.*.compatibility",
+      "providers.*.models.*.compatibility.cacheFormat",
+      "providers.*.models.*.compatibility.maxTokensField",
+      "providers.*.models.*.compatibility.requireAssistantAfterTool",
+      "providers.*.models.*.compatibility.requireFinishReason",
+      "providers.*.models.*.compatibility.requireReasoning",
+      "providers.*.models.*.compatibility.streamUsage",
+      "providers.*.models.*.compatibility.supportsEffortUpdates",
+      "providers.*.models.*.compatibility.supportsPromptCacheKey",
+      "providers.*.models.*.compatibility.supportsThinkingBlockBinding",
+      "providers.*.models.*.cost.cache",
+      "providers.*.models.*.cost.cache.read",
+      "providers.*.models.*.cost.cache.write",
+      "providers.*.models.*.cost.tier",
+      "providers.*.models.*.cost.tier.size",
+      "providers.*.models.*.cost.tier.type",
+      "providers.*.models.*.disabled",
+      "providers.*.models.*.family",
+      "providers.*.models.*.modelID",
+      "providers.*.models.*.package",
+      "providers.*.models.*.releaseDate",
+      "providers.*.models.*.settings",
+      "providers.*.models.*.settings.*",
+      "providers.*.models.*.settings.compaction",
+      "providers.*.models.*.settings.compaction.type",
+      "providers.*.models.*.settings.encoding",
+      "providers.*.settings.compaction",
+      "providers.*.settings.compaction.type",
+      "providers.*.settings.encoding",
+      "providers.*.settings.headerTimeout",
+      "providers.*.settings.timeout",
+      "providers.*.settings.transport",
+    ],
+  ),
+]);
+
+const CONFIGURATION_DISPOSITIONS: ReadonlyMap<string, OpenCodeConfigurationDisposition> = new Map(
+  OPENCODE_CONFIGURATION_DISPOSITIONS.map((entry) => [entry.name, entry.disposition]),
+);
+
+/** The disposition of one configuration setting path, or `undefined` when none exists. */
+export function openCodeConfigurationDisposition(
+  path: string,
+): OpenCodeConfigurationDisposition | undefined {
+  return CONFIGURATION_DISPOSITIONS.get(path);
+}
 
 const ADMITTED_ENDPOINTS: ReadonlySet<string> = new Set(OPENCODE_V2_APPROVED_ENDPOINTS);
 const EXPLICIT_DISPOSITIONS: ReadonlyMap<string, OpenCodeServiceDispositionEntry> = new Map(

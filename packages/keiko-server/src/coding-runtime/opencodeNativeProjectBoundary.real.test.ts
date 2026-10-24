@@ -20,6 +20,8 @@ import {
 } from "@oscharko-dev/keiko-sandbox";
 import {
   buildOpenCodeLaunchProfile,
+  OPENCODE_RUNTIME_MODEL_ALIAS,
+  OPENCODE_RUNTIME_PROVIDER_ID,
   openCodeConfigDirectory,
   openCodePlanDirectory,
 } from "./opencodeLaunchProfile.js";
@@ -326,6 +328,8 @@ interface LaunchOptions {
   readonly protectedConfig: "on" | "off";
   /** `on` loads the throwaway observation plugin beside the policy plugin (never product code). */
   readonly probe: "on" | "off";
+  /** `off` is the negative control: no gateway-only provider policy and the free models on. */
+  readonly providerPolicy: "on" | "off";
 }
 
 const PRODUCTION_LAUNCH: LaunchOptions = {
@@ -333,7 +337,31 @@ const PRODUCTION_LAUNCH: LaunchOptions = {
   policyPlugin: "present",
   protectedConfig: "on",
   probe: "off",
+  providerPolicy: "on",
 };
+
+/** A configuration document without its provider policy (the negative control shape only). */
+function withoutProviderPolicy(json: string): string {
+  const value = JSON.parse(json) as Record<string, unknown>;
+  return JSON.stringify(
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== "policies")),
+  );
+}
+
+/** The production env, or the control's: no provider policy and OpenCode's free models on. */
+function providerPolicyEnvironment(
+  env: Readonly<Record<string, string>>,
+  options: LaunchOptions,
+): Record<string, string> {
+  if (options.providerPolicy === "on") return { ...env };
+  const control = Object.fromEntries(
+    Object.entries(env).filter(([name]) => name !== "OPENCODE_DISABLE_FREE_MODELS"),
+  );
+  const binding = env.OPENCODE_CONFIG_CONTENT;
+  return binding === undefined
+    ? control
+    : { ...control, OPENCODE_CONFIG_CONTENT: withoutProviderPolicy(binding) };
+}
 
 /** The production env, optionally without the project-layer switch (the control shape only). */
 function childEnvironment(
@@ -343,7 +371,7 @@ function childEnvironment(
   path: string,
 ): Record<string, string> {
   const env = Object.fromEntries(
-    Object.entries(profileEnv).filter(
+    Object.entries(providerPolicyEnvironment(profileEnv, options)).filter(
       ([name]) => options.projectLayer === "off" || name !== "OPENCODE_DISABLE_PROJECT_CONFIG",
     ),
   );
@@ -407,7 +435,9 @@ function launch(
     },
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
-  materializePrivateConfiguration(fixture.state, profile.config, options);
+  const config =
+    options.providerPolicy === "on" ? profile.config : withoutProviderPolicy(profile.config);
+  materializePrivateConfiguration(fixture.state, config, options);
   const git = resolveDarwinGitExecutable();
   const policy = createRuntimeGatewayConfinement({
     gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
@@ -1053,6 +1083,17 @@ interface AgentRule {
   readonly effect: string;
 }
 
+/** The models the runtime's catalog offers (`GET /api/model`), as provider and model ids. */
+async function catalogModels(run: Run): Promise<readonly string[]> {
+  const query = `location%5Bdirectory%5D=${encodeURIComponent(run.fixture.workspace)}`;
+  const listed = object(await run.service.request("GET", `/api/model?${query}`));
+  const models = Array.isArray(listed?.data) ? listed.data : [];
+  return models
+    .map(object)
+    .map((model) => `${String(model?.providerID)}/${String(model?.id)}`)
+    .sort();
+}
+
 /** The effective rules the producer reports for one built-in agent (`GET /api/agent`). */
 async function agentRules(run: Run, agent: string): Promise<readonly AgentRule[]> {
   let rules: unknown;
@@ -1092,6 +1133,44 @@ function writeCall(path: string, content: string): ScriptedCall {
 // last match won, so Plan's `edit` denial (and Explore's read-only floor, General's subagent
 // restriction) was replaced before Keiko's hook ever ran. Keiko now writes no rule naming an
 // ordinary action: the producer's agent selection stays independent of Keiko's mode.
+// Parity row S11: the runtime knows one provider, the Model Gateway. Without the producer's
+// provider policy the original executable lists OpenCode's hosted free models and discovers local
+// model servers on their default loopback ports; the control proves this fixture can fail.
+describe("pinned native OpenCode provider catalog", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const GATEWAY_MODEL = `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`;
+
+  it.skipIf(skip)(
+    "lists exactly the gateway model: no hosted free model and no other provider",
+    async () => {
+      await withRun({}, async (run) => {
+        await expect.poll(() => catalogModels(run), { timeout: 15_000 }).toContain(GATEWAY_MODEL);
+        // Discovery is asynchronous: the catalog must still hold the one model a moment later.
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        expect(await catalogModels(run)).toEqual([GATEWAY_MODEL]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "control: without the provider policy the catalog offers models that bypass the gateway",
+    async () => {
+      await withRun({ providerPolicy: "off" }, async (run) => {
+        await expect
+          .poll(async () => (await catalogModels(run)).length, { timeout: 15_000 })
+          .toBeGreaterThan(1);
+        const models = await catalogModels(run);
+        expect(models).toContain(GATEWAY_MODEL);
+        expect(models.some((model) => !model.startsWith(`${OPENCODE_RUNTIME_PROVIDER_ID}/`))).toBe(
+          true,
+        );
+      });
+    },
+    120_000,
+  );
+});
+
 describe("pinned native OpenCode built-in agent restrictions", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 

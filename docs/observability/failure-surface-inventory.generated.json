@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "008bee0fc62ad188f7825715f100194e98b5196fe879d8fbadbf341924b0f82c"
+    "catalogDigest": "e9a006025ed2ca562ee33418c86421539d931d82a8d711d05b2b17362fa869e2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 575,
-    "proofCount": 588,
-    "resolvedProofCount": 587,
+    "operationCount": 576,
+    "proofCount": 589,
+    "resolvedProofCount": 589,
     "failureClassCount": 360,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -349,6 +349,7 @@
         "coding-runtime.operator-decision",
         "coding-runtime.project-memory.context",
         "coding-runtime.prompt-inputs.settled",
+        "coding-runtime.provider-policy.bound",
         "coding-runtime.question.authority-resolution-failed",
         "coding-runtime.question.list-failed",
         "coding-runtime.question.list-revision-rebound",
@@ -1470,7 +1471,9 @@
     "coding-runtime.initialization-transport.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
-    "coding-runtime.mentions.listed.emitted-line": [],
+    "coding-runtime.mentions.listed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
+    ],
     "coding-runtime.native-formatter.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
@@ -1503,6 +1506,9 @@
     ],
     "coding-runtime.prompt-inputs.settled.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodePromptInputs.test.ts"
+    ],
+    "coding-runtime.provider-policy.bound.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.question.authority-resolution-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
@@ -2870,12 +2876,5 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": [
-    {
-      "code": "proof-unresolved",
-      "site": "proofs.coding-runtime.mentions.listed.emitted-line",
-      "detail": "coding-runtime.mentions.listed",
-      "correctiveAction": "Add an owning-package test that calls expectActivityLogProof with a production-persisted line."
-    }
-  ]
+  "violations": []
 }

@@ -94,6 +94,24 @@ export interface OpenCodeLaunchProfileInput {
 export type OpenCodeOptionalToolName =
   "keiko_research_fetch" | "keiko_skill_discover" | "keiko_skill" | "keiko_child_agent";
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
+
+/** The one provider of every OpenCode run: the Model Gateway binding below. */
+export const OPENCODE_RUNTIME_PROVIDER_ID = "keiko-runtime";
+
+/**
+ * The producer's own provider policy, fixed on every V2 profile: only the gateway-bound provider may
+ * be used. Without it the pinned 2.1.4 runtime lists OpenCode's hosted free models and discovers
+ * local servers such as Ollama on their default loopback ports (original executable), each a model
+ * route that bypasses the Model Gateway. Statements are ordered; the last match wins.
+ */
+export const OPENCODE_GATEWAY_PROVIDER_POLICIES = Object.freeze([
+  Object.freeze({ action: "provider.use", resource: "*", effect: "deny" }),
+  Object.freeze({
+    action: "provider.use",
+    resource: OPENCODE_RUNTIME_PROVIDER_ID,
+    effect: "allow",
+  }),
+]);
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
@@ -190,6 +208,11 @@ export function buildOpenCodeLaunchProfile(
       // tools. Registry retries cannot succeed inside the gateway-only network boundary. Keep its
       // package manager offline so absent optional packages fail promptly, without registry egress.
       npm_config_offline: "true",
+      // Keeps OpenCode's hosted free models out of the catalog (proven on the original executable);
+      // the provider policy above refuses them too. The model catalog is never fetched from
+      // models.dev: the one model is the gateway's, and a firewalled customer has no route there.
+      OPENCODE_DISABLE_FREE_MODELS: "1",
+      OPENCODE_DISABLE_MODELS_FETCH: "1",
       OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
       OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
     }),
@@ -393,9 +416,10 @@ export function createFixedOpenCodeV2Config(
     update: "disable",
     share: "disabled",
     snapshots: false,
-    model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, false),
+    policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions,
@@ -445,9 +469,10 @@ function createNativeOpenCodeV2Config(
     // Always explicit: the producer's own default is off, and a disabled run must stay off even if
     // a later layer or release changes that default.
     formatter: openCodeNativeFormatterSetting(formatter),
-    model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, contextGeometry.imageInput === true),
+    policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
@@ -474,7 +499,7 @@ function createNativeOpenCodeV2Config(
 
 /**
  * The fields no layer below Keiko may change: the single gateway-bound provider and model, the
- * mode-independent permission floor, the self-update and sharing switches, and the built-in
+ * provider policy that admits no other provider, the mode-independent permission floor, the self-update and sharing switches, and the built-in
  * formatter setting (a child process the permission hook never sees, so no layer may turn it on
  * for a mode that must not run it; see `openCodeNativeFormatterDisposition`), and the MCP servers
  * (an MCP server is a process or a remote endpoint, so only the operator's registry names one;
@@ -492,6 +517,7 @@ const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
   "model",
   "default_agent",
   "providers",
+  "policies",
   "permissions",
 ] as const;
 
@@ -511,7 +537,7 @@ function fixedOpenCodeV2Provider(
   imageInput: boolean,
 ): Readonly<Record<string, unknown>> {
   return {
-    "keiko-runtime": {
+    [OPENCODE_RUNTIME_PROVIDER_ID]: {
       name: "Keiko Governed Coding Gateway",
       package: "@opencode/ai/providers/openai-compatible",
       models: {

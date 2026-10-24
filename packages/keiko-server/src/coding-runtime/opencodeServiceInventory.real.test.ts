@@ -13,6 +13,7 @@ import {
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
+  extractOpenCodeConfigurationPaths,
   extractOpenCodeServiceOperations,
   parseOpenCodeCliSubcommands,
   parseOpenCodeServiceInventory,
@@ -23,10 +24,11 @@ import {
 } from "./opencodeV2HttpClient.js";
 
 /**
- * Drift detection for the complete service inventory (#3908 AC4, #3899 AC3). The pinned executable
- * serves its OpenAPI document and its `--help` tree; both must equal the committed producer-derived
- * fixture, so a producer that adds, removes or moves an operation or a command fails here before
- * anyone admits it. Run with KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set;
+ * Drift detection for the complete service inventory (#3908 AC4, #3899 AC3) and its configuration
+ * settings (#3903 AC5, #3908 AC2). The pinned executable serves its OpenAPI document and its
+ * `--help` tree; the operations, the commands and the setting paths of its configuration schema
+ * must equal the committed producer-derived fixture, so a producer that adds, removes or moves one
+ * fails here before anyone admits it. Run with KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set;
  * otherwise it is skipped. After an upgrade, KEIKO_WRITE_OPENCODE_SERVICE_INVENTORY_FIXTURE=1
  * rewrites the fixture of the running version (format it with prettier); the unit test then names
  * every added operation or command that still needs a disposition.
@@ -171,6 +173,7 @@ describe("pinned OpenCode complete service inventory", () => {
           version: OPENCODE_PINNED_VERSION,
           operations: extractOpenCodeServiceOperations(document),
           cliCommands: walkCli(binary, root).sort(),
+          configurationPaths: extractOpenCodeConfigurationPaths(document),
         };
         if (WRITE_FIXTURE)
           writeFileSync(fixtureUrl(live.version), `${JSON.stringify(live, null, 2)}\n`);
@@ -179,6 +182,7 @@ describe("pinned OpenCode complete service inventory", () => {
         );
         expect(live.operations).toEqual(committed.operations);
         expect(live.cliCommands).toEqual(committed.cliCommands);
+        expect(live.configurationPaths).toEqual(committed.configurationPaths);
         // The admitted subset of the same live document still projects to the pinned digest.
         expect(projectOpenCodeV2ProtocolSurface(document).digest).toBe(
           OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,

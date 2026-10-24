@@ -188,6 +188,7 @@ import {
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import {
   buildOpenCodeLaunchProfile,
+  OPENCODE_GATEWAY_PROVIDER_POLICIES,
   OPENCODE_RUNTIME_READINESS_PROMPT,
   openCodeConfigDirectory,
   openCodePlanDirectory,
@@ -318,6 +319,48 @@ const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-native-policy"],
   proofIds: ["coding-runtime.native-formatter.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PROVIDER_POLICY_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.provider-policy.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordProviderPolicyBound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    providerPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["gateway-only", "absent"],
+    },
+    freeModels: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["disabled", "enabled"],
+    },
+    modelsFetch: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["disabled", "enabled"],
+    },
+    toolProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["native", "direct", "code-mode"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.provider-policy.bound.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -1499,6 +1542,7 @@ async function materializePrepare(
     mcp,
   });
   recordNativeFormatterBound(input.activityLog, request, profile.formatter);
+  recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
 }
 
@@ -1621,6 +1665,35 @@ function recordNativeFormatterBound(
       NATIVE_FORMATTER_BOUND_OPERATION,
       { correlationId: request.runId },
       { runId: request.runId, disposition, launchMode: mode ?? "unknown" },
+    ),
+  );
+}
+
+/**
+ * Whether the prepared run admits only the gateway-bound provider, keeps OpenCode's hosted free
+ * models off and never fetches the models.dev catalog (parity row S11), read from the launch
+ * configuration and environment it was given.
+ */
+function recordProviderPolicyBound(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>,
+  toolProfile: OpenCodeToolProfile,
+): void {
+  const gatewayOnly =
+    JSON.stringify(profile.configValue.policies) ===
+    JSON.stringify(OPENCODE_GATEWAY_PROVIDER_POLICIES);
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      PROVIDER_POLICY_BOUND_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        providerPolicy: gatewayOnly ? "gateway-only" : "absent",
+        freeModels: profile.env.OPENCODE_DISABLE_FREE_MODELS === "1" ? "disabled" : "enabled",
+        modelsFetch: profile.env.OPENCODE_DISABLE_MODELS_FETCH === "1" ? "disabled" : "enabled",
+        toolProfile,
+      },
     ),
   );
 }

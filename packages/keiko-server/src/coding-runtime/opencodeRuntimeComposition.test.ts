@@ -3612,6 +3612,42 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     },
   );
 
+  // Parity row S11: every profile binds the producer's provider policy and keeps the hosted free
+  // models off, so the runtime knows no model route but the Model Gateway. The line is read from
+  // the configuration and environment the run was actually given.
+  it.each(["native", "direct"] as const)(
+    "records that a %s launch admits only the gateway-bound provider",
+    async (toolProfile) => {
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "governed-assist",
+        readToolProfile: () => toolProfile,
+        activityLog,
+      });
+      try {
+        expect(fixture.preparation.env.OPENCODE_DISABLE_FREE_MODELS).toBe("1");
+        const bound = activityLog.events.filter(
+          (event) => event.op === "coding-runtime.provider-policy.bound",
+        );
+        expect(bound).toHaveLength(1);
+        expect(bound[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+        expect(bound[0]?.extra).toMatchObject({
+          runId: FIXTURE_RUN_ID,
+          providerPolicy: "gateway-only",
+          freeModels: "disabled",
+          modelsFetch: "disabled",
+          toolProfile,
+        });
+        expectActivityLogProof(
+          "coding-runtime.provider-policy.bound.emitted-line",
+          formatActivityLogProofLine(bound[0] ?? {}),
+        );
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
   it("control: a mapped launch carries no formatter setting and records no decision", async () => {
     const activityLog = createBufferedServerLogSink();
     const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "008bee0fc62ad188f7825715f100194e98b5196fe879d8fbadbf341924b0f82c" as const;
+  "e9a006025ed2ca562ee33418c86421539d931d82a8d711d05b2b17362fa869e2" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8738,6 +8738,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
+          "coding-runtime.provider-policy.bound",
         ],
         end: [],
         failure: [],
@@ -8756,12 +8757,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "coding-runtime.native-policy.decided",
           mode: "correlation",
         },
+        {
+          op: "coding-runtime.provider-policy.bound",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
+        "coding-runtime.provider-policy.bound",
       ],
       replayReferences: [],
       operations: [
@@ -8931,6 +8937,54 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.native-policy.decided.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.provider-policy.bound",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "freeModels",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "modelsFetch",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "providerPolicy",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "toolProfile",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.provider-policy.bound.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -44418,6 +44472,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.operator-decision": "tools-workflows",
     "coding-runtime.project-memory.context": "tools-workflows",
     "coding-runtime.prompt-inputs.settled": "tools-workflows",
+    "coding-runtime.provider-policy.bound": "tools-workflows",
     "coding-runtime.question.authority-resolution-failed": "tools-workflows",
     "coding-runtime.question.list-failed": "tools-workflows",
     "coding-runtime.question.list-revision-rebound": "tools-workflows",

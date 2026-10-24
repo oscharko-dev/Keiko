@@ -3,15 +3,24 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts";
+
+import { createFixedOpenCodeV2Config } from "./opencodeLaunchProfile.js";
+import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
 import {
   OPENCODE_CLI_DISPOSITIONS,
+  OPENCODE_CONFIGURATION_DISPOSITIONS,
   OPENCODE_SERVICE_DISPOSITIONS,
   OPENCODE_SERVICE_REFUSAL_REASONS,
+  diffOpenCodeConfigurationPaths,
   diffOpenCodeServiceOperations,
+  extractOpenCodeConfigurationPaths,
   extractOpenCodeServiceOperations,
+  openCodeConfigurationDisposition,
   openCodeServiceDisposition,
   parseOpenCodeCliSubcommands,
   parseOpenCodeServiceInventory,
+  type OpenCodeConfigurationDisposition,
   type OpenCodeServiceDisposition,
   type OpenCodeServiceDispositionEntry,
   type OpenCodeServiceOperation,
@@ -28,6 +37,8 @@ const SOURCE_ROOT = new URL("../", import.meta.url);
 const DOCUMENT_URL = new URL("../../../../docs/qa/opencode-capability-parity.md", import.meta.url);
 const BEGIN = "<!-- service-inventory:begin -->";
 const END = "<!-- service-inventory:end -->";
+const CONFIGURATION_BEGIN = "<!-- configuration-inventory:begin -->";
+const CONFIGURATION_END = "<!-- configuration-inventory:end -->";
 /** The epic #3897 child issues that can own an original surface. */
 const OWNER_ISSUES: ReadonlySet<number> = new Set([
   3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3906, 3907, 3908,
@@ -45,6 +56,7 @@ function inventory(version: string): ReturnType<typeof parseOpenCodeServiceInven
 
 const CURRENT = inventory(OPENCODE_PINNED_VERSION);
 const CLI_COMMANDS = CURRENT.cliCommands ?? [];
+const CONFIGURATION_PATHS = CURRENT.configurationPaths ?? [];
 const OPERATION_IDS: ReadonlySet<string> = new Set(CURRENT.operations.map((o) => o.operationId));
 
 function endpoint(operation: OpenCodeServiceOperation): string {
@@ -348,7 +360,7 @@ function label(entry: OpenCodeServiceDisposition): string[] {
   }
 }
 
-function rowsCell(entry: OpenCodeServiceDispositionEntry | undefined): string {
+function rowsCell(entry: { readonly rows: readonly string[] } | undefined): string {
   return entry === undefined || entry.rows.length === 0 ? "-" : entry.rows.join(", ");
 }
 
@@ -423,11 +435,11 @@ function normalized(block: string): string[] {
     );
 }
 
-function documentBlock(document: string): string {
-  const start = document.indexOf(BEGIN);
-  const end = document.indexOf(END);
-  if (start < 0 || end < start) throw new TypeError("service-inventory-markers-missing");
-  return document.slice(start, end + END.length);
+function documentBlock(document: string, begin = BEGIN, end = END): string {
+  const start = document.indexOf(begin);
+  const stop = document.indexOf(end);
+  if (start < 0 || stop < start) throw new TypeError("inventory-markers-missing");
+  return document.slice(start, stop + end.length);
 }
 
 describe("parity document service inventory section", () => {
@@ -455,5 +467,297 @@ describe("parity document service inventory section", () => {
     ]) {
       expect(legend, term).toContain(`\`${term}\``);
     }
+  });
+});
+
+// ---- Configuration settings (#3903 AC5, #3908 AC2) ----
+
+const LOCAL_SERVER: McpServerDefinition = {
+  name: "docs",
+  description: undefined,
+  enabled: true,
+  transport: { kind: "local", command: ["/opt/mcp/docs"], environment: { DOCS_MODE: "offline" } },
+  tools: { search: "read" },
+};
+const REMOTE_SERVER: McpServerDefinition = {
+  name: "tracker",
+  description: undefined,
+  enabled: true,
+  transport: { kind: "remote", url: "https://mcp.example.test/v1" },
+  tools: { issues: "read" },
+};
+
+/**
+ * The schema path of every setting a composed configuration writes: a key the schema names keeps
+ * its name, any other key is the configuration's own (`*`), and an array declares its items' keys
+ * at its own path. A key the schema does not declare at all is returned as `undeclared:<path>`.
+ */
+function declaredSettings(value: unknown, declared: ReadonlySet<string>, prefix = ""): string[] {
+  if (Array.isArray(value))
+    return value.flatMap((item) => declaredSettings(item, declared, prefix));
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) => {
+    const named = prefix === "" ? key : `${prefix}.${key}`;
+    const dynamic = prefix === "" ? "*" : `${prefix}.*`;
+    const path = declared.has(named) ? named : dynamic;
+    if (!declared.has(path)) return [`undeclared:${named}`];
+    return [path, ...declaredSettings(child, declared, path)];
+  });
+}
+
+/** Every setting the native profile composes, at its widest: images, Full access and both MCP kinds. */
+function composedNativeSettings(): readonly string[] {
+  const mcp = openCodeNativeMcpAdmission({
+    servers: [LOCAL_SERVER, REMOTE_SERVER],
+    mode: "autonomous-delivery",
+    home: "/state/home",
+  }).config;
+  const geometry = {
+    contextWindowTokens: 32_768,
+    maxInputTokens: 24_000,
+    maxOutputTokens: 4_096,
+    imageInput: true,
+  };
+  const config = createFixedOpenCodeV2Config(
+    geometry,
+    undefined,
+    "native",
+    "/state",
+    "enabled",
+    mcp,
+  );
+  return [...new Set(declaredSettings(config, new Set(CONFIGURATION_PATHS)))].sort();
+}
+
+function configurationNames(kind: OpenCodeConfigurationDisposition["kind"]): readonly string[] {
+  return OPENCODE_CONFIGURATION_DISPOSITIONS.filter((entry) => entry.disposition.kind === kind)
+    .map((entry) => entry.name)
+    .sort();
+}
+
+describe("OpenCode 2.1.4 configuration dispositions fail closed", () => {
+  it("hold the complete, ordered setting inventory of the pinned version", () => {
+    expect(CONFIGURATION_PATHS).toHaveLength(232);
+    expect(duplicates(CONFIGURATION_PATHS)).toEqual([]);
+    expect(CONFIGURATION_PATHS).toEqual([...CONFIGURATION_PATHS].sort());
+  });
+
+  it("give every setting path exactly one disposition and name no other", () => {
+    const names = OPENCODE_CONFIGURATION_DISPOSITIONS.map((entry) => entry.name);
+    expect(duplicates(names)).toEqual([]);
+    expect([...names].sort()).toEqual([...CONFIGURATION_PATHS]);
+    const undisposed = CONFIGURATION_PATHS.filter(
+      (path) => openCodeConfigurationDisposition(path) === undefined,
+    );
+    expect(undisposed).toEqual([]);
+  });
+
+  // Derived from the production composition, so the table cannot claim a setting the runtime is not
+  // given, and a setting Keiko starts to write cannot stay listed as unavailable.
+  it("mark as keiko-set exactly the settings the native profile composes", () => {
+    const composed = composedNativeSettings();
+    expect(composed.filter((path) => path.startsWith("undeclared:"))).toEqual([]);
+    expect(configurationNames("keiko-set")).toEqual(composed);
+  });
+
+  it("give every refusal a closed reason and an epic owner, and every Keiko owner a real source", () => {
+    for (const { name, disposition } of OPENCODE_CONFIGURATION_DISPOSITIONS) {
+      if (disposition.kind === "refused") {
+        expect(OPENCODE_SERVICE_REFUSAL_REASONS, name).toContain(disposition.reason);
+        expect(OWNER_ISSUES.has(disposition.owner), name).toBe(true);
+        if (disposition.reason === "experimental-unadmitted")
+          expect(name, name).toMatch(/^experimental\./u);
+      }
+      if (disposition.kind === "keiko-operation") {
+        const source = fileURLToPath(new URL(disposition.source, SOURCE_ROOT));
+        expect(existsSync(source), name).toBe(true);
+      }
+    }
+  });
+
+  it("tie every setting to existing capability-matrix rows", () => {
+    const rows = matrixRows(readFileSync(DOCUMENT_URL, "utf8"));
+    const unrowed = OPENCODE_CONFIGURATION_DISPOSITIONS.filter((entry) => entry.rows.length === 0);
+    expect(unrowed.map((entry) => entry.name)).toEqual([]);
+    const unknown = OPENCODE_CONFIGURATION_DISPOSITIONS.flatMap((entry) => entry.rows).filter(
+      (row) => !rows.has(row),
+    );
+    expect(unknown).toEqual([]);
+  });
+});
+
+describe("OpenCode configuration schema extraction", () => {
+  const SCHEMA = (schemas: Record<string, unknown>): unknown => ({ components: { schemas } });
+
+  it("walks named, union, array-item and named-key settings, each reference once per path", () => {
+    const document = SCHEMA({
+      "Config.InfoEncoded": {
+        type: "object",
+        properties: {
+          model: { anyOf: [{ type: "string" }, { $ref: "#/components/schemas/Model" }] },
+          rules: { type: "array", items: { $ref: "#/components/schemas/Rule" } },
+          agents: { type: "object", additionalProperties: { $ref: "#/components/schemas/Agent" } },
+          open: { type: "object", additionalProperties: true },
+        },
+      },
+      Model: { type: "object", properties: { id: { type: "string" } } },
+      Rule: { type: "object", properties: { action: { type: "string" } } },
+      Agent: {
+        type: "object",
+        properties: { child: { $ref: "#/components/schemas/Agent" }, name: { type: "string" } },
+      },
+    });
+    expect(extractOpenCodeConfigurationPaths(document)).toEqual([
+      "agents",
+      "agents.*",
+      "agents.*.child",
+      "agents.*.name",
+      "model",
+      "model.id",
+      "open",
+      "rules",
+      "rules.action",
+    ]);
+  });
+
+  it("refuses a document without the configuration schema or with an unresolved reference", () => {
+    expect(() => extractOpenCodeConfigurationPaths({ components: { schemas: {} } })).toThrow(
+      "opencode-configuration-schema-missing",
+    );
+    const dangling = SCHEMA({
+      "Config.InfoEncoded": { properties: { a: { $ref: "#/components/schemas/Missing" } } },
+    });
+    expect(() => extractOpenCodeConfigurationPaths(dangling)).toThrow(
+      "opencode-configuration-reference-unresolved",
+    );
+  });
+
+  it("refuses a committed configuration inventory that is not a list of paths", () => {
+    expect(() =>
+      parseOpenCodeServiceInventory('{"version":"1","operations":[],"configurationPaths":[1]}'),
+    ).toThrow("opencode-service-inventory-malformed");
+  });
+});
+
+describe("OpenCode configuration upgrade diff", () => {
+  // The first captured upgrade, kept as a permanent record: both fixtures are named explicitly.
+  const ADDED_BY_2_1_4 = [
+    "experimental.background_compaction",
+    "experimental.location_idle_timeout",
+    "experimental.todo",
+    "policies",
+    "policies.action",
+    "policies.effect",
+    "policies.resource",
+    "providers.*.compatibility",
+    "providers.*.compatibility.cacheFormat",
+    "providers.*.compatibility.maxTokensField",
+    "providers.*.compatibility.reasoningField",
+    "providers.*.compatibility.requireAssistantAfterTool",
+    "providers.*.compatibility.requireFinishReason",
+    "providers.*.compatibility.requireReasoning",
+    "providers.*.compatibility.streamUsage",
+    "providers.*.compatibility.supportsPromptCacheKey",
+    "providers.*.models.*.capabilities.reasoning",
+    "providers.*.models.*.capabilities.reasoning.budget",
+    "providers.*.models.*.capabilities.reasoning.budget.max",
+    "providers.*.models.*.capabilities.reasoning.budget.min",
+    "providers.*.models.*.capabilities.reasoning.effort",
+    "providers.*.models.*.capabilities.reasoning.supported",
+    "providers.*.models.*.capabilities.reasoning.toggle",
+    "providers.*.models.*.capabilities.temperature",
+    "providers.*.models.*.compatibility.cacheFormat",
+    "providers.*.models.*.compatibility.streamUsage",
+    "providers.*.models.*.compatibility.supportsEffortUpdates",
+    "providers.*.models.*.compatibility.supportsThinkingBlockBinding",
+    "providers.*.models.*.releaseDate",
+    "providers.*.models.*.settings.encoding",
+    "providers.*.models.*.variants.settings.encoding",
+    "providers.*.settings.encoding",
+    "providers.*.settings.headerTimeout",
+  ];
+
+  it("names the 33 settings 2.1.4 added to 2.0.10 and that none was removed", () => {
+    const previous = inventory("2.0.10").configurationPaths ?? [];
+    const diff = diffOpenCodeConfigurationPaths(previous, CONFIGURATION_PATHS);
+    expect(previous).toHaveLength(199);
+    expect(diff.added).toEqual(ADDED_BY_2_1_4);
+    expect(diff.removed).toEqual([]);
+    expect(diffOpenCodeConfigurationPaths(CONFIGURATION_PATHS, previous).removed).toEqual(
+      ADDED_BY_2_1_4,
+    );
+  });
+
+  it("requires a disposition for every setting an upgrade adds", () => {
+    const missing = ADDED_BY_2_1_4.filter(
+      (path) => openCodeConfigurationDisposition(path) === undefined,
+    );
+    expect(missing).toEqual([]);
+  });
+});
+
+function configurationLabel(disposition: OpenCodeConfigurationDisposition): string[] {
+  return disposition.kind === "keiko-set"
+    ? ["`keiko-set`", "native profile (`opencodeLaunchProfile.ts`)", "-"]
+    : label(disposition);
+}
+
+function configurationCountRows(): string[][] {
+  const entries = OPENCODE_CONFIGURATION_DISPOSITIONS;
+  const kinds = ["keiko-set", "keiko-operation", "refused"] as const;
+  const reasons = OPENCODE_SERVICE_REFUSAL_REASONS.map((reason) => [
+    `refused: \`${reason}\``,
+    String(
+      entries.filter((e) => e.disposition.kind === "refused" && e.disposition.reason === reason)
+        .length,
+    ),
+  ]);
+  return [
+    ...kinds.map((kind) => [`\`${kind}\``, String(configurationNames(kind).length)]),
+    ...reasons,
+    ["Total", String(entries.length)],
+  ];
+}
+
+function renderConfigurationBlock(): string {
+  const entries = new Map(OPENCODE_CONFIGURATION_DISPOSITIONS.map((entry) => [entry.name, entry]));
+  const settings = CONFIGURATION_PATHS.map((path) => {
+    const entry = entries.get(path);
+    if (entry === undefined) throw new TypeError(`no disposition: ${path}`);
+    return [`\`${path}\``, ...configurationLabel(entry.disposition), rowsCell(entry)];
+  });
+  return [
+    CONFIGURATION_BEGIN,
+    "",
+    ...table(["Disposition", "Settings"], configurationCountRows()),
+    "",
+    `#### Settings (${String(settings.length)})`,
+    "",
+    ...table(["Setting", "Disposition", "Detail", "Owner", "Rows"], settings),
+    "",
+    CONFIGURATION_END,
+  ].join("\n");
+}
+
+describe("parity document configuration inventory section", () => {
+  it("lists exactly the configuration dispositions and the committed fixture", () => {
+    let document = readFileSync(DOCUMENT_URL, "utf8");
+    const block = (text: string): string =>
+      documentBlock(text, CONFIGURATION_BEGIN, CONFIGURATION_END);
+    if (WRITE_DOCUMENT) {
+      document = document.replace(block(document), renderConfigurationBlock());
+      writeFileSync(DOCUMENT_URL, document);
+    }
+    expect(normalized(block(document))).toEqual(normalized(renderConfigurationBlock()));
+  });
+
+  it("explains the configuration disposition kinds", () => {
+    const document = readFileSync(DOCUMENT_URL, "utf8");
+    const legend = document.slice(
+      document.indexOf("### Configuration setting inventory"),
+      document.indexOf(CONFIGURATION_BEGIN),
+    );
+    for (const term of ["keiko-set", "keiko-operation", "refused"])
+      expect(legend, term).toContain(`\`${term}\``);
   });
 });

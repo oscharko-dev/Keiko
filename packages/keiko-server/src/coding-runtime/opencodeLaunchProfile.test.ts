@@ -249,6 +249,7 @@ describe("OpenCode launch profile", () => {
         "mcp",
         "model",
         "permissions",
+        "policies",
         "providers",
         "share",
         "update",
@@ -260,6 +261,33 @@ describe("OpenCode launch profile", () => {
         Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}",
       });
       expect(content.model).toBe("keiko-runtime/coding");
+    });
+
+    // The pinned runtime lists OpenCode's hosted free models and discovers local model servers on
+    // their default loopback ports unless told otherwise (original executable, real-binary test in
+    // `opencodeNativeProjectBoundary.real.test.ts`). The last statement admits only the gateway.
+    it("admits only the gateway-bound provider on every profile and keeps the free models off", () => {
+      const expected = [
+        { action: "provider.use", resource: "*", effect: "deny" },
+        { action: "provider.use", resource: "keiko-runtime", effect: "allow" },
+      ];
+      const native = nativeProfile();
+      const content = JSON.parse(native.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly policies?: unknown;
+      };
+      expect(content.policies).toEqual(expected);
+      for (const toolProfile of ["direct", "code-mode", "native"] as const) {
+        const launched = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile,
+          ...CONTEXT_INPUT,
+        });
+        if (!launched.ok) throw new Error("profile-invalid");
+        expect(record(JSON.parse(launched.config)).policies, toolProfile).toEqual(expected);
+        expect(launched.env.OPENCODE_DISABLE_FREE_MODELS, toolProfile).toBe("1");
+        expect(launched.env.OPENCODE_DISABLE_MODELS_FETCH, toolProfile).toBe("1");
+      }
     });
 
     it("re-asserts only Keiko's own permission rules on the highest layer", () => {
