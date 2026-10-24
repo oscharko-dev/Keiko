@@ -697,19 +697,23 @@ function responsibilityAssessment(subject, policy, files, resolver) {
   return assessments;
 }
 
+function collectiveParserEligible(record, assessment) {
+  return (
+    (record.kind === "public-parser" || record.kind === "diagnostic-checker") &&
+    assessment.structural === "ready" &&
+    Boolean(record.proofAssertions?.length)
+  );
+}
+
 function collectiveParserGroups(policy, assessments) {
   const groups = new Map();
   for (const record of policy.responsibilities ?? []) {
     const assessment = assessments.find((entry) => entry.id === record.id);
-    if (
-      (record.kind !== "public-parser" && record.kind !== "diagnostic-checker") ||
-      assessment.structural !== "ready" ||
-      !record.proofAssertions?.length
-    )
-      continue;
+    if (!collectiveParserEligible(record, assessment)) continue;
     const identity = assessment.roles.input.identities[0];
     for (const rule of record.rules) {
-      const key = JSON.stringify([identity.owner, identity.producer.path, rule]);
+      const source = rule === "anti-slop/no-object-parameters" ? identity.producer.path : null;
+      const key = JSON.stringify([identity.owner, source, rule]);
       const group = groups.get(key) ?? { rule, roots: [] };
       group.roots.push({ identity, index: record.input.parameterIndex, recordId: record.id });
       groups.set(key, group);
@@ -761,19 +765,23 @@ function joinedSlots(policy, assessments, resolver, roots, rule) {
 function joinPublicParserSlots(policy, assessments, resolver) {
   const groups = collectiveParserGroups(policy, assessments);
   for (const { roots, rule } of groups.values()) {
-    // A single root already has the unchanged legacy closure; only a join needs another graph.
-    if (roots.length < 2 && rule !== "anti-slop/no-object-parameters") continue;
-    for (const slot of joinedSlots(policy, assessments, resolver, roots, rule)) {
-      const assessment = assessments.find(
-        (entry) => entry.id === slot.contributingResponsibilityIds[0],
-      );
-      const existing = assessment.slots.findIndex(
-        (entry) =>
-          entry.path === slot.path && entry.rule === slot.rule && entry.start === slot.start,
-      );
-      if (existing === -1) assessment.slots.push(slot);
-      else assessment.slots[existing] = slot;
-    }
+    const components =
+      rule === "anti-slop/no-object-parameters" ? [roots] : resolver.collectiveRawComponents(roots);
+    for (const component of components)
+      joinComponentSlots(policy, assessments, resolver, component, rule);
+  }
+}
+
+function joinComponentSlots(policy, assessments, resolver, roots, rule) {
+  for (const slot of joinedSlots(policy, assessments, resolver, roots, rule)) {
+    const assessment = assessments.find(
+      (entry) => entry.id === slot.contributingResponsibilityIds[0],
+    );
+    const existing = assessment.slots.findIndex(
+      (entry) => entry.path === slot.path && entry.rule === slot.rule && entry.start === slot.start,
+    );
+    if (existing === -1) assessment.slots.push(slot);
+    else assessment.slots[existing] = slot;
   }
 }
 

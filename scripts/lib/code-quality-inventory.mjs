@@ -10,6 +10,69 @@ import { emittedSources, reconcileProductionSources } from "./code-quality-produ
 import { resolveGitExecutable } from "../check-dependency-hygiene.mjs";
 
 const POLICY_SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
+const MODULE_RECEIPTS = new WeakMap();
+
+function frozenModuleFacts(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) frozenModuleFacts(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function moduleReceiptBinding(subject) {
+  return policyDigest(
+    JSON.stringify({
+      root: subject.root,
+      contexts: [...subject.contexts].map(([owner, config]) => ({
+        owner,
+        files: config.fileNames,
+        references: config.projectReferences,
+        options: Object.fromEntries(
+          Object.entries(config.options).filter(([key]) => key !== "configFile"),
+        ),
+      })),
+      files: subject.inventory.files,
+      rootBuild: subject.inventory.rootBuild,
+      packages: subject.inventory.packages,
+      rootManifest: subject.inventory.rootManifestSha256,
+      lock: subject.inventory.lockSha256,
+      outputs: [...subject.outputs],
+      membership: subject.membership.paths,
+    }),
+  );
+}
+
+function bindModuleReceipt(subject, preparation) {
+  const files = subject.inventory.files.filter((file) => file.production);
+  const rows = new Map(preparation.rows.map((row) => [row.path, row.sourceSha256]));
+  if (
+    !preparation.failure &&
+    (rows.size !== preparation.rows.length ||
+      rows.size !== files.length ||
+      files.some((file) => rows.get(file.path) !== file.sha256))
+  )
+    throw new TypeError("incomplete-private-module-facts");
+  const digest = policyDigest(JSON.stringify(preparation));
+  subject.moduleReceipt = frozenModuleFacts({ ...preparation, digest });
+  MODULE_RECEIPTS.set(subject, {
+    receipt: subject.moduleReceipt,
+    binding: moduleReceiptBinding(subject),
+  });
+  return subject;
+}
+
+export function preparedModuleReceipt(subject) {
+  const witness = MODULE_RECEIPTS.get(subject);
+  if (!witness && subject.moduleReceipt === undefined) return null;
+  if (
+    !witness ||
+    subject.moduleReceipt !== witness.receipt ||
+    moduleReceiptBinding(subject) !== witness.binding
+  )
+    throw new TypeError("symbol-module-facts-changed");
+  return witness.receipt;
+}
 const TOOL_CATALOG_FIXTURES = new Set([
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
@@ -217,7 +280,7 @@ export async function collectPolicySubject(root) {
   const files = sourceInventory(root, paths, tracked, packages);
   if (files.length === 0) throw new TypeError("empty-source-inventory");
   const outputs = emittedSources(root, contexts, new Map(files.map((file) => [file.path, file])));
-  const productionReachability = reconcileProductionSources({
+  const { preparation, ...productionReachability } = reconcileProductionSources({
     root,
     files,
     contexts,
@@ -249,7 +312,10 @@ export async function collectPolicySubject(root) {
         };
       }),
   };
-  return { root: realpathSync(root), inventory, contexts, workspaces, outputs, membership };
+  return bindModuleReceipt(
+    { root: realpathSync(root), inventory, contexts, workspaces, outputs, membership },
+    preparation,
+  );
 }
 
 export async function collectPolicyInventory(root) {

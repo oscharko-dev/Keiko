@@ -80,6 +80,23 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     expect(() => selectPolicyScope([], "repository", false)).toThrow("unknown-or-empty-scope");
   });
 
+  it("keeps detached module preparation internal to the collected subject", async () => {
+    const root = trackedRepository();
+    const subject = await policyMembership.collectPolicySubject(root);
+    const receipt = policyMembership.preparedModuleReceipt(subject);
+    expect(receipt.failure).toBeNull();
+    expect(receipt.rows.map((row) => row.path)).toEqual(["packages/alpha/src/index.ts"]);
+    expect(receipt.rows[0].statements).toEqual([{ start: 0, bindings: null }]);
+    expect(subject.inventory).not.toHaveProperty("moduleReceipt");
+    expect(subject.inventory.productionReachability).toEqual({ promoted: [] });
+    expect(await collectPolicyInventory(root)).toEqual(subject.inventory);
+    expect(Object.isFrozen(receipt.rows[0].statements[0])).toBe(true);
+    delete subject.moduleReceipt;
+    expect(() => policyMembership.preparedModuleReceipt(subject)).toThrow(
+      "symbol-module-facts-changed",
+    );
+  });
+
   it("derives source membership and export targets from real manifests and TypeScript", async () => {
     const inventory = await collectPolicyInventory(trackedRepository());
     expect(inventory.packages).toHaveLength(1);

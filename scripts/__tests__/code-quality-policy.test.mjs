@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
-import { assessPolicyDiagnostics, validatePolicy } from "../lib/code-quality-policy.mjs";
+import {
+  assessPolicyDiagnostics,
+  validatePolicy,
+  SYMBOL_LIMITS,
+  symbolLimits,
+  chargeSymbolVisits,
+} from "../lib/code-quality-policy.mjs";
 import { classifyPolicyPath, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
 
 import { publicParserRecord } from "./support/code-quality-symbol-fixture.mjs";
@@ -18,6 +24,35 @@ const ASSERTION_RULES = [
   "anti-slop/no-chained-type-assertions",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
+
+describe("shared symbol resource accounting", () => {
+  it("keeps one immutable default profile and validates explicit profiles", () => {
+    expect(SYMBOL_LIMITS).toEqual({
+      programs: 2,
+      sourceBytes: 64 * 1024 * 1024,
+      nodes: 5_000_000,
+      aliases: 64,
+      emitBytes: 16 * 1024 * 1024,
+      emissionTimeout: 10_000,
+      emissionOutputBytes: 1024 * 1024,
+    });
+    expect(Object.isFrozen(SYMBOL_LIMITS)).toBe(true);
+    expect(symbolLimits({ aliases: 8 })).toEqual({ ...SYMBOL_LIMITS, aliases: 8 });
+    for (const options of [{ nodes: 0 }, { aliases: 1.5 }, { unknown: 1 }])
+      expect(() => symbolLimits(options)).toThrow("invalid-symbol-budget");
+  });
+
+  it("charges repeated actual visits and preserves the over-limit increment", () => {
+    const state = { nodes: 0, limits: symbolLimits({ nodes: 2 }) };
+    chargeSymbolVisits(state);
+    chargeSymbolVisits(state);
+    expect(state.nodes).toBe(2);
+    expect(() => chargeSymbolVisits(state)).toThrow("symbol-node-budget");
+    expect(state.nodes).toBe(3);
+    expect(() => chargeSymbolVisits(state, -1)).toThrow("invalid-symbol-budget");
+    expect(state.nodes).toBe(3);
+  });
+});
 
 describe("public parser optional raw admission rules (#3918)", () => {
   it.each([

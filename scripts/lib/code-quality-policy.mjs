@@ -1,5 +1,32 @@
 import { compareStrings } from "./compare-strings.mjs";
 
+export const SYMBOL_LIMITS = Object.freeze({
+  programs: 2,
+  sourceBytes: 64 * 1024 * 1024,
+  nodes: 5_000_000,
+  aliases: 64,
+  emitBytes: 16 * 1024 * 1024,
+  emissionTimeout: 10_000,
+  emissionOutputBytes: 1024 * 1024,
+});
+
+export function symbolLimits(options = {}) {
+  const limits = { ...SYMBOL_LIMITS, ...options };
+  if (
+    Object.keys(limits).some(
+      (key) => !(key in SYMBOL_LIMITS) || !Number.isSafeInteger(limits[key]) || limits[key] < 1,
+    )
+  )
+    throw new TypeError("invalid-symbol-budget");
+  return limits;
+}
+
+export function chargeSymbolVisits(state, count = 1) {
+  if (!Number.isSafeInteger(count) || count < 0) throw new TypeError("invalid-symbol-budget");
+  state.nodes += count;
+  if (state.nodes > state.limits.nodes) throw new TypeError("symbol-node-budget");
+}
+
 export const UPSTREAM_COMMIT = "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b";
 export const RUNNER_VERSION = "1.78.0";
 export const UPSTREAM_VERSION = "0.1.2";

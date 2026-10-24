@@ -1,10 +1,13 @@
 import { Buffer } from "node:buffer";
 import { types } from "node:util";
-import { policyDigest } from "./code-quality-inventory.mjs";
+import { fileURLToPath } from "node:url";
+import { policyDigest, preparedModuleReceipt } from "./code-quality-inventory.mjs";
+import { chargeSymbolVisits } from "./code-quality-policy.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import { recognizeJsonByteMeasurement } from "./code-quality-json-byte-form.mjs";
+import { productionModuleReferences } from "./code-quality-production.mjs";
 import {
   createCompilerContext,
   qualifiedAlias,
@@ -19,6 +22,32 @@ import {
 
 // Only these module-created cardinality refusals may withhold a collective group.
 const collectiveHelperBudgetErrors = new WeakMap();
+const rawModuleIndexes = new WeakMap();
+const rawSourceNodeCaches = new WeakMap();
+const rawPrivateOutputBindings = new WeakMap();
+const rawDiscoveryKeys = new WeakMap();
+const rawDetachedSlots = new WeakMap();
+
+function detachedRawRequestKey(requests) {
+  const entries = requests.map(({ identity, index, recordId }) =>
+    JSON.stringify({ identity, index, recordId }),
+  );
+  return JSON.stringify([true, entries.sort(compareStrings)]);
+}
+
+function detachedRawResult(compiler, caches, key, compute) {
+  compiler.assertCurrent();
+  let cache = caches.get(compiler);
+  if (!cache) {
+    cache = new Map();
+    caches.set(compiler, cache);
+  }
+  if (cache.has(key)) return structuredClone(cache.get(key));
+  const result = compute();
+  compiler.assertCurrent();
+  if (cache.size < compiler.state.limits.aliases) cache.set(key, structuredClone(result));
+  return structuredClone(result);
+}
 
 function collectiveHelperBudgetError(limit, observedCount) {
   const error = new TypeError("symbol-alias-budget");
@@ -2365,6 +2394,563 @@ function sourceNodes(compiler, source) {
   return nodes;
 }
 
+function collectiveSourceNodes(compiler, source) {
+  let cache = rawSourceNodeCaches.get(compiler);
+  if (!cache) {
+    cache = new WeakMap();
+    rawSourceNodeCaches.set(compiler, cache);
+  }
+  if (!cache.has(source)) cache.set(source, sourceNodes(compiler, source));
+  return cache.get(source);
+}
+
+function rawModulePath(compiler, source, specifier, mode = ts.ModuleKind.ESNext) {
+  if (specifier.startsWith("file:")) specifier = fileURLToPath(specifier);
+  const path = relative(compiler.state.subject.root, source.fileName).replaceAll("\\", "/");
+  const { config } = compiler.context(path);
+  const resolved = compiler.resolveModule(source.fileName, specifier, config, mode);
+  if (!resolved) return null;
+  const target = relative(compiler.state.subject.root, resolved.resolvedFileName).replaceAll(
+    "\\",
+    "/",
+  );
+  return compiler.state.subject.outputs.get(target) ?? target;
+}
+
+function rawModuleIndex(compiler) {
+  compiler.assertCurrent();
+  if (rawModuleIndexes.has(compiler)) return rawModuleIndexes.get(compiler);
+  const receipt = preparedModuleReceipt(compiler.state.subject);
+  if (receipt && preparedRawProfileCompatible(compiler.state.limits, receipt))
+    return preparedRawModuleIndex(compiler, receipt);
+  return unpreparedRawModuleIndex(compiler);
+}
+
+function preparedRawProfileCompatible(limits, receipt) {
+  if (receipt.limits.aliases !== limits.aliases) return false;
+  if (receipt.failure === "symbol-node-budget" && limits.nodes > receipt.limits.nodes) return false;
+  if (receipt.failure === "symbol-source-budget" && limits.sourceBytes > receipt.limits.sourceBytes)
+    return false;
+  return true;
+}
+
+function recordRawModuleReferences(compiler, source, path, references, incoming) {
+  for (const reference of references)
+    for (const specifier of reference.specifiers)
+      for (const target of new Set(
+        [ts.ModuleKind.ESNext, ts.ModuleKind.CommonJS].map((mode) =>
+          rawModulePath(compiler, source, specifier, mode),
+        ),
+      )) {
+        if (!target) continue;
+        const entries = incoming.get(target) ?? [];
+        entries.push({ path, start: reference.start, specifier });
+        incoming.set(target, entries);
+      }
+}
+
+function finishRawModuleIndex(compiler, modules, incoming) {
+  const result = { modules, incoming, privacy: new Map(), references: new Map() };
+  rawModuleIndexes.set(compiler, result);
+  compiler.assertCurrent();
+  return result;
+}
+
+function preparedRawModuleIndex(compiler, receipt) {
+  if (receipt.failure) throw new TypeError(receipt.failure);
+  const modules = new Map();
+  const incoming = new Map();
+  for (const row of receipt.rows) {
+    if (policyDigest(compiler.read(row.path)) !== row.sourceSha256)
+      throw new TypeError("symbol-module-facts-changed");
+    const source = { fileName: join(compiler.state.subject.root, row.path) };
+    modules.set(row.path, { statements: row.statements });
+    recordRawModuleReferences(compiler, source, row.path, row.references, incoming);
+  }
+  return finishRawModuleIndex(compiler, modules, incoming);
+}
+
+function rawModuleStatements(compiler, source) {
+  return source.statements.map((node) => {
+    chargeSymbolVisits(compiler.state);
+    const bindings = ts.isImportDeclaration(node)
+      ? node.importClause?.namedBindings
+      : node.exportClause;
+    return {
+      start: node.getStart(),
+      bindings:
+        bindings && (ts.isNamedImports(bindings) || ts.isNamedExports(bindings))
+          ? bindings.elements.map((binding) => {
+              chargeSymbolVisits(compiler.state);
+              return {
+                name: (binding.propertyName ?? binding.name).text,
+                isTypeOnly: binding.isTypeOnly,
+              };
+            })
+          : null,
+    };
+  });
+}
+
+function unpreparedRawModuleIndex(compiler) {
+  const modules = new Map();
+  const incoming = new Map();
+  for (const file of compiler.state.subject.inventory.files) {
+    if (!file.production) continue;
+    const source = ts.createSourceFile(
+      file.path,
+      compiler.read(file.path),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    if (source.parseDiagnostics.length) throw new TypeError("invalid-production-source");
+    source.fileName = join(compiler.state.subject.root, file.path);
+    const nodes = collectiveSourceNodes(compiler, source);
+    const { config } = compiler.context(file.path);
+    const references = productionModuleReferences(
+      nodes,
+      config.options,
+      compiler.state.limits.aliases,
+      (node) => visitCompilerNodes(compiler.state, node, () => undefined),
+    );
+    modules.set(file.path, { statements: rawModuleStatements(compiler, source) });
+    recordRawModuleReferences(
+      compiler,
+      source,
+      file.path,
+      references.map(({ node, specifiers }) => ({ start: node.getStart(), specifiers })),
+      incoming,
+    );
+  }
+  return finishRawModuleIndex(compiler, modules, incoming);
+}
+
+function namedRawImport(node) {
+  return (
+    ts.isImportSpecifier(node) &&
+    !node.isTypeOnly &&
+    (node.propertyName ?? node.name).text !== "default" &&
+    ts.isNamedImports(node.parent) &&
+    !node.parent.parent.isTypeOnly &&
+    ts.isImportDeclaration(node.parent.parent.parent) &&
+    node.parent.parent.parent.moduleSpecifier.text.startsWith(".")
+  );
+}
+
+function importedRawAliasInitializer(state, symbol) {
+  const initializer = aliasInitializer(symbol.valueDeclaration);
+  if (
+    !initializer ||
+    exportedDeclaration(symbol.valueDeclaration) ||
+    writtenSymbol(state.context, state.nodes, symbol)
+  )
+    return null;
+  return initializer;
+}
+
+function importedRawCallable(state, expression, seen = new Set()) {
+  expression = rawParentheses(expression);
+  if (!ts.isIdentifier(expression)) return null;
+  const symbol = state.context.checker.getSymbolAtLocation(expression);
+  if (!symbol) return null;
+  if (seen.has(symbol) || seen.size >= state.compiler.state.limits.aliases)
+    throw new TypeError("symbol-alias-budget");
+  seen.add(symbol);
+  const declaration = symbol.declarations?.[0];
+  if (declaration && namedRawImport(declaration)) return importedRawTarget(state, symbol);
+  const initializer = importedRawAliasInitializer(state, symbol);
+  if (!initializer) return null;
+  return importedRawCallable(state, initializer, seen);
+}
+
+function importedRawTarget(state, symbol) {
+  const compiler = state.compiler;
+  const declaration = symbol.declarations[0];
+  const imported = declaration.parent.parent.parent.moduleSpecifier.text;
+  const modulePath = rawModulePath(compiler, state.source, imported);
+  symbol = qualifiedAlias(state.context, symbol, compiler.state.limits.aliases);
+  if (symbol.declarations.length !== 1) return null;
+  const identity = canonicalDeclaration(compiler, symbol.declarations[0], null);
+  if (identity.owner !== state.identity.owner || identity.producer.path !== modulePath) return null;
+  if (!privateRawOutputBinding(compiler, identity.producer.path)) return null;
+  const owned = declarationCallable(compiler, identity);
+  if (
+    !ts.isFunctionDeclaration(owned.callable) ||
+    !owned.callable.name ||
+    owned.callable.parent !== owned.source
+  )
+    return null;
+  return {
+    ...owned,
+    identity,
+    declaration: owned.callable,
+    nodes: collectiveSourceNodes(compiler, owned.source),
+    modulePrivate: true,
+  };
+}
+
+function privateRawOutputBinding(compiler, path) {
+  let bound = rawPrivateOutputBindings.get(compiler);
+  if (!bound) {
+    bound = new Set();
+    rawPrivateOutputBindings.set(compiler, bound);
+  }
+  if (bound.has(path)) return true;
+  const outputs = [...compiler.state.subject.outputs].filter(([, source]) => source === path);
+  const declarations = outputs.filter(([output]) => /\.d\.[cm]?ts$/u.test(output));
+  const runtimes = outputs.filter(([output]) => /\.[cm]?js$/u.test(output));
+  if (declarations.length !== 1 || runtimes.length !== 1) return false;
+  qualifiedDeclarationBytes(compiler, declarations[0][0]);
+  compiler.read(runtimes[0][0]);
+  bound.add(path);
+  return true;
+}
+
+function collectiveRawCallable(state, expression) {
+  const local = localRawCallable(state.compiler, state.context, state.source, expression);
+  if (local && !exportedDeclaration(local.declaration)) return local;
+  return importedRawCallable(state, expression);
+}
+
+function privatePublicSources(compiler, relevant) {
+  const owners = [{ directory: "" }, ...compiler.state.subject.inventory.packages];
+  return owners.flatMap(({ directory }) => {
+    const manifest = JSON.parse(
+      compiler.read(directory ? `${directory}/package.json` : "package.json"),
+    );
+    const sources = [...relevant].filter((path) => compiler.context(path).owner === directory);
+    if (manifest.exports === undefined)
+      sources.push(...privateContainedRuntimeSources(compiler, directory, relevant));
+    const mainRelevant = privatePublicMainRelevant(compiler, directory, manifest.main, relevant);
+    if (
+      !sources.length &&
+      !mainRelevant &&
+      !privatePublicTargetRelevant(compiler, directory, manifest.exports, relevant)
+    )
+      return [];
+    // Without exports, Node exposes package subpaths as well as main/default-index resolution.
+    // Every relevant module here is already known to export the canonical helper.
+    if (manifest.exports === undefined) return sources.length ? sources : [...relevant];
+    if (!manifest.exports || typeof manifest.exports !== "object")
+      throw new TypeError("unsupported-private-public-topology");
+    return Object.entries(manifest.exports).flatMap(([name, target]) =>
+      privatePublicTargetRelevant(compiler, directory, target, relevant)
+        ? [privatePublicSource(compiler, directory, name, target)]
+        : [],
+    );
+  });
+}
+
+function privateContainedRuntimeSources(compiler, directory, relevant) {
+  const sources = new Set();
+  for (const [output, source] of compiler.state.subject.outputs) {
+    if (!relevant.has(source) || !/\.[cm]?js$/u.test(output)) continue;
+    if (directory && !output.startsWith(`${directory}/`)) continue;
+    if (!privateRawOutputBinding(compiler, source))
+      throw new TypeError("unqualified-private-public-topology");
+    sources.add(source);
+  }
+  return [...sources];
+}
+
+function privatePublicMainRelevant(compiler, directory, main, relevant) {
+  if (typeof main !== "string") return false;
+  const candidates = [
+    main,
+    `${main}.js`,
+    `${main}.json`,
+    `${main}.node`,
+    `${main}/index.js`,
+    `${main}/index.json`,
+    `${main}/index.node`,
+  ];
+  return candidates.some((target) =>
+    privatePublicTargetRelevant(compiler, directory, target, relevant),
+  );
+}
+
+function privatePublicTargetRelevant(compiler, directory, target, relevant, depth = 0) {
+  if (depth >= compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  if (typeof target !== "string") {
+    if (!target || typeof target !== "object") return false;
+    return Object.values(target).some((value) =>
+      privatePublicTargetRelevant(compiler, directory, value, relevant, depth + 1),
+    );
+  }
+  const path = join(directory, target).replaceAll("\\", "/");
+  if (relevant.has(path) || relevant.has(compiler.state.subject.outputs.get(path))) return true;
+  if (!path.includes("*")) return false;
+  const parts = path.split("*");
+  return [...compiler.state.subject.outputs].some(
+    ([output, source]) =>
+      relevant.has(source) && output.startsWith(parts[0]) && output.endsWith(parts.at(-1)),
+  );
+}
+
+function privatePublicRuntime(target) {
+  if (!target || Object.keys(target).length !== 2 || typeof target.types !== "string")
+    throw new TypeError("unsupported-private-public-topology");
+  const runtime = target.import ?? target.default;
+  if (typeof runtime !== "string" || !runtime.startsWith("./") || !target.types.startsWith("./"))
+    throw new TypeError("unsupported-private-public-topology");
+  return runtime;
+}
+
+function privatePublicSource(compiler, directory, name, target) {
+  if (!name.startsWith(".") || name.includes("*"))
+    throw new TypeError("unsupported-private-public-topology");
+  const runtime = privatePublicRuntime(target);
+  const prefix = directory ? `${directory}/` : "";
+  const source = compiler.state.subject.outputs.get(`${prefix}${target.types.slice(2)}`);
+  if (!source || compiler.state.subject.outputs.get(`${prefix}${runtime.slice(2)}`) !== source)
+    throw new TypeError("unqualified-private-public-topology");
+  compiler.read(`${prefix}${runtime.slice(2)}`);
+  compiler.read(`${prefix}${target.types.slice(2)}`);
+  return source;
+}
+
+function privateExportExposes(state, context, symbol, seen = new Set()) {
+  if (!privateValueExportSymbol(symbol)) return false;
+  if (seen.has(symbol)) return false;
+  if (seen.size >= state.compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  const next = new Set(seen).add(symbol);
+  symbol = qualifiedAlias(context, symbol, state.compiler.state.limits.aliases);
+  if (matchesProducer(state.compiler, symbol, state.identity)) return true;
+  if ((symbol.flags & ts.SymbolFlags.Module) === 0) return false;
+  return context.checker
+    .getExportsOfModule(symbol)
+    .some((entry) => privateExportExposes(state, context, entry, next));
+}
+
+function privateValueExportSymbol(symbol) {
+  return !symbol.declarations?.length || symbol.declarations.some(privateValueExportDeclaration);
+}
+
+function privateValueExportDeclaration(declaration) {
+  if (!ts.isExportSpecifier(declaration)) return true;
+  const statement = declaration.parent.parent;
+  return statement.moduleSpecifier
+    ? Boolean(namedValueReexport(statement, declaration))
+    : !statement.isTypeOnly && !declaration.isTypeOnly;
+}
+
+function privateReachableModules(state, index, path) {
+  const reachable = new Set([path]);
+  const queue = [path];
+  for (const target of queue)
+    for (const entry of index.incoming.get(target) ?? [])
+      if (!reachable.has(entry.path)) {
+        if (target === path && !privateIncomingRelevant(state, index, entry)) continue;
+        const exposed = privateModuleExportsHelper(state, entry.path);
+        if (exposed === null) return null;
+        if (!exposed) continue;
+        reachable.add(entry.path);
+        queue.push(entry.path);
+      }
+  return reachable;
+}
+
+function privateModuleExportsHelper(state, path) {
+  const owned = privateOwnedSource(state.compiler, path);
+  if (!owned) return null;
+  const module = owned.context.checker.getSymbolAtLocation(owned.source);
+  if (!module) return null;
+  return owned.context.checker
+    .getExportsOfModule(module)
+    .some((symbol) => privateExportExposes(state, owned.context, symbol));
+}
+
+function privateRawPublicExposure(state, index) {
+  const key = canonicalRawStateKey(state.identity, -1);
+  if (index.privacy.has(key)) return index.privacy.get(key);
+  const relevant = privateReachableModules(state, index, state.identity.producer.path);
+  if (!relevant) return true;
+  const paths = privatePublicPaths(state.compiler, relevant);
+  if (!paths) return true;
+  const exposed = paths.some((path) => {
+    if (!relevant.has(path)) return false;
+    const owned = privateOwnedSource(state.compiler, path);
+    if (!owned) return true;
+    const { context, source } = owned;
+    const module = context.checker.getSymbolAtLocation(source);
+    if (!module) throw new TypeError("unresolved-private-public-topology");
+    return context.checker
+      .getExportsOfModule(module)
+      .some((symbol) => privateExportExposes(state, context, symbol));
+  });
+  index.privacy.set(key, exposed);
+  return exposed;
+}
+
+function privatePublicPaths(compiler, relevant) {
+  try {
+    return privatePublicSources(compiler, relevant);
+  } catch (error) {
+    if (
+      error.message === "unsupported-private-public-topology" ||
+      error.message === "unqualified-private-public-topology"
+    )
+      return null;
+    throw error;
+  }
+}
+
+function privateOwnedSource(compiler, path) {
+  try {
+    return ownedSource(compiler, path);
+  } catch (error) {
+    if (error.message === "untyped-symbol-source") return null;
+    throw error;
+  }
+}
+
+function privateReferenceIdentity(state, context, node) {
+  let symbol = referenceValueSymbol(context, node);
+  if (!symbol) return false;
+  const seen = new Set();
+  while (symbol) {
+    if (!symbol.declarations?.length) return false;
+    symbol = qualifiedAlias(context, symbol, state.compiler.state.limits.aliases);
+    if (matchesProducer(state.compiler, symbol, state.identity)) return true;
+    if (seen.has(symbol) || seen.size >= state.compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    seen.add(symbol);
+    const initializer = aliasInitializer(symbol.valueDeclaration);
+    if (!initializer || !ts.isIdentifier(rawParentheses(initializer))) return false;
+    symbol = context.checker.getSymbolAtLocation(rawParentheses(initializer));
+  }
+  return false;
+}
+
+function privateReferenceAlias(node) {
+  let outer = node;
+  while (ts.isParenthesizedExpression(outer.parent)) outer = outer.parent;
+  return (
+    ts.isVariableDeclaration(outer.parent) &&
+    outer.parent.initializer === outer &&
+    Boolean(aliasInitializer(outer.parent)) &&
+    !exportedDeclaration(outer.parent) &&
+    ts.isIdentifier(outer.parent.name)
+  );
+}
+
+function privateReferenceFact(node, path) {
+  if (declarationReference(node)) return { kind: "binding" };
+  if (ts.isImportSpecifier(node.parent))
+    return { kind: namedRawImport(node.parent) ? "binding" : "unsupported" };
+  const call = referenceCall(node);
+  if (call) return { kind: "call", path, start: call.getStart(), end: call.end };
+  return { kind: privateReferenceAlias(node) ? "binding" : "unsupported" };
+}
+
+function privateUnsupportedReexport(state, owned, node) {
+  return (
+    !node.isTypeOnly &&
+    node.exportClause.elements.some(
+      (binding) =>
+        !binding.isTypeOnly && privateReferenceIdentity(state, owned.context, binding.name),
+    )
+  );
+}
+
+function privateUnsupportedImportClause(state, owned, clause) {
+  if (!clause || clause.isTypeOnly) return false;
+  if (clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) return true;
+  return clause.namedBindings.elements.some(
+    (binding) =>
+      !binding.isTypeOnly &&
+      privateReferenceIdentity(state, owned.context, binding.name) &&
+      !namedRawImport(binding),
+  );
+}
+
+function privateUnsupportedImport(state, owned, entry) {
+  const node = owned.source.statements.find((statement) => statement.getStart() === entry.start);
+  if (
+    node &&
+    ts.isExportDeclaration(node) &&
+    node.exportClause &&
+    ts.isNamedExports(node.exportClause)
+  )
+    return privateUnsupportedReexport(state, owned, node);
+  if (!node || !ts.isImportDeclaration(node)) return true;
+  return privateUnsupportedImportClause(state, owned, node.importClause);
+}
+
+function privateSourceReferenceFacts(state, path) {
+  const owned = privateOwnedSource(state.compiler, path);
+  if (!owned) return [{ kind: "unsupported" }];
+  const nodes = collectiveSourceNodes(state.compiler, owned.source);
+  return nodes.flatMap((node) => {
+    if (!ts.isIdentifier(node) || privateTypeOnlyReference(node)) return [];
+    if (!privateReferenceIdentity(state, owned.context, node)) return [];
+    const symbol = owned.context.checker.getSymbolAtLocation(node);
+    if (symbol && writtenSymbol(owned.context, nodes, symbol)) return [{ kind: "unsupported" }];
+    return [privateReferenceFact(node, path)];
+  });
+}
+
+function privateTypeOnlyReference(node) {
+  const parent = node.parent;
+  if (ts.isImportSpecifier(parent)) return ts.isTypeOnlyImportDeclaration(parent);
+  if (ts.isExportSpecifier(parent)) return parent.isTypeOnly || parent.parent.parent.isTypeOnly;
+  for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
+    if (ts.isTypeNode(ancestor)) return true;
+    if (ts.isExpression(ancestor) || ts.isStatement(ancestor)) return false;
+  }
+  return false;
+}
+
+function privateRawReferenceFacts(state, index) {
+  const key = canonicalRawStateKey(state.identity, -1);
+  if (index.references.has(key)) return index.references.get(key);
+  const facts = [];
+  if (privateRawPublicExposure(state, index)) facts.push({ kind: "unsupported" });
+  const path = state.identity.producer.path;
+  const incoming = (index.incoming.get(path) ?? []).filter((entry) =>
+    privateIncomingRelevant(state, index, entry),
+  );
+  for (const entry of incoming) {
+    if (state.compiler.context(entry.path).owner !== state.compiler.context(path).owner) {
+      facts.push({ kind: "unsupported" });
+      continue;
+    }
+    const owned = privateOwnedSource(state.compiler, entry.path);
+    if (!owned || privateUnsupportedImport(state, owned, entry))
+      facts.push({ kind: "unsupported" });
+  }
+  if (!facts.some((fact) => fact.kind === "unsupported"))
+    for (const source of new Set([path, ...incoming.map((entry) => entry.path)]))
+      facts.push(...privateSourceReferenceFacts(state, source));
+  index.references.set(key, facts);
+  return facts;
+}
+
+function privateRawUnsupportedUse(state) {
+  const facts = privateRawReferenceFacts(state, rawModuleIndex(state.compiler));
+  return facts.some(
+    (fact) =>
+      fact.kind === "unsupported" ||
+      (fact.kind === "call" &&
+        !state.incoming.some(
+          (edge) =>
+            edge.path === fact.path &&
+            edge.call.getStart() === fact.start &&
+            edge.call.end === fact.end,
+        )),
+  );
+}
+
+function privateIncomingRelevant(state, index, entry) {
+  const node = index.modules
+    .get(entry.path)
+    ?.statements.find((statement) => statement.start === entry.start);
+  if (!node?.bindings) return true;
+  return node.bindings.some(
+    (binding) => !binding.isTypeOnly && binding.name === state.callable.name.text,
+  );
+}
+
 function containsSymbol(context, node, symbol) {
   if (ts.isIdentifier(node) && context.checker.getSymbolAtLocation(node) === symbol) return true;
   return Boolean(ts.forEachChild(node, (child) => containsSymbol(context, child, symbol)));
@@ -2519,9 +3105,9 @@ function rawEdgeCandidate(state, target, index, argument) {
   if (!origin || (state.collective && !collectiveRawArgument(state, argument))) return null;
   const candidate = rawState(
     state.compiler,
-    state.context,
-    state.source,
-    state.nodes,
+    target.context ?? state.context,
+    target.source ?? state.source,
+    target.nodes ?? state.nodes,
     target,
     index,
     state.collective,
@@ -2531,8 +3117,11 @@ function rawEdgeCandidate(state, target, index, argument) {
 
 function rawCallEdges(state, states, queue) {
   for (const call of stateCalls(state)) {
-    const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
-    if (!target || exportedDeclaration(target.declaration)) continue;
+    const target =
+      state.collective && state.privateModules
+        ? collectiveRawCallable(state, call.expression)
+        : localRawCallable(state.compiler, state.context, state.source, call.expression);
+    if (!target || (!target.modulePrivate && exportedDeclaration(target.declaration))) continue;
     rawCallArguments(state, target, call, states, queue);
   }
 }
@@ -2542,13 +3131,16 @@ function rawCallArguments(state, target, call, states, queue) {
     const edge = rawEdgeCandidate(state, target, index, argument);
     if (!edge) continue;
     const { candidate, origin } = edge;
+    if (state.privateModules) candidate.privateModules = true;
     if (!states.has(candidate.key)) {
       if (state.collective && states.size >= state.compiler.state.limits.aliases)
         throw collectiveHelperBudgetError(state.compiler.state.limits.aliases, states.size + 1);
       states.set(candidate.key, candidate);
       queue.push(candidate);
     }
-    states.get(candidate.key).incoming.push({ state: state.key, call, origin });
+    const incoming = { state: state.key, call, origin };
+    if (state.privateModules) incoming.path = state.identity.producer.path;
+    states.get(candidate.key).incoming.push(incoming);
   }
 }
 
@@ -2639,9 +3231,11 @@ function rawStateHasUnsupportedUse(state) {
   return (
     ((state.collective || state.capturedUnknownTraversal) &&
       writtenSymbol(state.context, state.nodes, state.parameterSymbol)) ||
-    state.nodes.some(
-      (node) => helperReference(state, node) && !permittedHelperReference(state, node),
-    )
+    (state.modulePrivate
+      ? privateRawUnsupportedUse(state)
+      : state.nodes.some(
+          (node) => helperReference(state, node) && !permittedHelperReference(state, node),
+        ))
   );
 }
 
@@ -3115,9 +3709,11 @@ function rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates =
   return slots;
 }
 
-function collectiveRawRoot(compiler, request) {
+function collectiveRawRoot(compiler, request, privateModules = false) {
   const owned = declarationCallable(compiler, request.identity);
-  const nodes = sourceNodes(compiler, owned.source);
+  const nodes = privateModules
+    ? collectiveSourceNodes(compiler, owned.source)
+    : sourceNodes(compiler, owned.source);
   const state = rawState(
     compiler,
     owned.context,
@@ -3131,6 +3727,7 @@ function collectiveRawRoot(compiler, request) {
     request.index,
     true,
   );
+  if (state && privateModules) state.privateModules = true;
   if (!state || writtenSymbol(state.context, nodes, state.parameterSymbol)) return null;
   const parameter = state.callable.parameters[state.index];
   return typeFacts(state.context.checker.getTypeAtLocation(parameter)).kind === "unknown"
@@ -3138,11 +3735,11 @@ function collectiveRawRoot(compiler, request) {
     : null;
 }
 
-function collectiveRawGraph(compiler, requests) {
+function collectiveRawGraph(compiler, requests, privateModules = false) {
   const states = new Map();
   const roots = new Map();
   for (const request of requests) {
-    const state = collectiveRawRoot(compiler, request);
+    const state = collectiveRawRoot(compiler, request, privateModules);
     if (!state) continue;
     if (!states.has(state.key) && states.size >= compiler.state.limits.aliases)
       throw collectiveHelperBudgetError(compiler.state.limits.aliases, states.size + 1);
@@ -3190,19 +3787,19 @@ function collectiveStateSlots(state) {
   ];
 }
 
-function collectiveRawFacts(compiler, requests) {
+function collectiveRawFacts(compiler, requests, privateModules = false) {
   compiler.assertCurrent();
   if (requests.length > compiler.state.limits.aliases)
     throw collectiveHelperBudgetError(compiler.state.limits.aliases, requests.length);
-  const { states, roots } = collectiveRawGraph(compiler, requests);
+  const { states, roots } = collectiveRawGraph(compiler, requests, privateModules);
   const first = states.get(roots.keys().next().value);
   const qualified =
     roots.size === 0 ? new Set() : qualifiedRawStates(first, states, new Set(roots.keys()));
   return { states, roots, qualified };
 }
 
-function collectiveRawCheckingSlots(compiler, requests, rule) {
-  const { states, roots, qualified } = collectiveRawFacts(compiler, requests);
+function collectiveDetachedSlots(compiler, requests) {
+  const { states, roots, qualified } = collectiveRawFacts(compiler, requests, true);
   const slots = [];
   const dependencies = new Map();
   for (const state of states.values()) {
@@ -3211,17 +3808,57 @@ function collectiveRawCheckingSlots(compiler, requests, rule) {
       ...new Set(contributingRawRoots(state.key, states, roots, dependencies)),
     ].sort(compareStrings);
     slots.push(
-      ...collectiveStateSlots(state)
-        .filter((slot) => slot.rule === rule)
-        .map((slot) => ({
-          ...slot,
-          producerIdentity: state.identity,
-          contributingResponsibilityIds,
-        })),
+      ...collectiveStateSlots(state).map((slot) => ({
+        ...slot,
+        producerIdentity: state.identity,
+        contributingResponsibilityIds,
+      })),
     );
   }
   compiler.assertCurrent();
   return slots;
+}
+
+function collectiveRawCheckingSlots(compiler, requests, rule) {
+  const key = detachedRawRequestKey(requests);
+  const slots = detachedRawResult(compiler, rawDetachedSlots, key, () =>
+    collectiveDetachedSlots(compiler, requests),
+  );
+  compiler.assertCurrent();
+  return slots.filter((slot) => slot.rule === rule);
+}
+
+function collectiveDiscoveryKeys(compiler, request) {
+  return detachedRawResult(compiler, rawDiscoveryKeys, detachedRawRequestKey([request]), () => [
+    ...collectiveRawGraph(compiler, [request], true).states.keys(),
+  ]);
+}
+
+function collectiveRawComponents(compiler, requests) {
+  compiler.assertCurrent();
+  const components = [];
+  for (const request of [...requests].sort((a, b) => compareStrings(a.recordId, b.recordId))) {
+    let keys;
+    try {
+      keys = new Set(collectiveDiscoveryKeys(compiler, request));
+    } catch (error) {
+      if (!collectiveHelperBudgetDetails(error)) throw error;
+      keys = new Set([canonicalRawStateKey(request.identity, request.index)]);
+    }
+    const joined = { keys, roots: [request] };
+    for (let index = components.length - 1; index >= 0; index -= 1) {
+      const component = components[index];
+      if (![...keys].some((key) => component.keys.has(key))) continue;
+      for (const key of component.keys) keys.add(key);
+      joined.roots.push(...component.roots);
+      components.splice(index, 1);
+    }
+    components.push(joined);
+  }
+  compiler.assertCurrent();
+  return components.map(({ roots }) =>
+    roots.sort((a, b) => compareStrings(a.recordId, b.recordId)),
+  );
 }
 
 function collectiveJsonByteMeasurement(compiler, requests) {
@@ -5269,6 +5906,15 @@ function validationBoundaryOperations(compiler) {
   };
 }
 
+function cachedRawCheckingSlots(compiler, rawSlots, identity, index, capturedUnknownPredicates) {
+  assertCapturedPredicateOption(capturedUnknownPredicates);
+  compiler.assertCurrent();
+  const key = policyDigest(JSON.stringify({ identity, index, capturedUnknownPredicates }));
+  if (!rawSlots.has(key))
+    rawSlots.set(key, rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates));
+  return structuredClone(rawSlots.get(key));
+}
+
 export function createSymbolResolver(subject, options = {}, proofRoots = []) {
   const compiler = createCompilerContext(subject, options, proofRoots);
   const rawSlots = new Map();
@@ -5287,15 +5933,10 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
       propertyObservationFacts(compiler, identity, options),
     observationBinding: (request, producer) => observationBinding(compiler, request, producer),
     callableSlots: (identity) => callableSlots(compiler, identity),
-    rawCheckingSlots: (identity, index, capturedUnknownPredicates = false) => {
-      assertCapturedPredicateOption(capturedUnknownPredicates);
-      compiler.assertCurrent();
-      const key = policyDigest(JSON.stringify({ identity, index, capturedUnknownPredicates }));
-      if (!rawSlots.has(key))
-        rawSlots.set(key, rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates));
-      return structuredClone(rawSlots.get(key));
-    },
+    rawCheckingSlots: (identity, index, capturedUnknownPredicates = false) =>
+      cachedRawCheckingSlots(compiler, rawSlots, identity, index, capturedUnknownPredicates),
     collectiveRawCheckingSlots: (roots, rule) => collectiveRawCheckingSlots(compiler, roots, rule),
+    collectiveRawComponents: (roots) => collectiveRawComponents(compiler, roots),
     collectiveJsonByteMeasurement: (roots) => collectiveJsonByteMeasurement(compiler, roots),
     consumerCalls: (identity, producer, expectedOwner) =>
       consumerCalls(compiler, identity, producer, expectedOwner),
@@ -5308,6 +5949,11 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     assertCurrent: compiler.assertCurrent,
     close: () => {
       exportFacts.close();
+      rawModuleIndexes.delete(compiler);
+      rawSourceNodeCaches.delete(compiler);
+      rawPrivateOutputBindings.delete(compiler);
+      rawDiscoveryKeys.delete(compiler);
+      rawDetachedSlots.delete(compiler);
       compiler.close();
     },
     stats: () => ({

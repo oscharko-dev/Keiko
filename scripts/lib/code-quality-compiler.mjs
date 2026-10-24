@@ -2,21 +2,16 @@ import { Buffer } from "node:buffer";
 import { readFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
-import { collectPolicyPaths, policyDigest } from "./code-quality-inventory.mjs";
+import {
+  collectPolicyPaths,
+  policyDigest,
+  preparedModuleReceipt,
+} from "./code-quality-inventory.mjs";
+import { chargeSymbolVisits, symbolLimits } from "./code-quality-policy.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
 // Witnesses remain private: exposed compiler metadata cannot rewrite the admitted text or bytes.
 const SNAPSHOT_WITNESSES = new WeakMap();
-
-const DEFAULT_LIMITS = Object.freeze({
-  programs: 2,
-  sourceBytes: 64 * 1024 * 1024,
-  nodes: 5_000_000,
-  aliases: 64,
-  emitBytes: 16 * 1024 * 1024,
-  emissionTimeout: 10_000,
-  emissionOutputBytes: 1024 * 1024,
-});
 
 export function subjectPath(subject, absolute) {
   const path = relative(subject.root, absolute).replaceAll("\\", "/");
@@ -58,17 +53,6 @@ function regularSource(path) {
     throw new TypeError("unsafe-symbol-source");
 }
 
-function limitsFrom(options) {
-  const limits = { ...DEFAULT_LIMITS, ...options };
-  if (
-    Object.keys(limits).some(
-      (key) => !(key in DEFAULT_LIMITS) || !Number.isSafeInteger(limits[key]) || limits[key] < 1,
-    )
-  )
-    throw new TypeError("invalid-symbol-budget");
-  return limits;
-}
-
 function subjectFingerprint(subject) {
   const contexts = [...subject.contexts].map(([owner, config]) => ({
     owner,
@@ -92,6 +76,7 @@ function subjectFingerprint(subject) {
       outputs: [...subject.outputs],
       ownership,
       membership: subject.membership.paths,
+      moduleReceipt: subject.moduleReceipt?.digest,
     }),
   );
 }
@@ -125,7 +110,7 @@ export function createCompilerContext(subject, options = {}, roots = []) {
     proofRoots: roots,
     proofManifest: proofManifest(subject, roots),
     proofFingerprint: policyDigest(JSON.stringify(roots)),
-    limits: limitsFrom(options),
+    limits: symbolLimits(options),
     inputs: observedInputs(subject),
     fingerprint: subjectFingerprint(subject),
     snapshots: new Map(),
@@ -139,6 +124,7 @@ export function createCompilerContext(subject, options = {}, roots = []) {
     created: 0,
     closed: false,
   };
+  initializePreparation(state);
   return {
     state,
     read: (path) => readOwned(state, path),
@@ -170,6 +156,18 @@ export function createCompilerContext(subject, options = {}, roots = []) {
 
 function assertOpen(state) {
   if (state.closed) throw new TypeError("symbol-resolver-closed");
+  if (state.preparationError) throw state.preparationError;
+}
+
+function initializePreparation(state) {
+  const receipt = preparedModuleReceipt(state.subject);
+  if (!receipt) return;
+  try {
+    chargeSymbolVisits(state, receipt.nodes);
+  } catch (error) {
+    if (error.message !== "symbol-node-budget") throw error;
+    state.preparationError = error;
+  }
 }
 
 function snapshot(state, absolute, text, digest = policyDigest(text)) {
@@ -310,6 +308,7 @@ function assertCurrent(state) {
     throw new TypeError("symbol-proof-context-changed");
   if (subjectFingerprint(state.subject) !== state.fingerprint)
     throw new TypeError("symbol-context-changed");
+  preparedModuleReceipt(state.subject);
   const current = collectPolicyPaths(state.subject.root);
   if (current.join("\0") !== state.subject.membership.paths.join("\0"))
     throw new TypeError("symbol-membership-changed");
@@ -337,8 +336,7 @@ function hasCurrentDigest(path, previous, expected) {
 }
 
 export function visitCompilerNodes(state, node, visit) {
-  state.nodes += 1;
-  if (state.nodes > state.limits.nodes) throw new TypeError("symbol-node-budget");
+  chargeSymbolVisits(state);
   visit(node);
   ts.forEachChild(node, (child) => visitCompilerNodes(state, child, visit));
 }

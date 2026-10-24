@@ -33,6 +33,7 @@ import {
   replaceConsumerCallFixture,
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
+  createPrivateModuleParserFixture,
   createTypedRecheckFixture,
   createCanonicalDecoderFixture,
   installResponsibilityFixtureTools,
@@ -94,6 +95,62 @@ afterEach(() => {
 });
 
 describe("collective public parser structural roots (#3918)", () => {
+  it.each(["direct", "one-root"])(
+    "joins only the private helper component for %s with pending semantics",
+    async (variant) => {
+      const own = createPrivateModuleParserFixture(variant, [
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]);
+      roots.push(own.root);
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.counts).toMatchObject({
+        ready: own.records.length,
+        qualified: 0,
+        pending: own.records.length,
+      });
+      const helper = report.assessments
+        .flatMap((record) => record.slots)
+        .filter((slot) => slot.path === "packages/alpha/src/helper.ts");
+      expect(helper.filter((slot) => slot.rule === "anti-slop/no-runtime-typeof")).toHaveLength(2);
+      expect(
+        helper.filter((slot) => slot.rule === "anti-slop/no-unsafe-dictionary-type"),
+      ).toHaveLength(3);
+      expect(
+        helper.every(
+          (slot) =>
+            JSON.stringify(slot.contributingResponsibilityIds) ===
+            JSON.stringify(own.records.map((record) => record.id)),
+        ),
+      ).toBe(true);
+      expect(
+        report.assessments.every((record) => record.proofs.every((proof) => !proof.executed)),
+      ).toBe(true);
+    },
+    30_000,
+  );
+
+  it.each(["missing-record", "missing-rule", "missing-selector", "incomplete-root"])(
+    "withholds imported helper ownership when a contributing root is %s",
+    async (variant) => {
+      const rule = "anti-slop/no-runtime-typeof";
+      const own = createPrivateModuleParserFixture("direct", [rule]);
+      roots.push(own.root);
+      if (variant === "missing-record") own.policy.responsibilities.pop();
+      if (variant === "missing-rule") own.records[1].rules = ["anti-slop/no-unknown-parameters"];
+      if (variant === "missing-selector") delete own.records[1].proofAssertions;
+      if (variant === "incomplete-root") own.records[1].consumer.exportName = "absent";
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.assessments[0].structural).toBe("ready");
+      expect(
+        report.assessments
+          .flatMap((record) => record.slots ?? [])
+          .filter((slot) => slot.path === "packages/alpha/src/helper.ts" && slot.rule === rule),
+      ).toEqual([]);
+    },
+    30_000,
+  );
+
   it("joins the complete registered incoming roots without qualifying their pending proofs", async () => {
     const own = createCollectiveParserFixture();
     roots.push(own.root);
@@ -2056,6 +2113,59 @@ async function collectiveSemanticFixture(variant) {
 }
 
 describe("collective public parser actual CLI qualification (#3918)", () => {
+  it
+    .skipIf(process.platform === "win32")
+    .each(["private-module-unsafe", "private-module-missing-assertion"])(
+    "preserves structural applicability and fails whole semantic qualification for %s",
+    async (variant) => {
+      const own = await collectiveSemanticFixture(variant);
+      const staticReport = await executeCodeQualityPolicy(
+        { mode: "enforce", scope: "repository", json: true },
+        own.root,
+      );
+      expect(staticReport.violations).toEqual([]);
+      expect(staticReport.enforcementOutcome).toBe("passed");
+      expect(staticReport.responsibilities.counts).toMatchObject({
+        ready: 2,
+        qualified: 0,
+        pending: 2,
+      });
+      const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        expect(
+          await codeQualityPolicyMain(["--json", "--qualify-responsibilities"], own.root),
+        ).toBe(1);
+        expect(stderr.mock.calls.join(" ")).toContain(
+          variant.endsWith("unsafe")
+            ? "semantic-proof-execution-failed"
+            : "semantic-proof-assertion-missing",
+        );
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "qualifies imported helper slots only through the unchanged whole public proof runner",
+    async () => {
+      const own = await collectiveSemanticFixture("private-module");
+      const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(report.violations).toEqual([]);
+      expect(report.outcome).toBe("passed");
+      expect(report.responsibilities.counts).toMatchObject({ ready: 2, qualified: 2, pending: 0 });
+      expect(report.responsibilities.execution).toMatchObject({
+        status: "passed",
+        invocationCount: 1,
+        process: { directChildClosed: true, groupAbsent: true },
+      });
+    },
+    195_000,
+  );
+
   it.skipIf(process.platform === "win32")(
     "executes both bound public roots once before granting semantics",
     async () => {

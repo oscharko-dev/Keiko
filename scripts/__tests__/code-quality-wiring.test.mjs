@@ -81,7 +81,14 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(124);
+    expect(production.responsibilities).toHaveLength(129);
+    expect(production.responsibilities.slice(-5).map(({ id }) => id)).toEqual([
+      "code-task-public-task-id-validator",
+      "code-task-public-run-id-validator",
+      "code-task-public-workspace-id-validator",
+      "code-task-public-grant-id-validator",
+      "code-task-public-idempotency-id-validator",
+    ]);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -1418,11 +1425,10 @@ describe("diagnostics ingress route responsibility wiring (#3918)", () => {
     ]);
     for (const record of records) {
       expect(record.kind).toBe("validator");
-      expect(record.rules).toEqual(
-        record.id === "client-binding-ingress-route-validator"
-          ? ["anti-slop/no-unknown-parameters", "anti-slop/no-known-value-widening"]
-          : ["anti-slop/no-unknown-parameters"],
-      );
+      expect(record.rules).toEqual([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-known-value-widening",
+      ]);
       expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
       expect(record.output).toEqual(record.transform);
       expect(record.consumer).toEqual({

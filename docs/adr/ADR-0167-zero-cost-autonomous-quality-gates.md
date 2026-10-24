@@ -104,6 +104,37 @@ mutation, extended end-to-end, and reference-machine performance measurement rem
 release-owned. This preserves their depth without making multi-hour or hardware-sensitive work a
 per-PR availability dependency.
 
+The repository source-policy resolver's collective raw-helper capability includes bounded,
+same-owner private modules (#3918). Only direct uniquely resolved named relative value imports
+and supported immutable aliases join actual canonical helper-connected roots, including one root.
+Complete owned production static membership supplies relevant import/reference facts; actual public
+root/subpath and named/star/default/namespace exposure denies a private loan. Closed `types` plus
+`import` and `types` plus `default` targets are recognized by that private exposure walk without
+changing public-proof qualification. Concrete helper-linked dynamic/computed dispatch, foreign or
+unregistered callers and observed escapes withhold helper slots. Unrelated unresolved runtime loaders
+remain a disclosed static-analysis limitation, not certified consumers or a universal refusal.
+Topology validation is deferred to canonical helper-export reachability and relevant manifest entry
+targets; an unrelated workspace's absent `exports` is not a global refusal. Relevant packages without
+`exports` retain Node main/default-index and public-subpath exposure, rather than becoming private.
+No-exports ancestor relevance includes physically contained qualified helper runtime outputs;
+a nested package's closed exports and the ancestor's `private` metadata do not seal those ancestor
+subpaths. A closed ancestor export map does. This is known Node topology, not a general loader model.
+Colocated type-only references are not runtime callers, and direct named type-only reexports retain
+their value-visibility flags before canonical private-exposure resolution. A named import of `default` remains an
+unsupported default edge, rather than an ordinary named-helper alias.
+Existing cumulative compiler/source/node/alias budgets, currentness checks and independently valid
+root slots remain authoritative. The mandatory inventory syntax visitors provide detached private
+module facts through a frozen, privately witnessed source/configuration/ownership/membership/output
+receipt. Added traversal uses the same unchanged checked visit ruler before compiler creation;
+each independent compiler seeds that actual preparation cost once and continues the same counter.
+Source admission and canonical dual-mode resolution remain compiler-owned. Incompatible alias
+profiles use charged extraction; failed or stale receipts grant no private loan. Public inventory
+and record contracts remain unchanged. This is structural applicability with pending semantics; the
+existing whole qualification route alone establishes runtime proof success. It adds no per-slot
+runtime gate, record kind, generic trusted output, rule scope or product runtime behavior. The exact
+source contract and discriminating whole-owner proofs live in the existing
+[code-quality policy](../qa/code-quality-policy.md).
+
 The original rollout used CPU simulation with a 5% dashboard threshold and later made the native
 comparison advisory after shared-runner provenance produced false regressions. ADR-0169 supersedes
 that complete provider-specific design: the benchmark workflow, dashboard policy, validator,

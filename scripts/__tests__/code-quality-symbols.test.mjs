@@ -15,9 +15,15 @@ import {
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { collectPolicyInventory, collectPolicySubject } from "../lib/code-quality-inventory.mjs";
+import {
+  collectPolicyInventory,
+  collectPolicySubject,
+  preparedModuleReceipt,
+} from "../lib/code-quality-inventory.mjs";
 import ts from "typescript";
-import { createCompilerContext } from "../lib/code-quality-compiler.mjs";
+import { createCompilerContext, visitCompilerNodes } from "../lib/code-quality-compiler.mjs";
+import * as productionModuleFacts from "../lib/code-quality-production.mjs";
+import { SYMBOL_LIMITS } from "../lib/code-quality-policy.mjs";
 import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
@@ -39,6 +45,7 @@ import {
   createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
+  createPrivateModuleParserFixture,
   createTypedRecheckFixture,
   createCanonicalDecoderFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
@@ -2296,6 +2303,541 @@ describe("collective exact raw symbol closure (#3918)", () => {
     expect(() =>
       changed.resolver.collectiveRawCheckingSlots(changed.rawRoots, "anti-slop/no-runtime-typeof"),
     ).toThrow("symbol-subject-changed");
+  }, 30_000);
+});
+
+function privateModuleReceiptVariant(own, variant) {
+  if (variant === "receipt-node-failure")
+    own.put(
+      "receipt-production.mjs",
+      `const boundArray = [${"0,".repeat(100_000)}];\n` + "void import(boundArray);\n".repeat(55),
+    );
+  if (variant === "fact-shapes")
+    own.put(
+      "src/module-facts.ts",
+      'import type { isRecord as Shape } from "../packages/alpha/src/helper.js";\n' +
+        'export { type isRecord } from "../packages/alpha/src/helper.js";\n' +
+        'declare const flag: boolean; const base = "../packages/alpha/src/";\n' +
+        'let path = flag ? base + "helper.js" : `${base}leaf-first.js`; void import(path);\n',
+    );
+  if (variant === "receipt-alias-failure")
+    own.put(
+      "src/module-aliases.ts",
+      'const path0 = "../packages/alpha/src/helper.js";\n' +
+        Array.from(
+          { length: SYMBOL_LIMITS.aliases },
+          (_, index) => `const path${index + 1} = path${index};\n`,
+        ).join("") +
+        `void import(path${SYMBOL_LIMITS.aliases});\n`,
+    );
+}
+
+async function privateModuleSymbolFixture(variant = "direct", options = {}) {
+  const own = createPrivateModuleParserFixture(variant);
+  fixtures.push(own);
+  if (variant === "cache-eviction")
+    own.put("src/cache-owner.ts", "export function evictionOwner(): number { return 1; }\n");
+  privateModuleReceiptVariant(own, variant);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    {
+      owner: "packages/alpha",
+      paths: ["packages/alpha/src/proof.test.ts"],
+    },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+  return own;
+}
+
+function evictPrivateModuleProgram(own) {
+  const path = "src/cache-owner.ts";
+  const text = readFileSync(join(own.root, path), "utf8");
+  own.resolver.describeAt({ path, offset: text.indexOf("evictionOwner") });
+  expect(own.resolver.stats().programs).toBe(1);
+}
+
+function privateModuleSyntaxReferences(text, limit = 64) {
+  const source = ts.createSourceFile("owned.ts", text, ts.ScriptTarget.Latest, true);
+  const nodes = [];
+  const visit = (node) => {
+    nodes.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return productionModuleFacts.productionModuleReferences(
+    nodes,
+    { verbatimModuleSyntax: true },
+    limit,
+  );
+}
+
+function originalModuleReferenceFacts(compiler, root, row) {
+  const source = ts.createSourceFile(
+    row.path,
+    readFileSync(join(root, row.path), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const nodes = [];
+  visitCompilerNodes(compiler.state, source, (node) => nodes.push(node));
+  return productionModuleFacts
+    .productionModuleReferences(
+      nodes,
+      compiler.context(row.path).config.options,
+      compiler.state.limits.aliases,
+      (node) => visitCompilerNodes(compiler.state, node, () => undefined),
+    )
+    .map(({ node, specifiers }) => ({ start: node.getStart(), specifiers }));
+}
+
+describe("inventory-prepared private module receipt", () => {
+  it("recomputes an actually exhausted preparation under a larger custom node profile", async () => {
+    const own = await privateModuleSymbolFixture("receipt-node-failure", {
+      nodes: SYMBOL_LIMITS.nodes * 3,
+    });
+    const healthy = await privateModuleSymbolFixture();
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.failure).toBe("symbol-node-budget");
+    expect(receipt.nodes).toBeGreaterThan(receipt.limits.nodes);
+    const defaults = createSymbolResolver(own.subject);
+    const rule = "anti-slop/no-unknown-parameters";
+    try {
+      expect(() => defaults.collectiveRawCheckingSlots(own.rawRoots, rule)).toThrow(
+        "symbol-node-budget",
+      );
+      const before = own.resolver.stats().nodes;
+      expect(own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toEqual(
+        healthy.resolver.collectiveRawCheckingSlots(healthy.rawRoots, rule),
+      );
+      expect(own.resolver.stats().nodes).toBeGreaterThan(before);
+    } finally {
+      defaults.close();
+    }
+  }, 30_000);
+
+  it("matches the complete existing extractor without a second inventory AST walk", async () => {
+    const own = await privateModuleSymbolFixture("fact-shapes");
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.failure).toBeNull();
+    expect(receipt.nodes).toBeGreaterThan(0);
+    expect(receipt.rows.map((row) => row.path).sort()).toEqual(
+      own.subject.inventory.files
+        .filter((file) => file.production)
+        .map((file) => file.path)
+        .sort(),
+    );
+    const statements = receipt.rows.find((row) => row.path === "src/module-facts.ts").statements;
+    expect(statements[0].bindings).toEqual([{ name: "isRecord", isTypeOnly: false }]);
+    expect(statements[1].bindings).toEqual([{ name: "isRecord", isTypeOnly: true }]);
+    const compiler = createCompilerContext(own.subject);
+    try {
+      for (const row of receipt.rows) {
+        expect(row.sourceSha256).toBe(
+          own.subject.inventory.files.find((file) => file.path === row.path).sha256,
+        );
+        expect(row.references).toEqual(originalModuleReferenceFacts(compiler, own.root, row));
+      }
+    } finally {
+      compiler.close();
+    }
+  }, 30_000);
+
+  it("seeds actual additional visits once for each independent compiler", async () => {
+    const own = await privateModuleSymbolFixture();
+    const receipt = preparedModuleReceipt(own.subject);
+    const first = createCompilerContext(own.subject);
+    const second = createCompilerContext(own.subject);
+    try {
+      expect(first.state.nodes).toBe(receipt.nodes);
+      expect(second.state.nodes).toBe(receipt.nodes);
+      const source = ts.createSourceFile(
+        "visit.ts",
+        "const value = 1;",
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      visitCompilerNodes(first.state, source, () => undefined);
+      expect(first.state.nodes).toBeGreaterThan(receipt.nodes);
+      expect(second.state.nodes).toBe(receipt.nodes);
+      second.assertCurrent();
+      expect(second.state.nodes).toBe(receipt.nodes);
+    } finally {
+      first.close();
+      second.close();
+    }
+  }, 30_000);
+
+  it("makes receipt facts immutable and rejects a replacement with the same digest", async () => {
+    const own = await privateModuleSymbolFixture();
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(() => {
+      receipt.nodes = 0;
+    }).toThrow(TypeError);
+    expect(() => {
+      receipt.rows[0].references.push({ start: 0, specifiers: [] });
+    }).toThrow(TypeError);
+    own.subject.moduleReceipt = structuredClone(receipt);
+    expect(() => own.resolver.assertCurrent()).toThrow("symbol-module-facts-changed");
+  }, 30_000);
+
+  it.each(["options", "outputs", "scope", "membership"])(
+    "rejects changed %s before constructing a second compiler",
+    async (kind) => {
+      const own = await privateModuleSymbolFixture();
+      if (kind === "options") {
+        const options = own.subject.contexts.get("packages/alpha").options;
+        options.verbatimModuleSyntax = !options.verbatimModuleSyntax;
+      }
+      if (kind === "outputs") own.subject.outputs.set("phantom.js", "packages/alpha/src/helper.ts");
+      if (kind === "scope")
+        own.subject.inventory.files.find((file) => file.production).scope = "changed";
+      if (kind === "membership") own.subject.membership.paths.push("phantom.ts");
+      expect(() => createCompilerContext(own.subject)).toThrow("symbol-module-facts-changed");
+    },
+    30_000,
+  );
+
+  it("uses fully charged extraction for an incompatible alias profile", async () => {
+    const prepared = await privateModuleSymbolFixture();
+    const fallback = await privateModuleSymbolFixture("direct", { aliases: 8 });
+    const rule = "anti-slop/no-unknown-parameters";
+    const beforePrepared = prepared.resolver.stats().nodes;
+    const beforeFallback = fallback.resolver.stats().nodes;
+    const expected = prepared.resolver.collectiveRawCheckingSlots(prepared.rawRoots, rule);
+    expect(fallback.resolver.collectiveRawCheckingSlots(fallback.rawRoots, rule)).toEqual(expected);
+    expect(fallback.resolver.stats().nodes - beforeFallback).toBeGreaterThan(
+      prepared.resolver.stats().nodes - beforePrepared,
+    );
+  }, 30_000);
+
+  it("retains a closed failed preparation instead of borrowing partial rows", async () => {
+    const own = await privateModuleSymbolFixture("receipt-alias-failure");
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.failure).toBe("symbol-alias-budget");
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-alias-budget");
+  }, 30_000);
+});
+
+describe("bounded private module specifier facts (#3918)", () => {
+  it.each([
+    'const path = flag ? "./helper.js" : "./other.js"; import(path);',
+    'const base = "./"; const path = base + "helper.js"; import(path);',
+    'const base = "./"; const path = `${base}helper.js`; import(path);',
+    'let path = "./helper.js"; path = userPath; import(path);',
+    'import(new URL("./helper.js", import.meta.url).href);',
+    'import(opaque("./helper.js"));',
+    'import { createRequire as make } from "node:module"; const load = make(import.meta.url); const alias = load; alias("./helper.js");',
+  ])("retains concrete helper alternatives from %s", (source) => {
+    expect(privateModuleSyntaxReferences(source).flatMap((entry) => entry.specifiers)).toContain(
+      "./helper.js",
+    );
+  });
+
+  it("does not certify an unrelated unresolved runtime loader", () => {
+    const references = privateModuleSyntaxReferences(
+      "export function load(path: string): Promise<unknown> { return import(path); }",
+    );
+    expect(references).toHaveLength(1);
+    expect(references[0].specifiers).toEqual([]);
+  });
+
+  it("bounds supported specifier aliases and finite alternatives", () => {
+    expect(() =>
+      privateModuleSyntaxReferences('const a = "./helper.js"; const b = a; import(b);', 2),
+    ).toThrow("symbol-alias-budget");
+    expect(() =>
+      privateModuleSyntaxReferences('import(flag ? "./helper.js" : "./other.js");', 1),
+    ).toThrow("symbol-alias-budget");
+  });
+});
+
+describe("private imported raw helper source closure (#3918)", () => {
+  it("owns exact dictionary, typeof and unknown slots across two bound public modules", async () => {
+    const own = await privateModuleSymbolFixture();
+    const runtime = await import(
+      pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+    );
+    for (const name of ["first", "second"]) {
+      expect(runtime[name]({ value: 3 })).toEqual({ ok: true, value: 3 });
+      expect(runtime[name]({ value: "wrong" })).toEqual({ ok: false, errors: ["invalid"] });
+    }
+    const path = "packages/alpha/src/helper.ts";
+    const text = readFileSync(join(own.root, path), "utf8");
+    const expected = [
+      ["anti-slop/no-unknown-parameters", 1, text.indexOf("unknown")],
+      ["anti-slop/no-runtime-typeof", 2, text.indexOf("typeof input")],
+      ["anti-slop/no-unsafe-dictionary-type", 3, text.indexOf("Record<string, unknown>")],
+    ];
+    for (const [rule, count, start] of expected) {
+      const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+      const helper = slots.filter((slot) => slot.path === path);
+      expect(helper).toHaveLength(count);
+      expect(helper).toContainEqual(
+        expect.objectContaining({
+          path,
+          rule,
+          start,
+          contributingResponsibilityIds: ["fixture-first", "fixture-second"],
+          producerIdentity: expect.objectContaining({
+            owner: "alpha",
+            producer: expect.objectContaining({ path }),
+          }),
+        }),
+      );
+    }
+  }, 30_000);
+
+  it("reuses detached discovery and all raw rule facts after Program eviction", async () => {
+    const own = await privateModuleSymbolFixture("cache-eviction", { programs: 1 });
+    const rules = [
+      "anti-slop/no-unknown-parameters",
+      "anti-slop/no-unsafe-dictionary-type",
+      "anti-slop/no-runtime-typeof",
+    ];
+    const components = own.resolver.collectiveRawComponents(own.rawRoots);
+    const expected = rules.map((rule) =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule),
+    );
+    expect(expected.every((slots) => slots.length > 0)).toBe(true);
+    evictPrivateModuleProgram(own);
+    const before = own.resolver.stats();
+    expect(own.resolver.collectiveRawComponents([...own.rawRoots].reverse())).toEqual(components);
+    for (const [index, rule] of rules.entries())
+      expect(own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toEqual(expected[index]);
+    expect(own.resolver.stats().nodes - before.nodes).toBe(0);
+    expect(own.resolver.stats().created).toBe(before.created);
+  }, 30_000);
+
+  it("separates complete root sets and clones detached returned slot facts", async () => {
+    const own = await privateModuleSymbolFixture();
+    const rule = "anti-slop/no-unknown-parameters";
+    const expected = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    const firstOnly = own.resolver.collectiveRawCheckingSlots([own.rawRoots[0]], rule);
+    expect(firstOnly.some((slot) => slot.path === "packages/alpha/src/helper.ts")).toBe(false);
+    const result = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    result[0].contributingResponsibilityIds.push("changed");
+    result[0].producerIdentity.producer.path = "changed.ts";
+    expect(own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toEqual(expected);
+    own.resolver.close();
+    expect(() => own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toThrow(
+      "symbol-resolver-closed",
+    );
+    expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+      "symbol-resolver-closed",
+    );
+  }, 30_000);
+
+  it("keeps responsibility IDs and parameter indices in detached request identity", async () => {
+    const own = await privateModuleSymbolFixture();
+    const rule = "anti-slop/no-unknown-parameters";
+    own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    const renamed = own.rawRoots.map((root) => ({ ...root, recordId: `renamed-${root.recordId}` }));
+    const slots = own.resolver.collectiveRawCheckingSlots(renamed, rule);
+    expect(slots.length).toBeGreaterThan(0);
+    expect(
+      slots.every((slot) =>
+        slot.contributingResponsibilityIds.every((id) => id.startsWith("renamed-")),
+      ),
+    ).toBe(true);
+    const absent = own.rawRoots.map((root) => ({ ...root, index: 1 }));
+    expect(own.resolver.collectiveRawCheckingSlots(absent, rule)).toEqual([]);
+  }, 30_000);
+
+  it("computes uncached successful requests when detached cache capacity is exhausted", async () => {
+    const own = await privateModuleSymbolFixture("cache-eviction", { programs: 1, aliases: 8 });
+    const rule = "anti-slop/no-unknown-parameters";
+    let requests;
+    let expected;
+    for (let index = 0; index < 9; index += 1) {
+      requests = own.rawRoots.map((root) => ({ ...root, recordId: `${index}-${root.recordId}` }));
+      expected = own.resolver.collectiveRawCheckingSlots(requests, rule);
+    }
+    evictPrivateModuleProgram(own);
+    const before = own.resolver.stats().nodes;
+    expect(own.resolver.collectiveRawCheckingSlots(requests, rule)).toEqual(expected);
+    expect(own.resolver.stats().nodes).toBeGreaterThan(before);
+  }, 30_000);
+
+  it("keeps same-offset leaf identities separate and results independent of root order", async () => {
+    const own = await privateModuleSymbolFixture();
+    const rule = "anti-slop/no-unknown-parameters";
+    const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    const leaves = slots.filter((slot) => slot.path.includes("/leaf"));
+    expect(leaves).toHaveLength(2);
+    expect(leaves[0].start).toBe(leaves[1].start);
+    expect(leaves[0].producerIdentity.producer.path).not.toBe(
+      leaves[1].producerIdentity.producer.path,
+    );
+    const sort = (values) =>
+      values.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    expect(
+      sort(own.resolver.collectiveRawCheckingSlots([...own.rawRoots].reverse(), rule)),
+    ).toEqual(sort(slots));
+    const reordered = await privateModuleSymbolFixture("import-order");
+    expect(sort(reordered.resolver.collectiveRawCheckingSlots(reordered.rawRoots, rule))).toEqual(
+      sort(slots),
+    );
+  }, 30_000);
+
+  it.each([
+    "one-root",
+    "sealed-root",
+    "unknown-loader",
+    "type-only",
+    "unrelated-public",
+    "default-condition",
+    "unrelated-noexports",
+    "colocated-type-only",
+    "colocated-inline-type-only",
+    "colocated-type-reexport",
+    "colocated-inline-type-reexport",
+  ])(
+    "admits the finite private graph with %s",
+    async (variant) => {
+      const own = await privateModuleSymbolFixture(variant);
+      if (variant === "sealed-root" || variant === "unrelated-noexports")
+        expect(JSON.parse(readFileSync(join(own.root, "package.json"), "utf8")).exports).toEqual(
+          {},
+        );
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-runtime-typeof",
+      );
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it.each([
+    "third-caller",
+    "typed-caller",
+    "foreign-caller",
+    "callback",
+    "return-escape",
+    "namespace",
+    "dynamic",
+    "computed",
+    "finite-loader",
+    "mutable-alias",
+    "public-named",
+    "public-star",
+    "public-namespace",
+    "public-default",
+    "public-subpath",
+    "relevant-unsupported",
+    "default-named-escape",
+    "export-alias-escape",
+    "relevant-main",
+    "unsealed-ancestor",
+  ])(
+    "withholds the predicate for observed %s while preserving root slots",
+    async (variant) => {
+      const own = await privateModuleSymbolFixture(variant);
+      if (variant === "unsealed-ancestor") {
+        const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+        expect(manifest.private).toBe(true);
+        expect(manifest).not.toHaveProperty("exports");
+        expect(manifest).not.toHaveProperty("main");
+      }
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unknown-parameters",
+      );
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual([]);
+      const rootPaths = new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]);
+      expect(slots.filter((slot) => rootPaths.has(slot.path))).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("retains cycle and alias budget refusals", async () => {
+    const cycle = await privateModuleSymbolFixture("cycle");
+    expect(() =>
+      cycle.resolver.collectiveRawCheckingSlots(cycle.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("unsupported-raw-helper-cycle");
+    const aliases = await privateModuleSymbolFixture("direct", { aliases: 2 });
+    expect(() =>
+      aliases.resolver.collectiveRawCheckingSlots(aliases.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-alias-budget");
+  }, 30_000);
+
+  it.each([
+    ["nodes", "symbol-node-budget"],
+    ["sourceBytes", "symbol-source-budget"],
+  ])(
+    "charges imported closure to the existing cumulative %s bound",
+    async (limit, reason) => {
+      const own = await privateModuleSymbolFixture();
+      const before = own.resolver.stats();
+      own.resolver.close();
+      own.resolver = createSymbolResolver(own.subject, { [limit]: before[limit] });
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+      ).toThrow(reason);
+    },
+    30_000,
+  );
+
+  it.each(["collector", "readonly-dictionary"])(
+    "does not widen dictionary or predicate-call eligibility for %s",
+    async (variant) => {
+      const own = await privateModuleSymbolFixture(variant);
+      const path = "packages/alpha/src/helper.ts";
+      const text = readFileSync(join(own.root, path), "utf8");
+      const marker =
+        variant === "collector"
+          ? "Record<string, unknown>): string[]"
+          : "Readonly<Record<string, unknown>>";
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(slots.some((slot) => slot.path === path && slot.start === text.indexOf(marker))).toBe(
+        false,
+      );
+      expect(
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-known-value-widening"),
+      ).toEqual([]);
+    },
+    30_000,
+  );
+
+  it.each([
+    "helper.ts",
+    "second.ts",
+    "index.ts",
+    "proof.test.ts",
+    "../package.json",
+    "../tsconfig.json",
+    "../dist/helper.js",
+    "../dist/helper.d.ts.map",
+  ])(
+    "rejects changed %s after module facts have been cached",
+    async (name) => {
+      const own = await privateModuleSymbolFixture();
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof");
+      const path = join(own.root, "packages/alpha/src", name);
+      writeFileSync(path, readFileSync(path, "utf8") + "\n");
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+
+  it("rejects membership mutation after the reference index is cached", async () => {
+    const own = await privateModuleSymbolFixture();
+    own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof");
+    own.subject.membership.paths.push("packages/alpha/src/phantom.ts");
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-context-changed");
   }, 30_000);
 });
 

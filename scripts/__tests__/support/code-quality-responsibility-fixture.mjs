@@ -59,6 +59,319 @@ function collectiveParserRecord(name, rules) {
   return record;
 }
 
+export function createPrivateModuleParserFixture(variant = "direct", rules = []) {
+  return assembleResponsibilityFixture(
+    (own) => {
+      const rootManifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+      rootManifest.exports = {};
+      own.put("package.json", rootManifest);
+      const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+      config.exclude = ["**/*.test.ts"];
+      own.put("packages/alpha/tsconfig.json", config);
+      const names = variant === "one-root" ? ["first"] : ["first", "second"];
+      const type =
+        "export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };\n";
+      const exported = names.length === 2 ? 'export { second } from "./second.js";\n' : "";
+      own.put("packages/alpha/src/owner.ts", type + exported + privateModuleRoot("first"));
+      if (names.length === 2)
+        own.put(
+          "packages/alpha/src/second.ts",
+          'import type { ParseResult } from "./owner.js";\n' + privateModuleRoot("second"),
+        );
+      own.put("packages/alpha/src/helper.ts", privateModuleHelper());
+      for (const path of ["leaf", "leaf-other"])
+        own.put(
+          `packages/alpha/src/${path}.ts`,
+          'export function finite(/* é */ input: unknown): boolean { return typeof input === "number" && Number.isFinite(input); }\n',
+        );
+      own.put("packages/alpha/src/index.ts", 'export { first as parse } from "./owner.js";\n');
+      own.put(
+        "src/consumer.ts",
+        'import { first } from "alpha/runtime"; export const result = first(1);\n',
+      );
+      own.put("packages/alpha/src/proof.test.ts", privateModuleProof(names));
+      const records = names.map((name) => collectiveParserRecord(name, rules));
+      const policy = responsibilityPolicy(records);
+      for (const record of records) activateResponsibilityFixtureRules(policy, record);
+      Object.assign(own, { records, policy });
+      privateModuleVariant(own, variant);
+      own.put("scripts/code-quality-policy.json", policy);
+    },
+    variant === "unrelated-noexports" ? ["packages/unrelated-ui"] : [],
+  );
+}
+
+function privateModuleRoot(name) {
+  return `import { isRecord as record, fields } from "./helper.js";
+const check = record;
+export function ${name}(input: unknown): ParseResult {
+  if (!check(input) || !fields(input)) return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: input.value };
+}
+`;
+}
+
+function privateModuleHelper() {
+  return `// Module coordinate control: é
+import { finite } from "./leaf.js";
+import { finite as other } from "./leaf-other.js";
+export function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+export function fields(input: Record<string, unknown>): input is Record<string, unknown> & { value: number } {
+  return finite(input.value) && other(input.value) && typeof input.value === "number";
+}
+export function guard(input: number): boolean { return input > 0; }
+`;
+}
+
+function privateModuleProof(names) {
+  return (
+    `import { ${names.join(", ")}, type ParseResult } from "alpha/runtime";\n` +
+    names
+      .map(
+        (name) =>
+          `export function public${name}(input: unknown): ParseResult { const result = ${name}(input); return result; }\n`,
+      )
+      .join("")
+  );
+}
+
+function privateModuleVariant(own, variant) {
+  privateModuleReferenceVariant(own, variant);
+  privateModuleShapeVariant(own, variant);
+  if (
+    variant === "public-subpath" ||
+    variant === "default-condition" ||
+    variant === "relevant-unsupported"
+  )
+    privateModuleManifest(own, variant);
+  if (variant === "unrelated-noexports") privateUnrelatedUiFixture(own);
+  if (variant === "relevant-main" || variant === "unsealed-ancestor")
+    privateUnsealedAncestor(own, variant);
+}
+
+function privateModuleReferenceVariant(own, variant) {
+  const append = (path, text) => own.put(path, readFileSync(join(own.root, path), "utf8") + text);
+  const owner = "packages/alpha/src/owner.ts";
+  const publicExports = {
+    "public-named": 'export { isRecord } from "./helper.js";\n',
+    "public-star": 'export * from "./helper.js";\n',
+    "public-namespace": 'export * as helpers from "./helper.js";\n',
+    "public-default": 'export { isRecord as default } from "./helper.js";\n',
+    "unrelated-public": 'export { guard } from "./helper.js";\n',
+    "colocated-type-reexport": 'export type { isRecord } from "./helper.js";\n',
+    "colocated-inline-type-reexport": 'export { type isRecord } from "./helper.js";\n',
+  };
+  if (publicExports[variant]) append(owner, publicExports[variant]);
+  const extra = privateModuleExtra(variant);
+  if (extra) own.put("packages/alpha/src/extra.ts", extra);
+  if (variant === "foreign-caller")
+    own.put(
+      "src/foreign.ts",
+      'import { isRecord } from "../packages/alpha/src/helper.js"; export const result = isRecord(1);\n',
+    );
+  if (variant === "mutable-alias")
+    own.put(owner, readFileSync(join(own.root, owner), "utf8").replace("const check", "let check"));
+}
+
+function privateUnsealedAncestor(own, variant) {
+  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+  delete manifest.exports;
+  if (variant === "relevant-main") manifest.main = "./packages/alpha/dist/helper";
+  own.put("package.json", manifest);
+}
+
+function privateUnrelatedUiFixture(own) {
+  own.put("packages/unrelated-ui/package.json", {
+    name: "unrelated-ui",
+    version: "0.0.0",
+    type: "module",
+    private: true,
+    description: "Static UI served by another workspace; no package exports.",
+    scripts: {
+      dev: "next dev",
+      build: "next build",
+      typecheck: "tsc --noEmit",
+      test: "vitest run",
+    },
+    dependencies: { alpha: "0.0.0" },
+  });
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  Object.assign(config.compilerOptions, {
+    noEmit: true,
+    composite: false,
+    declaration: false,
+    declarationMap: false,
+  });
+  own.put("packages/unrelated-ui/tsconfig.json", config);
+  own.put(
+    "packages/unrelated-ui/src/owner.ts",
+    'import { first } from "alpha/runtime"; export function render(): boolean { return first({ value: 1 }).ok; }\n',
+  );
+}
+
+function privateModuleShapeVariant(own, variant) {
+  if (variant === "cycle") privateModuleCycle(own);
+  if (variant === "unsafe") {
+    const path = "packages/alpha/src/helper.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        'return finite(input.value) && other(input.value) && typeof input.value === "number";',
+        "return (finite(input.value) && other(input.value)) || true;",
+      ),
+    );
+  }
+  if (variant === "collector") privateModuleCollector(own);
+  if (variant === "import-order") {
+    const path = "packages/alpha/src/helper.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        'import { finite } from "./leaf.js";\nimport { finite as other } from "./leaf-other.js";',
+        'import { finite as other } from "./leaf-other.js";\nimport { finite } from "./leaf.js";',
+      ),
+    );
+  }
+  if (variant === "readonly-dictionary") {
+    const path = "packages/alpha/src/helper.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        "fields(input: Record<string, unknown>)",
+        "fields(input: Readonly<Record<string, unknown>>)",
+      ),
+    );
+  }
+  if (variant === "colocated-type-only" || variant === "colocated-inline-type-only")
+    privateColocatedTypeImport(own, variant);
+  if (variant === "default-named-escape") privateDefaultNamedEscape(own);
+  if (variant === "export-alias-escape") privateExportAliasEscape(own);
+}
+
+function privateColocatedTypeImport(own, variant) {
+  const path = "packages/alpha/src/owner.ts";
+  let source = readFileSync(join(own.root, path), "utf8");
+  source =
+    variant === "colocated-type-only"
+      ? source + 'import type { isRecord as Guard } from "./helper.js";\n'
+      : source.replace("record, fields }", "record, fields, type isRecord as Guard }");
+  own.put(path, source + "export type ImportedGuard = typeof Guard;\n");
+}
+
+function privateDefaultNamedEscape(own) {
+  const helper = "packages/alpha/src/helper.ts";
+  own.put(
+    helper,
+    readFileSync(join(own.root, helper), "utf8").replace(
+      "export function isRecord",
+      "export default function isRecord",
+    ),
+  );
+  for (const path of ["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"])
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        "isRecord as record",
+        "default as record",
+      ) + "export const escaped = record;\n",
+    );
+}
+
+function privateExportAliasEscape(own) {
+  const helper = "packages/alpha/src/helper.ts";
+  own.put(
+    helper,
+    readFileSync(join(own.root, helper), "utf8").replace(
+      "export function isRecord",
+      "function isRecord",
+    ) + "export { isRecord as recordAlias };\n",
+  );
+  for (const path of ["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"])
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        "isRecord as record",
+        "recordAlias as record",
+      ) + "export const escaped = record;\n",
+    );
+}
+
+function privateModuleCollector(own) {
+  const helper = "packages/alpha/src/helper.ts";
+  own.put(
+    helper,
+    readFileSync(join(own.root, helper), "utf8") +
+      "export function collect(input: Record<string, unknown>): string[] { return Object.keys(input); }\n",
+  );
+  for (const path of ["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"])
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8")
+        .replace("record, fields", "record, fields, collect")
+        .replace("  return { ok: true", "  collect(input);\n  return { ok: true"),
+    );
+}
+
+function privateModuleExtra(variant) {
+  const prefix = 'import { isRecord } from "./helper.js";\n';
+  const extras = {
+    "third-caller":
+      prefix + "export function third(input: unknown): boolean { return isRecord(input); }\n",
+    "typed-caller":
+      prefix + "export function third(input: number): boolean { return isRecord(input); }\n",
+    callback: prefix + "export const callbacks = [isRecord];\n",
+    "return-escape": prefix + "export function escaped(): typeof isRecord { return isRecord; }\n",
+    namespace: 'import * as helper from "./helper.js"; export const result = helper.isRecord(1);\n',
+    dynamic: 'export const loaded = import("./helper.js");\n',
+    computed:
+      'const helper = await import("./helper.js"); const key = Math.random() > 0.5 ? "isRecord" : "fields"; export const result = helper[key]({});\n',
+    "finite-loader":
+      'const path = Math.random() > 0.5 ? "./helper.js" : "./leaf.js"; export const loaded = import(path);\n',
+    "unknown-loader":
+      "export function load(path: string): Promise<unknown> { return import(path); }\n",
+    "type-only":
+      'import type { isRecord } from "./helper.js"; export type Guard = typeof isRecord;\n',
+  };
+  return extras[variant];
+}
+
+function privateModuleCycle(own) {
+  const path = "packages/alpha/src/helper.ts";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8").replace(
+      'return typeof input === "object"',
+      'return finite(input) && typeof input === "object"',
+    ),
+  );
+  own.put(
+    "packages/alpha/src/leaf.ts",
+    'import { isRecord } from "./helper.js"; export function finite(input: unknown): boolean { return isRecord(input) && typeof input === "number"; }\n',
+  );
+}
+
+function privateModuleManifest(own, variant) {
+  const path = "packages/alpha/package.json";
+  const manifest = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+  if (variant === "public-subpath")
+    manifest.exports["./helper"] = { types: "./dist/helper.d.ts", import: "./dist/helper.js" };
+  else if (variant === "relevant-unsupported")
+    manifest.exports["./helper-unsupported"] = {
+      types: "./dist/helper.d.ts",
+      require: "./dist/helper.js",
+    };
+  else {
+    own.put("packages/alpha/src/public-context.ts", "export const healthy = true;\n");
+    manifest.exports["./private-context"] = {
+      types: "./dist/public-context.d.ts",
+      default: "./dist/public-context.js",
+    };
+  }
+  own.put(path, manifest);
+}
+
 function collectiveParserOwner(variant) {
   const helper =
     variant === "unsafe"
@@ -1755,7 +2068,12 @@ export function embeddedSemanticOptions() {
 }
 
 export async function createCollectiveSemanticFixture(variant, roots) {
-  const own = createCollectiveParserFixture(variant, [
+  const privateModule = variant.startsWith("private-module");
+  const create = privateModule ? createPrivateModuleParserFixture : createCollectiveParserFixture;
+  const sourceVariant = privateModule
+    ? variant.slice("private-module-".length) || "direct"
+    : variant;
+  const own = create(sourceVariant, [
     "anti-slop/no-runtime-typeof",
     "anti-slop/no-unsafe-dictionary-type",
   ]);
@@ -1780,7 +2098,7 @@ it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toB
         )
         .join("\n"),
   );
-  if (variant === "missing-assertion")
+  if (variant === "missing-assertion" || variant === "private-module-missing-assertion")
     own.records[1].proofAssertions[1].testName = "absent assertion";
   own.put("scripts/code-quality-policy.json", own.policy);
   await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);

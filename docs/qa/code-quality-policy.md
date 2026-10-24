@@ -252,12 +252,14 @@ Static enforcement fails on active applicable findings and incomplete or rejecte
 facts, including missing/foreign owners, missing/noncallable or unbound consumers, missing proofs and unsafe
 unknown or open-dictionary validator outputs. Merely unexecuted runtime and consumer proofs remain
 pending without becoming static rejection. The evaluator adapts the assigned canonical raw
-parameter's exact annotation, and exact private same-source helper parameter annotations reached
+parameter's exact annotation, and exact private helper parameter annotations reached
 by bounded direct calls forwarding that parameter or its static property projection. Parentheses
 and immutable const aliases preserve this origin; assertions, non-null assertions, `satisfies`,
 explicit unknown/open-dictionary erasure, mutable or destructured bindings and computed dispatch do not.
-Every helper value reference must be accounted for by this closure or an immutable local callee alias.
-Unrelated trusted callers, exports/reexports, return/container/callback escapes, unused nested
+The legacy walk remains same-source; the collective module extension below is separately bounded.
+Every relevant helper value reference in the owned static graph must be accounted for by that
+closure or an immutable callee alias. Unrelated trusted callers, public exposure,
+return/container/callback escapes, unused nested
 functions, deferred classes and self/mutual cycles withdraw the helper adaptation or leave facts
 incomplete. Extra unknown parameters and other APIs remain checked.
 
@@ -353,9 +355,9 @@ alias/producer does not qualify. This preserves the existing readonly-string-arr
 it does not manufacture a parsed value or grant type-predicate behavior to a diagnostic collector.
 
 Structurally bound diagnostic roots with declared proof selectors may participate in the same
-owner/source/rule collective helper join as public parsers. The existing direct raw-origin,
+owner/rule collective helper components as public parsers. The existing direct raw-origin,
 all-incoming-use, currentness and whole-group budget-withholding rules remain unchanged. Private
-string-array collectors already fit that direct raw traversal; this adds no callback, exported-helper,
+string-array collectors already fit that direct raw traversal; this adds no callback, public-helper,
 mutation, indexed-origin or body-wide permission. Structural applicability still leaves proofs pending.
 
 One resolver derives a detached owner-to-selected-test-root manifest before assessment. Proof
@@ -404,17 +406,71 @@ existing checker-unknown operands and intrinsic dictionary members described abo
 return, body-wide, known-value-widening or typed-domain exemption. Supporting these optional rules
 does not change any production record or activate a scope.
 
-The collective raw-helper closure can account for multiple public parsers or diagnostic checkers
-in the same source. For
+The collective raw-helper closure accounts for actual connected public-parser or diagnostic-checker
+roots, including a single root, across modules in one owning package. For
 each rule, every contributing root must be structurally ready with its canonical producer/public
 proof binding, declared proof selectors and current source facts, and must explicitly declare that
-rule. Every helper runtime reference must belong to the closed direct raw-origin graph or an
-eligible immutable local alias. An unregistered, incomplete, invalid or differently opted-in
-caller, export, escape, mutation, cycle or exhausted existing budget withholds the affected helper
+rule. Imported edges admit only uniquely resolved direct named relative value imports, their named
+aliases and the existing immutable const callee aliases, targeting a top-level named function in
+the same owner. Target states use the target's own checker/source/declaration/parameter; incoming
+edges retain the caller's origin and source coordinates. Reexport chains are not imported edges.
+Every relevant helper value reference in the complete owned repository production static graph
+must belong to the closed direct raw-origin graph or an eligible immutable alias. An unregistered,
+typed, foreign, incomplete, invalid or differently opted-in caller, public exposure, escape,
+mutation, cycle or exhausted existing budget withholds the affected helper
 and its downstream slots. A sound public root remains ready when a helper cannot join; its unmatched
 diagnostics stay enforced. Helper state identity includes the canonical owner/source/declaration
 and parameter, not only a source offset. Shared slots retain all contributing responsibility ids
-in sorted order and use deterministic attribution independent of record order.
+in sorted order and use deterministic attribution independent of record order. Roots are joined
+only when canonical helper states connect them, never merely because they share a package.
+
+Module export syntax alone establishes neither public API nor privacy. Privacy uses the actual
+declared package roots/subpaths and canonical export symbols, including named, star, default and
+namespace exposure. The private exposure walk accepts the existing closed `types` plus `import`
+and `types` plus `default` manifest target shapes; the public-proof resolver is unchanged. Missing,
+unsupported, ambiguous or stale required source, membership, manifest, config or output facts
+withhold the helper or preserve the existing currentness/budget refusal. File naming is no witness.
+Topology validation follows canonical helper exports through reverse module references and checks
+the relevant owner/entry targets. An ordinary import of a public caller does not make the importing
+workspace expose every helper behind that caller. An unrelated workspace without `exports` cannot
+withhold the helper solely through that absent field. Conversely, absence of `exports` is not a
+privacy witness: Node's main/default-index and public subpath semantics still apply to relevant
+canonical helper-exporting modules. A known relevant unsupported target remains a refusal.
+For a no-exports ancestor, relevance includes physically contained, qualified runtime outputs of
+the canonical helper even when a nested workspace is its exact compiler owner and seals its own
+exports. An ancestor's `private` metadata does not seal that Node subpath. An explicit closed
+ancestor export map still controls access. This checks known declared filesystem/module topology,
+not arbitrary JavaScript loader behavior.
+Type-only import bindings and references are not runtime callers, including when colocated with a
+value import. Direct named type-only reexports retain their declaration/specifier value-visibility
+flags in the private exposure walk before canonical alias resolution; they do not create runtime
+public exposure. Semantic default imports, including `{ default as local }`, remain outside the admitted
+helper-edge grammar; their presence never conceals observed value escapes.
+
+The resolver builds a snapshot-bound module index once, reading the complete owned production
+membership through the existing compiler snapshot path. The mandatory inventory syntax visitors
+also observe richer detached module references and top-level binding descriptors while their
+existing AST is available. No second complete source parse/walk is needed for compatible facts.
+Additional expression traversal is checked by the same policy-leaf-owned visit primitive and
+unchanged limits during preparation. A frozen private receipt binds its actual extra visits and
+facts to original source/configuration/ownership/membership/output metadata. Each independent
+compiler seeds those visits once into its own cumulative counter; an already-exhausted strict
+profile retains an explicit refusal on the first operation. Incompatible alias profiles use the
+fully charged extraction path, and partial or stale receipts cannot certify an empty graph.
+Receipt data stays outside public inventory JSON and contains no retained AST or Program.
+Source-byte admission, currentness and both-mode module resolution still run in the compiler;
+all subsequent actual walks charge the same counter. The two-resident-Program LRU,
+alias/cardinality, emission and execution bounds remain unchanged. Relevant namespace/default imports, concrete
+dynamic/computed module dispatch, finite loader specifier alternatives containing the helper
+module, mutations and callback/container/return escapes withhold the relevant helper. Unrelated
+unresolved loader expressions, such as `import(userPath)` without a statically established helper
+link, remain an analysis limitation: they are neither certified consumers nor evidence of another
+helper caller. These grants describe the declared owned static graph; they do not prove that
+arbitrary JavaScript execution cannot load a function. No observed helper-linked escape is waived.
+
+Dictionary eligibility is unchanged: intrinsic dictionary annotations still need the existing
+boolean/predicate checker result. A string-array collector, readonly wrapper, callback or imported
+module receives no new dictionary or known-value-widening authority from this extension.
 
 A collective cardinality refusal preserves the independently assessed legacy root slots and adds
 no slots from the entire failed collective group, including its first 64 states. Only the three
