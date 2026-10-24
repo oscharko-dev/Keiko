@@ -75,7 +75,7 @@ async function actualRawReaderCensus(own) {
   assert.deepEqual(returns[0], {
     path: ACTUAL_RAW_READER_SOURCE,
     rule: ACTUAL_RAW_READER_RULE,
-    line: 284,
+    line: 274,
     column: 73,
   });
   return scan;
