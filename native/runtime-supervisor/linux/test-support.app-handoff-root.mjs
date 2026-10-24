@@ -30,6 +30,17 @@ import {
 } from "../../../packages/keiko-server/dist/update-portable-handoff-receipts.js";
 
 let startupStage = "ownership";
+// Startup timeline for a readiness diagnosis: epoch milliseconds only, no environment or content.
+const startupTimeline = { processStartedAt: Math.round(globalThis.performance.timeOrigin) };
+function recordStartup(stage) {
+  startupTimeline[stage] = Date.now();
+  writeFileSync(
+    join(process.env.KEIKO_STATE_DIR, `fixture-startup-${process.env.KEIKO_UI_LAUNCH_ID}.json`),
+    JSON.stringify(startupTimeline),
+    { mode: 0o600 },
+  );
+}
+recordStartup("modulesEvaluatedAt");
 process.on("uncaughtExceptionMonitor", (error) => {
   writeFileSync(
     join(process.env.KEIKO_STATE_DIR, `fixture-failure-${process.env.KEIKO_UI_LAUNCH_ID}.json`),
@@ -55,6 +66,7 @@ if (process.env.KEIKO_HANDOFF_FIXTURE_WRONG_LAUNCH === "1") {
   if (!(refusal instanceof NativeAppControlError) || refusal.nativeAuthorityMayBeLive)
     throw new Error("native fixture wrong launch was not refused");
 }
+recordStartup("ownershipCheckedAt");
 const stateDir = process.env.KEIKO_STATE_DIR;
 const version = process.env.KEIKO_HANDOFF_FIXTURE_VERSION;
 const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
@@ -183,7 +195,7 @@ const server = createServer(async (request, response) => {
       .end(JSON.stringify({ message: error.message, cause: error.cause?.message }));
   }
 });
-server.listen(port, "127.0.0.1");
+server.listen(port, "127.0.0.1", () => recordStartup("listeningAt"));
 
 if (process.env.KEIKO_HANDOFF_FIXTURE_RESUME === "1") {
   const wal = JSON.parse(readFileSync(join(stateDir, "fixture-activation.json"), "utf8"));
