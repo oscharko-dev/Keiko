@@ -736,3 +736,46 @@ it("public Git parser results carry distinct closed domain types without asserti
     expect(result.value).toBeUndefined();
   }
 });
+
+it.each(["source", "public"])(
+  "preserves repository envelope observations through %s",
+  (surface) => {
+    for (const kind of ["status", "diff"]) {
+      const parse =
+        kind === "status"
+          ? surface === "source"
+            ? parseGitRepositoryStatusResponse
+            : parsePublicGitStatus
+          : surface === "source"
+            ? parseGitRepositoryDiffResponse
+            : parsePublicGitDiff;
+      const healthy = kind === "status" ? makeValidStatusResponse() : makeValidDiffResponse();
+      const accepted = parse(healthy);
+      expect(accepted.ok).toBe(true);
+      if (accepted.ok) expect(accepted.value).toBe(healthy);
+      const reads: string[] = [];
+      const observedKeys: ReadonlySet<PropertyKey> = new Set([
+        "schemaVersion",
+        "root",
+        "state",
+        "reason",
+      ]);
+      const input = new Proxy(
+        { ...healthy, schemaVersion: 0, root: 0, state: 0 },
+        {
+          get(target, key, receiver): unknown {
+            if (observedKeys.has(key)) {
+              reads.push(String(key));
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      expect(parse(input)).toEqual({
+        ok: false,
+        reasons: ["schemaVersion invalid", "root must be a string", "state invalid"],
+      });
+      expect(reads).toEqual(["schemaVersion", "root", "state", "reason"]);
+    }
+  },
+);

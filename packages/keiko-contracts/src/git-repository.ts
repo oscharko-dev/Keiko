@@ -366,15 +366,23 @@ function validateStatusPresentation(
   return valid;
 }
 
-function admitGitStatusResponse(
+function validateRepositoryEnvelopeIdentity(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): input is Readonly<Record<string, unknown>> & GitRepositoryStatusResponse {
+): boolean {
   let valid = true;
   if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION)
     valid = rejectGitField(reasons, "schemaVersion invalid");
   if (!isString(input.root)) valid = rejectGitField(reasons, "root must be a string");
   if (!isGitRepositoryState(input.state)) valid = rejectGitField(reasons, "state invalid");
+  return valid;
+}
+
+function admitGitStatusResponse(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitRepositoryStatusResponse {
+  let valid = validateRepositoryEnvelopeIdentity(input, reasons);
   valid = validateWireEnvelopeOptionals(input, reasons) && valid;
   if (input.branch !== undefined && !isString(input.branch)) {
     valid = rejectGitField(reasons, "branch must be a string when present");
@@ -477,11 +485,7 @@ function admitGitDiffResponse(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): input is Readonly<Record<string, unknown>> & GitRepositoryDiffResponse {
-  let valid = true;
-  if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION)
-    valid = rejectGitField(reasons, "schemaVersion invalid");
-  if (!isString(input.root)) valid = rejectGitField(reasons, "root must be a string");
-  if (!isGitRepositoryState(input.state)) valid = rejectGitField(reasons, "state invalid");
+  let valid = validateRepositoryEnvelopeIdentity(input, reasons);
   valid = validateDiffEnvelopeFields(input, reasons) && valid;
   return validateDiffTruncationConsistency(input, reasons) && valid;
 }
