@@ -1411,16 +1411,7 @@ async function materializePrepare(
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-  const result = {
-    ok: true,
-    parentLifetime: "stdin-eof",
-    env: {
-      ...profile.env,
-      KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
-      KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
-      KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
-    },
-  } as const;
+  const result = preparedLaunch(input, bridge, profile.env);
   const program =
     serviceHost === undefined
       ? undefined
@@ -1437,6 +1428,28 @@ async function materializePrepare(
   persistPreparedRun(runs, request, runRoot, password, configDigest, program, continuation);
   recordNativeFormatterBound(input.activityLog, request, profile.formatter);
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
+}
+
+/** The prepared launch: the profile's environment plus the run's two capabilities. */
+function preparedLaunch(
+  input: OpenCodeRuntimeCompositionInput,
+  bridge: ToolBridgeController,
+  env: Readonly<Record<string, string>>,
+): {
+  readonly ok: true;
+  readonly parentLifetime: "stdin-eof";
+  readonly env: Readonly<Record<string, string>>;
+} {
+  return {
+    ok: true,
+    parentLifetime: "stdin-eof",
+    env: {
+      ...env,
+      KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
+      KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
+      KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
+    },
+  };
 }
 
 // The copies join the discovery directory before the first launch, so the config digest stays the

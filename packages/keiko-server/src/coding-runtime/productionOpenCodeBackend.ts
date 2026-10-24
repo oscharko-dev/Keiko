@@ -375,14 +375,7 @@ function composeOpenCodeRun(
       run.onRuntimeEvent,
     ),
     safeActivity,
-    ...(input.sessionContinuity === undefined
-      ? {}
-      : {
-          sessionContinuity: {
-            service: input.sessionContinuity,
-            workspaceId: run.context.workspaceId,
-          },
-        }),
+    ...sessionContinuityFor(input, run),
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
     supervisor: runtimeSupervisor(input, run, toolProfile),
@@ -396,6 +389,21 @@ function composeOpenCodeRun(
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
   });
+}
+
+// A task's retained native session (#3904), bound to the run's own workspace.
+function sessionContinuityFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): Pick<OpenCodeRuntimeCompositionInput, "sessionContinuity"> {
+  return input.sessionContinuity === undefined
+    ? {}
+    : {
+        sessionContinuity: {
+          service: input.sessionContinuity,
+          workspaceId: run.context.workspaceId,
+        },
+      };
 }
 
 // The run's own repository items (#3903), read only while its workspace is still the active one.
