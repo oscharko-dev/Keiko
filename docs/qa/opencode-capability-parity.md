@@ -112,7 +112,8 @@ All points are [R] unless tagged.
   request field selects it. The audited Linux mount plan still let a shell child read a workspace
   `.env` and a fresh network namespace could not reach the host-loopback gateway, and Windows has no
   native filesystem boundary yet, so both Linux wrappers refuse a native plan
-  (`native-linux-backend-unqualified`, [backends][backends]; #3901).
+  (`native-linux-backend-unqualified`, [backends][backends]; #3901). Windows-machine qualification is
+  #4068 (B9).
 - **Launch.** `buildOpenCodeLaunchProfile` ([profile][profile]) starts
   `opencode serve --hostname 127.0.0.1 --port 0` with a per-run password and a private `HOME`, XDG
   roots and `OPENCODE_DB` under the run's state root. `OPENCODE_CONFIG_DIR` names the run's private
@@ -509,8 +510,15 @@ The order is by developer impact, not a schedule.
     throwing on a formula, is reported once through `reportClientDiagnostic` (`kind: "other"`, error
     class only, never the formula).
 - **B9. Native boundary on Linux and Windows** (profile). A qualified Linux boundary must enforce the
-  shared sensitive exclusions for descendants and keep the gateway reachable; Windows has no native
-  filesystem boundary. Owners: `backends.ts`, `productionOpenCodeToolProfile` in `deps.ts` (#3901).
+  shared sensitive exclusions for descendants and keep the gateway reachable; the Linux work and the
+  shared owners `backends.ts` and `productionOpenCodeToolProfile` in `deps.ts` stay with #3901.
+  Windows has no native filesystem boundary and keeps the mapped profile until it is implemented
+  and qualified there. All Windows-machine execution and qualification of the epic moved to #4068 by
+  the owner's transfer of 2026-10-24 (its register names the source checkpoints per issue and
+  destination W1–W15); a transferred checkpoint is closed by scope transfer, not by a Windows pass.
+  #4068 starts only after this pull request is merged into `dev`. Shared defects reproducible on
+  macOS or Linux, the other platforms, publication and the required exact-head checks stay with
+  their original issues.
 - **B10. Real-binary controls for unexercised rows** (T14, T15, T16, S08). Add opt-in cases beside
   `opencodeNativeQualification.real.test.ts` (T02, T08, T13, T19 and C07 have theirs) and keep every
   real-binary suite on `OPENCODE_PINNED_VERSION`.
