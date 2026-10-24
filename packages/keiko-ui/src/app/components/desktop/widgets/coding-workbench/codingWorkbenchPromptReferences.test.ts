@@ -131,7 +131,7 @@ describe("search results as workspace-relative references", () => {
   it("drops a result outside the searched root or one the contract would refuse", () => {
     expect(
       workspaceRelativeReferencePath("/work/space", { root: "/work/other", path: "a.ts" }),
-    ).toBe(null);
+    ).toBeNull();
     expect(
       workspaceRelativeReferencePath("/work/space", { root: "/work/space-evil", path: "a.ts" }),
     ).toBeNull();

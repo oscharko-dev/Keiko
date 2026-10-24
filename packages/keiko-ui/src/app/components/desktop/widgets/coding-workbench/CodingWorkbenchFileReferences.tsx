@@ -108,23 +108,21 @@ export function FileReferencePopover({ picker, t }: PickerViewProps): ReactNode 
   if (!picker.open) return null;
   const showList = picker.status === "found" && !picker.atLimit && picker.options.length > 0;
   return (
-    <div
+    <fieldset
       className={styles.picker}
-      role="group"
       aria-label={t("codingWorkbench.composer.references.picker.title")}
     >
-      <p
+      <output
         className={styles.pickerStatus}
-        role="status"
         data-state={picker.status === "error" ? "error" : "info"}
       >
         {pickerStatus(picker, t)}
-      </p>
+      </output>
       {showList ? <PickerOptions picker={picker} t={t} /> : null}
-      <p className="sr-only" role="status" aria-live="polite">
+      <output className="sr-only" aria-live="polite">
         {activeOptionAnnouncement(picker, t)}
-      </p>
-    </div>
+      </output>
+    </fieldset>
   );
 }
 

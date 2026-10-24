@@ -915,7 +915,7 @@ describe("pinned native OpenCode session tree: questions", () => {
             await expect(owners.questions.answer(questionId, [["Blue"]])).resolves.toBe(false);
             await expect(owners.questions.reject(questionId)).resolves.toBe(false);
           }
-          expect((await run.client.forms()).length).toBe(2);
+          expect(await run.client.forms()).toHaveLength(2);
           expect(owners.tree.children.size).toBe(0);
           const routed = owners.activityLog.events
             .filter((event) => event.op === "coding-runtime.native-question.routed")

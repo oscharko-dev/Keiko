@@ -145,7 +145,6 @@ import {
   classifyNativeSession,
   createNativeTreeStatusPort,
   interruptNativeTree,
-  nativeSessionDescendsFromRun,
   type NativeSessionTreeRun,
 } from "./opencodeNativeSessionTree.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
@@ -1040,8 +1039,9 @@ function createQuestionRunPort(
   activityLog: ServerLogSink | undefined,
 ): QuestionRunPort {
   // The run's questions are its own session's and its owned children's (`opencodeNativeQuestions.ts`).
-  const portOf = (run: ReadyRun): NativeQuestionPort =>
-    createNativeQuestionPort({
+  const portOf = (run: ReadyRun): NativeQuestionPort => {
+    run.questionList ??= {};
+    return createNativeQuestionPort({
       runId: run.runId,
       client: run.client,
       tree: nativeSessionTree(run, run.sessionId),
@@ -1050,8 +1050,9 @@ function createQuestionRunPort(
       onFailure: (error) => {
         recordOpenCodeTurnFailure(diagnostics, run, "question", error);
       },
-      listed: (run.questionList ??= {}),
+      listed: run.questionList,
     });
+  };
   return {
     listQuestions: async (runId): Promise<readonly OpenCodeQuestionRequest[]> => {
       const run = readyRun(runId);
@@ -2784,14 +2785,11 @@ function nativeSessionTree(
   run: Pick<PreparedRun, "workspaceRoot" | "childSessionIds">,
   sessionId: string,
 ): NativeSessionTreeRun {
-  return {
-    sessionId,
-    workspaceRoot: run.workspaceRoot,
-    children: (run.childSessionIds ??= new Set()),
-  };
+  run.childSessionIds ??= new Set();
+  return { sessionId, workspaceRoot: run.workspaceRoot, children: run.childSessionIds };
 }
 
-export { nativeSessionDescendsFromRun };
+export { nativeSessionDescendsFromRun } from "./opencodeNativeSessionTree.js";
 
 // The ask goes to the human through the run's existing approval lane; the tool call it ends is
 // settled with the human's verdict like a governed ask (#3612).

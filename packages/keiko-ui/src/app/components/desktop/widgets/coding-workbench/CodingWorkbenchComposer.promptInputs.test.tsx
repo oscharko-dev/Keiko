@@ -334,7 +334,7 @@ describe("Send now and Queue while a turn runs", () => {
         {...props("running", actions(), { promptInputs: ENABLED, deliveryNotice: notice })}
       />,
     );
-    expect(screen.getByText(text)).toHaveAttribute("role", "status");
+    expect(screen.getByRole("status")).toHaveTextContent(text);
   });
 
   it("keeps a refusal visible, but a sent notice only while the turn runs", () => {

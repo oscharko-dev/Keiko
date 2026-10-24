@@ -110,9 +110,9 @@ export function CodingWorkbenchRevertBar({
   const { open } = confirmation;
   return (
     <section className={styles.cmpRevert} aria-label={t("codingWorkbench.revert.region")}>
-      <p className={styles.cmpRevertSummary} role="status">
+      <output className={styles.cmpRevertSummary}>
         {busy ? t("codingWorkbench.revert.busy") : summaryText(revert, t)}
-      </p>
+      </output>
       {open === null ? (
         <button
           ref={confirmation.triggerRef}
@@ -174,19 +174,14 @@ function RevertConfirmation({
   useEffect(() => {
     cancelRef.current?.focus();
   }, []);
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: KeyboardEvent<HTMLFieldSetElement>): void => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
     onCancel();
   };
   return (
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape cancels from any control inside the group; the buttons are the interactive elements.
-    <div
-      className={styles.cmpRevertConfirm}
-      role="group"
-      aria-labelledby={textId}
-      onKeyDown={onKeyDown}
-    >
+    <fieldset className={styles.cmpRevertConfirm} aria-labelledby={textId} onKeyDown={onKeyDown}>
       <p id={textId} className={styles.cmpRevertConfirmText}>
         {t(CONFIRMATION_KEYS[action].text)}
       </p>
@@ -203,6 +198,6 @@ function RevertConfirmation({
           {t(CONFIRMATION_KEYS[action].action)}
         </button>
       </div>
-    </div>
+    </fieldset>
   );
 }

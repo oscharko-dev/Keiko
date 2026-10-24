@@ -525,13 +525,9 @@ function DeliveryNotice({ input, t }: ControlProps): ReactNode {
   if (notice === undefined || notice === null) return null;
   if (notice !== "failed" && input.runState !== "running") return null;
   return (
-    <p
-      className={promptStyles.notice}
-      role="status"
-      data-state={notice === "failed" ? "failed" : "info"}
-    >
+    <output className={promptStyles.notice} data-state={notice === "failed" ? "failed" : "info"}>
       {t(`codingWorkbench.composer.delivery.${notice}`)}
-    </p>
+    </output>
   );
 }
 

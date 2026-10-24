@@ -6,7 +6,6 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type KeyboardEvent,
   type RefObject,
@@ -85,6 +84,20 @@ interface SearchState {
 
 const IDLE_SEARCH: SearchState = { status: "idle", options: [] };
 
+/** The files a search found that the message does not reference yet. */
+function searchOptions(
+  root: string,
+  results: Awaited<ReturnType<typeof fetchFilesSearch>>["results"],
+  pickedKey: string,
+): FileReferenceOption[] {
+  const already = new Set(pickedKey.split("\u0000"));
+  return results
+    .map((result) => fileReferenceOption(root, result))
+    .filter(
+      (option): option is FileReferenceOption => option !== null && !already.has(option.path),
+    );
+}
+
 /**
  * Searches the run's workspace for the text after the `@`, through the Files surface's own search
  * (no second file index). Debounced and cancelled by the next keystroke; a failure is reported
@@ -107,13 +120,7 @@ function useFileSearch(
     const timer = window.setTimeout(() => {
       void fetchFilesSearch(root, query, FILE_REFERENCE_SEARCH_LIMIT, { signal: controller.signal })
         .then((response) => {
-          const already = new Set(pickedKey.split("\u0000"));
-          const options = response.results
-            .map((result) => fileReferenceOption(root, result))
-            .filter(
-              (option): option is FileReferenceOption =>
-                option !== null && !already.has(option.path),
-            );
+          const options = searchOptions(root, response.results, pickedKey);
           setState({ status: options.length === 0 ? "empty" : "found", options });
         })
         .catch((error: unknown) => {
