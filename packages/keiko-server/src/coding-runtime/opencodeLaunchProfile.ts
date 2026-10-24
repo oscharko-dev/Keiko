@@ -5,6 +5,11 @@ import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/kei
 
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import {
+  openCodeNativeFormatterDisposition,
+  openCodeNativeFormatterSetting,
+  type OpenCodeNativeFormatterDisposition,
+} from "./opencodeNativeFormatter.js";
+import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
@@ -71,6 +76,12 @@ export interface OpenCodeLaunchProfileInput {
    * which does not yet thread it through).
    */
   readonly unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName> | undefined;
+  /**
+   * The run's launch autonomy mode (`KEIKO_CODING_MODE`). Only the native profile acts on it: it
+   * decides whether the producer's built-in formatters may run (`openCodeNativeFormatterDisposition`).
+   * Absent or unrecognized fails closed to formatters off.
+   */
+  readonly mode?: string | undefined;
 }
 
 /** The optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
@@ -116,6 +127,8 @@ export type OpenCodeLaunchProfileResult =
       readonly env: Readonly<Record<string, string>>;
       readonly config: string;
       readonly configValue: ReturnType<typeof createFixedOpenCodeV2Config>;
+      /** What the native binding decided for the built-in formatters; absent on mapped profiles. */
+      readonly formatter?: OpenCodeNativeFormatterDisposition;
     }
   | { readonly ok: false; readonly reason: "invalid-launch-input" | "secret-generation-failed" };
 
@@ -131,11 +144,13 @@ export function buildOpenCodeLaunchProfile(
   const secret = (input.randomBytes ?? nodeRandomBytes)(32);
   if (secret.length < 32) return { ok: false, reason: "secret-generation-failed" };
   const home = join(input.stateRoot, "home");
+  const formatter = openCodeNativeFormatterDisposition(input.mode);
   const configValue = createFixedOpenCodeV2Config(
     input.contextGeometry,
     input.unavailableOptionalTools,
     input.toolProfile,
     input.stateRoot,
+    formatter,
   );
   return {
     ok: true,
@@ -173,6 +188,7 @@ export function buildOpenCodeLaunchProfile(
     }),
     config: JSON.stringify(configValue),
     configValue,
+    ...(input.toolProfile === "native" ? { formatter } : {}),
   };
 }
 
@@ -338,9 +354,11 @@ export function createFixedOpenCodeV2Config(
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
   profile: OpenCodeToolProfile = "direct",
   stateRoot?: string,
+  formatter: OpenCodeNativeFormatterDisposition = "disabled-unknown-mode",
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
-  if (profile === "native") return createNativeOpenCodeV2Config(contextGeometry, stateRoot);
+  if (profile === "native")
+    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, formatter);
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -395,7 +413,8 @@ export function createFixedOpenCodeV2Config(
  */
 function createNativeOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
-  stateRoot?: string,
+  stateRoot: string | undefined,
+  formatter: OpenCodeNativeFormatterDisposition,
 ): Readonly<Record<string, unknown>> {
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -409,6 +428,9 @@ function createNativeOpenCodeV2Config(
     update: "disable",
     share: "disabled",
     snapshots: true,
+    // Always explicit: the producer's own default is off, and a disabled run must stay off even if
+    // a later layer or release changes that default.
+    formatter: openCodeNativeFormatterSetting(formatter),
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, contextGeometry.imageInput === true),
@@ -432,7 +454,9 @@ function createNativeOpenCodeV2Config(
 
 /**
  * The fields no layer below Keiko may change: the single gateway-bound provider and model, the
- * mode-independent permission floor, and the self-update and sharing switches. The pinned runtime
+ * mode-independent permission floor, the self-update and sharing switches, and the built-in
+ * formatter setting (a child process the permission hook never sees, so no layer may turn it on
+ * for a mode that must not run it; see `openCodeNativeFormatterDisposition`). The pinned runtime
  * merges `OPENCODE_CONFIG_CONTENT` after the private file and after every discovered project
  * document, so this subset is the last word if a project layer is ever admitted (#3903). Only
  * `{env:…}` placeholders appear in it; the gateway address and capability stay in the child
@@ -441,6 +465,7 @@ function createNativeOpenCodeV2Config(
 const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
   "update",
   "share",
+  "formatter",
   "model",
   "default_agent",
   "providers",

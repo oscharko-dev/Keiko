@@ -173,6 +173,10 @@ import {
   type NativeSessionTreeRun,
 } from "./opencodeNativeSessionTree.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
+import {
+  OPENCODE_NATIVE_FORMATTER_DISPOSITIONS,
+  type OpenCodeNativeFormatterDisposition,
+} from "./opencodeNativeFormatter.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import {
   buildOpenCodeLaunchProfile,
@@ -273,6 +277,36 @@ const NATIVE_NARROWING_REFUSED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-native-policy"],
   proofIds: ["coding-runtime.native-narrowing.refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-formatter.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeFormatterBound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    disposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: OPENCODE_NATIVE_FORMATTER_DISPOSITIONS,
+    },
+    launchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...CODING_WORKBENCH_MODE_VALUES, "unknown"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-formatter.bound.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -1368,6 +1402,7 @@ async function materializePrepare(
     stateRoot: runRoot,
     contextGeometry: input.contextGeometry,
     toolProfile: input.toolProfile,
+    mode: request.env.KEIKO_CODING_MODE,
   });
   if (!profile.ok) throw new Error("profile-invalid");
   const config = profile.config;
@@ -1400,6 +1435,7 @@ async function materializePrepare(
   if (serviceHost !== undefined && program === undefined)
     throw new Error("host-preparation-invalid");
   persistPreparedRun(runs, request, runRoot, password, configDigest, program, continuation);
+  recordNativeFormatterBound(input.activityLog, request, profile.formatter);
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
 }
 
@@ -1447,6 +1483,25 @@ function seedRun(
     runRoot,
     workspaceRoot: request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
   });
+}
+
+/** A native run's built-in formatter decision, once per prepared run (parity row C07). */
+function recordNativeFormatterBound(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  disposition: OpenCodeNativeFormatterDisposition | undefined,
+): void {
+  if (disposition === undefined) return;
+  const mode = CODING_WORKBENCH_MODE_VALUES.find(
+    (value) => value === request.env.KEIKO_CODING_MODE,
+  );
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_FORMATTER_BOUND_OPERATION,
+      { correlationId: request.runId },
+      { runId: request.runId, disposition, launchMode: mode ?? "unknown" },
+    ),
+  );
 }
 
 function persistPreparedRun(

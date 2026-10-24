@@ -3475,6 +3475,88 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     );
   });
 
+  // #3897 (parity row C07): the producer runs a built-in formatter after its own edits without any
+  // permission, so the launch mode decides whether it may, and the choice is recorded body-free.
+  it.each([
+    ["autonomous-delivery", true, "enabled"],
+    ["supervised-coding", false, "disabled-supervised-mode"],
+    ["governed-assist", false, "disabled-ask-mode"],
+  ] as const)(
+    "binds the native built-in formatter to the %s launch mode and records the decision",
+    async (mode, formatter, disposition) => {
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => "native",
+        activityLog,
+      });
+      try {
+        const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+          readonly formatter?: unknown;
+        };
+        expect(binding.formatter).toBe(formatter);
+        const bound = activityLog.events.filter(
+          (event) => event.op === "coding-runtime.native-formatter.bound",
+        );
+        expect(bound).toHaveLength(1);
+        expect(bound[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+        expect(bound[0]?.extra).toMatchObject({
+          runId: FIXTURE_RUN_ID,
+          disposition,
+          launchMode: mode,
+        });
+        expectActivityLogProof(
+          "coding-runtime.native-formatter.bound.emitted-line",
+          formatActivityLogProofLine(bound[0] ?? {}),
+        );
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  it("control: a mapped launch carries no formatter setting and records no decision", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "direct",
+      activityLog,
+    });
+    try {
+      expect(fixture.preparation.env).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
+      expect(
+        activityLog.events.some((event) => event.op === "coding-runtime.native-formatter.bound"),
+      ).toBe(false);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // The formatter's setting is part of the launch configuration and cannot follow a narrowing.
+  // The only launch mode that enables it is one whose resume cannot narrow in place, so a tree that
+  // may format can never be acknowledged as Ask for approval while it still would.
+  it("refuses to narrow a formatter-enabled tree in place to a mode that forbids the formatter", async () => {
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog: createBufferedServerLogSink(),
+    });
+    try {
+      const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly formatter?: unknown;
+      };
+      expect(binding.formatter).toBe(true);
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "governed-assist")).toEqual({
+        ok: false,
+        failureCode: "authority-resolution-failed",
+        retryable: false,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   const SOURCE = { messageID: "msg_assistant_1", id: "call_read_1" } as const;
   const handleAsk = (
     fixture: Awaited<ReturnType<typeof startBridgeFixture>>,

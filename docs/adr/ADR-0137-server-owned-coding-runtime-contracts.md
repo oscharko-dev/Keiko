@@ -1107,6 +1107,33 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
   `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
   Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
+- **Built-in formatters follow the launch mode, and only Full access runs them (#3897, parity row
+  C07).** The pinned 2.1.4 producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
+  `prettier`, ...) after its own `write` and `edit` as a plain child process of the runtime. No
+  permission is evaluated for it, so the policy hook sees the edit and never the formatter, and it
+  runs only when the configuration says `formatter: true`; its own default is off. Keiko therefore
+  writes the setting explicitly on both configuration layers, never inherited, from the launch
+  mode (`openCodeNativeFormatterDisposition`): Full access enables it; Supervised workspace and
+  Ask for approval turn it off; an absent or unrecognized mode fails closed to off. Supervised
+  workspace is off for the same reason the egress rule above exists: the setting is bound when the
+  tree launches, and a resume may narrow Supervised workspace to Ask for approval in place, so an
+  enabled formatter could outlive the mode that allowed it. A Full access tree cannot be narrowed
+  in place at all, so an enabled formatter never does. A unit test pins that coupling (a mode that
+  enables the formatter must be one whose in-place narrowing is refused) so widening either rule
+  breaks the other. Formatting in Supervised workspace needs a narrowing the runtime can apply in
+  place and is not implemented. Proven against the staged original executable under the real
+  native Seatbelt wrapper (`opencodeNativeFormatter.real.test.ts`): in Full access a native
+  `write` and a native `edit` are each followed by the PATH-resolved `gofmt` built-in with no
+  permission asked for it; in Ask for approval and Supervised workspace the same calls land
+  verbatim; without the key the producer runs no formatter even in Full access. The producer
+  resolves `prettier`, `oxfmt` and `biome` through its own package manager and package cache
+  rather than the repository's `node_modules/.bin`, and Keiko keeps that package manager offline
+  (`npm_config_offline`), so a repository's own prettier is never executed (real binary, registry
+  unreachable); formatters that resolve a binary on the launcher's `PATH` run when it is installed
+  and readable inside the kernel read allowlist's toolchain roots. `pint` runs the repository's
+  `./vendor/bin/pint` (read from the bundle, not exercised) and so is covered by the same
+  Full-access-only rule. Each prepared native run records its decision body-free as
+  `coding-runtime.native-formatter.bound` (closed `disposition` and `launchMode`).
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
   standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
@@ -1222,8 +1249,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     reasons present, directory failures, the stripped authority-bearing and other key counts, the
     copies' byte total and a SHA-256 over them, never a name, a path or a body.
 - **The server-owned binding rides the highest layer.** The profile also passes the single
-  provider, model, `default_agent`, `update`/`share` switches and the mode-independent permission
-  floor as `OPENCODE_CONFIG_CONTENT`, a secret-free subset of the private file that holds only
+  provider, model, `default_agent`, `update`/`share` switches, the built-in `formatter` setting
+  (above) and the mode-independent permission floor as `OPENCODE_CONFIG_CONTENT`, a secret-free
+  subset of the private file that holds only
   `{env:…}` placeholders (the gateway address and capability stay in the child environment). The
   producer merges that virtual document after the private file and after every discovered project
   document, so it stays the last word if a project layer is ever admitted, including across a

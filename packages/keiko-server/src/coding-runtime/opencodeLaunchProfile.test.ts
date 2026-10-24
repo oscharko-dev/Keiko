@@ -245,6 +245,7 @@ describe("OpenCode launch profile", () => {
       const file = JSON.parse(profile.config) as Record<string, unknown>;
       expect(Object.keys(content).sort()).toEqual([
         "default_agent",
+        "formatter",
         "model",
         "permissions",
         "providers",
@@ -302,6 +303,87 @@ describe("OpenCode launch profile", () => {
         expect(mapped.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
         expect(mapped.env).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
       }
+    });
+  });
+
+  // #3897 (parity row C07): the pinned producer runs a built-in formatter after its own edits as a
+  // plain child process no permission sees, and only when the configuration says `formatter: true`.
+  // The setting is therefore explicit in every native launch and follows the launch mode: only Full
+  // access enables it, because the formatter cannot follow an in-place narrowing and a Full access
+  // tree cannot be narrowed in place.
+  describe("native built-in formatter binding", () => {
+    function formatterFor(mode: string | undefined): {
+      readonly content: unknown;
+      readonly file: unknown;
+      readonly disposition: unknown;
+    } {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        ...CONTEXT_INPUT,
+        ...(mode === undefined ? {} : { mode }),
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as Record<
+        string,
+        unknown
+      >;
+      const file = JSON.parse(profile.config) as Record<string, unknown>;
+      return { content: content.formatter, file: file.formatter, disposition: profile.formatter };
+    }
+
+    it.each([
+      ["autonomous-delivery", true, "enabled"],
+      ["supervised-coding", false, "disabled-supervised-mode"],
+      ["governed-assist", false, "disabled-ask-mode"],
+    ] as const)("binds %s to formatter=%s on both configuration layers", (mode, on, why) => {
+      expect(formatterFor(mode)).toEqual({ content: on, file: on, disposition: why });
+    });
+
+    it("fails closed to an explicit false for an absent or unrecognized mode", () => {
+      for (const mode of [undefined, "", "Autonomous-Delivery", "full-access", "unknown"])
+        expect(formatterFor(mode)).toEqual({
+          content: false,
+          file: false,
+          disposition: "disabled-unknown-mode",
+        });
+    });
+
+    it("never gives the mapped profiles a formatter setting or a disposition", () => {
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        const mapped = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile,
+          mode: "autonomous-delivery",
+          ...CONTEXT_INPUT,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!mapped.ok) throw new Error("expected mapped launch profile");
+        expect(mapped.config).not.toContain("formatter");
+        expect(mapped).not.toHaveProperty("formatter");
+      }
+    });
+
+    it("changes nothing but the formatter setting between modes", () => {
+      const rest = (mode: string): string => {
+        const profile = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile: "native",
+          ...CONTEXT_INPUT,
+          mode,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!profile.ok) throw new Error("expected native launch profile");
+        const config = JSON.parse(profile.config) as Record<string, unknown>;
+        delete config.formatter;
+        return JSON.stringify(config);
+      };
+      expect(rest("governed-assist")).toBe(rest("autonomous-delivery"));
+      expect(rest("supervised-coding")).toBe(rest("autonomous-delivery"));
     });
   });
 

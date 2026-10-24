@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4ab975bbe99101e9ef3140b3ae659c5e515820445b951c7e404101ab077f5468" as const;
+  "befab2dc60463a4b680bdc5d38192de9eb1c0ea965a40a72487156219e8671ec" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8660,12 +8660,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.native-narrowing.refused", "coding-runtime.native-policy.decided"],
+        state: [
+          "coding-runtime.native-formatter.bound",
+          "coding-runtime.native-narrowing.refused",
+          "coding-runtime.native-policy.decided",
+        ],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "coding-runtime.native-formatter.bound",
+          mode: "correlation",
+        },
         {
           op: "coding-runtime.native-narrowing.refused",
           mode: "correlation",
@@ -8677,11 +8685,48 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.native-formatter.bound",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "disposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "launchMode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.native-formatter.bound.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.native-narrowing.refused",
           owner: "keiko-server",
@@ -43932,6 +43977,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.initialization-transport": "tools-workflows",
+    "coding-runtime.native-formatter.bound": "tools-workflows",
     "coding-runtime.native-narrowing.refused": "tools-workflows",
     "coding-runtime.native-policy.decided": "tools-workflows",
     "coding-runtime.native-question.observed": "tools-workflows",

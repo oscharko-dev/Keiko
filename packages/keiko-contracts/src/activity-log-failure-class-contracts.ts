@@ -2625,22 +2625,29 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["coding-runtime.native-narrowing.refused", "coding-runtime.native-policy.decided"],
+      state: [
+        "coding-runtime.native-formatter.bound",
+        "coding-runtime.native-narrowing.refused",
+        "coding-runtime.native-policy.decided",
+      ],
       end: [],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
     ],
