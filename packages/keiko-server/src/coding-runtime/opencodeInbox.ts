@@ -408,14 +408,20 @@ async function withdrawPending(
   const run = deps.capabilities.delivery ? deps.readyRun(runId) : undefined;
   if (run === undefined) return;
   try {
-    let withdrawn = 0;
-    for (const entry of await run.client.inbox(run.sessionId, signal)) {
+    const pending = (await run.client.inbox(run.sessionId, signal)).filter((entry) => {
       const minted = entry.kind === "user" ? deps.nativeInput(runId, entry.id) : undefined;
-      if (minted === undefined || minted.withdrawn) continue;
+      return minted !== undefined && !minted.withdrawn;
+    });
+    // Every withdrawal changes the same session's ordered queue, and the first failure stops the
+    // rest, so the withdrawals run one after another.
+    const withdraw = async (index: number): Promise<number> => {
+      const entry = pending[index];
+      if (entry === undefined) return index;
       await run.client.cancelInboxEntry(run.sessionId, entry.id, signal);
       deps.withdrawNativeInput(runId, entry.id);
-      withdrawn += 1;
-    }
+      return withdraw(index + 1);
+    };
+    const withdrawn = await withdraw(0);
     if (withdrawn > 0) {
       recordInboxAction(
         deps.activityLog,

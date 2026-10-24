@@ -79,8 +79,8 @@ export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefini
  * and `opencodeNativeQualification.real.test.ts` pins the two rules against the real executable:
  * `patch` is registered for every model but advertised only to a model whose id contains `gpt-`
  * (not `gpt-4`, not `oss`), where it replaces `edit` and `write`, so the alias `coding` never sees
- * it; `todowrite` is registered only under the producer's opt-in `experimental.todo`, which Keiko
- * leaves off.
+ * it; the plan tool `todowrite` is registered only under the producer's opt-in experimental
+ * switch for it, which the native profile turns on (parity row T19).
  */
 export const OPENCODE_NATIVE_TOOL_NAMES: readonly string[] = Object.freeze(
   OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => !tool.codemode).map((tool) => tool.id),

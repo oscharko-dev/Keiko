@@ -116,12 +116,14 @@ async function loadedAgents(
   run: CommandsRun,
 ): Promise<readonly OpenCodeV2Agent[]> {
   const pause = deps.pause ?? realPause;
-  let agents = await run.client.agents(run.workspaceRoot);
-  for (let read = 1; read < LOCATION_LOAD_READS && agents.length === 0; read += 1) {
+  // Each read depends on the previous one's answer, so the reads run one after another.
+  const read = async (remaining: number): Promise<readonly OpenCodeV2Agent[]> => {
+    const agents = await run.client.agents(run.workspaceRoot);
+    if (agents.length > 0 || remaining <= 1) return agents;
     await pause(LOCATION_LOAD_PAUSE_MS);
-    agents = await run.client.agents(run.workspaceRoot);
-  }
-  return agents;
+    return read(remaining - 1);
+  };
+  return read(LOCATION_LOAD_READS);
 }
 
 const COMMANDS_LISTED_OPERATION = defineActivityLogOperation({

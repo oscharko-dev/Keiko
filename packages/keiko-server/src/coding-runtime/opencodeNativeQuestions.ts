@@ -159,13 +159,19 @@ async function listQuestions(
   try {
     const routing = await routeForms(deps);
     noteListed(deps, routing);
-    const requests: OpenCodeQuestionRequest[] = [];
-    for (const routed of routing.routed) {
+    // One form at a time: the Activity Log records each refused form's dismissal right after its
+    // refusal, so the evidence of every form stays together.
+    const represent = async (
+      index: number,
+      requests: readonly OpenCodeQuestionRequest[],
+    ): Promise<readonly OpenCodeQuestionRequest[]> => {
+      const routed = routing.routed[index];
+      if (routed === undefined) return requests;
       const request = representedForm(deps, routing, routed);
       if (request === undefined) await dismissForm(deps, routing, routed);
-      else requests.push(request);
-    }
-    return requests;
+      return represent(index + 1, request === undefined ? requests : [...requests, request]);
+    };
+    return await represent(0, []);
   } catch (error) {
     deps.onFailure(error);
     throw error;
