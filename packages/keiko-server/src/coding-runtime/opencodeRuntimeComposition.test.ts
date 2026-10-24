@@ -3435,6 +3435,47 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     }
   });
 
+  // #3901: an admitted project check is remembered by its call, so its exit status can become the
+  // run's verification evidence; any other shell line is no check.
+  it("tells the run evidence owner which admitted shell call is a project check (#3901)", async () => {
+    const verificationAdmitted = vi.fn();
+    const nativeSettlement = {
+      refused: vi.fn(),
+      settled: vi.fn(),
+      verificationAdmitted,
+      verificationDenied: vi.fn(),
+    } as unknown as NonNullable<CodingToolFacade["nativeSettlement"]>;
+    const fixture = await startBridgeFixture(
+      facadeWith(admitWith(CHARGED), nativeSettlement),
+      undefined,
+      {
+        mode: "autonomous-delivery",
+      },
+    );
+    const shellAsk = (id: string, resources: readonly string[]): string =>
+      JSON.stringify({
+        action: "native-policy",
+        runId: FIXTURE_RUN_ID,
+        sessionID: "ses_tool",
+        permission: "shell",
+        resources,
+        configured: "allow",
+        source: { type: "tool", messageID: "msg_1", id },
+      });
+    try {
+      await handleAsk(fixture, shellAsk("call_test", ["cd packages/app", "npm test"]));
+      await handleAsk(fixture, shellAsk("call_typecheck", ["npm run typecheck"]));
+      await handleAsk(fixture, shellAsk("call_listing", ["ls -la"]));
+      await handleAsk(fixture, shellAsk("call_masked", ["npm test", "true"]));
+      expect(verificationAdmitted.mock.calls).toEqual([
+        [{ messageId: "msg_1", callId: "call_test" }, "test"],
+        [{ messageId: "msg_1", callId: "call_typecheck" }, "typecheck"],
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("proves ancestry only through a bounded parent chain inside the workspace", async () => {
     const { nativeSessionDescendsFromRun } = await compositionModule();
     const ws = "/ws";

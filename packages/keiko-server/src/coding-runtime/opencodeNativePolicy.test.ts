@@ -22,6 +22,7 @@ import {
   workspaceRelative,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyRequest,
+  openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import {
   expectActivityLogProof,
@@ -534,4 +535,58 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// #3901: a native shell line is verification evidence only when its one exit status can speak for
+// the check alone: every simple command is a project check or a `cd`.
+describe("native verification commands (#3901, #3897 review)", () => {
+  it.each([
+    [["npm test"], "test"],
+    [["npm run test:unit -- --reporter=dot"], "test"],
+    [["pnpm run typecheck"], "typecheck"],
+    [["yarn run lint --fix"], "lint"],
+    [["npm run build"], "build"],
+    [["npx vitest run src/a.test.ts"], "test"],
+    [["npx tsc --noEmit"], "typecheck"],
+    [["npx eslint ."], "lint"],
+    [["cd packages/app", "npm test"], "test"],
+    [["env CI=1 npm test"], "test"],
+    [["mvn test"], "test"],
+    [["./gradlew build"], "build"],
+    [["cargo clippy"], "lint"],
+    [["go vet ./..."], "lint"],
+    [["pytest -q"], "test"],
+    [["python3 -m pytest tests"], "test"],
+    [["node --test"], "test"],
+  ] as const)("classifies %j as a %s check", (resources, kind) => {
+    expect(openCodeNativeVerificationKind(resources)).toBe(kind);
+  });
+
+  it.each([
+    [[]],
+    [["cd packages/app"]],
+    [["npm test", "true"]],
+    [["npm test | tee test.log"]],
+    [["npm test; rm -rf dist"]],
+    [["npm install"]],
+    [["npm run deploy"]],
+    [["git status"]],
+    [["rm -rf node_modules"]],
+    [["bash -c 'npm test'"]],
+  ] as const)("does not count %j as verification", (resources) => {
+    expect(openCodeNativeVerificationKind(resources)).toBeUndefined();
+  });
+});
+
+// Program names are untrusted model text: one that names an `Object.prototype` member must be an
+// ordinary unvetted command, never a lookup that reaches the prototype and throws.
+describe("program names that collide with prototype members", () => {
+  it.each(["constructor test", "__proto__ build", "hasOwnProperty x", "toString"])(
+    "classifies %j as an ordinary command and as no check",
+    (command) => {
+      expect(effectOf("supervised-coding", "shell", [command])).toBe("ask");
+      expect(effectOf("autonomous-delivery", "shell", [command])).toBe("allow");
+      expect(openCodeNativeVerificationKind([command])).toBeUndefined();
+    },
+  );
 });

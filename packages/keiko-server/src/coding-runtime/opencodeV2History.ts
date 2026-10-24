@@ -533,7 +533,11 @@ function toolState(
   const { id, name } = toolIdentity(part);
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
-  const mapped = displayToolState(name, state);
+  const exitCode = name === "shell" ? shellExitCode(state) : undefined;
+  // The runtime completes a shell call whatever its command returned (`metadata.exit`); a command
+  // that exited non-zero failed, which the timeline and the run's evidence both say (#3901).
+  const mapped =
+    exitCode !== undefined && exitCode !== 0 ? "failed" : displayToolState(name, state);
   return {
     kind: "tool",
     messageId,
@@ -541,7 +545,15 @@ function toolState(
     tool: name,
     state: mapped,
     occurredAt: toolOccurredAt(part),
+    ...(exitCode === undefined ? {} : { exitCode }),
   };
+}
+
+/** A completed shell call's own exit status; a job moved to the background reports none. */
+function shellExitCode(state: Readonly<Record<string, unknown>>): number | undefined {
+  if (state.status !== "completed") return undefined;
+  const exit = record(state.metadata)?.exit;
+  return typeof exit === "number" && Number.isInteger(exit) ? exit : undefined;
 }
 
 // A completed part is a succeeded tool, except a Code Mode `execute` whose program failed: the

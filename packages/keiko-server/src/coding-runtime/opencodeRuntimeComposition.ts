@@ -20,6 +20,7 @@ import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
   CodingWorkbenchActionClass,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
   encodeSecureWorkspaceNativeResponse,
@@ -140,6 +141,7 @@ import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   decideOpenCodeNativePolicy,
   openCodeNativeEditFiles,
+  openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
   recordOpenCodeNativePolicyDecision,
   type OpenCodeNativeAuthorityEvidence,
@@ -1519,6 +1521,7 @@ function nativeToolSettlementObserver(
       callId: signal.callId,
       tool: signal.tool,
       state: signal.state,
+      ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
     });
   };
 }
@@ -2815,6 +2818,7 @@ async function settleNativePolicyOutcome(
     decision.effect === "ask"
       ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
       : "allowed";
+  noteDeniedVerification(deps, request, outcome);
   if (outcome !== "allowed" && outcome !== "approved") return { outcome };
   const admission = nativeEffectAdmission(
     deps,
@@ -2825,7 +2829,40 @@ async function settleNativePolicyOutcome(
   if (!admission.ok)
     return { outcome: "authority-refused", authority: { reason: admission.reason } };
   noteAdmittedEditTargets(run, request);
+  noteAdmittedVerification(deps, request);
   return { outcome, authority: { charge: admission.charge } };
+}
+
+/** A human refused a project check: the run's verification is blocked, as for the governed one. */
+function noteDeniedVerification(
+  deps: ToolBridgeExecutionDeps,
+  request: OpenCodeNativePolicyRequest,
+  outcome: OpenCodeNativePolicyOutcome,
+): void {
+  if (outcome === "denied" && nativeVerificationKind(request) !== undefined)
+    deps.facade.nativeSettlement?.verificationDenied?.();
+}
+
+/** The project check an admitted native shell call runs, if it is one (#3901). */
+function nativeVerificationKind(
+  request: OpenCodeNativePolicyRequest,
+): VerificationKind | undefined {
+  return request.permission === "shell"
+    ? openCodeNativeVerificationKind(request.resources)
+    : undefined;
+}
+
+/** An admitted verification command, so its exit status can become the run's evidence (#3901). */
+function noteAdmittedVerification(
+  deps: ToolBridgeExecutionDeps,
+  request: OpenCodeNativePolicyRequest,
+): void {
+  const kind = nativeVerificationKind(request);
+  if (kind === undefined || request.source === undefined) return;
+  deps.facade.nativeSettlement?.verificationAdmitted?.(
+    { messageId: request.source.messageID, callId: request.source.id },
+    kind,
+  );
 }
 
 /** An admitted native edit's targets, so its settlement can record what the turn itself wrote. */

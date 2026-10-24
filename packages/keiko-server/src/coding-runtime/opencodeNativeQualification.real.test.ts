@@ -28,6 +28,7 @@ import {
 import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import {
   decideOpenCodeNativePolicy,
+  openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
 } from "./opencodeNativePolicy.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
@@ -1114,6 +1115,49 @@ describe("pinned native OpenCode shell processes (T13)", () => {
 });
 
 // ─── C07: formatters ───────────────────────────────────────────────────────────────────────────
+
+// #3901 (T10): the pinned runtime completes every shell call and reports the command's own exit
+// status in the part's metadata; Keiko's history reads it, so a failing project check is a failed
+// call and the run's verification evidence, never a success by default.
+describe("pinned native OpenCode project checks (T10, #3901)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "reports a failing and a passing project test run with their exit status",
+    async () => {
+      await withRun({ mode: "autonomous-delivery", approveAsks: true }, async (run) => {
+        // A stand-in for the project's test runner (the harness's PATH carries no toolchain): it is
+        // read as `npm test` by Keiko's classifier and exits as a real runner would.
+        const runner = join(run.fixture.workspace, "bin", "npm");
+        mkdirSync(dirname(runner), { recursive: true });
+        writeFileSync(
+          runner,
+          '#!/bin/sh\nif [ "$FAIL" = 1 ]; then echo "1 failing"; exit 1; fi\necho "1 passing"\n',
+          { mode: 0o755 },
+        );
+        expect(await scriptedTurn(run, shell("FAIL=1 ./bin/npm test"))).toMatch(
+          /Exited with code 1$/u,
+        );
+        expect(await scriptedTurn(run, shell("./bin/npm test"))).toContain("1 passing");
+        expect(openCodeNativeVerificationKind(["FAIL=1 ./bin/npm test"])).toBe("test");
+        const projection = createOpenCodeV2HistoryProjection({
+          runId: RUN_ID,
+          activityLog: undefined,
+          toolProfile: "native",
+        });
+        const tools = projection
+          .project(run.sessionId, await run.client.messages(run.sessionId), undefined)
+          .flatMap((event) => projection.takeSignal(event) ?? [])
+          .filter((signal) => signal.kind === "tool" && signal.tool === "shell");
+        expect(tools).toEqual([
+          expect.objectContaining({ state: "failed", exitCode: 1 }),
+          expect.objectContaining({ state: "succeeded", exitCode: 0 }),
+        ]);
+      });
+    },
+    120_000,
+  );
+});
 
 describe("pinned native OpenCode formatters (C07)", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;

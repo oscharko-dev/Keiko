@@ -5,9 +5,11 @@ import type {
   CodingWorkbenchRuntimeAdapterKind,
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeDelegationUsage,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 
 import type {
+  CodingToolEditOutcome,
   CodingToolNativeCall,
   CodingToolNativeEffectAdmission,
   CodingToolNativeEffectFacet,
@@ -16,6 +18,8 @@ import type {
   CodingToolNativeSettlement,
   CodingToolNativeSettlementFacet,
   CodingToolNativeSettlementInput,
+  CodingToolNativeVerificationHooks,
+  CodingVerificationExecutedObserver,
 } from "./codingToolFacadePorts.js";
 import type { CodingToolAction, CodingToolResult } from "./codingToolIpc.js";
 import { isOpenCodeNativeDeliveryToolName } from "./opencodeNativeDeliveryTools.js";
@@ -203,9 +207,11 @@ export function createCodingToolNativeSettlementFacet(
   onToolSettled:
     | ((action: CodingToolAction | undefined, status: CodingToolResult["status"]) => void)
     | undefined,
+  observers: NativeSettlementObservers = {},
 ): CodingToolNativeSettlementFacet {
   const refused = boundedKeys(NATIVE_SETTLEMENT_MEMORY_MAX);
   const settled = boundedKeys(NATIVE_SETTLEMENT_MEMORY_MAX);
+  const verification = nativeVerificationTracker(observers.verification);
   return {
     refused: (call): void => {
       refused.add(nativeCallKey(call));
@@ -217,8 +223,76 @@ export function createCodingToolNativeSettlementFacet(
       const key = nativeCallKey(input);
       if (settled.has(key)) return "duplicate";
       settled.add(key);
-      onToolSettled?.(nativeToolAction(input.tool), nativeToolStatus(input, refused.take(key)));
+      const action = nativeToolAction(input.tool);
+      const refusedByPolicy = refused.take(key);
+      onToolSettled?.(action, nativeToolStatus(input, refusedByPolicy));
+      // A native edit the runtime applied is the run's edit like a governed one: it needs a check
+      // at its own revision before the run can succeed (#3901).
+      if (action === "edit" && input.state === "succeeded")
+        observers.observeEditOutcome?.({ kind: "applied" });
+      verification.settled(key, input, refusedByPolicy);
       return "counted";
+    },
+    verificationAdmitted: (call, kind): void => {
+      verification.admitted(nativeCallKey(call), kind);
+    },
+    verificationDenied: (): void => {
+      observers.verification?.blocked?.("verification-command-denied");
+    },
+  };
+}
+
+interface NativeSettlementObservers {
+  readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
+  readonly verification?: CodingToolNativeVerificationHooks | undefined;
+}
+
+interface PendingNativeVerification {
+  readonly kind: VerificationKind;
+  readonly editRevision: number | undefined;
+  readonly executed: CodingVerificationExecutedObserver | undefined;
+  readonly admittedAtMs: number;
+}
+
+/**
+ * A verification command is remembered from its admission (with the edit revision and admission
+ * observer the governed verifier captures at the same point) until the runtime reports it. Only a
+ * call that actually ran and reported an exit status is evidence: a refused, cancelled or
+ * backgrounded one proves nothing either way.
+ */
+function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | undefined): {
+  readonly admitted: (key: string, kind: VerificationKind) => void;
+  readonly settled: (
+    key: string,
+    input: CodingToolNativeSettlementInput,
+    refusedByPolicy: boolean,
+  ) => void;
+} {
+  const pending = new Map<string, PendingNativeVerification>();
+  return {
+    admitted: (key, kind): void => {
+      if (hooks === undefined) return;
+      if (pending.size >= NATIVE_SETTLEMENT_MEMORY_MAX)
+        pending.delete(pending.keys().next().value ?? "");
+      pending.set(key, {
+        kind,
+        editRevision: hooks.revision?.(),
+        executed: hooks.admitted?.(),
+        admittedAtMs: Date.now(),
+      });
+    },
+    settled: (key, input, refusedByPolicy): void => {
+      const entry = pending.get(key);
+      if (entry === undefined || hooks === undefined) return;
+      pending.delete(key);
+      if (refusedByPolicy || input.exitCode === undefined) return;
+      hooks.publish({
+        kind: entry.kind,
+        passed: input.exitCode === 0,
+        editRevision: entry.editRevision,
+        durationMs: Math.max(0, Date.now() - entry.admittedAtMs),
+        executed: entry.executed,
+      });
     },
   };
 }

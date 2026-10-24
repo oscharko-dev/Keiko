@@ -3,6 +3,7 @@ import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchActionClass,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 
 import type {
@@ -440,6 +441,32 @@ export interface CodingToolNativeCall {
 export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
   readonly tool?: string | undefined;
   readonly state: "succeeded" | "failed";
+  /** A finished native `shell` call's own exit status; absent for every other tool and a job. */
+  readonly exitCode?: number | undefined;
+}
+
+/** A native verification command's result, as the runtime's own exit status reports it. */
+export interface CodingToolNativeVerificationResult {
+  readonly kind: VerificationKind;
+  readonly passed: boolean;
+  /** The run's edit revision when the command was admitted: a pass proves no later edit. */
+  readonly editRevision: number | undefined;
+  readonly durationMs: number;
+  /** The run's admission observer captured with the command; told only after it executed. */
+  readonly executed: CodingVerificationExecutedObserver | undefined;
+}
+
+/**
+ * The run's verification owner as native verification commands reach it (#3897 review, #3901):
+ * the same edit revision, admission observer, blocker and summary event the governed verifier
+ * uses, so a native edit needs a native check at its own revision before the run can succeed.
+ */
+export interface CodingToolNativeVerificationHooks {
+  readonly revision?: (() => number | undefined) | undefined;
+  readonly admitted?: (() => CodingVerificationExecutedObserver | undefined) | undefined;
+  readonly blocked?:
+    ((reason: CodingVerificationBlockedReason, targetDigest?: string) => void) | undefined;
+  readonly publish: (result: CodingToolNativeVerificationResult) => void;
 }
 
 /**
@@ -458,6 +485,11 @@ export interface CodingToolNativeSettlementFacet {
   /** The policy refused or a human denied this call: its terminal failure is a refusal. */
   readonly refused: (call: CodingToolNativeCall) => void;
   readonly settled: (input: CodingToolNativeSettlementInput) => CodingToolNativeSettlement;
+  /** The policy admitted this call as a verification command (`openCodeNativeVerificationKind`). */
+  readonly verificationAdmitted?:
+    ((call: CodingToolNativeCall, kind: VerificationKind) => void) | undefined;
+  /** A human refused a native verification command: no later pass of an older one clears it. */
+  readonly verificationDenied?: (() => void) | undefined;
 }
 
 export interface CodingToolFacade {

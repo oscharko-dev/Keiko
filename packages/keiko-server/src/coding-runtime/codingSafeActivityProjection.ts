@@ -192,6 +192,8 @@ export type CodingSafeActivitySignal =
       readonly tool?: string | undefined;
       readonly state: CodingSafeActivityToolState;
       readonly presentation?: CodingSafeActivityToolPresentation;
+      /** A finished native `shell` call's exit status: run evidence only, never projected. */
+      readonly exitCode?: number | undefined;
     })
   | (SignalBase & {
       readonly kind: "plan";

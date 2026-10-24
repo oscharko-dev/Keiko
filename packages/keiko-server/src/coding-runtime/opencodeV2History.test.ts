@@ -2486,3 +2486,65 @@ describe("OpenCode V2 plan carrier tool parts (#3897)", () => {
     ).toEqual([expect.objectContaining({ kind: "tool", tool: "todowrite", state: "succeeded" })]);
   });
 });
+
+// #3901 (#3897 review): the pinned runtime completes a shell call whatever its command returned and
+// reports the command's exit status as `metadata.exit` (observed on the 2.1.4 executable:
+// `{ status: "completed", metadata: { status: "completed", truncated: false, exit: 3 } }`).
+describe("OpenCode V2 native shell exit status (#3901)", () => {
+  function shellHistory(
+    state: Readonly<Record<string, unknown>>,
+  ): readonly Record<string, unknown>[] {
+    return [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Run the tests." },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        time: { created: 2 },
+        content: [{ type: "tool", id: "call_shell", name: "shell", time: { created: 2 }, state }],
+      },
+    ];
+  }
+
+  function toolSignals(history: readonly Record<string, unknown>[]): readonly unknown[] {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-shell",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    return projection
+      .project("ses_shell", history, undefined)
+      .flatMap((event) => projection.takeSignal(event) ?? [])
+      .filter((signal) => signal.kind === "tool");
+  }
+
+  const completed = (exit: unknown): Readonly<Record<string, unknown>> => ({
+    status: "completed",
+    input: { command: "npm test" },
+    content: [{ type: "text", text: "PRIVATE_SHELL_OUTPUT" }],
+    metadata: { status: "completed", truncated: false, exit },
+  });
+
+  it("projects a command that exited non-zero as a failed call carrying its exit status", () => {
+    expect(toolSignals(shellHistory(completed(3)))).toEqual([
+      expect.objectContaining({ kind: "tool", callId: "call_shell", state: "failed", exitCode: 3 }),
+    ]);
+  });
+
+  it("projects a command that exited zero as succeeded with its exit status", () => {
+    expect(toolSignals(shellHistory(completed(0)))).toEqual([
+      expect.objectContaining({ state: "succeeded", exitCode: 0 }),
+    ]);
+  });
+
+  it("carries no exit status for a job moved to the background or a malformed one", () => {
+    const background = { status: "completed", input: { command: "npm run dev", background: true } };
+    for (const state of [background, completed("3"), completed(1.5)]) {
+      const [signal] = toolSignals(shellHistory(state));
+      expect(signal).toMatchObject({ state: "succeeded" });
+      expect(signal).not.toHaveProperty("exitCode");
+    }
+    expect(JSON.stringify(toolSignals(shellHistory(completed(3))))).not.toContain(
+      "PRIVATE_SHELL_OUTPUT",
+    );
+  });
+});

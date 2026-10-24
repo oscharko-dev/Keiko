@@ -43,6 +43,7 @@ import type {
   CodingToolNativeReadListResult,
   CodingToolMutationGuard,
   CodingToolProducerBinding,
+  CodingToolNativeVerificationHooks,
   MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
@@ -180,6 +181,8 @@ interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly catalogBudget?: CatalogToolBudgetPort | undefined;
   readonly unavailableOptionalTools?: (() => ReadonlySet<OpenCodeOptionalToolName>) | undefined;
   readonly disableCatalogBridge?: boolean | undefined;
+  /** The run's verification owner for native verification commands (#3901). */
+  readonly nativeVerification?: CodingToolNativeVerificationHooks | undefined;
 }
 
 export type CodingToolAuthorityAvailability =
@@ -630,7 +633,7 @@ export function createRuntimeCodingToolFacade(
   return {
     ...facade,
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
-    ...nativeExecutionFacets(authority, context, configuration.onToolSettled),
+    ...nativeExecutionFacets(authority, context, configuration),
   };
 }
 
@@ -655,11 +658,14 @@ function nativeExecutionFacets(
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
   >,
   context: CodingToolAuthorityContextProvider,
-  onToolSettled: CodingToolFacadeOptions["onToolSettled"],
+  configuration: RuntimeCodingToolFacadeOptions,
 ): Pick<CodingToolFacade, "nativeEffect" | "nativeSettlement"> {
   return {
     nativeEffect: createCodingToolNativeEffectFacet(authority, context),
-    nativeSettlement: createCodingToolNativeSettlementFacet(onToolSettled),
+    nativeSettlement: createCodingToolNativeSettlementFacet(configuration.onToolSettled, {
+      observeEditOutcome: configuration.observeEditOutcome,
+      verification: configuration.nativeVerification,
+    }),
   };
 }
 

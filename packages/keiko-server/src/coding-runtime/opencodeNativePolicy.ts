@@ -7,6 +7,7 @@ import type {
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchPolicyResourceScope,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
   codingWorkbenchPolicyEffectFor,
@@ -340,11 +341,152 @@ function isVettedSegment(segment: string): boolean {
 function vettedSubcommandsOf(program: string): ReadonlySet<string> | undefined {
   if (VETTED_PACKAGE_MANAGERS.has(program)) return VETTED_PACKAGE_SUBCOMMANDS;
   if (program === "npx") return VETTED_NPX_TOOLS;
-  return VETTED_BUILD_TOOLS[program];
+  // Own entries only: `constructor` or `__proto__` as a program must not reach the prototype.
+  return Object.hasOwn(VETTED_BUILD_TOOLS, program) ? VETTED_BUILD_TOOLS[program] : undefined;
 }
 
 function isVettedNodeInvocation(subcommand: string | undefined): boolean {
   return subcommand === "--test" || /\.(?:m?js|c?js|ts)$/u.test(subcommand ?? "");
+}
+
+/**
+ * The project check a native shell line runs (#3897 review, #3901): the line counts as verification
+ * only when every simple command of it is a check or a `cd`, and at least one is a check, because
+ * the runtime reports one exit status for the whole line. `npm test || true`, a pipe into another
+ * program or any other command next to the check makes the line no verification at all.
+ */
+export function openCodeNativeVerificationKind(
+  resources: readonly string[],
+): VerificationKind | undefined {
+  let kind: VerificationKind | undefined;
+  for (const segment of resources.flatMap((resource) => commandSegments(resource))) {
+    const tokens = commandTokens(segment);
+    if (tokens[0] === "cd") continue;
+    const next = segmentVerificationKind(tokens);
+    if (next === undefined) return undefined;
+    kind ??= next;
+  }
+  return kind;
+}
+
+const NPX_VERIFICATION_KINDS: ReadonlyMap<string, VerificationKind> = new Map([
+  ["vitest", "test"],
+  ["jest", "test"],
+  ["mocha", "test"],
+  ["playwright", "test"],
+  ["tsc", "typecheck"],
+  ["eslint", "lint"],
+]);
+type BuildToolChecks = readonly (readonly [string, VerificationKind])[];
+const MAVEN_CHECKS: BuildToolChecks = [
+  ["test", "test"],
+  ["verify", "test"],
+  ["compile", "build"],
+  ["package", "build"],
+];
+const GRADLE_CHECKS: BuildToolChecks = [
+  ["test", "test"],
+  ["check", "test"],
+  ["build", "build"],
+  ["compileJava", "build"],
+];
+const BUILD_TOOL_VERIFICATION: ReadonlyMap<string, BuildToolChecks> = new Map<
+  string,
+  BuildToolChecks
+>([
+  ["mvn", MAVEN_CHECKS],
+  ["mvnw", MAVEN_CHECKS],
+  ["gradle", GRADLE_CHECKS],
+  ["gradlew", GRADLE_CHECKS],
+  [
+    "cargo",
+    [
+      ["test", "test"],
+      ["build", "build"],
+      ["check", "build"],
+      ["clippy", "lint"],
+    ],
+  ],
+  [
+    "go",
+    [
+      ["test", "test"],
+      ["build", "build"],
+      ["vet", "lint"],
+    ],
+  ],
+  [
+    "make",
+    [
+      ["test", "test"],
+      ["check", "test"],
+      ["build", "build"],
+      ["lint", "lint"],
+    ],
+  ],
+]);
+/** A package script's check by its name: `test`, `test:unit`, `typecheck`, `lint:fix`, ... */
+const SCRIPT_VERIFICATION: readonly (readonly [RegExp, VerificationKind])[] = [
+  [/^(?:test|tests|spec|check|verify)(?::|$)/u, "test"],
+  [/^(?:typecheck|type-check|types|tsc)(?::|$)/u, "typecheck"],
+  [/^(?:lint|eslint)(?::|$)/u, "lint"],
+  [/^(?:build|compile)(?::|$)/u, "build"],
+];
+
+function segmentVerificationKind(tokens: readonly string[]): VerificationKind | undefined {
+  const [program] = tokens;
+  if (program === undefined) return undefined;
+  const subcommand = subcommandOf(tokens);
+  if (VETTED_PACKAGE_MANAGERS.has(program)) return packageCheckKind(tokens, subcommand);
+  const check = PROGRAM_CHECKS.get(program);
+  if (check !== undefined) return check(tokens, subcommand);
+  return BUILD_TOOL_VERIFICATION.get(program)?.find(([name]) => name === subcommand)?.[1];
+}
+
+type ProgramCheck = (
+  tokens: readonly string[],
+  subcommand: string | undefined,
+) => VerificationKind | undefined;
+
+function pythonCheck(tokens: readonly string[]): VerificationKind | undefined {
+  return tokens[1] === "-m" && (tokens[2] === "pytest" || tokens[2] === "unittest")
+    ? "test"
+    : undefined;
+}
+
+function npxCheck(
+  _tokens: readonly string[],
+  subcommand: string | undefined,
+): VerificationKind | undefined {
+  return NPX_VERIFICATION_KINDS.get(subcommand ?? "");
+}
+
+function nodeCheck(tokens: readonly string[]): VerificationKind | undefined {
+  return tokens[1] === "--test" ? "test" : undefined;
+}
+
+function pytestCheck(): VerificationKind {
+  return "test";
+}
+
+const PROGRAM_CHECKS: ReadonlyMap<string, ProgramCheck> = new Map<string, ProgramCheck>([
+  ["npx", npxCheck],
+  ["node", nodeCheck],
+  ["pytest", pytestCheck],
+  ["python", pythonCheck],
+  ["python3", pythonCheck],
+]);
+
+function packageCheckKind(
+  tokens: readonly string[],
+  subcommand: string | undefined,
+): VerificationKind | undefined {
+  if (subcommand === "test" || subcommand === "t") return "test";
+  if (subcommand !== "run" && subcommand !== "run-script") return undefined;
+  const script = tokens
+    .slice(tokens.indexOf(subcommand) + 1)
+    .find((token) => !token.startsWith("-"));
+  return SCRIPT_VERIFICATION.find(([pattern]) => pattern.test(script ?? ""))?.[1];
 }
 
 export function parseOpenCodeNativePolicyRequest(

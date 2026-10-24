@@ -1440,6 +1440,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   settlement owner leaves these calls to the facade that settles them, so run effort counts each
   once. A run readies only with the plugin active (above), because the refusal and the guidance
   point to tools it must have.
+- **A native check is the run's verification evidence (#3901).** Native tools execute outside the
+  facade, so the governed verifier's ledger learned nothing from them and a native run that edited
+  and never verified settled as succeeded. The native settlement owner now feeds the same ledger:
+  a native `edit`, `write` or `patch` the runtime applied is the run's edit (`observeEditOutcome`),
+  and a shell line the policy admitted as a project check (`openCodeNativeVerificationKind`: every
+  simple command is a test, typecheck, lint or build invocation or a `cd`, so `npm test || true`,
+  a pipe or any other command is no check) is remembered with the edit revision and the admission
+  observer the governed verifier captures at the same point. Its exit status, which the producer
+  reports as `metadata.exit` on a completed part (a non-zero exit is projected as a failed call),
+  becomes the same `verification-summarized` event, so the settlement's verification continuation,
+  `verification-not-evidenced`, the human-refusal blocker and the Workbench's verification card
+  treat both alike. A refused, backgrounded or unreported check proves nothing; a check admitted
+  before the last edit cannot prove it.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

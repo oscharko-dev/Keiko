@@ -571,3 +571,95 @@ describe("native tool calls reach the run's effort roll-up once per call (#3873,
     expect(effort.read(RUN_ID)).toMatchObject({ toolInvocationCount: 1, workspaceReadCount: 1 });
   });
 });
+
+// #3901 (#3897 review): a native edit is the run's edit and a native project check is its
+// verification, both through the governed verifier's own ledger, so a run that edited and never
+// verified at the current revision cannot settle as succeeded.
+describe("native edits and checks reach the run's verification ledger (#3901)", () => {
+  function verifiedRun(): {
+    readonly ledger: CodingRuntimeRunEffortLedger;
+    readonly facet: ReturnType<typeof createCodingToolNativeSettlementFacet>;
+    readonly edits: { count: number };
+  } {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin(RUN_ID);
+    const edits = { count: 0 };
+    const facet = createCodingToolNativeSettlementFacet(undefined, {
+      observeEditOutcome: (outcome): void => {
+        edits.count += 1;
+        if (outcome.kind === "applied") ledger.edit(RUN_ID);
+      },
+      verification: {
+        revision: () => ledger.verificationRevision(RUN_ID),
+        admitted: () => ledger.verificationAdmitted(RUN_ID),
+        blocked: (reason, digest): void => {
+          ledger.verificationBlocked(RUN_ID, reason, digest);
+        },
+        publish: (result): void => {
+          result.executed?.(result.kind);
+          ledger.verification(RUN_ID, result.passed, result.kind, result.editRevision);
+        },
+      },
+    });
+    return { ledger, facet, edits };
+  }
+  const call = (callId: string): { readonly messageId: string; readonly callId: string } => ({
+    messageId: "msg_1",
+    callId,
+  });
+
+  it("needs verification after a native edit and accepts a passing check at its revision", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+    facet.verificationAdmitted?.(call("call_test"), "test");
+    facet.settled({ ...call("call_test"), tool: "shell", state: "succeeded", exitCode: 0 });
+    expect(ledger.needsVerification(RUN_ID)).toBe(false);
+  });
+
+  it("does not let a check admitted before the last edit prove that edit", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({ ...call("call_edit_1"), tool: "write", state: "succeeded" });
+    facet.verificationAdmitted?.(call("call_test"), "test");
+    facet.settled({ ...call("call_edit_2"), tool: "patch", state: "succeeded" });
+    facet.settled({ ...call("call_test"), tool: "shell", state: "succeeded", exitCode: 0 });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+  });
+
+  it("keeps the run unverified after a failing check", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    facet.verificationAdmitted?.(call("call_test"), "test");
+    facet.settled({ ...call("call_test"), tool: "shell", state: "failed", exitCode: 3 });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+  });
+
+  it("takes a refused, backgrounded or unannounced check as no evidence at all", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    facet.verificationAdmitted?.(call("call_refused"), "test");
+    facet.refused(call("call_refused"));
+    facet.settled({ ...call("call_refused"), tool: "shell", state: "failed", exitCode: 0 });
+    facet.verificationAdmitted?.(call("call_background"), "test");
+    facet.settled({ ...call("call_background"), tool: "shell", state: "succeeded" });
+    // A shell call the policy never admitted as a check is no check, whatever it returned.
+    facet.settled({ ...call("call_other"), tool: "shell", state: "succeeded", exitCode: 0 });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+  });
+
+  it("records a human's refusal of a check as the run's verification blocker", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    facet.verificationDenied?.();
+    expect(ledger.verificationBlockedReason(RUN_ID)).toBe("verification-command-denied");
+  });
+
+  it("counts an applied native edit once and a failed one never", () => {
+    const { ledger, facet, edits } = verifiedRun();
+    facet.settled({ ...call("call_failed"), tool: "edit", state: "failed" });
+    expect(ledger.needsVerification(RUN_ID)).toBe(false);
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    expect(edits.count).toBe(1);
+  });
+});
