@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9517e1e464b710510ffd4aec307ae50beb2ca86e9c11b31821063da6a3e72750" as const;
+  "e13e0c735510856f1af4d4cb54022db3fc16d838d1ce5e28fd937d31e8719c72" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -22657,6 +22657,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "addedModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "backgroundAttempt",
               type: "integer",
               dataClass: "count",
@@ -22670,6 +22676,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "configuredModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "deploymentChangedModelCount",
               type: "integer",
               dataClass: "count",
               required: true,
@@ -22691,6 +22703,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: false,
+            },
+            {
+              name: "removedModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
             },
             {
               name: "retryDeadlineMs",
