@@ -362,12 +362,14 @@ Workbench.
   `coding-runtime.native-policy.decided` operation changed with it). The V2 history projected the
   completed part as a succeeded tool, not the plan snapshot the safe-activity contract requires; it
   now projects the plan and shows nothing for a part that has not completed.
-- **C07 (`gap`).** `Formatter.file` runs after an edit only for formatters registered by the
-  `formatter` key; with no key none is registered. The built-in prettier entry needs the project's
-  `package.json` to list prettier and then resolves a managed install by the package manager, not the
-  project's `node_modules`. With `npm_config_offline=true` it finds none; with the package manager
-  online the same run asked a loopback registry for `/prettier`. A configured command formatter
-  ran after the edit inside the Seatbelt profile.
+- **C07 (`partial` since the owner decision of 2026-10-24).** `Formatter.file` runs after an edit
+  only for formatters registered by the `formatter` key; with no key none is registered. Keiko now
+  writes the key on the server-owned binding by launch mode: Full access enables the built-ins,
+  Supervised workspace and Ask for approval disable them. The built-in prettier entry needs the
+  project's `package.json` to list prettier and then resolves a managed install by the package
+  manager, not the project's `node_modules`; with `npm_config_offline=true` it finds none, so a
+  repository's own prettier never runs. A PATH-resolved built-in (`gofmt`) runs after a native write
+  and edit in Full access inside the Seatbelt profile ([native-formatter][native-formatter]).
 
 ## 4. Keiko capabilities without a native counterpart
 

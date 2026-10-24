@@ -51,8 +51,7 @@ import {
  * Model Gateway, and Keiko's own native policy (`decideOpenCodeNativePolicy`) answers every ask the
  * generated hook sends, so each result is what a run under Keiko's governance observes. A control
  * that departs from the production launch says so in its name: a model alias the producer treats
- * as an apply-patch model, the producer's opt-in switches, a configured formatter command, a
- * package manager that is allowed online. Run with KEIKO_OPENCODE_REAL_BINARY and
+ * as an apply-patch model, the producer's opt-in switches. Run with KEIKO_OPENCODE_REAL_BINARY and
  * KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
  */
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
@@ -1276,10 +1275,7 @@ describe("pinned native OpenCode formatters (C07)", () => {
   }
 
   /** Runs the one native edit with a registry stub on loopback and reports what it did. */
-  async function editWith(
-    overrides: Partial<LaunchOptions>,
-    packageManager: "offline" | "online",
-  ): Promise<EditOutcome> {
+  async function editWith(overrides: Partial<LaunchOptions>): Promise<EditOutcome> {
     const registry = await startStub((_self, _recorded, response) => {
       response.writeHead(404, { "Content-Type": "application/json" }).end("{}");
     });
@@ -1289,10 +1285,7 @@ describe("pinned native OpenCode formatters (C07)", () => {
         {
           ...overrides,
           files,
-          env: {
-            npm_config_registry: `http://127.0.0.1:${String(registry.port)}/`,
-            ...(packageManager === "online" ? { npm_config_offline: "false" } : {}),
-          },
+          env: { npm_config_registry: `http://127.0.0.1:${String(registry.port)}/` },
         },
         async (run) => {
           const started = Date.now();
@@ -1309,52 +1302,14 @@ describe("pinned native OpenCode formatters (C07)", () => {
     }
   }
 
+  // The setting itself is the server's, by launch mode: `opencodeNativeFormatter.real.test.ts` proves
+  // Full access (a built-in runs, a repository's own prettier never does, with its positive control)
+  // and the two narrower modes. Supervised, the production launch here, runs none.
   it.skipIf(skip)(
-    "runs no formatter after a native edit: the producer's formatters are opt-in and Keiko sets none",
+    "runs no formatter after a native edit in Supervised workspace and asks no registry",
     async () => {
-      const edited = await editWith({}, "offline");
+      const edited = await editWith({});
       expect(edited.content).toBe("const   a  =  {b:2}\n");
-      expect(edited.registryRequests).toEqual([]);
-    },
-    120_000,
-  );
-
-  it.skipIf(skip)(
-    "control: with the producer's formatter switch on and prettier missing offline, the edit neither hangs nor reaches the registry",
-    async () => {
-      const edited = await editWith({ overlay: { formatter: true } }, "offline");
-      // The built-in prettier formatter is enabled by a project dependency, then looks for its own
-      // managed install (not the project's node_modules) and finds none; offline it moves on.
-      expect(edited.content).toBe("const   a  =  {b:2}\n");
-      expect(edited.registryRequests).toEqual([]);
-      expect(edited.ms).toBeLessThan(30_000);
-    },
-    120_000,
-  );
-
-  // The positive control for the test above: the same formatter does ask the registry for prettier
-  // when the package manager is allowed online, so the stub does see a request that was made.
-  it.skipIf(skip)(
-    "control: the same formatter asks the registry for prettier when the package manager is online",
-    async () => {
-      const edited = await editWith({ overlay: { formatter: true } }, "online");
-      expect(edited.registryRequests).toEqual(["/prettier"]);
-      expect(edited.content).toBe("const   a  =  {b:2}\n");
-    },
-    120_000,
-  );
-
-  it.skipIf(skip)(
-    "control: a configured formatter command runs after a native edit under the Seatbelt profile",
-    async () => {
-      const formatter = {
-        fixture: {
-          command: ["/usr/bin/sed", "-i", "", "s/const   a  =  /const a = /", "$FILE"],
-          extensions: [".ts"],
-        },
-      };
-      const edited = await editWith({ overlay: { formatter } }, "offline");
-      expect(edited.content).toBe("const a = {b:2}\n");
       expect(edited.registryRequests).toEqual([]);
     },
     120_000,
