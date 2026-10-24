@@ -1348,8 +1348,8 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(keyboardBlock).toContain("border-color: var(--accent-line)");
 
     const pointerBlock = cssBlock(':root[data-input-modality="pointer"] .wf-dialog-input:focus');
-    expect(pointerBlock).toContain("outline: none");
-    expect(pointerBlock).toContain("border-color: var(--line)");
+    expect(pointerBlock).toContain("outline: none;");
+    expect(pointerBlock).toContain("border-color: var(--line);");
   });
 
   it("keeps chat history rename mouse focus neutral while preserving keyboard focus", () => {
@@ -1363,8 +1363,8 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const pointerInputBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-open:focus,\n:root[data-input-modality="pointer"] .chat-history-title-input:focus',
     );
-    expect(pointerInputBlock).toContain("outline: none");
-    expect(pointerInputBlock).toContain("box-shadow: none");
+    expect(pointerInputBlock).toContain("outline: none;");
+    expect(pointerInputBlock).toContain("box-shadow: none;");
 
     const pointerRowBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-row:focus-within',
@@ -1386,8 +1386,8 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const groundingBlock = cssBlock(
       ':root[data-input-modality="pointer"] .scope-grounding-select:focus',
     );
-    expect(groundingBlock).toContain("box-shadow: none");
-    expect(groundingBlock).toContain("border-color: var(--line-soft)");
+    expect(groundingBlock).toContain("box-shadow: none;");
+    expect(groundingBlock).toContain("border-color: var(--line-soft);");
   });
 
   it("keeps the grounding select at its default width in compact chat layouts", () => {
@@ -1418,31 +1418,31 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const block = cssBlock(
       ':root[data-input-modality="pointer"] .qi-input:focus,\n:root[data-input-modality="pointer"] .qi-textarea:focus,\n:root[data-input-modality="pointer"] .qi-select:focus',
     );
-    expect(block).toContain("outline: none");
-    expect(block).toContain("border-color: var(--line)");
-    expect(block).toContain("box-shadow: none");
+    expect(block).toContain("outline: none;");
+    expect(block).toContain("border-color: var(--line);");
+    expect(block).toContain("box-shadow: none;");
   });
 
   it("suppresses pointer focus rings on dialog and gateway inputs", () => {
     expect(cssBlock(':root[data-input-modality="pointer"] .dlg-input:focus')).toContain(
-      "box-shadow: none",
+      "box-shadow: none;",
     );
     expect(cssBlock(':root[data-input-modality="pointer"] .gw-input:focus')).toContain(
-      "box-shadow: none",
+      "box-shadow: none;",
     );
   });
 
   it("suppresses pointer focus rings on memory and template manager fields", () => {
     const memoryBlock = cssBlock(':root[data-input-modality="pointer"] .mem-add input:focus');
-    expect(memoryBlock).toContain("border-color: var(--line-soft)");
-    expect(memoryBlock).toContain("box-shadow: none");
+    expect(memoryBlock).toContain("border-color: var(--line-soft);");
+    expect(memoryBlock).toContain("box-shadow: none;");
 
     const templateBlock = cssBlockFrom(
       auditedProductCss,
       ':root[data-input-modality="pointer"] .tm-field input:focus,\n:root[data-input-modality="pointer"] .tm-field select:focus',
     );
-    expect(templateBlock).toContain("border-color: var(--line-strong)");
-    expect(templateBlock).toContain("box-shadow: none");
+    expect(templateBlock).toContain("border-color: var(--line-strong);");
+    expect(templateBlock).toContain("box-shadow: none;");
   });
 
   it("renders connector create actions as buttons, not text links", () => {
@@ -1494,8 +1494,8 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const pointerBlock = cssBlock(
       ':root[data-input-modality="pointer"] .mc-dialog-textarea:focus,\n:root[data-input-modality="pointer"] .mc-dialog-input:focus,\n:root[data-input-modality="pointer"] .mc-dialog-select:focus',
     );
-    expect(pointerBlock).toContain("outline: none");
-    expect(pointerBlock).toContain("box-shadow: none");
+    expect(pointerBlock).toContain("outline: none;");
+    expect(pointerBlock).toContain("box-shadow: none;");
   });
 });
 
@@ -1867,21 +1867,21 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
       "scrollbar-color: var(--ed-scrollbar-thumb) var(--ed-scrollbar-track)",
     );
     const monacoSliderBlock = cssBlock(":root .monaco-editor .scrollbar .slider {");
-    expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb)");
-    expect(monacoSliderBlock).toContain("border-radius: 999px");
-    expect(monacoSliderBlock).toContain("transition: background var(--dur-fast) var(--ease-out)");
+    expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb);");
+    expect(monacoSliderBlock).toContain("border-radius: 999px;");
+    expect(monacoSliderBlock).toContain("transition: background var(--dur-fast) var(--ease-out);");
     expect(monacoSliderBlock).not.toContain("background-clip");
     expect(monacoSliderBlock).not.toContain("border:");
     const monacoHoverBlock = cssBlock(":root .monaco-editor .scrollbar .slider:hover,");
-    expect(monacoHoverBlock).toContain("background: var(--ed-scrollbar-thumb-hover)");
+    expect(monacoHoverBlock).toContain("background: var(--ed-scrollbar-thumb-hover);");
     const monacoVerticalRailBlock = cssBlock(".ed-host .monaco-editor .scrollbar.vertical {");
     expect(monacoVerticalRailBlock).toContain("background: var(--ed-bg)");
     const monacoVerticalBlock = cssBlock(":root .monaco-editor .scrollbar.vertical .slider {");
-    expect(monacoVerticalBlock).toContain("min-width: 8px");
+    expect(monacoVerticalBlock).toContain("min-width: 8px;");
     expect(monacoVerticalBlock).not.toContain("border-right-width");
     expect(monacoVerticalBlock).not.toContain("border-left-width");
     const monacoHorizontalBlock = cssBlock(":root .monaco-editor .scrollbar.horizontal .slider {");
-    expect(monacoHorizontalBlock).toContain("min-height: 8px");
+    expect(monacoHorizontalBlock).toContain("min-height: 8px;");
     expect(monacoHorizontalBlock).not.toContain("border-top-width");
     expect(monacoHorizontalBlock).not.toContain("border-bottom-width");
 
@@ -2386,7 +2386,7 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     expect(verticalScrollbarBlock).toContain("background: var(--ed-bg)");
 
     const verticalSliderBlock = cssBlock(":root .monaco-editor .scrollbar.vertical .slider {");
-    expect(verticalSliderBlock).toContain("min-width: 8px");
+    expect(verticalSliderBlock).toContain("min-width: 8px;");
 
     const overviewRulerBlock = cssBlock(
       ".ed-host .monaco-editor canvas.decorationsOverviewRuler {",
@@ -2412,15 +2412,15 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     expect(hoverFrameBlock).toContain("overflow: hidden");
 
     const resizableHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover {");
-    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border)");
-    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating)");
-    expect(resizableHoverBlock).toContain("background: var(--surface-primary)");
+    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border);");
+    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating);");
+    expect(resizableHoverBlock).toContain("background: var(--surface-primary);");
     expect(resizableHoverBlock).toContain("box-shadow: var(--popover-shadow)");
 
     const monacoHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-hover {", {
       fromLast: true,
     });
-    expect(monacoHoverBlock).toContain("color: var(--text-primary)");
+    expect(monacoHoverBlock).toContain("color: var(--text-primary);");
     expect(monacoHoverBlock).toContain("font-size: var(--text-body-sm)");
     expect(monacoHoverBlock).toContain("line-height: var(--leading-normal)");
   });
@@ -2429,18 +2429,18 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     const contentBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .monaco-hover-content,", {
       fromLast: true,
     });
-    expect(contentBlock).toContain("white-space: normal");
+    expect(contentBlock).toContain("white-space: normal;");
     expect(contentBlock).toContain("overflow-wrap: anywhere");
 
     const codeBlock = cssBlock(".ed-host .monaco-editor .monaco-hover code,");
     expect(codeBlock).toContain("white-space: pre-wrap");
     expect(codeBlock).toContain("overflow-wrap: anywhere");
-    expect(codeBlock).toContain("background: var(--surface-inset)");
+    expect(codeBlock).toContain("background: var(--surface-inset);");
 
     const actionsBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-row .actions {");
     expect(actionsBlock).toContain("flex-wrap: wrap");
     expect(actionsBlock).toContain("border-top: 1px solid var(--border-subtle)");
-    expect(actionsBlock).toContain("background: var(--surface-secondary)");
+    expect(actionsBlock).toContain("background: var(--surface-secondary);");
   });
 
   it("skins Monaco copy affordances and nested copy tooltips with Keiko feedback states", () => {
@@ -2455,13 +2455,13 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     const copyIconBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,",
     );
-    expect(copyIconBlock).toContain("color: currentColor");
+    expect(copyIconBlock).toContain("color: currentColor;");
 
     const copyHoverBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {",
     );
     expect(copyHoverBlock).toContain(
-      "background: color-mix(in oklch, var(--text-primary) 10%, transparent)",
+      "background: color-mix(in oklch, var(--text-primary) 10%, transparent);",
     );
     expect(copyHoverBlock).toContain("border-color: transparent");
     expect(copyHoverBlock).toContain("color: var(--text-primary)");
@@ -2475,23 +2475,23 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button:active {",
     );
     expect(copyActiveBlock).toContain("transform: translateY(1px) scale(0.98)");
-    expect(copyActiveBlock).toContain("background: var(--button-secondary-surface-hover)");
+    expect(copyActiveBlock).toContain("background: var(--button-secondary-surface-hover);");
 
     const workbenchHoverBlock = cssBlock(":root .monaco-hover.workbench-hover,");
     expect(workbenchHoverBlock).toContain("max-width: min(220px, calc(100vw - 24px))");
     expect(workbenchHoverBlock).toContain(":root .monaco-hover.workbench-hover.with-pointer");
-    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border)");
-    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control)");
-    expect(workbenchHoverBlock).toContain("background: var(--surface-primary)");
-    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow)");
+    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border);");
+    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control);");
+    expect(workbenchHoverBlock).toContain("background: var(--surface-primary);");
+    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow);");
 
     const workbenchPointerBlock = cssBlock(":root .workbench-hover-pointer:after,");
     expect(workbenchPointerBlock).toContain(
       ":root .workbench-hover-container:not(:focus-within).locked",
     );
     expect(workbenchPointerBlock).toContain(":root .workbench-hover-container:focus-within");
-    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary)");
-    expect(workbenchPointerBlock).toContain("border-right: 1px solid var(--popover-border)");
+    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary);");
+    expect(workbenchPointerBlock).toContain("border-right: 1px solid var(--popover-border);");
   });
 
   it("aligns updater command copy feedback with the editor copy affordance", () => {

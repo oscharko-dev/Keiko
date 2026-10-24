@@ -12237,7 +12237,8 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 
 /* loading skeleton rows */
-.c-table.is-loading tbody td {
+.c-table.is-loading tbody td,
+.c-table.is-loading tbody tr[aria-selected="true"] td {
   color: transparent;
 }
 .c-table.is-loading tbody td * {

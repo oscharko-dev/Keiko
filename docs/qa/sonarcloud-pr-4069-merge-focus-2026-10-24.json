@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "reviewDate": "2026-10-24",
+  "pullRequest": "https://github.com/oscharko-dev/Keiko/pull/4069",
+  "ownerDirection": "Pause general issue cleanup. Owner explicitly authorizes only the remaining blockers required for the existing PR to merge into dev.",
+  "mergeAuthorized": true,
+  "merged": false,
+  "baseRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "remoteHeadRevision": "a34e60bda61ec0cf82e2dda28b3d511861a8b426",
+  "localCommittedRepairBase": "d8cc404ac872885c02ca9a913b89d11e6ef0eabe",
+  "pausedFallowImplementation": {
+    "gitStashCommit": "722e88c42d6a07c0533d6a148041d383f9c23971",
+    "state": "Preserved separately; previously checked repairs may be reused only where required by this PR’s mandatory gates.",
+    "lastDiagnosticGroups": 55,
+    "note": "The snapshot contains partially verified implementation work; its prior authorizations and source audits remain available."
+  },
+  "mergeOnlyRepair": {
+    "priorityAssertionsStrengthened": 40,
+    "baselinePriorityTestsExpectedToFail": 7,
+    "baselineProbeExit": 1,
+    "loadingSelectionFix": "Restore the original transparent loading-cell text for selected rows, without adding !important.",
+    "fixtureCount": 40,
+    "computedValueComparisons": 50304,
+    "computedValueDifferences": 0,
+    "sourceDigests": [
+      {
+        "path": "packages/keiko-ui/src/app/globals.css",
+        "sha256": "002e4ba59dca284ab15c7afc02d3ad04fb90e011e1ed118ff82c180dce0441e2"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/globals.css.test.ts",
+        "sha256": "0e33e42a6cd7a3bb234834266a552048130e61b8d3d221fdfaa3d1b8d953f15e"
+      },
+      {
+        "path": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+        "sha256": "c82838b4f9fdc323772ad68e01ab8e7891a9e89146118491c57721c72c6c8411"
+      }
+    ]
+  },
+  "localChecks": {
+    "localSonar": "PASS: no unresolved changed-file findings.",
+    "uiTypecheck": "PASS",
+    "uiLint": "PASS",
+    "format": "PASS: final whole-repository format check; report-only wording refreshed and checked separately.",
+    "componentEquivalence": "PASS: dark/light zero gated differences; no missing selectors.",
+    "editorEquivalence": "PASS: dark/light zero gated differences; 14 reference captures; no capture errors.",
+    "accessibility": "PASS: no serious/critical violations or unresolved incomplete findings.",
+    "browserCapture": "PASS: 108 original running-app screenshots and manifest regenerated.",
+    "updaterEvidence": "PASS: 9 Chromium cases and unchanged freshness gate.",
+    "uiCoverage": "PASS: 564 files, 10,873 passed tests, 1 existing skip; 94.21% line coverage. The final full run includes the regenerated browser manifest.",
+    "fallow": "FAIL: 95 groups with the unchanged semantic / 100-token / 10-line / zero-issue command.",
+    "editorReleaseEvidence": "PASS: unchanged first-load, lazy-runtime and worker budgets."
+  },
+  "unresolvedMergePreconditions": [
+    "The required Fallow 3.34.0 security update still yields 95 groups in the minimal repair scope. Owner authorizes necessary merge-blocker repairs only; no gate waiver, threshold change or broader cleanup is authorized.",
+    "GitHub still analyzes the older remote head. It has five CodeQL conversations and one CodeRabbit request-changes conversation; prepared fixes require producing-reviewer acceptance on the corrected head before settlement.",
+    "Required CI must pass on the exact new head. The latest run also failed a Windows local-volume positive probe in unchanged security code; cause is not established, and a macOS run previously hit a native handoff readiness deadline."
+  ],
+  "limits": [
+    "No merge, auto-merge, direct dev push, force push, review dismissal or check bypass has been performed.",
+    "Earlier full-root and native validation belongs to the committed repair base; final current-head CI and full release coverage are still outstanding."
+  ]
+}

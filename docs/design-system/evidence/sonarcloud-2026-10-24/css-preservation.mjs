@@ -15,95 +15,103 @@ const before = cp.execFileSync("/usr/bin/git", ["show", BASELINE + ":" + file], 
 });
 const after = fs.readFileSync(file, "utf8");
 const fixtures = [
-  ["number", '<input class="mc-dialog-input number-control-input" type="number">'],
-  [
+["number", '<input class="mc-dialog-input number-control-input" type="number">'],
+[
     "select-down",
     '<div class="cmp-model"><button class="ksel-trigger cmp-model-select ksel-trigger-open-down">Select</button></div>',
   ],
-  [
+[
     "select-up",
     '<div class="cmp-model"><button class="ksel-trigger cmp-model-select ksel-trigger-open-up">Select</button></div>',
   ],
-  ["badge", '<button class="rb-edge-badge-btn">Badge</button>'],
-  ["search", '<div class="srch"><div class="tw-label srch-label">Search</div></div>'],
-  ["connection", '<svg><path class="conn-path" data-reduced-motion="true"></path></svg>'],
-  ["memory-focus", '<div class="mem-add"><input></div>'],
-  ["dialog-focus", '<input class="dlg-input">'],
-  ["gateway-focus", '<input class="gw-input">'],
-  ["model-focus", '<select class="cmp-model-select"><option>Model</option></select>'],
-  ["textarea-focus", '<textarea class="mc-dialog-textarea"></textarea>'],
-  ["quality-focus", '<input class="qi-input">'],
-  ["figma-focus", '<input class="figma-snapshot-input">'],
-  ["workflow-focus", '<input class="wf-dialog-input">'],
-  ["scope-focus", '<select class="scope-grounding-select"><option>Scope</option></select>'],
-  ["history-focus", '<button class="chat-history-open">History</button>'],
-  [
+["badge", '<button class="rb-edge-badge-btn">Badge</button>'],
+["search", '<div class="srch"><div class="tw-label srch-label">Search</div></div>'],
+["connection", '<svg><path class="conn-path" data-reduced-motion="true"></path></svg>'],
+["memory-focus", '<div class="mem-add"><input></div>'],
+["dialog-focus", '<input class="dlg-input">'],
+["gateway-focus", '<input class="gw-input">'],
+["model-focus", '<select class="cmp-model-select"><option>Model</option></select>'],
+["textarea-focus", '<textarea class="mc-dialog-textarea"></textarea>'],
+["quality-focus", '<input class="qi-input">'],
+["figma-focus", '<input class="figma-snapshot-input">'],
+["workflow-focus", '<input class="wf-dialog-input">'],
+["scope-focus", '<select class="scope-grounding-select"><option>Scope</option></select>'],
+["history-focus", '<button class="chat-history-open">History</button>'],
+[
     "skeleton",
     '<table class="c-table is-loading"><tbody><tr><td class="num">Value</td></tr></tbody></table>',
   ],
-  [
+[
     "safety",
     '<section class="pe-section"><p class="pe-safety-warning">Warning</p><p class="pe-grounding-meta">Evidence</p></section>',
   ],
-  [
+[
     "destructive",
     '<div class="dlg-foot"><button class="dlg-btn lkd-btn-destructive">Delete</button></div>',
   ],
-  [
+[
     "slider",
     '<div class="ed-host"><div class="monaco-editor"><div class="scrollbar vertical"><div class="slider" style="width:4px;height:30px"></div></div><div class="scrollbar horizontal"><div class="slider" style="height:4px;width:30px"></div></div></div></div>',
   ],
-  [
+[
     "hover",
     '<div class="ed-host"><div class="monaco-editor"><div class="monaco-resizable-hover" style="width:600px;max-width:600px"><div class="monaco-hover" style="width:600px;max-width:600px;--vscode-hover-whiteSpace:nowrap"><div class="monaco-scrollable-element" style="width:600px;max-width:600px"><div class="monaco-hover-content"><div class="hover-row"><div class="hover-row-contents"><div class="hover-contents"><div class="rendered-markdown">Long hover text <a href="#">link</a><code>code</code><pre>pre</pre></div></div><div class="actions"><span class="action-label">Action</span></div></div></div><button class="hover-copy-button codicon"><span class="codicon">Copy</span></button></div></div></div></div></div></div>',
   ],
-  [
+[
     "workbench-hover",
     '<div class="workbench-hover-container"><div class="monaco-hover workbench-hover" style="max-width:600px"><div class="hover-contents">Copy</div></div><div class="workbench-hover-pointer"></div></div>',
   ],
-  [
+[
     "workbench-pointer",
     '<div class="workbench-hover-container"><div class="monaco-hover workbench-hover with-pointer" style="max-width:600px"><div class="hover-contents">Copy</div></div><div class="workbench-hover-pointer"></div></div>',
   ],
-  [
+[
     "destructive-hover",
     '<div class="dlg-foot"><button class="dlg-btn lkd-btn-destructive">Delete</button></div>',
   ],
-  [
+[
     "destructive-disabled",
     '<div class="dlg-foot"><button class="dlg-btn lkd-btn-destructive" disabled>Delete</button></div>',
   ],
-  [
+[
     "workbench-locked",
     '<div class="workbench-hover-container locked"><div class="monaco-hover workbench-hover" style="max-width:600px"><div class="hover-contents">Copy</div></div><div class="workbench-hover-pointer"></div></div>',
   ],
-  [
+[
     "workbench-locked-focus",
     '<div class="workbench-hover-container locked"><div class="monaco-hover workbench-hover" tabindex="0" style="max-width:600px"><div class="hover-contents">Copy</div></div><div class="workbench-hover-pointer"></div></div>',
   ],
-  [
+[
     "slider-hover",
     '<div class="ed-host"><div class="monaco-editor"><div class="scrollbar vertical"><div class="slider" style="width:4px;height:30px"></div></div></div></div>',
   ],
-  [
+[
     "copy-hover",
     '<div class="ed-host"><div class="monaco-editor"><div class="monaco-hover"><button class="hover-copy-button codicon">Copy</button></div></div></div>',
   ],
-  [
+[
     "workbench-summary",
     '<div class="cmpContextUsage"><dl class="cmpContextSummary"><dt>Context</dt><dd>100</dd></dl></div>',
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
   ],
-  [
+[
     "terminal-focus",
     '<div class="lazyWidgetScope"><label class="tm-field"><input></label></div>',
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
   ],
-  [
+[
     "debug-toggle",
     '<input class="toggle" type="checkbox" checked>',
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/DebuggingSettings.module.css",
   ],
+["table-plain-ready-text","<table class=\"c-table\"><tbody><tr><td><span>Value</span></td></tr></tbody></table>"],
+["table-plain-ready-number","<table class=\"c-table\"><tbody><tr><td class=\"num\"><span>Value</span></td></tr></tbody></table>"],
+["table-plain-loading-text","<table class=\"c-table is-loading\"><tbody><tr><td><span>Value</span></td></tr></tbody></table>"],
+["table-plain-loading-number","<table class=\"c-table is-loading\"><tbody><tr><td class=\"num\"><span>Value</span></td></tr></tbody></table>"],
+["table-selected-ready-text","<table class=\"c-table\"><tbody><tr aria-selected=\"true\"><td><span>Value</span></td></tr></tbody></table>"],
+["table-selected-ready-number","<table class=\"c-table\"><tbody><tr aria-selected=\"true\"><td class=\"num\"><span>Value</span></td></tr></tbody></table>"],
+["table-selected-loading-text","<table class=\"c-table is-loading\"><tbody><tr aria-selected=\"true\"><td><span>Value</span></td></tr></tbody></table>"],
+["table-selected-loading-number","<table class=\"c-table is-loading\"><tbody><tr aria-selected=\"true\"><td class=\"num\"><span>Value</span></td></tr></tbody></table>"],
 ];
 const properties = [
   "padding-right",
