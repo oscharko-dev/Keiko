@@ -227,8 +227,9 @@ export function createCodingToolNativeSettlementFacet(
       const refusedByPolicy = refused.take(key);
       onToolSettled?.(action, nativeToolStatus(input, refusedByPolicy));
       // A native edit the runtime applied is the run's edit like a governed one: it needs a check
-      // at its own revision before the run can succeed (#3901).
-      if (action === "edit" && input.state === "succeeded")
+      // at its own revision before the run can succeed (#3901). The plan agent's private notes are
+      // planning and need none.
+      if (action === "edit" && input.state === "succeeded" && input.workspaceEdit !== false)
         observers.observeEditOutcome?.({ kind: "applied" });
       verification.settled(key, input, refusedByPolicy);
       return "counted";
@@ -238,6 +239,9 @@ export function createCodingToolNativeSettlementFacet(
     },
     verificationDenied: (): void => {
       observers.verification?.blocked?.("verification-command-denied");
+    },
+    unsettledEdit: (): void => {
+      observers.observeEditOutcome?.({ kind: "applied" });
     },
   };
 }

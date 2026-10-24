@@ -680,6 +680,40 @@ describe("native verification commands (#3901, #3897 review)", () => {
   ] as const)("does not count %j as verification", (resources) => {
     expect(openCodeNativeVerificationKind(resources)).toBeUndefined();
   });
+
+  // #3901: a check that only prints, lists or plans exits zero without checking anything.
+  it.each([
+    [["npx vitest --version"]],
+    [["npx vitest --help"]],
+    [["npx vitest list"]],
+    [["npx tsc -h"]],
+    [["npx tsc --showConfig"]],
+    [["npx eslint --print-config src/a.ts"]],
+    [["npx jest --listTests"]],
+    [["npm test -- --listTests"]],
+    [["npx playwright test --list"]],
+    [["pytest --collect-only"]],
+    [["python3 -m pytest --co tests"]],
+    [["go test -list ."]],
+    [["cargo test --no-run"]],
+    [["make -n test"]],
+    [["make -q check"]],
+    [["./gradlew build -m"]],
+    [["npm run build -- --dry-run"]],
+    [["cd packages/app && npx vitest --version"]],
+  ] as const)("does not count the non-executing check %j as verification", (resources) => {
+    expect(openCodeNativeVerificationKind(resources)).toBeUndefined();
+  });
+
+  it.each([
+    [["pytest -v"], "test"],
+    [["go test -v ./..."], "test"],
+    [["npx vitest run --reporter=verbose"], "test"],
+    [["make test"], "test"],
+    [["npm test -- --coverage"], "test"],
+  ] as const)("still counts the executing check %j", (resources, kind) => {
+    expect(openCodeNativeVerificationKind(resources)).toBe(kind);
+  });
 });
 
 // Program names are untrusted model text: one that names an `Object.prototype` member must be an

@@ -448,6 +448,12 @@ export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
    * when another command of the line could have decided it (`npm test; cd .`).
    */
   readonly exitStatusCheck?: VerificationKind | undefined;
+  /**
+   * Whether the call wrote the task workspace, as its admission named it (#3901): `false` for an
+   * edit of the run's private plan notes, which is planning, not a change a check must cover.
+   * Absent keeps the tool's own meaning: a completed edit tool call is the run's edit.
+   */
+  readonly workspaceEdit?: boolean | undefined;
 }
 
 /** A native verification command's result, as the runtime's own exit status reports it. */
@@ -495,6 +501,11 @@ export interface CodingToolNativeSettlementFacet {
     ((call: CodingToolNativeCall, kind: VerificationKind) => void) | undefined;
   /** A human refused a native verification command: no later pass of an older one clears it. */
   readonly verificationDenied?: (() => void) | undefined;
+  /**
+   * An admitted workspace edit whose settlement the runtime reports only on a child session, which
+   * the run's own history does not carry (#3901): it is the run's edit from its admission.
+   */
+  readonly unsettledEdit?: (() => void) | undefined;
 }
 
 export interface CodingToolFacade {

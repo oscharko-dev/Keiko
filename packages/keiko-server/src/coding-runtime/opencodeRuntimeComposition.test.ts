@@ -143,6 +143,7 @@ import {
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   openCodeV2PromptFileData,
 } from "./opencodeV2HttpClient.js";
+import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 
@@ -1124,6 +1125,7 @@ async function startBridgeFixture(
 ): Promise<{
   readonly runtime: OpenCodeRuntimeComposition;
   readonly preparation: OpenCodeLifecyclePrepareRequest;
+  readonly stateBaseRoot: string;
   stop(): Promise<void>;
 }> {
   const root = tempDir("keiko-opencode-tool-bridge-");
@@ -1445,6 +1447,7 @@ async function startBridgeFixture(
   return {
     runtime,
     preparation,
+    stateBaseRoot: join(root, "state"),
     stop: async (): Promise<void> => {
       await runtime.manager.stop(FIXTURE_RUN_ID);
     },
@@ -4059,6 +4062,88 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
       ["egress", "denied"],
       ["read", "completed"],
     ]);
+  });
+
+  // #3901: the plan agent's notes are planning, not an edit a check must cover, and a child
+  // session's edit settles on the child, whose history the run does not read.
+  it("counts workspace edits, not plan notes, and a child's edit from its admission", async () => {
+    const edits: string[] = [];
+    const nativeSettlement = createCodingToolNativeSettlementFacet(undefined, {
+      observeEditOutcome: (outcome): void => {
+        edits.push(outcome.kind);
+      },
+    });
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const childSessions: Record<string, unknown>[] = [];
+    let content: readonly Record<string, unknown>[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement,
+      },
+      undefined,
+      {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        historyCalls,
+        childSessions,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: () => Promise.resolve(v2Envelope(history(content))),
+      },
+    );
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push({
+        id: "ses_child",
+        parentID: "ses_tool",
+        location: { directory: workspaceRoot },
+      });
+      const plan = openCodePlanDirectory(join(fixture.stateBaseRoot, FIXTURE_RUN_ID));
+      const editAsk = async (
+        callId: string,
+        resource: string,
+        sessionID = "ses_tool",
+      ): Promise<Awaited<ReturnType<typeof fixture.runtime.toolBridge.handle>>> =>
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "native-policy",
+            runId: FIXTURE_RUN_ID,
+            sessionID,
+            permission: "edit",
+            resources: [resource],
+            source: { type: "tool", messageID: "msg_assistant", id: callId },
+            configured: "ask",
+          }),
+        });
+      expect((await editAsk("call_plan", join(plan, "feature.md"))).status).toBe(200);
+      expect((await editAsk("call_edit", "src/a.ts")).status).toBe(200);
+      expect(edits, "an admitted edit of the run's own session waits for its settlement").toEqual(
+        [],
+      );
+      expect((await editAsk("call_child", "src/b.ts", "ses_child")).status).toBe(200);
+      expect(edits, "a child's workspace edit counts from its admission").toEqual(["applied"]);
+      content = [part("call_plan", "edit", "completed"), part("call_edit", "edit", "completed")];
+      const stream = streams[0];
+      if (stream === undefined) throw new Error("expected the event stream");
+      const reads = historyCalls.length;
+      stream.enqueue(frame("session.step.ended", 1));
+      await vi.waitFor(() => {
+        expect(historyCalls.length).toBeGreaterThan(reads);
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(edits, "the workspace edit counts; the plan note does not").toEqual([
+        "applied",
+        "applied",
+      ]);
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("control: a mapped profile's calls reach the run's effort through the facade, never through its history", async () => {

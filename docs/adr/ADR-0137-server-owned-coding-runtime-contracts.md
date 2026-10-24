@@ -1546,7 +1546,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   settlement's verification continuation,
   `verification-not-evidenced`, the human-refusal blocker and the Workbench's verification card
   treat both alike. A refused, backgrounded or unreported check proves nothing; a check admitted
-  before the last edit cannot prove it.
+  before the last edit cannot prove it. A line that only prints, lists or plans (`--help`,
+  `--version`, `--listTests`, `--list`, `--collect-only`, `--no-run`, `--dry-run`, `make -n`,
+  `npx vitest list`, ...) exits zero without checking anything and is no check. The plan agent's
+  notes in the run's private plan directory, which the policy classifies as reads, are planning,
+  not an edit a check must cover. A child session's workspace edit settles on the child, whose
+  history the run does not read, so it counts as the run's edit from its admission
+  (`unsettledEdit`, PR #4064 review follow-up).
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

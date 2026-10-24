@@ -472,9 +472,47 @@ const SCRIPT_VERIFICATION: readonly (readonly [RegExp, VerificationKind])[] = [
   [/^(?:build|compile)(?::|$)/u, "build"],
 ];
 
+/**
+ * Options and subcommands that make a check print, list or plan instead of running (#3901): such a
+ * line exits zero without testing, type-checking, linting or building anything, so its status
+ * cannot be verification evidence.
+ */
+const NON_EXECUTING_FLAGS: ReadonlySet<string> = new Set([
+  "--help",
+  "-h",
+  "--version",
+  "--listTests",
+  "--list-tests",
+  "--list",
+  "-list",
+  "--showConfig",
+  "--print-config",
+  "--init",
+  "--dry-run",
+  "--collect-only",
+  "--co",
+  "--no-run",
+  "--just-print",
+  "--recon",
+  "--question",
+]);
+const PROGRAM_NON_EXECUTING: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["make", new Set(["-n", "-q"])],
+  ["gradle", new Set(["-m"])],
+  ["gradlew", new Set(["-m"])],
+  ["./gradlew", new Set(["-m"])],
+  ["npx", new Set(["list"])],
+]);
+
+function nonExecutingCheck(tokens: readonly string[]): boolean {
+  if (tokens.some((token) => NON_EXECUTING_FLAGS.has(token))) return true;
+  const own = PROGRAM_NON_EXECUTING.get(tokens[0] ?? "");
+  return own !== undefined && tokens.slice(1).some((token) => own.has(token));
+}
+
 function segmentVerificationKind(tokens: readonly string[]): VerificationKind | undefined {
   const [program] = tokens;
-  if (program === undefined) return undefined;
+  if (program === undefined || nonExecutingCheck(tokens)) return undefined;
   const subcommand = subcommandOf(tokens);
   if (VETTED_PACKAGE_MANAGERS.has(program)) return packageCheckKind(tokens, subcommand);
   const check = PROGRAM_CHECKS.get(program);

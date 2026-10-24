@@ -624,6 +624,28 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     expect(ledger.needsVerification(RUN_ID)).toBe(false);
   });
 
+  // #3901: the plan agent writes its notes with the edit tool into the run's private plan
+  // directory; that is planning, and a run that only planned must not need a check.
+  it("does not count a settled plan-note edit as the run's edit", () => {
+    const { ledger, facet, edits } = verifiedRun();
+    facet.settled({ ...call("call_plan"), tool: "edit", state: "succeeded", workspaceEdit: false });
+    expect(edits.count).toBe(0);
+    expect(ledger.needsVerification(RUN_ID)).toBe(false);
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+  });
+
+  // #3901: a child session's edit settles on the child, whose history the run does not read.
+  it("counts an admitted child-session edit as the run's edit without its settlement", () => {
+    const { ledger, facet, edits } = verifiedRun();
+    facet.unsettledEdit?.();
+    expect(edits.count).toBe(1);
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+    facet.verificationAdmitted?.(call("call_test"), "test");
+    facet.settled({ ...call("call_test"), ...passedCheck });
+    expect(ledger.needsVerification(RUN_ID)).toBe(false);
+  });
+
   // #3897 review: `npm test; cd .` and `npm test || cd .` run a failing test and exit zero. The
   // admission saw `npm test` and `cd .`; the finished line carries no check its status speaks for.
   it("takes a zero exit status as no evidence when another command of the line decided it", () => {

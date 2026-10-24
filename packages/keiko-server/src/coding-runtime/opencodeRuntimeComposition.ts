@@ -163,6 +163,7 @@ import {
   openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
   recordOpenCodeNativePolicyDecision,
+  type OpenCodeNativeActionClassification,
   type OpenCodeNativeAuthorityEvidence,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyOutcome,
@@ -710,6 +711,8 @@ interface PreparedRun {
   turnImage?: OpenCodeRevertRun["turnImage"];
   /** What the newest turn's own native edits wrote (`recordOpenCodeEditSettled`). */
   agentImages?: OpenCodeAgentImages | undefined;
+  /** Admitted plan-note edits awaiting their settlement (`noteAdmittedEditEvidence`). */
+  planNoteEdits?: Set<string> | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
 }
@@ -1843,6 +1846,7 @@ function nativeToolSettlementObserver(
       callId: signal.callId,
       tool: signal.tool,
       state: signal.state,
+      ...planNoteSettlement(run, signal.messageId, signal.callId),
       ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
       ...(signal.exitStatusCheck === undefined ? {} : { exitStatusCheck: signal.exitStatusCheck }),
     });
@@ -3201,7 +3205,10 @@ async function handleNativePolicyRequest(
     nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
   });
-  const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, approvals);
+  const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
+    approvals,
+    sessionRelation,
+  });
   const { outcome } = settled;
   if (outcome !== "allowed" && outcome !== "approved") noteNativeCallRefused(deps, request);
   recordOpenCodeNativePolicyDecision(deps.activityLog, run.runId, {
@@ -3259,8 +3266,12 @@ async function settleNativePolicyOutcome(
   request: OpenCodeNativePolicyRequest,
   signal: AbortSignal | undefined,
   deps: ToolBridgeExecutionDeps,
-  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  context: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly sessionRelation: OpenCodeNativeSessionRelation;
+  },
 ): Promise<NativePolicySettlement> {
+  const { approvals, sessionRelation } = context;
   if (signal?.aborted === true) return { outcome: "cancelled" };
   if (decision.effect === "deny") return { outcome: decision.reason };
   const outcome: OpenCodeNativePolicyOutcome =
@@ -3278,6 +3289,7 @@ async function settleNativePolicyOutcome(
   if (!admission.ok)
     return { outcome: "authority-refused", authority: { reason: admission.reason } };
   noteAdmittedEditTargets(run, request);
+  noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
   noteAdmittedVerification(deps, request);
   return { outcome, authority: { charge: admission.charge } };
 }
@@ -3312,6 +3324,49 @@ function noteAdmittedVerification(
     { messageId: request.source.messageID, callId: request.source.id },
     kind,
   );
+}
+
+/** The most admitted plan-note edits a run remembers until the runtime reports them settled. */
+const PLAN_NOTE_EDITS_MAX = 256;
+
+/**
+ * What an admitted native edit means for the run's verification evidence (#3901). The plan agent's
+ * notes in the run's private plan directory are planning: the policy classifies that edit as a
+ * read, and its settlement does not count as a workspace edit. A workspace edit of a child session
+ * is settled on the child, whose history the run does not read, so it counts from its admission.
+ */
+function noteAdmittedEditEvidence(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  classification: OpenCodeNativeActionClassification,
+  context: {
+    readonly deps: ToolBridgeExecutionDeps;
+    readonly sessionRelation: OpenCodeNativeSessionRelation;
+  },
+): void {
+  if (request.permission !== "edit" || request.source === undefined) return;
+  if (classification.actionClass === "workspace-read") {
+    rememberPlanNoteEdit(run, openCodeNativeCallKey(request.source.messageID, request.source.id));
+    return;
+  }
+  if (context.sessionRelation === "child") context.deps.facade.nativeSettlement?.unsettledEdit?.();
+}
+
+function rememberPlanNoteEdit(run: PreparedRun, key: string): void {
+  const notes = (run.planNoteEdits ??= new Set());
+  notes.add(key);
+  if (notes.size > PLAN_NOTE_EDITS_MAX) notes.delete(notes.values().next().value ?? "");
+}
+
+/** A settled plan-note edit is no workspace edit; every other call keeps its tool's meaning. */
+function planNoteSettlement(
+  run: PreparedRun,
+  messageId: string,
+  callId: string,
+): { readonly workspaceEdit?: false } {
+  return run.planNoteEdits?.delete(openCodeNativeCallKey(messageId, callId)) === true
+    ? { workspaceEdit: false }
+    : {};
 }
 
 /** An admitted native edit's targets, so its settlement can record what the turn itself wrote. */
