@@ -87,10 +87,12 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
+  classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
 } from "./opencodeV2HttpClient.js";
+import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
 import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
@@ -849,8 +851,11 @@ async function postTurnPrompt(
   if (inputs?.command !== undefined) {
     return postTurnCommand(run, inputs.command.name, text, inputs, diagnostics, activityLog);
   }
-  try {
-    await run.client.prompt(
+  // One id for the turn's input: a resend after a lost acknowledgement is the same input, never a
+  // second one, so a lost reply does not end a turn the runtime already started (#3897 review).
+  const id = mintTurnMessageId();
+  const post = (): Promise<void> =>
+    run.client.prompt(
       run.sessionId,
       initialContext === undefined ? text : `${initialContext}\n\n${text}`,
       undefined,
@@ -860,8 +865,10 @@ async function postTurnPrompt(
             displayText: text,
             hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
           },
-      inputs === undefined || inputs.files.length === 0 ? undefined : { files: inputs.files },
+      { id, ...(inputs === undefined || inputs.files.length === 0 ? {} : { files: inputs.files }) },
     );
+  try {
+    await postOnceMore(post, diagnostics, run);
     if (initialContext !== undefined) recordContextPresentation(activityLog, run.runId);
     if (inputs !== undefined) acceptPromptInputs(activityLog, run, inputs);
     return run.ready;
@@ -869,6 +876,35 @@ async function postTurnPrompt(
     recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
     run.runtimeAdapter.cancelTurn();
     return false;
+  }
+}
+
+/** The turn prompts' ascending native ids, shared by every run of this process. */
+const mintTurnMessageId = createOpenCodeNativeMessageIdMinter();
+
+/**
+ * Posts a turn's prompt; a failure after which the runtime may hold the input is resent once with
+ * the same id, which the runtime answers with the receipt it holds. A receipt under another id
+ * means the input is held under that one: the turn runs. A definite refusal fails the turn.
+ */
+async function postOnceMore(
+  post: () => Promise<void>,
+  diagnostics: ServerDiagnosticSink | undefined,
+  run: ReadyRun,
+): Promise<void> {
+  try {
+    await post();
+    return;
+  } catch (error) {
+    const failure = classifyOpenCodeV2PromptFailure(error);
+    if (failure === "not-submitted") throw error;
+    if (failure === "receipt-mismatch") return;
+    recordOpenCodeTurnFailure(diagnostics, run, "submit-resent", error);
+  }
+  try {
+    await post();
+  } catch (error) {
+    if (classifyOpenCodeV2PromptFailure(error) !== "receipt-mismatch") throw error;
   }
 }
 
@@ -952,7 +988,13 @@ function createReplyPermission(
 }
 
 type OpenCodeTurnFailureStage =
-  "agent" | "agent-unsupported" | "permission" | "question" | "submit" | "terminal";
+  | "agent"
+  | "agent-unsupported"
+  | "permission"
+  | "question"
+  | "submit"
+  | "submit-resent"
+  | "terminal";
 
 function recordOpenCodeTurnFailure(
   diagnostics: ServerDiagnosticSink | undefined,

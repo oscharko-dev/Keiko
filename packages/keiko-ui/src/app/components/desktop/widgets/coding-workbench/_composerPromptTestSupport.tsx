@@ -79,6 +79,7 @@ export function props(
     onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
     autonomyLabel: "Supervised workspace",
+    activeRunMode: null,
     requestedMode: "supervised-coding",
     runtimePreference: "managed-gateway",
     configurationLocked: runState !== "idle",

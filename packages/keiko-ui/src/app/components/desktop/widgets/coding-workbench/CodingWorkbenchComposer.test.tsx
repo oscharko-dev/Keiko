@@ -96,6 +96,7 @@ function composerProps(
     onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
     autonomyLabel: "Supervised workspace",
+    activeRunMode: null,
     requestedMode: "supervised-coding",
     runtimePreference: "managed-gateway",
     configurationLocked: runState !== "idle",
@@ -499,6 +500,42 @@ describe("Coding Workbench composer", () => {
       "This paused run is waiting for a required decision.",
     );
     expect(actions.onSend).not.toHaveBeenCalled();
+  });
+
+  // #3897 review: a restored run's locked control showed the saved selection, so an Ask or Full
+  // access run read "Supervised workspace" with Supervised's description.
+  it.each([
+    ["governed-assist", "Ask for approval", "every command asks for approval"],
+    ["autonomous-delivery", "Full access", "without asking"],
+  ] as const)(
+    "shows the active %s run's confirmed mode in the locked control, not the saved selection",
+    (mode, label, description) => {
+      renderComposerWithOverrides({
+        runState: "running",
+        configurationLocked: true,
+        autonomyMode: mode,
+        autonomyLabel: label,
+        activeRunMode: mode,
+        requestedMode: "supervised-coding",
+      });
+
+      const authority = screen.getByRole("combobox", { name: "Run authority" });
+      expect(authority).toHaveTextContent(label);
+      expect(authority).not.toHaveTextContent("Supervised workspace");
+      expect(authority.getAttribute("title")).toContain(description);
+      expect(authority.getAttribute("title")).not.toContain("vetted project commands");
+    },
+  );
+
+  it("shows the saved selection again once no run is active", () => {
+    renderComposerWithOverrides({
+      autonomyMode: "governed-assist",
+      activeRunMode: null,
+      requestedMode: "autonomous-delivery",
+    });
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Full access",
+    );
   });
 
   it("marks only confirmed full access on the authority control", () => {

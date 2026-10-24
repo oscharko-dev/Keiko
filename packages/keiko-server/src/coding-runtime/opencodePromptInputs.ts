@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep, basename } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import {
   isCodingWorkbenchPromptReferencePath,
@@ -28,6 +27,8 @@ import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.j
 import type { OpenCodeRuntimeAdapter } from "./opencodeRuntimeAdapter.js";
 import {
   classifyOpenCodeV2PromptFailure,
+  OPENCODE_PROMPT_FILE_MAX_BYTES,
+  openCodeV2PromptFileData,
   type OpenCodeV2HttpClient,
 } from "./opencodeV2HttpClient.js";
 
@@ -40,9 +41,7 @@ import {
  * bounds that keep the model request and the runtime's history reads small.
  */
 
-/** One referenced file's ceiling. The runtime embeds the bytes (base64) in the session's history. */
-export const OPENCODE_PROMPT_FILE_MAX_BYTES = 64 * 1024;
-/** What one prompt's references may add up to. */
+/** What one prompt's references may add up to; one file's ceiling is the client's. */
 export const OPENCODE_PROMPT_FILES_MAX_BYTES = 3 * OPENCODE_PROMPT_FILE_MAX_BYTES;
 /**
  * What all the references of one run may add up to. Every attachment stays in the session's history
@@ -53,8 +52,8 @@ export const OPENCODE_PROMPT_RUN_FILES_MAX_BYTES = 1024 * 1024;
 
 /**
  * The prompt inputs an OpenCode tool profile can honour. Only the native service governs them: it
- * reads the attachment inside the run's confinement (the credential names are kernel-denied) and
- * runs the steered message under its own agent policy. The mapped profiles answer nothing and the
+ * receives the attachment's admitted bytes inline and runs the steered message under its own agent
+ * policy. The mapped profiles answer nothing and the
  * server refuses what they were not offered, exactly like a `plan` request (`openCodeSelectableAgents`).
  */
 export function openCodePromptInputs(
@@ -89,7 +88,10 @@ export interface PromptInputsRequest {
   readonly requestId?: string | undefined;
 }
 
-/** One attachment in the runtime's own words: the absolute file URI and the file's name. */
+/**
+ * One attachment in the runtime's own words: the admitted bytes inline (`data:` URI) and the file's
+ * name. The bytes are the ones the descriptor read proved, so nothing is reopened by path later.
+ */
 export interface PromptFileAttachment {
   readonly uri: string;
   readonly name: string;
@@ -208,7 +210,10 @@ function readBoundedText(root: string, real: string): ResolvedReference {
   return {
     real,
     bytes: sizeBytes,
-    attachment: { uri: pathToFileURL(real).href, name: basename(real) },
+    attachment: {
+      uri: openCodeV2PromptFileData(Buffer.from(rawText, "utf8")),
+      name: basename(real),
+    },
   };
 }
 

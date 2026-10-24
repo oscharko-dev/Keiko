@@ -179,6 +179,11 @@ interface TaskStartSectionProps {
   readonly onProjectMemoryEnabledChange: (enabled: boolean) => void;
   readonly autonomyMode: CodingWorkbenchMode | null;
   readonly autonomyLabel: string;
+  /**
+   * The server-confirmed mode of the run that is active, or null when none is. The locked authority
+   * control shows it instead of the saved selection, which stays the next run's (#3897 review).
+   */
+  readonly activeRunMode: CodingWorkbenchMode | null;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference: CodingWorkbenchRuntimePreference;
   readonly configurationLocked: boolean;
@@ -822,6 +827,7 @@ function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNo
 function AuthorityControl({ input, t }: ControlProps): ReactNode {
   const confirmed = input.autonomyMode !== null;
   const confirmedModeId = useId();
+  const shownMode = input.activeRunMode ?? input.requestedMode;
   return (
     <div
       className={`cmp-model ${styles.authorityControl}`}
@@ -830,10 +836,10 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         : {})}
     >
       <KeikoSelect
-        value={input.requestedMode}
+        value={shownMode}
         ariaLabel={t("codingWorkbench.composer.authority.label")}
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}
-        triggerTitle={t(`codingWorkbench.mode.${input.requestedMode}.description`)}
+        triggerTitle={t(`codingWorkbench.mode.${shownMode}.description`)}
         menuTitle={t("codingWorkbench.composer.authority.menu")}
         menuMinWidth={180}
         menuPopoverMinWidth={296}

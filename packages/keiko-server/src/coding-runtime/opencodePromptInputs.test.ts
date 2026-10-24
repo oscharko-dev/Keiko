@@ -11,7 +11,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { activityLogEventWillBeRejected } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -25,10 +24,11 @@ import {
   OpenCodeV2HttpStatusError,
   OpenCodeV2PromptRefusedError,
   OpenCodeV2ReceiptMismatchError,
+  OPENCODE_PROMPT_FILE_MAX_BYTES,
+  openCodeV2PromptFileData,
 } from "./opencodeV2HttpClient.js";
 import {
   OPENCODE_NATIVE_INPUT_LEDGER_MAX,
-  OPENCODE_PROMPT_FILE_MAX_BYTES,
   OPENCODE_PROMPT_FILES_MAX_BYTES,
   OPENCODE_PROMPT_RUN_FILES_MAX_BYTES,
   createOpenCodePromptInputsRunPort,
@@ -42,6 +42,11 @@ import {
 let root: string;
 let workspace: string;
 let outside: string;
+
+/** A file's bytes as the attachment carries them. */
+function inline(text: string): string {
+  return openCodeV2PromptFileData(Buffer.from(text, "utf8"));
+}
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-prompt-inputs-")));
@@ -92,7 +97,7 @@ describe("OpenCode prompt input capabilities", () => {
 });
 
 describe("prompt references resolved against the run's workspace", () => {
-  it("maps a contained text file to its absolute file URI and name, never the relative path", () => {
+  it("maps a contained text file to its admitted bytes inline and its name, never a path", () => {
     const resolved = resolvePromptReferences({
       workspaceRoot: workspace,
       references: [{ path: "src/app.ts" }, { path: "README.md" }],
@@ -101,23 +106,37 @@ describe("prompt references resolved against the run's workspace", () => {
     expect(resolved).toEqual({
       ok: true,
       files: [
-        { uri: `file://${join(workspace, "src", "app.ts")}`, name: "app.ts" },
-        { uri: `file://${join(workspace, "README.md")}`, name: "README.md" },
+        { uri: inline("export const app = 1;\n"), name: "app.ts" },
+        { uri: inline("# readme\n"), name: "README.md" },
       ],
       bytes: "export const app = 1;\n".length + "# readme\n".length,
     });
   });
 
-  it("percent-encodes names so the URI resolves back to the very file", () => {
+  it("carries the file's exact bytes and its own name whatever the name contains", () => {
     for (const name of ["my notes.md", "a#b.md", "q?.md", "100%.md", "ünïcode-名前.md"]) {
-      writeFileSync(join(workspace, name), "x\n");
+      writeFileSync(join(workspace, name), "ünïcode x\n");
       const resolved = resolveOne(name);
       expect(resolved.ok, name).toBe(true);
       if (!resolved.ok) continue;
-      const uri = resolved.files[0]?.uri ?? "";
-      expect(uri.includes("#") || uri.includes("?")).toBe(false);
-      expect(fileURLToPath(uri)).toBe(join(workspace, name));
+      expect(resolved.files[0]).toEqual({ uri: inline("ünïcode x\n"), name });
     }
+  });
+
+  // #3897 review: the runtime must not reopen the path the resolver admitted. A hard link to an
+  // outside file swapped in after admission would otherwise reach the model in its place.
+  it("keeps the admitted bytes when the path is replaced by a link to an outside file afterwards", () => {
+    writeFileSync(join(workspace, "notes.md"), "ADMITTED_BYTES\n");
+    const canary = join(outside, "canary.md");
+    writeFileSync(canary, "OUTSIDE_CANARY_THAT_MUST_NOT_BE_SENT\n");
+    const resolved = resolveOne("notes.md");
+    rmSync(join(workspace, "notes.md"));
+    linkSync(canary, join(workspace, "notes.md"));
+    expect(resolved).toMatchObject({ ok: true, files: [{ uri: inline("ADMITTED_BYTES\n") }] });
+    expect(JSON.stringify(resolved)).not.toContain(
+      Buffer.from("OUTSIDE_CANARY").toString("base64").slice(0, 16),
+    );
+    expect(JSON.stringify(resolved)).not.toContain(workspace);
   });
 
   it("canonicalizes a workspace root that is itself reached through a link", () => {
@@ -130,7 +149,7 @@ describe("prompt references resolved against the run's workspace", () => {
     });
     expect(resolved).toMatchObject({
       ok: true,
-      files: [{ uri: `file://${join(workspace, "README.md")}` }],
+      files: [{ uri: inline("# readme\n") }],
     });
   });
 
@@ -193,7 +212,7 @@ describe("prompt references resolved against the run's workspace", () => {
     });
     expect(resolved).toEqual({
       ok: true,
-      files: [{ uri: `file://${join(workspace, "README.md")}`, name: "README.md" }],
+      files: [{ uri: inline("# readme\n"), name: "README.md" }],
       bytes: "# readme\n".length,
     });
   });
@@ -527,7 +546,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
         delivery: "steer",
         referenceCount: 1,
         correlationId: "corr-0123456789",
-        files: [{ uri: `file://${join(workspace, "src", "app.ts")}`, name: "app.ts" }],
+        files: [{ uri: inline("export const app = 1;\n"), name: "app.ts" }],
         fileBytes: "export const app = 1;\n".length,
       },
     });
@@ -575,7 +594,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
         referenceCount: 1,
         correlationId: "corr-0123456789",
         requestId: "req-1",
-        files: [{ uri: `file://${join(workspace, "src", "app.ts")}`, name: "app.ts" }],
+        files: [{ uri: inline("export const app = 1;\n"), name: "app.ts" }],
         fileBytes: "export const app = 1;\n".length,
       },
     });

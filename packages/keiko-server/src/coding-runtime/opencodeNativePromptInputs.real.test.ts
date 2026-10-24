@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -63,6 +63,7 @@ const NOTES_FILE = "NOTES.md";
 const NOTES_CANARY = "NOTES-CANARY-CONTENT";
 const AWKWARD_FILE = "my notes #1 100%.md";
 const AWKWARD_CANARY = "AWKWARD-CANARY-CONTENT";
+const OUTSIDE_CANARY = "OUTSIDE-CANARY-THAT-MUST-NOT-REACH-THE-MODEL";
 const MAX_FIXTURE_BODY_BYTES = 4 * 1_024 * 1_024;
 
 /** What the scripted model answers the Nth request with. */
@@ -774,7 +775,16 @@ describe("pinned native OpenCode prompt inputs", () => {
       await withRun(["tool-held", "text", "text"], async (run) => {
         await run.client.prompt(run.sessionId, "First prompt");
         await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
-        const path = deliveryPath(run, run.client);
+        // The producer itself refuses the first send: it holds no session under the id that send
+        // names (a declared 404), and stores nothing. The admitted bytes travel inline, so a file
+        // that changes after admission no longer provokes a refusal (#3897 review).
+        let refuse = true;
+        const client: OpenCodeV2HttpClient = {
+          ...run.client,
+          prompt: (sessionId, ...rest) =>
+            run.client.prompt(refuse ? "ses_not_held_by_the_producer" : sessionId, ...rest),
+        };
+        const path = deliveryPath(run, client);
         const request = {
           delivery: "queue" as const,
           references: [{ path: NOTES_FILE }],
@@ -783,16 +793,12 @@ describe("pinned native OpenCode prompt inputs", () => {
         const admitted = path.port.admitPromptInputs(RUN_ID, request);
         if (!admitted.ok) throw new Error("expected admission");
 
-        // The file vanishes between admission and the send: the producer answers 400 and stores nothing.
-        const notes = join(run.fixture.workspace, NOTES_FILE);
-        const content = `${NOTES_CANARY}\n`;
-        rmSync(notes);
         await expect(
           path.port.deliverPrompt(RUN_ID, "See the notes", admitted.inputs),
         ).resolves.toBe(false);
         expect(await userMessagesWith(run, "See the notes")).toHaveLength(0);
 
-        writeFileSync(notes, content);
+        refuse = false;
         await expect(
           path.port.deliverPrompt(RUN_ID, "See the notes", admitted.inputs),
         ).resolves.toBe(true);
@@ -845,9 +851,10 @@ describe("pinned native OpenCode prompt inputs", () => {
   );
 
   // S15: a referenced file reaches the model request. The attachment is the one Keiko's resolver
-  // produces (a `file://` URI of the real path inside the workspace), including a name that needs
-  // percent-encoding; the typed text stays the user's visible message in the runtime's history and
-  // in Keiko's timeline projection, and the file's content stays out of both.
+  // produces: the bytes it admitted, inline as a `data:` URI, under the file's own name, so the
+  // runtime never reopens the path (a hard link swapped in after admission is not what the model
+  // reads, #3897 review). The typed text stays the user's visible message in the runtime's history
+  // and in Keiko's timeline projection, and the file's content stays out of both.
   it.skipIf(skip)(
     "reads a referenced workspace file into the model request and keeps the message text visible",
     async () => {
@@ -859,6 +866,11 @@ describe("pinned native OpenCode prompt inputs", () => {
         });
         if (!resolved.ok) throw new Error("expected the references to resolve");
         const typed = `Summarize @${NOTES_FILE} and @${AWKWARD_FILE}`;
+        // After admission the path names an outside file through a hard link.
+        const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-reference-outside-")));
+        writeFileSync(join(outside, "canary.md"), OUTSIDE_CANARY);
+        rmSync(join(run.fixture.workspace, NOTES_FILE));
+        linkSync(join(outside, "canary.md"), join(run.fixture.workspace, NOTES_FILE));
 
         await run.client.prompt(run.sessionId, typed, undefined, undefined, {
           files: resolved.files,
@@ -870,6 +882,7 @@ describe("pinned native OpenCode prompt inputs", () => {
         expect(modelSaw).toContain(typed);
         expect(modelSaw).toContain(`Attached file: ${NOTES_FILE}`);
         expect(modelSaw).toContain(NOTES_CANARY);
+        expect(modelSaw).not.toContain(OUTSIDE_CANARY);
         expect(modelSaw).toContain(`Attached file: ${AWKWARD_FILE}`);
         expect(modelSaw).toContain(AWKWARD_CANARY);
 
@@ -905,10 +918,10 @@ describe("pinned native OpenCode prompt inputs", () => {
     120_000,
   );
 
-  // The pinned runtime itself answers a refused attachment with a 400 and starts nothing, which the
-  // Keiko client surfaces as a rejected prompt (`opencode-v2-response-invalid`): a file it cannot
-  // read, an image it cannot decode (Keiko's resolver never sends one: it admits UTF-8 text only),
-  // and a delivery outside the closed vocabulary.
+  // The pinned runtime itself answers a refused attachment with a 400 and starts nothing: a file it
+  // cannot read, an image it cannot decode (Keiko's resolver never sends one: it admits UTF-8 text
+  // only), and a delivery outside the closed vocabulary. The Keiko client sends no path at all: a
+  // `file://` attachment is refused before a byte leaves (`opencode-v2-prompt-file-invalid`).
   it.skipIf(skip)(
     "refuses an unreadable attachment, an undecodable image and an unknown delivery with a 400",
     async () => {
@@ -934,7 +947,8 @@ describe("pinned native OpenCode prompt inputs", () => {
           run.client.prompt(run.sessionId, "t", undefined, undefined, {
             files: [{ uri: `file://${missing}`, name: "missing.md" }],
           }),
-        ).rejects.toThrow("opencode-v2-response-invalid");
+        ).rejects.toThrow("opencode-v2-prompt-file-invalid");
+        expect(count(run.events, "session.execution.started")).toBe(0);
       });
     },
     120_000,

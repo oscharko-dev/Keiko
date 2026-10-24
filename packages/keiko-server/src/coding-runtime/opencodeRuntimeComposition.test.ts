@@ -141,6 +141,7 @@ import type {
 } from "./opencodePromptInputs.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
+import { openCodeV2PromptFileData } from "./opencodeV2HttpClient.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 
@@ -471,6 +472,34 @@ function promptReceipt(path: string, body: BodyInit | null | undefined): Record<
   return typeof id === "string" ? { id, sessionID: path.split("/")[3] ?? "", type: "user" } : {};
 }
 
+const NATIVE_MESSAGE_ID = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u;
+
+/** A turn's prompt as the producer receives it: the input carries its own native message id. */
+function turnPrompt(fields: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return { ...fields, id: expect.stringMatching(NATIVE_MESSAGE_ID) as unknown };
+}
+
+function parsedBodies(bodies: readonly string[]): unknown[] {
+  return bodies.map((body) => JSON.parse(body) as unknown);
+}
+
+/** The producer's side of a turn prompt, as `runControl.promptAcknowledgement` scripts it. */
+function storedTurnPrompt(
+  runControl: NonNullable<StartBridgeControl["runControl"]>,
+  path: string,
+  body: string,
+): Promise<Response> {
+  const acknowledgement = runControl.promptAcknowledgement?.() ?? "deliver";
+  if (acknowledgement === "refuse") return Promise.resolve(new Response("", { status: 400 }));
+  const receipt = promptReceipt(path, body);
+  const stored = runControl.promptBodies.some(
+    (held) => receipt.id !== undefined && promptReceipt(path, held).id === receipt.id,
+  );
+  if (!stored) runControl.promptBodies.push(body);
+  if (acknowledgement === "lose") return Promise.reject(new TypeError("fetch failed"));
+  return Promise.resolve(v2Envelope(receipt));
+}
+
 function v2Envelope(value: unknown): Response {
   return v2Json({ data: value });
 }
@@ -603,6 +632,13 @@ interface StartBridgeControl {
   readonly gatewayRefused?: boolean;
   readonly runControl?: {
     readonly promptBodies: string[];
+    /**
+     * How the producer answers each turn prompt: `deliver` (the default) stores it and returns its
+     * receipt, `lose` stores it and then loses the reply, `refuse` answers 400 and stores nothing. A
+     * prompt whose id is already stored is answered with its receipt and not stored twice, as the
+     * pinned producer deduplicates a resent input.
+     */
+    readonly promptAcknowledgement?: () => "deliver" | "lose" | "refuse";
     /** Each `POST /api/session/{id}/agent`, with how many prompts had been posted before it. */
     readonly agentRequests?: {
       readonly path: string;
@@ -995,8 +1031,8 @@ async function startBridgeFixture(
       control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
         readinessChallengePhase = "prompt-pending";
-      } else if (typeof init?.body === "string") {
-        control?.runControl?.promptBodies.push(init.body);
+      } else if (typeof init?.body === "string" && control?.runControl !== undefined) {
+        return storedTurnPrompt(control.runControl, path, init.body);
       }
       return Promise.resolve(v2Envelope(promptReceipt(path, init?.body)));
     }
@@ -2363,8 +2399,8 @@ describe("private OpenCode run control", () => {
     expect(runControl.statusResponses).toEqual([{}]);
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
-    expect(runControl.promptBodies).toEqual([
-      JSON.stringify({
+    expect(parsedBodies(runControl.promptBodies)).toEqual([
+      turnPrompt({
         text: `${initialContext}\n\n${prompt}`,
         metadata: {
           keikoContextPresentationV1: {
@@ -6334,7 +6370,7 @@ describe("primary agent selection on the run port (#3897)", () => {
       expect(agentRequests).toEqual([
         { path: "/api/session/ses_tool/agent", body: '{"agent":"plan"}', promptsBefore: 0 },
       ]);
-      expect(promptBodies).toEqual([JSON.stringify({ text: "outline it" })]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "outline it" })]);
       await settleTurn(port);
 
       // Same agent again, and an absent agent: the session already runs plan, so nothing is re-sent.
@@ -6398,9 +6434,9 @@ describe("primary agent selection on the run port (#3897)", () => {
         port.submitTask(FIXTURE_RUN_ID, "explicit build", undefined, "build"),
       ).resolves.toBe(true);
       expect(agentRequests).toEqual([]);
-      expect(promptBodies).toEqual([
-        JSON.stringify({ text: "plain task" }),
-        JSON.stringify({ text: "explicit build" }),
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({ text: "plain task" }),
+        turnPrompt({ text: "explicit build" }),
       ]);
       expect(activityLog.events.some((event) => event.op === "coding-runtime.agent.selected")).toBe(
         false,
@@ -6457,7 +6493,7 @@ describe("primary agent selection on the run port (#3897)", () => {
         '{"agent":"plan"}',
         '{"agent":"plan"}',
       ]);
-      expect(promptBodies).toEqual([JSON.stringify({ text: "retry" })]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "retry" })]);
     } finally {
       await fixture.stop();
     }
@@ -6489,12 +6525,111 @@ describe("primary agent selection on the run port (#3897)", () => {
           true,
         );
         expect(agentRequests).toEqual([]);
-        expect(promptBodies).toEqual([JSON.stringify({ text: "build it" })]);
+        expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "build it" })]);
       } finally {
         await fixture.stop();
       }
     },
   );
+});
+
+// A lost acknowledgement of a turn's prompt does not end a turn the runtime may already run: the
+// prompt is resent once under the same native id, which the producer answers from what it stored.
+describe("turn prompt acknowledgement on the run port (#3897 review)", () => {
+  const promptFacade: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+
+  function acknowledgementControl(answers: readonly ("deliver" | "lose" | "refuse")[]): {
+    readonly control: StartBridgeControl;
+    readonly promptBodies: string[];
+    readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+    readonly posts: () => number;
+  } {
+    const promptBodies: string[] = [];
+    const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let posts = 0;
+    return {
+      promptBodies,
+      diagnostics,
+      posts: () => posts,
+      control: {
+        diagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+        runControl: {
+          promptBodies,
+          abortSessions: [],
+          statusResponses: [{}],
+          promptAcknowledgement: () => answers[posts++] ?? "deliver",
+        },
+      },
+    };
+  }
+
+  function failureStages(diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][]): string[] {
+    return diagnostics.map((record) => /^stage=([a-z-]+):/u.exec(record.code ?? "")?.[1] ?? "");
+  }
+
+  it("resends a prompt whose acknowledgement was lost once, under the same id, and runs the turn", async () => {
+    const { control, promptBodies, diagnostics, posts } = acknowledgementControl(["lose"]);
+    const fixture = await startBridgeFixture(promptFacade, undefined, control);
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "PRIVATE_FIRST_TASK"),
+      ).resolves.toBe(true);
+      expect(posts()).toBe(2);
+      // The producer holds one input: the resend carried the id of the post it had stored.
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "PRIVATE_FIRST_TASK" })]);
+      expect(failureStages(diagnostics)).toEqual(["submit-resent"]);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId: FIXTURE_RUN_ID,
+        errorClass: "TypeError",
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_FIRST_TASK");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("fails the turn when the resent prompt's acknowledgement is lost too, and frees the run", async () => {
+    const { control, promptBodies, diagnostics, posts } = acknowledgementControl(["lose", "lose"]);
+    const fixture = await startBridgeFixture(promptFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(false);
+      expect(posts()).toBe(2);
+      expect(failureStages(diagnostics)).toEqual(["submit-resent", "submit"]);
+      // One resend, never a loop; the cancelled turn leaves the run free for the next submission.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "second task")).resolves.toBe(true);
+      expect(posts()).toBe(3);
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({ text: "first task" }),
+        turnPrompt({ text: "second task" }),
+      ]);
+      const [first, second] = parsedBodies(promptBodies) as { id: string }[];
+      expect(first?.id).not.toBe(second?.id);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("never resends a prompt the runtime refused", async () => {
+    const { control, promptBodies, diagnostics, posts } = acknowledgementControl(["refuse"]);
+    const fixture = await startBridgeFixture(promptFacade, undefined, control);
+    try {
+      await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(
+        false,
+      );
+      expect(posts()).toBe(1);
+      expect(promptBodies).toEqual([]);
+      expect(failureStages(diagnostics)).toEqual(["submit"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
 });
 
 // B3, S04: undo and restore of the newest turn on a live native run. The logic is pinned in
@@ -6628,7 +6763,7 @@ describe("turn revert on the run port (B3, S04)", () => {
         path: "/api/session/ses_tool/revert",
       });
       await expect(port.submitTask(FIXTURE_RUN_ID, "the next task")).resolves.toBe(true);
-      expect(promptBodies).toEqual([JSON.stringify({ text: "the next task" })]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "the next task" })]);
     } finally {
       await fixture.stop();
     }
@@ -6749,7 +6884,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
   });
 
   it("delivers a steering message to the session of the turn in flight without arming another", async () => {
-    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
     try {
       await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
       const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
@@ -6762,14 +6897,14 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         port.deliverPrompt?.(FIXTURE_RUN_ID, "also read @notes.md", admitted.inputs),
       ).resolves.toBe(true);
 
-      // The turn's own prompt keeps its exact body; a delivery additionally carries the producer's
-      // supported message id (ADR-0137 D10), which is what makes a retry of it the same input.
+      // Both inputs carry the producer's supported message id (ADR-0137 D10), which is what makes a
+      // resend of either one the same input; only the delivery names how it joins the turn.
       expect(promptBodies).toHaveLength(2);
-      expect(promptBodies[0]).toBe(JSON.stringify({ text: "first task" }));
+      expect(JSON.parse(promptBodies[0] ?? "null")).toEqual(turnPrompt({ text: "first task" }));
       expect(JSON.parse(promptBodies[1] ?? "null")).toEqual({
         text: "also read @notes.md",
-        id: expect.stringMatching(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u) as unknown,
-        files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+        id: expect.stringMatching(NATIVE_MESSAGE_ID) as unknown,
+        files: [{ uri: openCodeV2PromptFileData(Buffer.from("NOTES-CANARY\n")), name: "notes.md" }],
         delivery: "steer",
       });
       expect(inputLines(activityLog)).toMatchObject([
@@ -6805,7 +6940,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       ).resolves.toBe(true);
       expect(JSON.parse(promptBodies[1] ?? "null")).toEqual({
         text: "after this turn",
-        id: expect.stringMatching(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u) as unknown,
+        id: expect.stringMatching(NATIVE_MESSAGE_ID) as unknown,
         delivery: "queue",
       });
     } finally {
@@ -6830,7 +6965,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         ok: false,
         reason: "run-unavailable",
       });
-      expect(promptBodies).toEqual([JSON.stringify({ text: "first task" })]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "first task" })]);
       expect(inputLines(activityLog)).toMatchObject([
         { outcome: "refused", delivery: "steer", reason: "turn-not-running" },
         { outcome: "refused", delivery: "queue", reason: "turn-not-running" },
@@ -6978,7 +7113,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
     });
 
     it("sends a bare command with an empty text and the admitted attachments with the command", async () => {
-      const { fixture, port, commands, workspace } = await commandsFixture();
+      const { fixture, port, commands } = await commandsFixture();
       try {
         const bare = admitted(port, { command: { name: "init", argumentBytes: 0 } });
         await expect(port.submitTask(FIXTURE_RUN_ID, "", undefined, undefined, bare)).resolves.toBe(
@@ -6995,7 +7130,9 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
           JSON.stringify({
             name: "review",
             text: "the notes",
-            files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+            files: [
+              { uri: openCodeV2PromptFileData(Buffer.from("NOTES-CANARY\n")), name: "notes.md" },
+            ],
           }),
         ]);
       } finally {
@@ -7133,7 +7270,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         expect(
           port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path: "notes.md" }] }),
         ).toEqual({ ok: false, reason: "references-unsupported" });
-        expect(promptBodies).toEqual([JSON.stringify({ text: "first task" })]);
+        expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "first task" })]);
         expect(inputLines(activityLog)).toMatchObject([
           { reason: "delivery-unsupported" },
           { reason: "references-unsupported" },
@@ -7145,7 +7282,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
   );
 
   it("attaches referenced files to the prompt of a new turn and counts them against the run", async () => {
-    const { fixture, port, promptBodies, workspace } = await inputsFixture();
+    const { fixture, port, promptBodies } = await inputsFixture();
     try {
       const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
         references: [{ path: "notes.md" }],
@@ -7160,10 +7297,12 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
           admitted.inputs,
         ),
       ).resolves.toBe(true);
-      expect(promptBodies).toEqual([
-        JSON.stringify({
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({
           text: "summarize @notes.md",
-          files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+          files: [
+            { uri: openCodeV2PromptFileData(Buffer.from("NOTES-CANARY\n")), name: "notes.md" },
+          ],
         }),
       ]);
     } finally {
@@ -7181,7 +7320,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       await expect(
         port.submitTask(FIXTURE_RUN_ID, "as a turn", undefined, undefined, admitted.inputs),
       ).resolves.toBe(false);
-      expect(promptBodies).toEqual([JSON.stringify({ text: "first task" })]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "first task" })]);
       // Nothing was armed by the refusal: an ordinary turn is still accepted.
       await expect(port.submitTask(FIXTURE_RUN_ID, "an ordinary turn")).resolves.toBe(true);
     } finally {

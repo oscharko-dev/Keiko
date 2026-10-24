@@ -1496,6 +1496,35 @@ describe("CodingWorkbenchWindow", () => {
     expect(change).toHaveBeenCalledWith("autonomous-delivery");
   });
 
+  // #3897 review: after a reload the saved selection (here Supervised) is restored while the
+  // restored run was confirmed in another mode; the locked control must name the run's own mode.
+  it.each([
+    ["governed-assist", "Ask for approval"],
+    ["supervised-coding", "Supervised workspace"],
+    ["autonomous-delivery", "Full access"],
+  ] as const)("shows a restored %s run's confirmed mode in the locked control", (mode, label) => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "supervised-coding",
+        run: {
+          status: "ready",
+          value: snapshot({ runId: "run-1", state: "running", effectiveMode: mode }),
+          error: null,
+        },
+      }),
+    );
+
+    const authority = screen.getByRole("combobox", { name: "Run authority" });
+    expect(authority).toHaveTextContent(label);
+    expect(authority.getAttribute("title")).toContain(
+      {
+        "governed-assist": "every command asks",
+        "supervised-coding": "vetted project commands",
+        "autonomous-delivery": "without asking",
+      }[mode],
+    );
+  });
+
   it("shows the selected authority while the server enforces a lower deployment ceiling", () => {
     renderWorkbench(
       liveState({

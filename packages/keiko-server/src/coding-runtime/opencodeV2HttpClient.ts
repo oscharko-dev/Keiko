@@ -19,6 +19,8 @@ const MAX_JSON_BYTES = OPENCODE_HISTORY_RESPONSE_MAX_BYTES;
  * context (`codingRuntimeRepositoryInstructions.ts`) can yield before the client refuses the turn.
  */
 export const OPENCODE_PROMPT_TEXT_MAX_BYTES = 65_536;
+/** One referenced file's ceiling, in the file's own bytes. */
+export const OPENCODE_PROMPT_FILE_MAX_BYTES = 64 * 1024;
 const MAX_TEXT_BYTES = OPENCODE_PROMPT_TEXT_MAX_BYTES;
 // History reads share the sidecar's event loop with tool execution. A burst of parallel tools may
 // delay its local HTTP response without making the run unhealthy; keep a bounded scheduling margin.
@@ -47,6 +49,11 @@ export interface OpenCodeV2PromptDisplay {
  * the two fields Keiko sends): the absolute `file://` URI the runtime reads and the name it shows the
  * model. Which file may be named is decided before this client (`opencodePromptInputs.ts`); the
  * client only keeps the wire shape closed.
+ */
+/**
+ * One attached file: the bytes Keiko admitted, inline as a `data:text/plain;base64,` URI, and the
+ * file's name. Never a path the runtime would open again, which a link swapped in after admission
+ * could redirect (#3897 review).
  */
 export interface OpenCodeV2PromptFile {
   readonly uri: string;
@@ -421,8 +428,25 @@ function stagedRevert(value: Readonly<Record<string, unknown>>): OpenCodeV2Stage
   return { messageId, files: value.files === undefined ? [] : fileDiffs(value.files) };
 }
 
-const PROMPT_FILE_URI = /^file:\/\/\/[^?#]{1,4090}$/u;
+const PROMPT_FILE_DATA_PREFIX = "data:text/plain;base64,";
+const PROMPT_FILE_DATA_MAX_CHARS =
+  PROMPT_FILE_DATA_PREFIX.length + 4 * Math.ceil(OPENCODE_PROMPT_FILE_MAX_BYTES / 3);
 const PROMPT_FILE_NAME_MAX_CHARS = 255;
+
+/** The inline text attachment of a file's admitted bytes. */
+export function openCodeV2PromptFileData(bytes: Buffer): string {
+  return `${PROMPT_FILE_DATA_PREFIX}${bytes.toString("base64")}`;
+}
+
+/** A canonical, bounded inline attachment; a file URI or any other scheme is refused. */
+function promptFileDataValid(uri: string): boolean {
+  if (!uri.startsWith(PROMPT_FILE_DATA_PREFIX) || uri.length > PROMPT_FILE_DATA_MAX_CHARS) {
+    return false;
+  }
+  const encoded = uri.slice(PROMPT_FILE_DATA_PREFIX.length);
+  const bytes = Buffer.from(encoded, "base64");
+  return bytes.length <= OPENCODE_PROMPT_FILE_MAX_BYTES && bytes.toString("base64") === encoded;
+}
 
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
@@ -433,8 +457,7 @@ function hasControlCharacter(value: string): boolean {
 
 function safePromptFile(file: OpenCodeV2PromptFile): OpenCodeV2PromptFile {
   if (
-    !PROMPT_FILE_URI.test(file.uri) ||
-    hasControlCharacter(file.uri) ||
+    !promptFileDataValid(file.uri) ||
     file.name.length === 0 ||
     file.name.length > PROMPT_FILE_NAME_MAX_CHARS ||
     hasControlCharacter(file.name)

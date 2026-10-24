@@ -1658,6 +1658,7 @@ function WorkbenchColumns({
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}
       autonomyMode={confirmedMode(state)}
       autonomyLabel={confirmedModeLabel(state, t)}
+      activeRunMode={activeRunMode(state)}
       requestedMode={state.requestedMode}
       runtimePreference={state.runtimePreference}
       configurationLocked={
@@ -1909,6 +1910,12 @@ function confirmedModeLabel(
 ): string {
   const mode = confirmedMode(state);
   return mode === null ? t("codingWorkbench.mode.unconfirmed") : modeLabel(mode, t);
+}
+
+/** The confirmed mode of the run that is active; null when no run is. */
+function activeRunMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {
+  const snapshot = state.run.value;
+  return activeRunState(snapshot?.state) ? (snapshot?.effectiveMode ?? null) : null;
 }
 
 function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {

@@ -6,6 +6,8 @@ import {
   OpenCodeV2ReceiptMismatchError,
   classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
+  OPENCODE_PROMPT_FILE_MAX_BYTES,
+  openCodeV2PromptFileData,
   parseOpenCodeV2ChildEndpoint,
 } from "./opencodeV2HttpClient.js";
 
@@ -230,8 +232,8 @@ describe("OpenCode V2 prompt inputs", () => {
   it("sends each file as the closed uri and name pair of the pinned attachment schema", async () => {
     const { client, fetch } = promptClient();
     const files = [
-      { uri: "file:///work/space/src/app.ts", name: "app.ts" },
-      { uri: "file:///work/space/my%20notes.md", name: "my notes.md" },
+      { uri: openCodeV2PromptFileData(Buffer.from("export const app = 1;\n")), name: "app.ts" },
+      { uri: openCodeV2PromptFileData(Buffer.from("")), name: "my notes.md" },
     ];
     await client.prompt("ses_prompt_1", "see @src/app.ts", undefined, undefined, {
       delivery: "steer",
@@ -242,24 +244,33 @@ describe("OpenCode V2 prompt inputs", () => {
 
   it("copies only the two admitted fields of a file, whatever else the caller object carries", async () => {
     const { client, fetch } = promptClient();
-    const file = { uri: "file:///a/b.ts", name: "b.ts", description: "x", mention: { start: 0 } };
+    const uri = openCodeV2PromptFileData(Buffer.from("b"));
+    const file = { uri, name: "b.ts", description: "x", mention: { start: 0 } };
     await client.prompt("ses_prompt_1", "t", undefined, undefined, { files: [file] });
-    expect(sentBody(fetch)).toEqual({
-      text: "t",
-      files: [{ uri: "file:///a/b.ts", name: "b.ts" }],
-    });
+    expect(sentBody(fetch)).toEqual({ text: "t", files: [{ uri, name: "b.ts" }] });
   });
 
   it.each([
     ["a relative uri", { uri: "src/app.ts", name: "app.ts" }],
     ["a remote uri", { uri: "https://example.invalid/a.ts", name: "a.ts" }],
-    ["a host uri", { uri: "file://host/a.ts", name: "a.ts" }],
-    ["a query", { uri: "file:///a.ts?x=1", name: "a.ts" }],
-    ["a fragment", { uri: "file:///a.ts#frag", name: "a.ts" }],
-    ["a control character", { uri: "file:///a\u0000.ts", name: "a.ts" }],
-    ["an empty name", { uri: "file:///a.ts", name: "" }],
-    ["a control name", { uri: "file:///a.ts", name: "a\n.ts" }],
-    ["an oversized name", { uri: "file:///a.ts", name: "n".repeat(256) }],
+    // A path the runtime would open itself, after Keiko's check (#3897 review).
+    ["a file uri", { uri: "file:///work/space/a.ts", name: "a.ts" }],
+    ["another media type", { uri: "data:text/html;base64,PGI+", name: "a.ts" }],
+    ["non-canonical base64", { uri: "data:text/plain;base64,YQ", name: "a.ts" }],
+    ["base64 noise", { uri: "data:text/plain;base64,Y Q==", name: "a.ts" }],
+    [
+      "an oversized attachment",
+      {
+        uri: openCodeV2PromptFileData(Buffer.alloc(OPENCODE_PROMPT_FILE_MAX_BYTES + 1, 97)),
+        name: "a.ts",
+      },
+    ],
+    ["an empty name", { uri: openCodeV2PromptFileData(Buffer.from("a")), name: "" }],
+    ["a control name", { uri: openCodeV2PromptFileData(Buffer.from("a")), name: "a\n.ts" }],
+    [
+      "an oversized name",
+      { uri: openCodeV2PromptFileData(Buffer.from("a")), name: "n".repeat(256) },
+    ],
   ])("refuses a file with %s before any request leaves the process", async (_label, file) => {
     const { client, fetch } = promptClient();
     await expect(
@@ -773,7 +784,7 @@ describe("OpenCode V2 slash commands", () => {
 
   it("runs a command with the closed body and files, and reads the empty 204 answer", async () => {
     const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
-    const file = { uri: "file:///workspace/NOTES.md", name: "NOTES.md" };
+    const file = { uri: openCodeV2PromptFileData(Buffer.from("notes\n")), name: "NOTES.md" };
 
     await expect(
       client.command("ses_cmd_1", "review", "the main branch", undefined, { files: [file] }),
