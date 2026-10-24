@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -139,7 +139,12 @@
                 <span>100%</span><span>50%</span><span>0</span>
               </div>
               <div class="viz-gridlines"><i></i><i></i><i></i></div>
-              <svg viewBox="0 0 240 150" preserveAspectRatio="none">
+              <svg
+                role="img"
+                aria-label="Example success rate with a mid-series dip and overall upward trend"
+                viewBox="0 0 240 150"
+                preserveAspectRatio="none"
+              >
                 <polyline
                   points="0,38 48,30 96,52 144,28 192,18 240,22"
                   fill="none"

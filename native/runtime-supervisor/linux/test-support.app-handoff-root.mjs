@@ -30,17 +30,14 @@ import {
 } from "../../../packages/keiko-server/dist/update-portable-handoff-receipts.js";
 
 let startupStage = "ownership";
-// Startup timeline for a readiness diagnosis: epoch milliseconds only, no environment or content.
-const startupTimeline = { processStartedAt: Math.round(globalThis.performance.timeOrigin) };
-function recordStartup(stage) {
-  startupTimeline[stage] = Date.now();
+function observeStartup(stage) {
   writeFileSync(
     join(process.env.KEIKO_STATE_DIR, `fixture-startup-${process.env.KEIKO_UI_LAUNCH_ID}.json`),
-    JSON.stringify(startupTimeline),
+    JSON.stringify({ stage, at: Date.now() }),
     { mode: 0o600 },
   );
 }
-recordStartup("modulesEvaluatedAt");
+observeStartup("ownership-check");
 process.on("uncaughtExceptionMonitor", (error) => {
   writeFileSync(
     join(process.env.KEIKO_STATE_DIR, `fixture-failure-${process.env.KEIKO_UI_LAUNCH_ID}.json`),
@@ -57,6 +54,7 @@ else bindProcessScope(createNativeProcessScope());
 if (!isProcessAlive(currentProcessId()))
   throw new Error("native fixture root ownership unavailable");
 if (process.env.KEIKO_HANDOFF_FIXTURE_FAIL_BOOT === "1") process.exit(73);
+observeStartup("ownership-checked");
 const { AbortController } = globalThis;
 if (process.env.KEIKO_HANDOFF_FIXTURE_WRONG_LAUNCH === "1") {
   const wrongLaunch = process.env.KEIKO_UI_LAUNCH_ID.startsWith("a")
@@ -66,7 +64,7 @@ if (process.env.KEIKO_HANDOFF_FIXTURE_WRONG_LAUNCH === "1") {
   if (!(refusal instanceof NativeAppControlError) || refusal.nativeAuthorityMayBeLive)
     throw new Error("native fixture wrong launch was not refused");
 }
-recordStartup("ownershipCheckedAt");
+observeStartup("launch-refusal-checked");
 const stateDir = process.env.KEIKO_STATE_DIR;
 const version = process.env.KEIKO_HANDOFF_FIXTURE_VERSION;
 const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
@@ -123,6 +121,7 @@ const coordinator = createPortableHandoffCoordinator({
   // Exercise the real maximum/default grant; a clock-domain offset must not reject it.
   nativeControl: process.env.KEIKO_HANDOFF_FIXTURE_COALESCED === "1" ? nativeControl : undefined,
 });
+observeStartup("coordinator-created");
 
 function stop() {
   server.close(() => process.exit(0));
@@ -195,7 +194,8 @@ const server = createServer(async (request, response) => {
       .end(JSON.stringify({ message: error.message, cause: error.cause?.message }));
   }
 });
-server.listen(port, "127.0.0.1", () => recordStartup("listeningAt"));
+server.once("listening", () => observeStartup("http-listening"));
+server.listen(port, "127.0.0.1");
 
 if (process.env.KEIKO_HANDOFF_FIXTURE_RESUME === "1") {
   const wal = JSON.parse(readFileSync(join(stateDir, "fixture-activation.json"), "utf8"));

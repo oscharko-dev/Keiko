@@ -1,3 +1,6 @@
+import { designEvidenceSourceHashes } from "../../../../../scripts/lib/design-evidence-sources.mjs";
+import { loadHtmlFixture } from "../../../../../scripts/lib/css-rendered-evidence.mjs";
+import { readStylesheet } from "../../../../../packages/keiko-ui/read-stylesheet.mjs";
 // Issue #1300 — accessibility proof for the Design System 0.4.0 component matrix.
 //
 // Runs axe-core (WCAG 2.1 A + AA + best-practice rules) against the migrated component union in
@@ -21,7 +24,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
-const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8").replace(/\r\n?/g, "\n");
+const POST = readStylesheet(resolve(REPO, CSS_PATH)).replace(/\r\n?/g, "\n");
 const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
 const AXE_SRC = readFileSync(resolve(REPO, "node_modules/axe-core/axe.min.js"), "utf8");
 
@@ -116,24 +119,13 @@ const unresolvedIncomplete = [];
 const deterministicChecksByMode = {};
 
 for (const mode of MODES) {
-  await page.emulateMedia({
+  await loadHtmlFixture(page, pageHtml(POST), mode, {
     colorScheme: mode.theme === "light" ? "light" : "dark",
     contrast: "no-preference",
     forcedColors: "none",
     reducedMotion: "no-preference",
     ...mode.media,
   });
-  await page.setContent(pageHtml(POST), { waitUntil: "load" });
-  await page.evaluate(
-    ({ theme, hc }) => {
-      const r = document.documentElement;
-      delete r.dataset.theme;
-      delete r.dataset.hc;
-      if (theme) r.dataset.theme = theme;
-      if (hc) r.dataset.hc = hc;
-    },
-    { theme: mode.theme, hc: mode.hc },
-  );
   await page.addScriptTag({ content: AXE_SRC });
   const results = await page.evaluate(async () => {
     // WCAG 2.1 A + AA + best-practice. Returns violations with impact + nodes.
@@ -343,6 +335,7 @@ writeFileSync(
       issue: 1300,
       epic: 1290,
       tool: `axe-core ${JSON.parse(readFileSync(resolve(REPO, "node_modules/axe-core/package.json"), "utf8")).version}`,
+      sourceFiles: designEvidenceSourceHashes(REPO),
       postCssSha256: POST_CSS_SHA256,
       run: { generatedAt: new Date().toISOString(), repoHeadSha: git(["rev-parse", "HEAD"]) },
       gate: "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",

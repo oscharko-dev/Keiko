@@ -58,10 +58,13 @@ const launcherFor = (root) =>
 const helperFor = (root) => join(resources(root), "runtime/native/keiko-runtime-supervisor");
 const stateDir = join(directory, "state");
 const managedRoot = join(directory, bundleName);
-const rootFixture = fileURLToPath(new URL("./test-support.app-handoff-root.mjs", import.meta.url));
+const rootFixture = fileURLToPath(
+  new URL("./test-support.app-handoff-bootstrap.mjs", import.meta.url),
+);
 const INITIAL_START_TIMEOUT_MS = 15_000;
 let initialOwner;
 let ownerExited;
+let ownerExitedAt;
 let port;
 let currentActivation;
 const knownLaunchIds = new Set();
@@ -134,7 +137,18 @@ async function receipt(launchId) {
 async function awaitPhase(launchId, phase, timeoutMs) {
   const deadline = performance.now() + timeoutMs;
   while ((await receipt(launchId))[4] !== phase && performance.now() < deadline) await delay(20);
-  assert.equal((await receipt(launchId))[4], phase);
+  const observed = (await receipt(launchId))[4];
+  if (observed !== phase)
+    console.error(
+      JSON.stringify({
+        classification: "native-fixture-phase-failure",
+        expected: phase,
+        observed,
+        bootstrap: await readFixtureObservation("bootstrap", launchId),
+        startup: await readFixtureObservation("startup", launchId),
+      }),
+    );
+  assert.equal(observed, phase);
 }
 
 function updateOutcome(plan, previous, index, newLaunchId) {
@@ -229,6 +243,9 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
           .filter((name) => /^fixture-failure-[a-f0-9]{32}\.json$/u.test(name))
           .map(async (name) => JSON.parse(await readFile(join(stateDir, name), "utf8"))),
       ),
+      bootstrapObservations: await Promise.all(
+        [...knownLaunchIds].map((id) => readFixtureObservation("bootstrap", id)),
+      ),
       receipts:
         currentActivation === undefined
           ? []
@@ -244,73 +261,44 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
   throw new Error("native fixture did not reach the selected owned version");
 }
 
-// Darwin's background band (MAXPRI_THROTTLE). A root launchd places there is throttled in CPU and
-// I/O, so on a busy machine it cannot even load its modules within the startup grant.
-const DARWIN_BACKGROUND_PRIORITY = 4;
-
-function schedulingPriority(pid) {
+async function startupControlObservation(reader) {
+  if (!reader.ended || reader.size < 12) return { bufferedBytes: reader.size, ended: reader.ended };
   try {
-    const value = execFileSync("/bin/ps", ["-o", "pri=", "-p", String(pid)], {
-      encoding: "utf8",
-      env: {},
-    });
-    return Number(value.trim());
+    const frame = await appResponse(reader);
+    return {
+      kind: frame.kind,
+      payloadBytes: frame.payload.length,
+      ...(frame.kind === 2 && frame.payload.length === 8
+        ? {
+            rootExitCode: frame.payload.readUInt32LE(0),
+            remainingProcesses: frame.payload.readUInt32LE(4),
+          }
+        : {}),
+    };
+  } catch {
+    return { unavailable: true };
+  }
+}
+
+async function readFixtureObservation(kind, launchId) {
+  try {
+    return JSON.parse(await readFile(join(stateDir, `fixture-${kind}-${launchId}.json`), "utf8"));
   } catch {
     return undefined;
   }
 }
 
-async function readinessFailure(launchId, rootPid, timing, lastObservation) {
-  const startupPath = join(stateDir, `fixture-startup-${launchId}.json`);
-  const startup = await readFile(startupPath, "utf8").then(JSON.parse, () => undefined);
-  let rootAlive = true;
-  try {
-    process.kill(rootPid, 0);
-  } catch {
-    rootAlive = false;
-  }
-  console.error(
-    JSON.stringify({
-      classification: "native-fixture-readiness-failure",
-      ...timing,
-      lastObservation,
-      rootAlive,
-      rootPriority: rootAlive ? schedulingPriority(rootPid) : undefined,
-      // Root milestones relative to the owner's started response (negative: before it).
-      rootStartup:
-        startup === undefined
-          ? undefined
-          : Object.fromEntries(
-              Object.entries(startup).map(([stage, at]) => [stage, at - timing.startedAtEpochMs]),
-            ),
-      startupFailures: (await readdir(stateDir)).filter((name) =>
-        /^fixture-failure-[a-f0-9]{32}\.json$/u.test(name),
-      ).length,
-    }),
+// Darwin's background band (MAXPRI_THROTTLE). A root launchd places there is throttled in CPU and
+// I/O, so on a busy machine it cannot even load its modules within the startup grant.
+const DARWIN_BACKGROUND_PRIORITY = 4;
+
+function schedulingPriority(pid) {
+  return Number(
+    execFileSync("/bin/ps", ["-o", "pri=", "-p", String(pid)], {
+      encoding: "utf8",
+      env: {},
+    }).trim(),
   );
-}
-
-/** One readiness observation of the root: its own pid on `/state`, or why not yet. */
-async function observeRoot(rootPid) {
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/state`, {
-      signal: AbortSignal.timeout(500),
-    });
-    const ready = response.ok && (await response.json()).pid === rootPid;
-    return { ready, observation: ready ? undefined : `http-${response.status}` };
-  } catch (error) {
-    // The actual root must consume and prove its metadata port before ownership commits.
-    return { ready: false, observation: error?.cause?.code ?? error?.name ?? "unknown" };
-  }
-}
-
-async function awaitRootReady(rootPid, deadline) {
-  let last = { ready: false, observation: undefined };
-  while (!last.ready && performance.now() < deadline) {
-    last = await observeRoot(rootPid);
-    if (!last.ready) await delay(20);
-  }
-  return last;
 }
 
 /** Darwin only: the app root must not run in the throttled background band. */
@@ -322,17 +310,33 @@ function assertForegroundRoot(rootPid) {
   );
 }
 
+async function startupObservation(launchId, reader) {
+  return {
+    classification: "native-fixture-startup-failure",
+    ownerExitCode: initialOwner.exitCode,
+    ownerSignal: initialOwner.signalCode,
+    ownerExitedAt,
+    startup: await readFixtureObservation("startup", launchId),
+    failure: await readFixtureObservation("failure", launchId),
+    bootstrap: await readFixtureObservation("bootstrap", launchId),
+    control: await startupControlObservation(reader),
+  };
+}
+
 async function initialStart(launcher, helper, hash) {
+  const requestedAt = Date.now();
   const launchId = randomBytes(16).toString("hex");
   knownLaunchIds.add(launchId);
   initialOwner = spawn(launcher, ["--own-app-runtime", helper, hash], {
     env: {},
     stdio: ["ignore", "pipe", "inherit", "pipe", "pipe"],
   });
-  const spawnedAt = performance.now();
-  ownerExited = new Promise((resolve) =>
-    initialOwner.once("exit", (code, signal) => resolve({ code, signal })),
-  );
+  ownerExited = new Promise((resolve) => {
+    initialOwner.once("exit", (code, signal) => {
+      ownerExitedAt = Date.now();
+      resolve({ code, signal });
+    });
+  });
   const reader = streamReader(initialOwner.stdio[4]);
   initialOwner.stdio[3].write(
     appLaunchPacket(
@@ -363,8 +367,6 @@ async function initialStart(launcher, helper, hash) {
     ),
   );
   const started = await appResponse(reader);
-  const startedAt = performance.now();
-  const startedAtEpochMs = Date.now();
   assert.equal(started.kind, 4);
   writeExclusivePidFile(
     join(stateDir, "ui.pid"),
@@ -374,24 +376,39 @@ async function initialStart(launcher, helper, hash) {
     true,
   );
   // Observe the complete startup grant already admitted by the native owner.
-  const rootPid = started.payload.readUInt32LE(0);
-  const root = await awaitRootReady(rootPid, performance.now() + INITIAL_START_TIMEOUT_MS);
-  if (!root.ready)
-    await readinessFailure(
-      launchId,
-      rootPid,
-      {
-        spawnToStartedMs: Math.round(startedAt - spawnedAt),
-        observationMs: Math.round(performance.now() - startedAt),
-        startedAtEpochMs,
-      },
-      root.observation,
+  const readyDeadline = performance.now() + INITIAL_START_TIMEOUT_MS;
+  let ready = false;
+  let lastObservation;
+  while (!ready && performance.now() < readyDeadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/state`, {
+        signal: AbortSignal.timeout(500),
+      });
+      const body = await response.json();
+      ready = response.ok && body.pid === started.payload.readUInt32LE(0);
+      lastObservation = {
+        status: response.status,
+        expectedPid: body.pid === started.payload.readUInt32LE(0),
+      };
+    } catch (error) {
+      lastObservation = { unavailable: unavailableObservation(error) };
+      // The actual root must consume and prove its metadata port before ownership commits.
+    }
+    if (!ready) await delay(20);
+  }
+  if (!ready)
+    console.error(
+      JSON.stringify({
+        ...(await startupObservation(launchId, reader)),
+        requestedAt,
+        lastObservation,
+      }),
     );
-  assert(root.ready);
+  assert(ready);
   initialOwner.stdio[3].write(commitPacket(launchId));
   assert.equal((await appResponse(reader)).kind, 5);
   // After the commit is acknowledged, so the synchronous `ps` lookup never spends commit time.
-  assertForegroundRoot(rootPid);
+  assertForegroundRoot(started.payload.readUInt32LE(0));
   initialOwner.stdio[3].end();
   return { launchId, ...(await awaitState("1.0.0", launchId)) };
 }

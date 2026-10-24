@@ -41,6 +41,12 @@ catalogs. All nine Chromium cases passed in 1.1 minutes, including the real-BFF 
 Twelve PNGs changed bytes at unchanged dimensions; the three JSON records now bind the current
 sources. The evidence freshness gate passed. This remains updater evidence, not skill acceptance.
 
+Merging `dev` with the Sonar repair (#4069) into PR #4064 moved the record to source provenance
+version 2 while this branch still changes `api.ts` and the message catalogs, so the original
+producer ran again on 2026-10-24 with Node 24.22.0. All nine Chromium cases passed in 1.1 minutes,
+including the real-BFF outage case; only `11-progress-state.png` changed bytes. The three JSON
+records bind the merged sources, and the evidence freshness gate passed.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -134,3 +140,13 @@ All 17 artifacts were regenerated; 12 screenshot files changed bytes, while the 
 records bind the current twelve UI sources and four harness inputs. The evidence freshness
 gate passes. This is updater presentation and declared BFF recovery evidence; native package
 replacement, process-generation ownership and SSD qualification remain separate obligations.
+
+The SonarCloud CSS maintenance on 2026-10-24 regenerated the original nine-case Chromium producer
+on macOS arm64 with Node 24.22.0. All nine cases passed in 56.8 seconds, including the real-BFF
+outage case; the unchanged freshness gate passed. These updater fixtures qualify presentation and
+BFF recovery only. They do not replace the separate Editor smoke or native update qualification.
+
+Source provenance version 2 stores each owned input as an explicit `{ path, sha256 }` record.
+The checker rejects duplicates, extra row fields, unsupported versions and any changed source path
+or digest. Harness hashes retain their existing exact map. This identifies public checksums as
+checksums while preserving the complete input binding and all visual/accessibility thresholds.

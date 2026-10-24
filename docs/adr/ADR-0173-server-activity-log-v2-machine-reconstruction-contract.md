@@ -420,6 +420,19 @@ module contains the complete safe operation schemas and failure-class coverage a
 registry/schema/catalog identity constants; it is not a digest-only index. The drift check requires
 both byte equality and an empty authoritative violation set.
 
+The public generated registry preserves its exports through separate identity and metadata modules.
+The compact identity module carries the digests and closed surface vocabulary; the metadata loader
+imports independent failure-class coverage and operation-to-surface JSON assets. This keeps the
+large metadata off consumers that require only identity, including the initial UI load, while
+separating declarative data from executable code. The metadata public types use stable
+readonly schemas, including the existing closed classifications and lifecycle enums, rather than
+literal counts and fixed list positions (owner decision, 2026-10-24). Canonical source operation
+registrations retain their exact inferred field types, and generation preserves every runtime
+contract value. JSON metadata is covered by the same byte-exact regeneration and runtime checks.
+The support-code inventory likewise stores its three existing readonly string lists as generated
+JSON data; their exported types, values and order remain intact. Its retained module-history tuple
+keeps its exact literal types and archived values.
+
 The predecessor bracket scanner remains temporarily in the same generated file as a visibly
 non-authoritative migration input. Its `<dynamic>` and `unknown` records authorize nothing and must
 disappear as producers migrate; no second catalog or parallel runtime vocabulary exists. Runtime

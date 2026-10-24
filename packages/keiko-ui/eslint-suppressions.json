@@ -1632,7 +1632,7 @@
   },
   "src/app/globals.css.test.ts": {
     "complexity": {
-      "count": 5
+      "count": 1
     }
   },
   "src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": {

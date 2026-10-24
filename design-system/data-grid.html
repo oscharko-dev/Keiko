@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -69,6 +69,7 @@
           <label class="c-check" style="margin-left: 6px"
             ><input type="checkbox" id="zebra" /><span class="bx"
               ><svg
+                aria-hidden="true"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -83,19 +84,14 @@
 
         <div class="c-tablewrap" id="gridwrap">
           <div class="c-tablescroll">
-            <table
-              class="c-table responsive"
-              id="grid-table"
-              role="grid"
-              aria-label="Agents"
-              aria-multiselectable="true"
-            >
+            <table class="c-table responsive" id="grid-table" aria-label="Agents">
               <thead>
                 <tr role="row">
                   <th class="selcell" role="columnheader">
                     <label class="c-check"
                       ><input type="checkbox" id="selall" aria-label="Select all" /><span class="bx"
                         ><svg
+                          aria-hidden="true"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
@@ -117,6 +113,7 @@
                     Agent
                     <span class="so"
                       ><svg
+                        aria-hidden="true"
                         width="11"
                         height="11"
                         viewBox="0 0 24 24"
@@ -150,6 +147,7 @@
                     Runs
                     <span class="so"
                       ><svg
+                        aria-hidden="true"
                         width="11"
                         height="11"
                         viewBox="0 0 24 24"
@@ -265,6 +263,7 @@
               <div class="c-table-empty">
                 <div class="ic">
                   <svg
+                    aria-hidden="true"
                     width="22"
                     height="22"
                     viewBox="0 0 24 24"
@@ -440,27 +439,27 @@
               '<tr role="row" data-name="' +
               r.name +
               '">' +
-              '<td class="selcell" role="gridcell"><label class="c-check"><input type="checkbox" class="rowsel" aria-label="Select ' +
+              '<td class="selcell" role="cell"><label class="c-check"><input type="checkbox" class="rowsel" aria-label="Select ' +
               r.name +
               '" /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span></label></td>' +
-              '<td role="gridcell" data-label="Agent"><div class="c-cell-user"><span class="av">' +
+              '<td role="cell" data-label="Agent"><div class="c-cell-user"><span class="av">' +
               r.initials +
               '</span><span class="pri">' +
               r.name +
               "</span></div></td>" +
-              '<td role="gridcell" data-label="Status">' +
+              '<td role="cell" data-label="Status">' +
               badge(r.status, r.statusLabel) +
               "</td>" +
-              '<td class="num" role="gridcell" data-label="Runs">' +
+              '<td class="num" role="cell" data-label="Runs">' +
               r.runs.toLocaleString() +
               "</td>" +
-              '<td class="num" role="gridcell" data-label="Success">' +
+              '<td class="num" role="cell" data-label="Success">' +
               r.success +
               "%</td>" +
-              '<td role="gridcell" data-label="Model" style="font-family:var(--font-mono);font-size:12px">' +
+              '<td role="cell" data-label="Model" style="font-family:var(--font-mono);font-size:12px">' +
               r.model +
               "</td>" +
-              '<td role="gridcell" data-label="Updated">' +
+              '<td role="cell" data-label="Updated">' +
               r.updated +
               "</td>" +
               "</tr>"

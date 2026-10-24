@@ -81,3 +81,23 @@ ghost text, agent prompts) is proven by
   MemoriaViva/Relationships, Files/Editor, and desktop/constrained Git-client scenarios), shell present
   in every mode/viewport, required selectors present, and 0 page errors, visible error notices, crashed
   window bodies, unexpected API requests, or unavailable workspace-trust states.
+
+## SonarCloud CSS maintenance — 2026-10-24
+
+The original four producers were regenerated for the reported CSS maintenance on Node 24.22.0
+(macOS arm64). Component fidelity retains 427 probes with zero gated or recorded differences;
+editor token fidelity retains zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof retains zero serious/critical violations and zero unresolved incomplete findings.
+The 108 running-app captures retain zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. The browser fixture now supplies the three
+existing browser-approval, empty-draft and absent-skill reads through exact paths and canonical empty
+responses. Unexpected requests still fail closed.
+
+The additional [CSS preservation producer](../sonarcloud-2026-10-24/css-preservation.mjs) compares
+32 fixtures against the pinned pre-change source, including interaction states, pseudo-elements,
+late-loaded Monaco styles and the changed CSS Modules. It records 34,944 equal computed values and
+binds the producer and source digests in its sibling proof JSON. This remains fixture qualification.
+The separate running-editor smoke is not green; its menu-selection and desktop-hover failures also
+reproduce with the original stylesheet. See the complete
+[SonarCloud review record](../../../qa/sonarcloud-blocker-medium-2026-10-24.json) for the actual gate
+outcomes and limitations. No failure or rule was suppressed to produce these artifacts.

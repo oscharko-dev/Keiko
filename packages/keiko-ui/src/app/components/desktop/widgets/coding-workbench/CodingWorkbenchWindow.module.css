@@ -374,8 +374,8 @@
   border-radius: var(--radius-pill);
 }
 
-.cmpContextSummary {
-  margin-block-start: var(--space-3) !important;
+.cmpContextUsage .cmpContextSummary {
+  margin-block-start: var(--space-3);
   border-block-start: 1px solid var(--border-subtle);
   padding-block-start: var(--space-3);
 }

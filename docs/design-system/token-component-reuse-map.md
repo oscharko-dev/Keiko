@@ -7,7 +7,34 @@ This document records the reuse decision for every styling asset, the dependency
 sequence, and the **exact files each child issue will edit** (acceptance criterion C). It enforces the epic's
 reuse / no-duplication gate.
 
-## 1. Two divergent token systems (the reuse-gate concern)
+## Current product source ownership (2026-10-24)
+
+The product now consumes the canonical `keiko-ai.css`, `keiko-data.css`, `keiko-dataviz.css`,
+`keiko-inputs.css` and `keiko-nav.css` through standard CSS imports in `globals.css`. Product-specific
+state overrides remain after those imports. The existing theme controller and runtime CSS-variable
+contract are preserved.
+
+`design-system/product-token-bindings.json` records the ordered product root, theme, contrast,
+density and rail bindings: 629 declarations reference their canonical design-system declaration,
+and 39 retain product-specific literal values. `packages/keiko-ui/design-tokens.mjs` resolves those
+bindings during Next configuration loading for both build and dev startup, writes the existing
+ignored `dist/styles/product-tokens.css` build asset, and rejects missing or ambiguous references.
+Rebuild or restart the development server after changing token bindings or their canonical values.
+The binding manifest preserves source order, media conditions and fallbacks without duplicating
+the palette or adding another runtime theme mechanism.
+
+PDF and Terminal windows compose the common action ancestor from `TerminalWidget.module.css`.
+Only that ancestor class is shared; each window retains its own scope, focus and disabled-state
+styles. The existing compatibility register remains at 38 sources and loses eight stale entries.
+The evidence reader expands local CSS imports and this limited scope composition, checking real
+path containment and rejecting cycles or unsupported projection. The original fidelity, keyboard,
+accessibility, browser and updater gates retain their thresholds. Their records also pin the
+shared producer, fixture, generator and canonical stylesheet inputs.
+
+The sections below retain the **historical starting point and migration plan for epic #1290**;
+the ownership above describes the current delivered source arrangement.
+
+## 1. Historical starting point: two divergent token systems
 
 There are two styling sources, and they have **diverged**:
 

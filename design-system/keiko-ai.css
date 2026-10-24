@@ -68,13 +68,7 @@
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  animation: ai-blink 1.2s ease-in-out infinite;
-}
-.ai-thinking .dots i:nth-child(2) {
-  animation-delay: 0.18s;
-}
-.ai-thinking .dots i:nth-child(3) {
-  animation-delay: 0.36s;
+  animation: none;
 }
 @keyframes ai-blink {
   0%,
@@ -102,7 +96,7 @@
   margin-left: 2px;
   border-radius: 1px;
   background: var(--ai-streaming-cursor);
-  animation: ai-caret 1s steps(1) infinite;
+  animation: none;
 }
 @keyframes ai-caret {
   50% {
@@ -168,7 +162,7 @@
   border-radius: 50%;
   border: 1.5px solid currentColor;
   border-top-color: transparent;
-  animation: ai-spin 0.7s linear infinite;
+  animation: none;
 }
 .ai-tool-head .st.done::before {
   content: "";
@@ -428,4 +422,21 @@
 .ai-danger-act {
   display: flex;
   gap: 9px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ai-thinking .dots i {
+    animation: ai-blink 1.2s ease-in-out infinite;
+  }
+  .ai-thinking .dots i:nth-child(2) {
+    animation-delay: 0.18s;
+  }
+  .ai-thinking .dots i:nth-child(3) {
+    animation-delay: 0.36s;
+  }
+  .ai-stream-cursor {
+    animation: ai-caret 1s steps(1) infinite;
+  }
+  .ai-tool-head .st.run::before {
+    animation: ai-spin 0.7s linear infinite;
+  }
 }

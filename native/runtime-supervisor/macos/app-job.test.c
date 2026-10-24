@@ -29,7 +29,7 @@ static ssize_t fault_sendmsg(int descriptor, const struct msghdr *message, int f
 #undef clock_gettime
 
 enum { CLOCK_FAILURE = 1, DIRECTORY_FAILURE = 2, BOOTSTRAP_FAILURE = 3,
-       GUI_UNAVAILABLE = 4, GUI_TIMEOUT = 5, ACK_FAILURE = 6 };
+       GUI_UNAVAILABLE = 4, GUI_TIMEOUT = 5, ACK_FAILURE = 6, CLOCK_OFFSET = 7 };
 
 static ssize_t fault_read(int descriptor, void *buffer, size_t length) {
   if (fault == ACK_FAILURE && descriptor == transferred_channel && length == 1) {
@@ -47,6 +47,11 @@ static ssize_t fault_sendmsg(int descriptor, const struct msghdr *message, int f
 
 static int fault_clock(clockid_t clock, struct timespec *value) {
   if (fault == CLOCK_FAILURE) { errno = EIO; return -1; }
+  if (fault == CLOCK_OFFSET) {
+    value->tv_sec = clock == CLOCK_MONOTONIC_RAW ? 100 : 220;
+    value->tv_nsec = 0;
+    return 0;
+  }
   int result = clock_gettime(clock, value);
   if (result == 0 && fault == GUI_TIMEOUT && probe_child > 0) value->tv_sec += 2;
   return result;
@@ -102,8 +107,21 @@ static void pre_handoff_error(int failure) {
          read_u16(bytes + 12) == ERROR_TREE_OBSERVE);
 }
 
+static void raw_deadline_survives_adjusted_clock_offset(void) {
+  int descriptors[2];
+  assert(pipe(descriptors) == 0);
+  assert(write(descriptors[1], "x", 1) == 1);
+  fault = CLOCK_OFFSET;
+  assert(keiko_job_ready(descriptors[0], POLLIN, 100050u));
+  assert(!keiko_job_ready(descriptors[0], POLLIN, 99999u));
+  fault = 0;
+  close(descriptors[0]);
+  close(descriptors[1]);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) return keiko_supervisor_entry_for_test(argc, argv);
+  raw_deadline_survives_adjusted_clock_offset();
   pre_handoff_error(CLOCK_FAILURE);
   pre_handoff_error(DIRECTORY_FAILURE);
   pre_handoff_error(BOOTSTRAP_FAILURE);

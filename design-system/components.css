@@ -62,10 +62,14 @@
   color: var(--button-secondary-text);
   font: var(--weight-medium) 13px var(--font-ui);
   cursor: pointer;
-  transition:
-    border-color 0.13s,
-    background 0.13s,
-    transform 0.06s;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .c-btn {
+    transition:
+      border-color 0.13s,
+      background 0.13s,
+      transform 0.06s;
+  }
 }
 .c-btn:hover {
   border-color: var(--border-strong);

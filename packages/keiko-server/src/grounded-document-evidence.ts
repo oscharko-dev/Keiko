@@ -705,7 +705,7 @@ async function extractDocumentText(
   remainingBudget: number,
   remainingTimeMs: number,
 ): Promise<BoundedDocumentExtractionResult> {
-  return extractBoundedDocumentText(
+  return await extractBoundedDocumentText(
     { bytes, extension: binding.format, mediaType: binding.mediaType },
     {
       maxInputBytes: MAX_DOCUMENT_INPUT_BYTES,

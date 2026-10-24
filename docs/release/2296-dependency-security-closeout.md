@@ -43,7 +43,7 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout                               |
 
 The 2026-09-30 OSV scan found newly reported advisories in the previous lockfile. The patched
-resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-address` 10.7.2.
+resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.9, and `ip-address` 10.7.2.
 The two `brace-expansion` majors are pinned under their respective `minimatch` consumers so neither
 receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
 with the updated lockfile.
@@ -225,15 +225,15 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fast-uri`                    | root                  | 3.1.9   | current        | Patch for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h (2026-10-24); earlier GHSA-hrr3-gc8f-f4qj via PR #3676.                                                                                                                                                                                      |
-| `undici`                      | root                  | 8.12.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c (2026-10-24; earlier GHSA-3wwx-pv8p-q78v, PR #3675); the separate override, now 7.30.1, remains scoped to other consumers.                                                                           |
+| `fast-uri`                    | root                  | 3.1.9   | major-deferred | Patched 3.x line for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h. Retains the compatible major used by current consumers; 4.2.3 is available. Scoped refresh in PR #4069.                                                                                                                          |
+| `undici`                      | root                  | 8.12.2  | patch-deferred | Reviewed fixes for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The jsdom override uses 8.12.2; the other-consumer override uses 7.30.1. Later 8.12.3 is available; this repair retains the prepared compatible floors from PR #4050. PR #4069.                                                                         |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                                                       |
 | `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7.                                                                                                                                                                                                                                                       |
 | `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                                                                                                                                                                                                                                                                        |
-| `eslint`                      | root                  | 10.12.0 | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
-| `eslint`                      | keiko-ui              | 10.12.0 | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `eslint`                      | root                  | 10.13.0 | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `eslint`                      | keiko-ui              | 10.13.0 | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                                                                                                                                                                                                                                                   |
 | `typescript-eslint`           | root                  | 8.70.0  | patch-deferred | Owner-approved retention in PR #4066: with identical product sources and the same 12 GiB limit, 8.71.2 exhausts the root lint heap; 8.70.0 passes complete root and UI lint. Retain the exact pin while prioritizing the updater; no heap, lint-rule or gate changes.                                                                        |
 | `next`                        | keiko-ui              | 16.4.2  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
@@ -254,7 +254,7 @@ or peer graph).
 | `monaco-editor`               | keiko-ui              | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `monaco-editor`               | keiko-editor          | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `@babel/preset-env`           | root                  | 8.0.7   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
-| `vite`                        | keiko-ui              | 8.3.3   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                                                              |
+| `vite`                        | keiko-ui              | 8.3.4   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                                                              |
 | `vitest`                      | root                  | 4.1.12  | major-deferred | #3474 reverts the Vitest 5 adoption for the mutation lane: Stryker 10 with Vitest 5.0.0 reports zero killed mutants despite a covering dry run, making the security mutation evidence meaningless. 4.1.12 fixes the current mocker advisories while retaining the previously qualified Vitest 4 major; mutation thresholds remain unchanged. |
 | `vitest`                      | keiko-ui              | 4.1.12  | major-deferred | Kept exactly aligned with the root because workspace-local Vitest drift previously produced peer-invalid `npm ls` output. The next Vitest major move must first prove non-zero Stryker kills on the security mutation scope.                                                                                                                 |
 | `@vitest/coverage-v8`         | root                  | 4.1.12  | major-deferred | Exact peer match for Vitest 4.1.12. Vitest 5 coverage stays deferred with the Vitest major because the security mutation runner, not the coverage package alone, is the blocking evidence path (#3474).                                                                                                                                      |
@@ -292,6 +292,21 @@ was missing from the table entirely while eleven minor releases behind. `check:d
 cannot catch this class either, by design: it compares the document against the lockfile and never
 contacts a registry, so it proves the record describes this checkout, never that the checkout is
 current. Cross-check individual root devDependencies before claiming a clean sweep.
+
+### Dependabot #4067 integration in PR #4069
+
+The owner-requested integration includes ESLint 10.13.0 and Vite 8.3.4. The existing exact Vite
+workspace declaration is now matched by the root override. The existing gates and limits remain
+intact. The owner explicitly selected a separate PDF.js qualification: 6.3.289 remains in this PR
+because 6.4.299 changes the bundled provider format and fails the unchanged browser-baseline gate.
+
+The TypeScript compiler stays on native 7.0.2, with the 6.0.3 programmatic API and the existing
+Next.js UI API lane. The proposed API replacement with 7.0.2 fails the supported peer range of
+`typescript-eslint`; the native TypeScript toolchain gate preserves these separate roles.
+`typescript-eslint` stays on 8.70.0: a fresh full lint run with 8.71.2 on the combined sources again
+exhausted the unchanged 12 GiB heap limit. `axe-core` stays on 4.12.1: #4067's dependency review rejects
+4.14.0's MPL-2.0 license under the unchanged permissive-only policy. No license exception, heap
+increase or quality-gate relaxation is introduced.
 
 ## GitHub Actions baseline
 
@@ -654,46 +669,26 @@ The owner also retained the existing axe-core 4.12.1 test dependency. GitHub dep
 rejects the proposed 4.14.0 MPL-2.0 update under its existing permissive-license policy. This
 disposition adds no license exception or policy change and does not remove accessibility tests.
 
-## PR #4050: service-host Zod and development URI security patches
+### 2026-10-24 — Sonar repair CI dependency blockers (PR #4069)
 
-On 2026-10-23 the required OSV Scanner 2.7.0 job reported
-[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) in the private
-OpenCode service-host lockfile. Its existing override mechanism now resolves every Zod consumer
-to 4.6.7, removing the vulnerable 3.25.76, 4.1.8 and 4.6.5 copies. The original GitLab provider
-remains unchanged: its actual direct-access client accepts string-valued header records and
-rejects malformed values with the patched runtime. The complete service-host suite passes
-70 tests, including the existing MCP issuer binding, native routes and governed tool boundaries.
+The exact pinned OSV 2.7.0 container reproduced 17 findings on the unchanged baseline locks.
+This repair reuses the bounded dependency versions already prepared in PR #4050: root undici
+7.30.1/8.12.2, fast-uri 3.1.9 and Fallow 3.34.0; native undici 6.29.1/8.12.2 and Zod 4.6.7.
+No OpenCode, Effect or other native package version changes. The native graph removes the three
+nested Zod copies while retaining the existing fixed host, model binding and authority profile.
 
-The collection regression is reproduced against the original Zod 4.1.8: an array exceeding its
-declared maximum still validates all three elements and accumulates their errors. With 4.6.7,
-the same input visits no elements and returns only the size violation. The committed regression
-also checks valid input at the size boundary. This is scoped proof for constrained collections,
-not a claim that unbounded schemas impose an application-specific input limit.
+All 71 native host tests pass, including original issuer-bound MCP refresh, guarded provider
+transport, PTY behavior, the original GitLab direct-access client with valid and malformed header
+records, the original GitLab OAuth schema's optional refresh-token and invalid-expiry paths, and an
+early-rejection control for oversized constrained Zod arrays. The GitLab consumer previously resolved
+Zod 3.25.76; the advisory also covers that version. Both of its actual schema families are exercised
+against the patched runtime rather than assuming compatibility from version numbers. This is evidence
+for the tested product/SDK paths rather than a claim of exhaustive upstream API equivalence.
+The same OSV container then reports no unwaived issue; the existing, unchanged, time-boxed
+build-only braces disposition remains recorded in osv-scanner.toml. No advisory waiver, gate
+threshold, provider availability or release approval is added.
 
-The same local recursive scan then found GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg,
-GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h in development-only fast-uri 3.1.8. Its existing
-root override advances to 3.1.9. With both lockfiles updated, OSV Scanner 2.7.0 reports no issues
-under the unchanged repository configuration. No suppression or gate threshold was added or
-relaxed. The governed dependency table above records the active version, 3.1.9.
-
-The subsequent workflow-hygiene run on `b2a8763e4` reported ten findings across four
-package/version pairs after the undici and fallow advisories were updated on 2026-10-23.
-The exact local recursive OSV 2.7.0 invocation reproduces those ten findings. The root jsdom
-consumer now resolves undici 8.12.2, and the other root override pins the patched 7.30.1 lane.
-The private host retains its existing major-version boundaries with undici 6.29.1 and 8.12.2.
-Fallow advances to 3.34.0 for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5; its exact-version
-configuration contract moves with the dependency. The semantic duplication command, thresholds,
-changed-file scope and failure behavior remain unchanged.
-
-PR #4064 (#3897, #3898) carries this forward: fallow is at 3.35.0 behind
+PR #4064 (#3897, #3898) carries this forward: Fallow advances to 3.35.0 behind
 `scripts/check-semantic-duplication.mjs` (generated files excluded, a shrink-only baseline), and
 the private OpenCode service host is removed together with its lockfile and overrides, so the
 service-host Zod, undici 6 and undici 8 boundaries described here no longer exist in the tree.
-
-With these updates the same recursive OSV scan reports no issues. The complete 70-test native
-service-host suite, 46 dependency-currency and external-quality configuration tests, and 11
-jsdom-backed transcript-follow tests pass locally. Dependency currency, dependency hygiene,
-TypeScript toolchain, install-script approvals and the diff-scoped semantic duplication gate pass.
-These results do not resolve the separate tool-catalog reference-evidence freshness failure:
-the changed root lockfile still requires a new candidate measurement on the declared reference
-environment. The reference evidence and its acceptance policy remain unchanged.

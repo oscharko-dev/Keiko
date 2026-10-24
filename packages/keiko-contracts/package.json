@@ -858,6 +858,10 @@
     "./runtime/governed-tool-bridge": {
       "types": "./dist/governed-tool-bridge.d.ts",
       "import": "./dist/governed-tool-bridge.js"
+    },
+    "./runtime/activity-log-diagnostic-fields": {
+      "types": "./dist/activity-log-diagnostic-fields.d.ts",
+      "import": "./dist/activity-log-diagnostic-fields.js"
     }
   },
   "scripts": {

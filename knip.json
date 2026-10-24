@@ -27,7 +27,8 @@
         "tests/e2e/support/**/*.{ts,mjs}!",
         "tests/e2e/servers/**/*.mts!",
         "native/**/*.test.mjs",
-        "native/**/test-*.mjs"
+        "native/**/test-*.mjs",
+        "docs/design-system/evidence/1300/browser/capture.mjs"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
       "ignore": [

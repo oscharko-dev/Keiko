@@ -5,6 +5,11 @@
   --ed-inlay-value-bg: color-mix(in oklch, var(--info) 14%, transparent);
 }
 
+/* Keep editor scrollbar and diagnostic targets clear of the window's inner resize edge. */
+.cmpEditorHost {
+  padding-right: 4px;
+}
+
 /*
  * Document tab strip, WAI-ARIA APG shape (0.3.0 release audit, #2802).
  *
