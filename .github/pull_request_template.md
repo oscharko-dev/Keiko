@@ -116,3 +116,22 @@ Not applicable rationale:
 ## Risk Notes
 
 List compatibility, migration, security, data, auditability, release, or operational risks.
+
+- Risk level: `low | medium | high`, justified by blast radius and reversibility (not author identity).
+- Most consequential failure and the check that would catch it:
+- What the checks do not establish:
+
+Risk describes review depth only; it does not change required checks or owner-only integration.
+
+## Rollback
+
+- Revert/disable procedure and the condition that triggers it:
+- State, migration or compatibility constraints (or explicitly none):
+- Verification after rollback:
+
+## Learning
+
+- Confirmed failure class and regression proof, if applicable:
+- Relevant [Experience.md](../Experience.md) entry updated, or why no durable lesson is needed:
+
+Do not add an experience entry for routine success or unverified hypotheses.
