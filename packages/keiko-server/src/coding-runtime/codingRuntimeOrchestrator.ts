@@ -3130,21 +3130,48 @@ export class CodingRuntimeOrchestrator {
     cause: RunSettlementCause | undefined,
     verificationFailure?: VerificationFailureSettlement,
   ): void {
-    const terminalResult = this.deps.manager.result(live.runId);
-    const runtimeAgrees =
-      (cause !== undefined && isRefusalEscalation(cause)) || terminalResult?.status === outcome;
-    if (!stopped || !runtimeAgrees) {
+    if (!stopped || !this.runtimeAgrees(live.runId, outcome, cause)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     const target =
       verificationFailure ?? this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome, cause));
+    if (target?.state === "cancelled") {
+      this.settleCancelledTurn(live);
+      return;
+    }
     if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
     this.transition(live, target.state, target.failureCode, undefined, settledCause);
+  }
+
+  private runtimeAgrees(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+    cause: RunSettlementCause | undefined,
+  ): boolean {
+    if (cause !== undefined && isRefusalEscalation(cause)) return true;
+    return this.deps.manager.result(runId)?.status === outcome;
+  }
+
+  /**
+   * A turn a person ended settles the way an operator stop does, through `stopping`, because a live
+   * run reaches `cancelled` only from there; the runtime was already stopped for the settlement.
+   */
+  private settleCancelledTurn(live: CodingRuntimeSnapshot): void {
+    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, "cancelled")) {
+      const stopping = this.transition(live, "stopping");
+      if (!stopping.ok) {
+        this.transition(live, "recovery-required", "recovery-required");
+        return;
+      }
+    }
+    const current = this.current();
+    if (current?.runId !== live.runId) return;
+    this.transition(current, "cancelled");
   }
 
   /**
@@ -3350,13 +3377,10 @@ export class CodingRuntimeOrchestrator {
    */
   private deliveryTruthfulOutcome(
     live: CodingRuntimeSnapshot,
-    target: {
-      readonly state: "failed" | "succeeded";
-      readonly failureCode?: TaskSettlementFailureCode | undefined;
-    },
+    target: TaskOutcomeTarget,
   ):
     | {
-        readonly state: "failed" | "succeeded";
+        readonly state: "cancelled" | "failed" | "succeeded";
         readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
       }
     | undefined {
@@ -4719,16 +4743,21 @@ export const DELIVERY_CONTINUATION_INTENT =
 
 // A failed turn settles `runtime-failed` unless a cause named it: the escalation of its run's
 // refused edits (F5), or one of the run's bounds or its last failed model call (F9).
+// #3897 review: a turn a person ended (a refused or dismissed native question) settles as
+// cancelled, the outcome the runtime reported, never as a runtime failure. A cause of Keiko's own
+// (an escalation of refused edits) still settles the run as failed with that cause.
 function taskOutcomeState(
   outcome: CodingRuntimeTaskOutcome,
   cause: RunSettlementCause | undefined,
-): {
-  readonly state: "failed" | "succeeded";
+): TaskOutcomeTarget {
+  if (outcome === "succeeded") return { state: "succeeded" };
+  if (outcome === "cancelled" && cause === undefined) return { state: "cancelled" };
+  return { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
+}
+
+interface TaskOutcomeTarget {
+  readonly state: "cancelled" | "failed" | "succeeded";
   readonly failureCode?: TaskSettlementFailureCode | undefined;
-} {
-  return outcome === "succeeded"
-    ? { state: "succeeded" }
-    : { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
 }
 
 // #3873: a run awaiting an approval, or paused on a decision a governed tool waits for, is waiting

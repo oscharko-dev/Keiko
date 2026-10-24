@@ -1662,15 +1662,22 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the workspace). Run authority and revision checks stay with the callers. The producer's General
     and Explore agents deny `question`, so a child form arises only for an agent whose rules allow
     it; the lane is correct for it either way. Refusing a child's question interrupts the child
-    only, and its parent continues with the failed subagent call. Evidence:
-    `coding-runtime.native-question.routed` (action, outcome, relation, counts, a closed refusal).
+    only, and its parent continues with the failed subagent call. An owned form the lane cannot
+    show (more than 32 fields or options, a hidden or conditional field, or a field type no answer
+    can be given for) is dismissed through the session that asked, as a refusal would be: the
+    runtime would otherwise wait for an answer nobody can give, and the validation bound stays.
+    Valid sibling forms stay listed, and a form of another session is never dismissed. Evidence:
+    `coding-runtime.native-question.routed` (action, outcome, relation, counts, a closed refusal;
+    `dismiss` with `form-unrepresentable`).
   - *A refused primary question.* The producer ends that turn with `session.execution.interrupted`,
     removes the session from the active list and writes an assistant message with
     `error.type = aborted`, but no idle message. The live hint is observed only for an execution the
     turn was seen running (a late interruption of a replaced turn settles nothing); the turn settles
     `interrupted` once the tree is quiet and no later verdict was recorded, and the production turn
-    port reports it as `cancelled`, not `failed`. The run's own terminal state for a turn that did
-    not succeed is the orchestrator's, unchanged. The next turn is armed at once. Evidence:
+    port reports it as `cancelled`, not `failed`. The orchestrator settles that run `cancelled`
+    through `stopping`, the way an operator stop does, with no failure code; a cause of Keiko's own
+    (an escalation of refused edits) still settles it `failed` with that cause. The next turn is
+    armed at once. Evidence:
     `coding-runtime.native-turn.interrupted` (how long the settlement took after the interruption).
 - **Version-specific history fields are decoded strictly.** OpenCode 2.1.4's failed idle message
   carries `Session.StructuredError`; the history decoder validates its exact producer shape and

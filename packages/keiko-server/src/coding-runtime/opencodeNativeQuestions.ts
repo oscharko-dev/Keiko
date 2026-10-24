@@ -23,7 +23,8 @@ import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 // The human's side of the question lane. `list` is written when the pending forms the run owns
 // change, `answer` and `reject` once per attempt; a form the run does not own is refused and
-// counted, never routed. Counts and closed words only.
+// counted, never routed. `dismiss` is written once for an owned form the lane cannot show (#3897
+// review): it is cancelled through the session that asked. Counts and closed words only.
 const NATIVE_QUESTION_ROUTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -36,13 +37,13 @@ const NATIVE_QUESTION_ROUTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["answer", "list", "reject"],
+      values: ["answer", "dismiss", "list", "reject"],
     },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["answered", "listed", "refused", "rejected"],
+      values: ["answered", "dismissed", "listed", "refused", "rejected"],
     },
     sessionRelation: {
       type: "string",
@@ -54,7 +55,7 @@ const NATIVE_QUESTION_ROUTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["foreign-session", "form-missing", "run-closed"],
+      values: ["foreign-session", "form-missing", "form-unrepresentable", "run-closed"],
     },
     formCount: { type: "integer", dataClass: "count", required: true },
     childFormCount: { type: "integer", dataClass: "count", required: true },
@@ -84,7 +85,7 @@ interface FormRouting {
   readonly foreignFormIds: ReadonlySet<string>;
 }
 
-type QuestionRefusal = "foreign-session" | "form-missing" | "run-closed";
+type QuestionRefusal = "foreign-session" | "form-missing" | "form-unrepresentable" | "run-closed";
 type RoutedFormLookup = { readonly form: RoutedForm } | { readonly refusal: QuestionRefusal };
 
 export interface NativeQuestionPortDeps {
@@ -158,11 +159,62 @@ async function listQuestions(
   try {
     const routing = await routeForms(deps);
     noteListed(deps, routing);
-    return routing.routed.map(({ form }) => projectOpenCodeV2Form(form));
+    const requests: OpenCodeQuestionRequest[] = [];
+    for (const routed of routing.routed) {
+      const request = representedForm(deps, routing, routed);
+      if (request === undefined) await dismissForm(deps, routing, routed);
+      else requests.push(request);
+    }
+    return requests;
   } catch (error) {
     deps.onFailure(error);
     throw error;
   }
+}
+
+/**
+ * The form as the Workbench shows it, or undefined when the question lane cannot represent it (more
+ * than 32 options, say, or a field type it has no control for). The validation bound stays: the
+ * original runtime would otherwise wait for an answer nobody can give.
+ */
+function representedForm(
+  deps: NativeQuestionPortDeps,
+  routing: FormRouting,
+  routed: RoutedForm,
+): OpenCodeQuestionRequest | undefined {
+  try {
+    return projectOpenCodeV2Form(routed.form);
+  } catch {
+    // The closed reason is the evidence; the projection's own message names only a shape bound.
+    recordRouted(deps, {
+      action: "dismiss",
+      outcome: "refused",
+      sessionRelation: routed.relation,
+      refusal: "form-unrepresentable",
+      routing,
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Settles an owned form the lane cannot show through the session that asked, as a human refusal
+ * would: the asking session receives the runtime's own dismissal, so a child's parent continues and
+ * a primary turn ends as cancelled instead of waiting invisibly. Valid sibling forms stay listed.
+ */
+async function dismissForm(
+  deps: NativeQuestionPortDeps,
+  routing: FormRouting,
+  routed: RoutedForm,
+): Promise<void> {
+  await deps.client.cancelForm(routed.sessionId, routed.formId);
+  recordRouted(deps, {
+    action: "dismiss",
+    outcome: "dismissed",
+    sessionRelation: routed.relation,
+    refusal: "form-unrepresentable",
+    routing,
+  });
 }
 
 async function answerQuestion(
@@ -233,8 +285,8 @@ function answersMatchQuestions(
 }
 
 interface NativeQuestionRoutedFacts {
-  readonly action: "answer" | "list" | "reject";
-  readonly outcome: "answered" | "listed" | "refused" | "rejected";
+  readonly action: "answer" | "dismiss" | "list" | "reject";
+  readonly outcome: "answered" | "dismissed" | "listed" | "refused" | "rejected";
   readonly sessionRelation?: OpenCodeNativeSessionRelation | undefined;
   readonly refusal?: QuestionRefusal | undefined;
   readonly routing: FormRouting;
@@ -252,7 +304,12 @@ export function recordNativeQuestionRouted(
   activityLog?.write(
     activityLogEvent(
       NATIVE_QUESTION_ROUTED_OPERATION,
-      { correlationId: runId, ...(facts.outcome === "refused" ? { level: "warn" as const } : {}) },
+      {
+        correlationId: runId,
+        ...(facts.outcome === "refused" || facts.outcome === "dismissed"
+          ? { level: "warn" as const }
+          : {}),
+      },
       {
         action: facts.action,
         outcome: facts.outcome,

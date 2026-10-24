@@ -117,6 +117,16 @@ function fixture(forms: readonly Record_[], sessions: readonly Record_[]): Fixtu
   return { port: createNativeQuestionPort(deps), activityLog, replies, cancels, failures, state };
 }
 
+/** A form whose one field offers `count` options; the question lane shows at most 32. */
+function formWithOptions(id: string, sessionID: string, count: number): Record_ {
+  const base = form(id, sessionID);
+  const options = Array.from({ length: count }, (_, index) => ({
+    label: `Option ${String(index + 1)}`,
+    value: `option-${String(index + 1)}`,
+  }));
+  return { ...base, fields: [{ key: "pick", title: "Pick", type: "string", options }] };
+}
+
 const routedLines = (fixtureValue: Fixture): readonly Record<string, unknown>[] =>
   fixtureValue.activityLog.events
     .filter((event) => event.op === "coding-runtime.native-question.routed")
@@ -149,6 +159,58 @@ describe("a native run's questions across its session tree", () => {
       ["que_child", "ses_child"],
       ["que_grandchild", "ses_grandchild"],
     ]);
+  });
+
+  // #3897 review: the original runtime accepts a question with 33 options; the lane shows at most
+  // 32. An owned form the lane cannot show is dismissed through the session that asked, so the
+  // runtime settles it as a refusal instead of waiting for an answer nobody can give.
+  it("dismisses an owned form the lane cannot show and keeps its valid siblings", async () => {
+    const run = fixture(
+      [
+        formWithOptions("wide", PRIMARY, 33),
+        formWithOptions("fits", PRIMARY, 32),
+        { ...form("dated", "ses_child"), fields: [{ key: "when", title: "When", type: "date" }] },
+        form("child", "ses_child"),
+        formWithOptions("foreign", "ses_foreign", 33),
+      ],
+      sessions,
+    );
+
+    const questions = await run.port.list();
+
+    expect(questions.map(({ id }) => id)).toEqual(["que_fits", "que_child"]);
+    expect(questions[0]?.questions[0]?.options).toHaveLength(32);
+    expect(run.cancels).toEqual([
+      { sessionId: PRIMARY, formId: "frm_wide" },
+      { sessionId: "ses_child", formId: "frm_dated" },
+    ]);
+    expect(run.failures).toEqual([]);
+    const dismissals = routedLines(run).filter((line) => line.action === "dismiss");
+    expect(dismissals).toEqual([
+      expect.objectContaining({
+        outcome: "refused",
+        refusal: "form-unrepresentable",
+        sessionRelation: "primary",
+        level: "warn",
+      }),
+      expect.objectContaining({ outcome: "dismissed", sessionRelation: "primary" }),
+      expect.objectContaining({ outcome: "refused", sessionRelation: "child" }),
+      expect.objectContaining({ outcome: "dismissed", sessionRelation: "child" }),
+    ]);
+    const persisted = run.activityLog.events
+      .filter((event) => event.extra?.action === "dismiss")
+      .map((event) => formatActivityLogProofLine(event));
+    expect(persisted).toHaveLength(4);
+    for (const line of persisted) expect(line).not.toContain("Option");
+  });
+
+  it("surfaces a dismissal the runtime refuses instead of listing the form", async () => {
+    const run = fixture([formWithOptions("wide", PRIMARY, 33)], sessions);
+    run.state.onSent = (): void => {
+      throw new Error("cancel-refused");
+    };
+    await expect(run.port.list()).rejects.toThrow("cancel-refused");
+    expect(run.failures).toHaveLength(1);
   });
 
   it("reads the session list only when a form of a session not yet proven turns up", async () => {

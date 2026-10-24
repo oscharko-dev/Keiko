@@ -7380,6 +7380,21 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
 
+  // #3897 review: the runtime ends a turn when a person refuses its native question. The run was
+  // cancelled by that person, not broken: it settles cancelled through stopping, with no failure.
+  it("settles a turn a person ended as cancelled through stopping, never as a runtime failure", async () => {
+    const { f, records } = settledWith("cancelled", undefined);
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("cancelled");
+    });
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.failureCode).toBeUndefined();
+    const settled = records.filter((event) => event.op === "coding-runtime.run.settled");
+    expect(settled.map((event) => event.extra?.state)).toEqual(["cancelled"]);
+    expect(settledLine(records)).toMatchObject({ errorKind: "cancelled" });
+    expect(settledLine(records).extra).not.toHaveProperty("failureCode");
+  });
+
   it.each(["succeeded", "cancelled"] as const)(
     "never names a bound or model-call cause for a %s task outcome",
     async (outcome) => {

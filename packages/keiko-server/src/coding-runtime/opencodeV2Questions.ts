@@ -46,8 +46,22 @@ function options(
   });
 }
 
+// The field types an answer can be given for (`fieldAnswer`); any other type is not shown as a
+// question that could never be answered (#3897 review).
+const ANSWERABLE_FIELD_TYPES: ReadonlySet<unknown> = new Set([
+  "string",
+  "boolean",
+  "number",
+  "integer",
+  "multiselect",
+]);
+
 function question(form: Form, field: Field): OpenCodeQuestionRequest["questions"][number] {
-  if (field.hidden === true || field.when !== undefined || field.type === "external") {
+  if (
+    field.hidden === true ||
+    field.when !== undefined ||
+    !ANSWERABLE_FIELD_TYPES.has(field.type)
+  ) {
     throw new Error("opencode-v2-form-field-unsupported");
   }
   const title = typeof field.title === "string" ? field.title : String(form.title);

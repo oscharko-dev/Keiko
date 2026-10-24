@@ -8063,13 +8063,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["answer", "list", "reject"],
+        values: ["answer", "dismiss", "list", "reject"],
       },
       outcome: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["answered", "listed", "refused", "rejected"],
+        values: ["answered", "dismissed", "listed", "refused", "rejected"],
       },
       sessionRelation: {
         type: "string",
@@ -8081,7 +8081,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["foreign-session", "form-missing", "run-closed"],
+        values: ["foreign-session", "form-missing", "form-unrepresentable", "run-closed"],
       },
       formCount: {
         type: "integer",

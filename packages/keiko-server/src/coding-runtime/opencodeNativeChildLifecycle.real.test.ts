@@ -641,6 +641,15 @@ const ASK_ARGUMENTS = {
   ],
 };
 
+/** One question with `count` options: the original runtime accepts 33, the question lane shows 32. */
+function askWithOptions(count: number): Readonly<Record<string, unknown>> {
+  const options = Array.from({ length: count }, (_, index) => ({
+    label: `Option ${String(index + 1)}`,
+    description: "Synthetic",
+  }));
+  return { questions: [{ header: "Pick", question: "Which synthetic option?", options }] };
+}
+
 const asking = (context: ModelContext): ModelPlan =>
   context.lastRole === "tool"
     ? { kind: "text", text: "Continued after the question." }
@@ -946,6 +955,94 @@ describe("pinned native OpenCode session tree: questions", () => {
           const [question] = await pending(owners);
           expect(question?.sessionID).toBe(run.sessionId);
           await expect(owners.questions.answer(question?.id ?? "", [["Green"]])).resolves.toBe(
+            true,
+          );
+          await expect(turn.settled).resolves.toBe(true);
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    120_000,
+  );
+
+  // #3897 review: the original runtime accepts a question with 33 options and waits for an answer.
+  // The question lane shows at most 32; it dismisses the owned form through the asking session, so
+  // the primary's turn ends as a refusal would end it, and a child's parent goes on.
+  it.skipIf(skip)(
+    "dismisses an owned question the lane cannot show instead of leaving it waiting",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          const wide = askWithOptions(33);
+          run.gateway.script = (context): ModelPlan =>
+            context.lastRole === "tool"
+              ? { kind: "text", text: "Continued after the question." }
+              : { kind: "tool", name: "question", arguments: wide };
+          const turn = startTurn(run, owners, "PARENT_TASK ask one wide question");
+          await until(async () => ((await run.client.forms()).length === 1 ? true : undefined));
+          await expect(owners.questions.list()).resolves.toEqual([]);
+          await expect(turn.settled).resolves.toBe("interrupted");
+          expect(await run.client.forms()).toEqual([]);
+          expect(await activeIds(run)).toEqual([]);
+          const dismissed = owners.activityLog.events
+            .filter((event) => event.op === "coding-runtime.native-question.routed")
+            .map((event) => event.extra)
+            .filter((extra) => extra?.action === "dismiss");
+          expect(dismissed).toEqual([
+            expect.objectContaining({ outcome: "refused", refusal: "form-unrepresentable" }),
+            expect.objectContaining({ outcome: "dismissed", sessionRelation: "primary" }),
+          ]);
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "dismisses a child's question the lane cannot show and lets the parent continue",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          const launching = launchingParent(false, "asker");
+          run.gateway.script = (context): ModelPlan =>
+            context.role === "parent"
+              ? launching(context)
+              : { kind: "tool", name: "question", arguments: askWithOptions(33) };
+          const turn = startTurn(run, owners, "PARENT_TASK launch a foreground child that asks");
+          await until(async () => ((await run.client.forms()).length === 1 ? true : undefined));
+          await until(async () =>
+            (await owners.questions.list()).length === 0 ? true : undefined,
+          );
+          await expect(turn.settled).resolves.toBe(true);
+          expect(await run.client.forms()).toEqual([]);
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "shows and answers a question with exactly 32 options",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          const widest = askWithOptions(32);
+          run.gateway.script = (context): ModelPlan =>
+            context.lastRole === "tool"
+              ? { kind: "text", text: "Continued after the question." }
+              : { kind: "tool", name: "question", arguments: widest };
+          const turn = startTurn(run, owners, "PARENT_TASK ask the widest question");
+          const [question] = await pending(owners);
+          expect(question?.questions[0]?.options).toHaveLength(32);
+          await expect(owners.questions.answer(question?.id ?? "", [["Option 32"]])).resolves.toBe(
             true,
           );
           await expect(turn.settled).resolves.toBe(true);
