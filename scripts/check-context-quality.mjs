@@ -1255,7 +1255,7 @@ function reportFailures(onFail, vacuity, budgetResult) {
   }
 }
 
-function rehydrateScenarios(scenarios) {
+export function rehydrateScenarios(scenarios) {
   // Each fixed scenario owns its file systems, allocation and invalidation probe.
   return Promise.all(scenarios.map(rehydrateScenario));
 }

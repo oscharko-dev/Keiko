@@ -8,16 +8,19 @@
     "blockerCount": 2,
     "mediumIssueCount": 117,
     "correctedInCode": 161,
-    "documentedExceptions": 20,
+    "documentedExceptions": 193,
     "originalBlockerMediumCorrectedInCode": 99,
     "selectedLowFindings": 58,
     "remainingOutsideRequestedFixScope": 0,
-    "reviewedAwaitExceptionsPendingAnalyzerDisposition": 173
+    "reviewedAwaitExceptionsPendingAnalyzerDisposition": 0,
+    "liveUnresolvedOnOriginalDev": 161,
+    "ownerAcceptedDesigns": 61,
+    "evidencedFalsePositives": 132
   },
   "ownerDirection": "Preserve functionality and document evidenced exceptions (confirmed in this chat on 2026-10-24).",
   "limits": [
-    "This report does not change SonarCloud issue statuses. Corrected issues require a subsequent analysis of the integrated source.",
-    "All 177 await-in-loop findings have individual source reviews in the linked audit. Four immutable QA-fixture cases are corrected; 173 retain their exact original loops pending analyzer disposition.",
+    "The initial 354-issue inventory is retained. Individually evidenced dispositions now record 132 false positives and 61 owner-accepted designs; 161 code corrections still require integrated-source analysis.",
+    "All 177 await-in-loop findings have individual source reviews: four immutable QA-fixture cases corrected, 112 evidenced serial false positives and 61 owner-accepted designs. All 173 retained loops preserve exact original source.",
     "The fixture-owned Chromium cascade comparison covers 32 representative global and module CSS fixtures in dark/light, ordinary/high contrast and pointer/keyboard modality, including hover/disabled states and pseudo-elements. Finite transitions are completed before comparison. This is not a full-product functional proof."
   ],
   "corrections": {
@@ -31,7 +34,7 @@
   },
   "exceptions": [
     {
-      "key": "AaDwTGl-da_cdHSoS7Uk",
+      "issueId": "AaDwTGl-da_cdHSoS7Uk",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/agent-run-governance.ts",
       "analysedLine": 338,
@@ -41,10 +44,10 @@
         "packages/keiko-server/src/agent-run-governance.test.ts",
         "https://tc39.es/ecma262/multipage/control-abstraction-objects.html#sec-generator-function-definitions-runtime-semantics-evaluation"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGQKda_cdHSoS7T-",
+      "issueId": "AaDwTGQKda_cdHSoS7T-",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
       "analysedLine": 226,
@@ -54,10 +57,10 @@
         "packages/keiko-server/src/agent-run-governance.test.ts",
         "https://tc39.es/ecma262/multipage/control-abstraction-objects.html#sec-generator-function-definitions-runtime-semantics-evaluation"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92lTNud5JuSxb0cpD",
+      "issueId": "AaE92lTNud5JuSxb0cpD",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.module.css",
       "analysedLine": 85,
@@ -67,10 +70,10 @@
         "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.tsx",
         "packages/keiko-ui/src/app/globals.css"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92lIpud5JuSxb0cpB",
+      "issueId": "AaE92lIpud5JuSxb0cpB",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
       "analysedLine": 10,
@@ -80,10 +83,10 @@
         "node_modules/monaco-editor/esm/vs/editor/browser/viewParts/glyphMargin/glyphMargin.js",
         "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92lIpud5JuSxb0cpC",
+      "issueId": "AaE92lIpud5JuSxb0cpC",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
       "analysedLine": 44,
@@ -93,10 +96,10 @@
         "node_modules/monaco-editor/esm/vs/editor/browser/viewParts/glyphMargin/glyphMargin.js",
         "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpb",
+      "issueId": "AaE92l8Vud5JuSxb0cpb",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 8532,
@@ -106,10 +109,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpc",
+      "issueId": "AaE92l8Vud5JuSxb0cpc",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 8977,
@@ -119,10 +122,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpj",
+      "issueId": "AaE92l8Vud5JuSxb0cpj",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9368,
@@ -132,10 +135,10 @@
         "node_modules/monaco-editor/esm/vs/editor/contrib/hover/browser/contentHoverWidget.js",
         "tests/e2e/editor-fidelity-1295.spec.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpv",
+      "issueId": "AaE92l8Vud5JuSxb0cpv",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9402,
@@ -145,10 +148,10 @@
         "node_modules/monaco-editor/esm/vs/editor/contrib/hover/browser/contentHoverWidget.js",
         "tests/e2e/editor-fidelity-1295.spec.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp2",
+      "issueId": "AaE92l8Vud5JuSxb0cp2",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9460,
@@ -158,10 +161,10 @@
         "node_modules/monaco-editor/esm/vs/editor/contrib/hover/browser/contentHoverWidget.js",
         "tests/e2e/editor-fidelity-1295.spec.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpJ",
+      "issueId": "AaE92l8Uud5JuSxb0cpJ",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 624,
@@ -171,10 +174,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpK",
+      "issueId": "AaE92l8Uud5JuSxb0cpK",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 634,
@@ -184,10 +187,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpR",
+      "issueId": "AaE92l8Uud5JuSxb0cpR",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 2317,
@@ -197,10 +200,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqY",
+      "issueId": "AaE92rXJud5JuSxb0cqY",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 332,
@@ -210,10 +213,10 @@
         "design-system/keiko-tokens.css",
         "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqZ",
+      "issueId": "AaE92rXJud5JuSxb0cqZ",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 333,
@@ -223,10 +226,10 @@
         "design-system/keiko-tokens.css",
         "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqa",
+      "issueId": "AaE92rXJud5JuSxb0cqa",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 334,
@@ -236,10 +239,10 @@
         "design-system/keiko-tokens.css",
         "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqb",
+      "issueId": "AaE92rXJud5JuSxb0cqb",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 335,
@@ -249,10 +252,10 @@
         "design-system/keiko-tokens.css",
         "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpS",
+      "issueId": "AaE92l8Uud5JuSxb0cpS",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 2322,
@@ -262,10 +265,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpU",
+      "issueId": "AaE92l8Uud5JuSxb0cpU",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 5337,
@@ -275,10 +278,10 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqG",
+      "issueId": "AaE92l8Vud5JuSxb0cqG",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 14479,
@@ -288,12 +291,12 @@
         "packages/keiko-ui/src/app/globals.css",
         "packages/keiko-ui/src/app/globals.css.test.ts"
       ],
-      "sonarCloudStatus": "unchanged"
+      "sonarCloudStatus": "FALSE_POSITIVE"
     }
   ],
   "inventory": [
     {
-      "key": "AaDwTGm3da_cdHSoS7Um",
+      "issueId": "AaDwTGm3da_cdHSoS7Um",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/chat-prompt-compaction.ts",
       "analysedLine": 180,
@@ -303,10 +306,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHC-da_cdHSoS7VL",
+      "issueId": "AaDwTHC-da_cdHSoS7VL",
       "rule": "typescript:S9382",
       "file": "packages/keiko-model-gateway/src/gateway.ts",
       "analysedLine": 2126,
@@ -316,10 +320,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFz8da_cdHSoS7Tb",
+      "issueId": "AaDwTFz8da_cdHSoS7Tb",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
       "analysedLine": 365,
@@ -329,10 +334,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFyUda_cdHSoS7TY",
+      "issueId": "AaDwTFyUda_cdHSoS7TY",
       "rule": "typescript:S7503",
       "file": "packages/keiko-ui/src/lib/memory-session-api.ts",
       "analysedLine": 72,
@@ -349,7 +355,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHCrda_cdHSoS7VK",
+      "issueId": "AaDwTHCrda_cdHSoS7VK",
       "rule": "typescript:S9382",
       "file": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts",
       "analysedLine": 1563,
@@ -359,10 +365,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcxda_cdHSoS7V9",
+      "issueId": "AaDwTHcxda_cdHSoS7V9",
       "rule": "javascript:S9382",
       "file": "scripts/assemble-portable-release-assets.mjs",
       "analysedLine": 686,
@@ -372,10 +379,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHcxda_cdHSoS7V-",
+      "issueId": "AaDwTHcxda_cdHSoS7V-",
       "rule": "javascript:S9382",
       "file": "scripts/assemble-portable-release-assets.mjs",
       "analysedLine": 688,
@@ -385,10 +393,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaE92ldsud5JuSxb0cpH",
+      "issueId": "AaE92ldsud5JuSxb0cpH",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
       "analysedLine": 378,
@@ -401,7 +410,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGSPda_cdHSoS7UA",
+      "issueId": "AaDwTGSPda_cdHSoS7UA",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
       "analysedLine": 1406,
@@ -418,7 +427,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGYPda_cdHSoS7UH",
+      "issueId": "AaDwTGYPda_cdHSoS7UH",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts",
       "analysedLine": 427,
@@ -428,10 +437,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTG9Kda_cdHSoS7U-",
+      "issueId": "AaDwTG9Kda_cdHSoS7U-",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/git-stage-node.ts",
       "analysedLine": 53,
@@ -441,10 +451,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHOAda_cdHSoS7Vd",
+      "issueId": "AaDwTHOAda_cdHSoS7Vd",
       "rule": "typescript:S9382",
       "file": "packages/keiko-verification/src/orchestrator.ts",
       "analysedLine": 787,
@@ -454,10 +465,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHKjda_cdHSoS7Va",
+      "issueId": "AaDwTHKjda_cdHSoS7Va",
       "rule": "typescript:S9382",
       "file": "packages/keiko-security/src/portable-tree-attestation.ts",
       "analysedLine": 771,
@@ -467,10 +479,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHKjda_cdHSoS7Vb",
+      "issueId": "AaDwTHKjda_cdHSoS7Vb",
       "rule": "typescript:S9382",
       "file": "packages/keiko-security/src/portable-tree-attestation.ts",
       "analysedLine": 777,
@@ -480,10 +493,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGooda_cdHSoS7Uq",
+      "issueId": "AaDwTGooda_cdHSoS7Uq",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/update-portable-handoff-native-verification.ts",
       "analysedLine": 108,
@@ -493,10 +507,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGinda_cdHSoS7Uc",
+      "issueId": "AaDwTGinda_cdHSoS7Uc",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/update-portable-handoff-tree.ts",
       "analysedLine": 109,
@@ -506,10 +521,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGpgda_cdHSoS7Uv",
+      "issueId": "AaDwTGpgda_cdHSoS7Uv",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/update-preflight-portable-shared.ts",
       "analysedLine": 264,
@@ -519,10 +535,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGfbda_cdHSoS7UT",
+      "issueId": "AaDwTGfbda_cdHSoS7UT",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/gitChangeSnapshotBinary.ts",
       "analysedLine": 40,
@@ -532,10 +549,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGfbda_cdHSoS7UU",
+      "issueId": "AaDwTGfbda_cdHSoS7UU",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/gitChangeSnapshotBinary.ts",
       "analysedLine": 41,
@@ -545,10 +563,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGY3da_cdHSoS7UI",
+      "issueId": "AaDwTGY3da_cdHSoS7UI",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/gitDelivery/prDescriptionPreparation.ts",
       "analysedLine": 171,
@@ -565,7 +584,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTG9cda_cdHSoS7VB",
+      "issueId": "AaDwTG9cda_cdHSoS7VB",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/git-ci-failure-context.ts",
       "analysedLine": 136,
@@ -575,10 +594,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG72da_cdHSoS7U9",
+      "issueId": "AaDwTG72da_cdHSoS7U9",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/git-raw-worktree-node.ts",
       "analysedLine": 167,
@@ -588,10 +608,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG9Kda_cdHSoS7U_",
+      "issueId": "AaDwTG9Kda_cdHSoS7U_",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/git-stage-node.ts",
       "analysedLine": 76,
@@ -601,10 +622,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTG9Kda_cdHSoS7VA",
+      "issueId": "AaDwTG9Kda_cdHSoS7VA",
       "rule": "typescript:S7503",
       "file": "packages/keiko-tools/src/git-stage-node.ts",
       "analysedLine": 104,
@@ -621,7 +643,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHfida_cdHSoS7WV",
+      "issueId": "AaDwTHfida_cdHSoS7WV",
       "rule": "javascript:S9382",
       "file": "scripts/check-tool-catalog-conformance.mjs",
       "analysedLine": 1274,
@@ -631,10 +653,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHbsda_cdHSoS7Vv",
+      "issueId": "AaDwTHbsda_cdHSoS7Vv",
       "rule": "javascript:S9382",
       "file": "scripts/coding-runtime-performance-harness.mjs",
       "analysedLine": 264,
@@ -644,10 +667,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHdVda_cdHSoS7WC",
+      "issueId": "AaDwTHdVda_cdHSoS7WC",
       "rule": "javascript:S9382",
       "file": "scripts/coding-runtime-performance-producer.mjs",
       "analysedLine": 84,
@@ -657,10 +681,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHZKda_cdHSoS7Vp",
+      "issueId": "AaDwTHZKda_cdHSoS7Vp",
       "rule": "javascript:S9382",
       "file": "scripts/run-npm-audit-with-retry.mjs",
       "analysedLine": 110,
@@ -670,10 +695,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGZ6da_cdHSoS7UL",
+      "issueId": "AaDwTGZ6da_cdHSoS7UL",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/health.ts",
       "analysedLine": 292,
@@ -683,10 +709,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGZ6da_cdHSoS7UN",
+      "issueId": "AaDwTGZ6da_cdHSoS7UN",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/health.ts",
       "analysedLine": 469,
@@ -696,10 +723,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGZ6da_cdHSoS7UO",
+      "issueId": "AaDwTGZ6da_cdHSoS7UO",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/health.ts",
       "analysedLine": 476,
@@ -709,10 +737,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGZrda_cdHSoS7UJ",
+      "issueId": "AaDwTGZrda_cdHSoS7UJ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/reconciliation.ts",
       "analysedLine": 610,
@@ -722,10 +751,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGZrda_cdHSoS7UK",
+      "issueId": "AaDwTGZrda_cdHSoS7UK",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/reconciliation.ts",
       "analysedLine": 685,
@@ -735,10 +765,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGL_da_cdHSoS7T5",
+      "issueId": "AaDwTGL_da_cdHSoS7T5",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/codingContextProviders.ts",
       "analysedLine": 738,
@@ -748,10 +779,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGKUda_cdHSoS7T3",
+      "issueId": "AaDwTGKUda_cdHSoS7T3",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/workspaceSearchRoutes.ts",
       "analysedLine": 264,
@@ -761,10 +793,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGkUda_cdHSoS7Uf",
+      "issueId": "AaDwTGkUda_cdHSoS7Uf",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/grounded-document-evidence.ts",
       "analysedLine": 701,
@@ -781,7 +814,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGZ6da_cdHSoS7UM",
+      "issueId": "AaDwTGZ6da_cdHSoS7UM",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/health.ts",
       "analysedLine": 410,
@@ -791,10 +824,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTG2Bda_cdHSoS7U3",
+      "issueId": "AaDwTG2Bda_cdHSoS7U3",
       "rule": "typescript:S9382",
       "file": "packages/keiko-workspace/src/discovery.ts",
       "analysedLine": 551,
@@ -804,10 +838,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG_pda_cdHSoS7VH",
+      "issueId": "AaDwTG_pda_cdHSoS7VH",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/ui-process-stop.ts",
       "analysedLine": 165,
@@ -817,10 +852,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHAada_cdHSoS7VJ",
+      "issueId": "AaDwTHAada_cdHSoS7VJ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/runner.ts",
       "analysedLine": 205,
@@ -830,10 +866,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGaJda_cdHSoS7UQ",
+      "issueId": "AaDwTGaJda_cdHSoS7UQ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/cleanup.ts",
       "analysedLine": 726,
@@ -843,10 +880,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGZ6da_cdHSoS7UP",
+      "issueId": "AaDwTGZ6da_cdHSoS7UP",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/task-workspace/health.ts",
       "analysedLine": 494,
@@ -856,10 +894,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHaEda_cdHSoS7Vs",
+      "issueId": "AaDwTHaEda_cdHSoS7Vs",
       "rule": "javascript:S9382",
       "file": "scripts/dev-start.mjs",
       "analysedLine": 675,
@@ -869,10 +908,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHAKda_cdHSoS7VI",
+      "issueId": "AaDwTHAKda_cdHSoS7VI",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/update.ts",
       "analysedLine": 355,
@@ -882,10 +922,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGPyda_cdHSoS7T9",
+      "issueId": "AaDwTGPyda_cdHSoS7T9",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/coding-runtime/researchEgressPort.ts",
       "analysedLine": 387,
@@ -895,10 +936,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGj2da_cdHSoS7Ue",
+      "issueId": "AaDwTGj2da_cdHSoS7Ue",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/voice-recap.ts",
       "analysedLine": 344,
@@ -908,10 +950,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaFcmF6hKA4ddiRM6TZi",
+      "issueId": "AaFcmF6hKA4ddiRM6TZi",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/Keiko Icon System.html",
       "analysedLine": 382,
@@ -924,7 +967,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6hKA4ddiRM6TZj",
+      "issueId": "AaFcmF6hKA4ddiRM6TZj",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/Keiko Icon System.html",
       "analysedLine": 400,
@@ -937,7 +980,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHInda_cdHSoS7VY",
+      "issueId": "AaDwTHInda_cdHSoS7VY",
       "rule": "typescript:S9382",
       "file": "packages/keiko-connectors/src/atlassian-write-http.ts",
       "analysedLine": 211,
@@ -947,10 +990,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHbgda_cdHSoS7Vu",
+      "issueId": "AaDwTHbgda_cdHSoS7Vu",
       "rule": "javascript:S9382",
       "file": "scripts/check-error-observability.mjs",
       "analysedLine": 1634,
@@ -960,10 +1004,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGlFda_cdHSoS7Ui",
+      "issueId": "AaDwTGlFda_cdHSoS7Ui",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/memory-conflict-advisory.ts",
       "analysedLine": 491,
@@ -973,10 +1018,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTF_zda_cdHSoS7Th",
+      "issueId": "AaDwTF_zda_cdHSoS7Th",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
       "analysedLine": 363,
@@ -986,10 +1032,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTF_zda_cdHSoS7Ti",
+      "issueId": "AaDwTF_zda_cdHSoS7Ti",
       "rule": "typescript:S7503",
       "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
       "analysedLine": 574,
@@ -1006,7 +1053,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTF_zda_cdHSoS7Tj",
+      "issueId": "AaDwTF_zda_cdHSoS7Tj",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
       "analysedLine": 587,
@@ -1016,10 +1063,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHXLda_cdHSoS7Vi",
+      "issueId": "AaDwTHXLda_cdHSoS7Vi",
       "rule": "javascript:S9382",
       "file": "scripts/installable-package-smoke.mjs",
       "analysedLine": 617,
@@ -1029,10 +1077,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGJBda_cdHSoS7Ty",
+      "issueId": "AaDwTGJBda_cdHSoS7Ty",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
       "analysedLine": 1183,
@@ -1042,10 +1091,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG_Gda_cdHSoS7VE",
+      "issueId": "AaDwTG_Gda_cdHSoS7VE",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/memory.ts",
       "analysedLine": 389,
@@ -1055,10 +1105,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG_dda_cdHSoS7VF",
+      "issueId": "AaDwTG_dda_cdHSoS7VF",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/task-workspace.ts",
       "analysedLine": 220,
@@ -1068,10 +1119,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG_dda_cdHSoS7VG",
+      "issueId": "AaDwTG_dda_cdHSoS7VG",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/task-workspace.ts",
       "analysedLine": 224,
@@ -1081,10 +1133,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpf",
+      "issueId": "AaE92l8Vud5JuSxb0cpf",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9274,
@@ -1097,7 +1150,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGl-da_cdHSoS7Uk",
+      "issueId": "AaDwTGl-da_cdHSoS7Uk",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/agent-run-governance.ts",
       "analysedLine": 338,
@@ -1111,10 +1164,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGQKda_cdHSoS7T-",
+      "issueId": "AaDwTGQKda_cdHSoS7T-",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
       "analysedLine": 226,
@@ -1128,10 +1182,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFmeda_cdHSoS7TV",
+      "issueId": "AaDwTFmeda_cdHSoS7TV",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/app/components/desktop/hooks/documentContext.ts",
       "analysedLine": 236,
@@ -1141,10 +1196,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFqRda_cdHSoS7TW",
+      "issueId": "AaDwTFqRda_cdHSoS7TW",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/app/components/desktop/shellRecovery.ts",
       "analysedLine": 79,
@@ -1154,10 +1210,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHaSda_cdHSoS7Vt",
+      "issueId": "AaDwTHaSda_cdHSoS7Vt",
       "rule": "javascript:S9382",
       "file": "scripts/dev-stop.mjs",
       "analysedLine": 59,
@@ -1167,10 +1224,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpQ",
+      "issueId": "AaE92l8Uud5JuSxb0cpQ",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 1273,
@@ -1183,7 +1241,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTFxrda_cdHSoS7TX",
+      "issueId": "AaDwTFxrda_cdHSoS7TX",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/lib/useCodingWorkbenchEditorBridge.ts",
       "analysedLine": 152,
@@ -1193,10 +1251,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTF02da_cdHSoS7Tc",
+      "issueId": "AaDwTF02da_cdHSoS7Tc",
       "rule": "typescript:S7503",
       "file": "packages/keiko-ui/src/lib/clipboard.ts",
       "analysedLine": 29,
@@ -1213,7 +1272,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHFrda_cdHSoS7VV",
+      "issueId": "AaDwTHFrda_cdHSoS7VV",
       "rule": "typescript:S9382",
       "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
       "analysedLine": 398,
@@ -1223,10 +1282,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGDDda_cdHSoS7Tn",
+      "issueId": "AaDwTGDDda_cdHSoS7Tn",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.ts",
       "analysedLine": 2477,
@@ -1236,10 +1296,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHYRda_cdHSoS7Vl",
+      "issueId": "AaDwTHYRda_cdHSoS7Vl",
       "rule": "javascript:S9382",
       "file": "scripts/lib/knowledge-m2-closeout.mjs",
       "analysedLine": 638,
@@ -1249,10 +1310,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHYRda_cdHSoS7Vm",
+      "issueId": "AaDwTHYRda_cdHSoS7Vm",
       "rule": "javascript:S9382",
       "file": "scripts/lib/knowledge-m2-closeout.mjs",
       "analysedLine": 687,
@@ -1262,10 +1324,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHYRda_cdHSoS7Vn",
+      "issueId": "AaDwTHYRda_cdHSoS7Vn",
       "rule": "javascript:S9382",
       "file": "scripts/lib/knowledge-m2-closeout.mjs",
       "analysedLine": 752,
@@ -1275,10 +1338,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92lTNud5JuSxb0cpD",
+      "issueId": "AaE92lTNud5JuSxb0cpD",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.module.css",
       "analysedLine": 85,
@@ -1288,10 +1352,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGhOda_cdHSoS7UZ",
+      "issueId": "AaDwTGhOda_cdHSoS7UZ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/workspace-manifest-routes.ts",
       "analysedLine": 230,
@@ -1301,10 +1366,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHfSda_cdHSoS7WP",
+      "issueId": "AaDwTHfSda_cdHSoS7WP",
       "rule": "javascript:S9382",
       "file": "scripts/measure-editor-m11-closeout.mjs",
       "analysedLine": 72,
@@ -1314,10 +1380,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHfSda_cdHSoS7WQ",
+      "issueId": "AaDwTHfSda_cdHSoS7WQ",
       "rule": "javascript:S9382",
       "file": "scripts/measure-editor-m11-closeout.mjs",
       "analysedLine": 73,
@@ -1327,10 +1394,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHfSda_cdHSoS7WR",
+      "issueId": "AaDwTHfSda_cdHSoS7WR",
       "rule": "javascript:S9382",
       "file": "scripts/measure-editor-m11-closeout.mjs",
       "analysedLine": 106,
@@ -1340,10 +1408,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHfSda_cdHSoS7WS",
+      "issueId": "AaDwTHfSda_cdHSoS7WS",
       "rule": "javascript:S9382",
       "file": "scripts/measure-editor-m11-closeout.mjs",
       "analysedLine": 161,
@@ -1353,10 +1422,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHfSda_cdHSoS7WT",
+      "issueId": "AaDwTHfSda_cdHSoS7WT",
       "rule": "javascript:S9382",
       "file": "scripts/measure-editor-m11-closeout.mjs",
       "analysedLine": 162,
@@ -1366,10 +1436,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHfSda_cdHSoS7WU",
+      "issueId": "AaDwTHfSda_cdHSoS7WU",
       "rule": "javascript:S9382",
       "file": "scripts/measure-editor-m11-closeout.mjs",
       "analysedLine": 201,
@@ -1379,10 +1450,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG0Vda_cdHSoS7U0",
+      "issueId": "AaDwTG0Vda_cdHSoS7U0",
       "rule": "typescript:S9382",
       "file": "packages/keiko-workspace/src/workspaceIndex.ts",
       "analysedLine": 1482,
@@ -1392,10 +1464,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTG0Vda_cdHSoS7U1",
+      "issueId": "AaDwTG0Vda_cdHSoS7U1",
       "rule": "typescript:S9382",
       "file": "packages/keiko-workspace/src/workspaceIndex.ts",
       "analysedLine": 1497,
@@ -1405,10 +1478,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFy1da_cdHSoS7TZ",
+      "issueId": "AaDwTFy1da_cdHSoS7TZ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/lib/useCodingWorkbenchQuestions.ts",
       "analysedLine": 370,
@@ -1418,10 +1492,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHHGda_cdHSoS7VW",
+      "issueId": "AaDwTHHGda_cdHSoS7VW",
       "rule": "typescript:S9382",
       "file": "packages/keiko-evaluations/src/quality-helpers.ts",
       "analysedLine": 78,
@@ -1431,10 +1506,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGBEda_cdHSoS7Tm",
+      "issueId": "AaDwTGBEda_cdHSoS7Tm",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/indexing/repository-fingerprints.ts",
       "analysedLine": 463,
@@ -1444,10 +1520,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHYRda_cdHSoS7Vo",
+      "issueId": "AaDwTHYRda_cdHSoS7Vo",
       "rule": "javascript:S9382",
       "file": "scripts/lib/knowledge-m2-closeout.mjs",
       "analysedLine": 1366,
@@ -1457,10 +1534,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGsZda_cdHSoS7Uz",
+      "issueId": "AaDwTGsZda_cdHSoS7Uz",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/memory-salience.ts",
       "analysedLine": 674,
@@ -1470,10 +1548,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGo9da_cdHSoS7Ur",
+      "issueId": "AaDwTGo9da_cdHSoS7Ur",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
       "analysedLine": 317,
@@ -1483,10 +1562,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGo9da_cdHSoS7Us",
+      "issueId": "AaDwTGo9da_cdHSoS7Us",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
       "analysedLine": 330,
@@ -1496,10 +1576,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGo9da_cdHSoS7Ut",
+      "issueId": "AaDwTGo9da_cdHSoS7Ut",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
       "analysedLine": 347,
@@ -1509,10 +1590,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGo9da_cdHSoS7Uu",
+      "issueId": "AaDwTGo9da_cdHSoS7Uu",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
       "analysedLine": 360,
@@ -1522,10 +1604,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGPJda_cdHSoS7T8",
+      "issueId": "AaDwTGPJda_cdHSoS7T8",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "analysedLine": 891,
@@ -1535,10 +1618,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V0",
+      "issueId": "AaDwTHcjda_cdHSoS7V0",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 59,
@@ -1548,10 +1632,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V1",
+      "issueId": "AaDwTHcjda_cdHSoS7V1",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 60,
@@ -1561,10 +1646,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V2",
+      "issueId": "AaDwTHcjda_cdHSoS7V2",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 83,
@@ -1574,10 +1660,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V6",
+      "issueId": "AaDwTHcjda_cdHSoS7V6",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 184,
@@ -1587,10 +1674,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V7",
+      "issueId": "AaDwTHcjda_cdHSoS7V7",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 185,
@@ -1600,10 +1688,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V8",
+      "issueId": "AaDwTHcjda_cdHSoS7V8",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 218,
@@ -1613,10 +1702,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGItda_cdHSoS7Tw",
+      "issueId": "AaDwTGItda_cdHSoS7Tw",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapNodeCapsuleLauncher.ts",
       "analysedLine": 401,
@@ -1626,10 +1716,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGPJda_cdHSoS7T7",
+      "issueId": "AaDwTGPJda_cdHSoS7T7",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "analysedLine": 586,
@@ -1639,10 +1730,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGQzda_cdHSoS7T_",
+      "issueId": "AaDwTGQzda_cdHSoS7T_",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
       "analysedLine": 555,
@@ -1652,10 +1744,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHeada_cdHSoS7WJ",
+      "issueId": "AaDwTHeada_cdHSoS7WJ",
       "rule": "javascript:S9382",
       "file": "scripts/portable-secure-read-smoke.mjs",
       "analysedLine": 138,
@@ -1665,10 +1758,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHeada_cdHSoS7WK",
+      "issueId": "AaDwTHeada_cdHSoS7WK",
       "rule": "javascript:S9382",
       "file": "scripts/portable-secure-read-smoke.mjs",
       "analysedLine": 163,
@@ -1678,10 +1772,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHeada_cdHSoS7WL",
+      "issueId": "AaDwTHeada_cdHSoS7WL",
       "rule": "javascript:S9382",
       "file": "scripts/portable-secure-read-smoke.mjs",
       "analysedLine": 197,
@@ -1691,10 +1786,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHeada_cdHSoS7WM",
+      "issueId": "AaDwTHeada_cdHSoS7WM",
       "rule": "javascript:S9382",
       "file": "scripts/portable-secure-read-smoke.mjs",
       "analysedLine": 211,
@@ -1704,10 +1800,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHeada_cdHSoS7WN",
+      "issueId": "AaDwTHeada_cdHSoS7WN",
       "rule": "javascript:S9382",
       "file": "scripts/portable-secure-read-smoke.mjs",
       "analysedLine": 211,
@@ -1717,10 +1814,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHWzda_cdHSoS7Vh",
+      "issueId": "AaDwTHWzda_cdHSoS7Vh",
       "rule": "javascript:S9382",
       "file": "scripts/update-portable-runtime-approvals.mjs",
       "analysedLine": 138,
@@ -1730,10 +1828,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGJBda_cdHSoS7Tx",
+      "issueId": "AaDwTGJBda_cdHSoS7Tx",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
       "analysedLine": 526,
@@ -1743,10 +1842,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGJBda_cdHSoS7Tz",
+      "issueId": "AaDwTGJBda_cdHSoS7Tz",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
       "analysedLine": 1422,
@@ -1756,10 +1856,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGJBda_cdHSoS7T0",
+      "issueId": "AaDwTGJBda_cdHSoS7T0",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
       "analysedLine": 1425,
@@ -1769,10 +1870,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGJWda_cdHSoS7T1",
+      "issueId": "AaDwTGJWda_cdHSoS7T1",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapPrivateEndpoint.ts",
       "analysedLine": 213,
@@ -1782,10 +1884,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGHXda_cdHSoS7Ts",
+      "issueId": "AaDwTGHXda_cdHSoS7Ts",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapProcessManager.ts",
       "analysedLine": 766,
@@ -1795,10 +1898,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGIEda_cdHSoS7Tv",
+      "issueId": "AaDwTGIEda_cdHSoS7Tv",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/dapProtocolClient.ts",
       "analysedLine": 302,
@@ -1808,10 +1912,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGH4da_cdHSoS7Tt",
+      "issueId": "AaDwTGH4da_cdHSoS7Tt",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts",
       "analysedLine": 913,
@@ -1821,10 +1926,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGH4da_cdHSoS7Tu",
+      "issueId": "AaDwTGH4da_cdHSoS7Tu",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts",
       "analysedLine": 1045,
@@ -1834,10 +1940,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTFYAda_cdHSoS7TS",
+      "issueId": "AaDwTFYAda_cdHSoS7TS",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useDebugSession.ts",
       "analysedLine": 1062,
@@ -1847,10 +1954,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFYAda_cdHSoS7TT",
+      "issueId": "AaDwTFYAda_cdHSoS7TT",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useDebugSession.ts",
       "analysedLine": 1068,
@@ -1860,10 +1968,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaFqKbwW_dZV_EiBOVCP",
+      "issueId": "AaFqKbwW_dZV_EiBOVCP",
       "rule": "css:S9440",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/panels/DebuggingSettings.module.css",
       "analysedLine": 105,
@@ -1876,7 +1985,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHDqda_cdHSoS7VO",
+      "issueId": "AaDwTHDqda_cdHSoS7VO",
       "rule": "typescript:S9382",
       "file": "packages/keiko-model-gateway/src/http.ts",
       "analysedLine": 1808,
@@ -1886,10 +1995,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHDqda_cdHSoS7VQ",
+      "issueId": "AaDwTHDqda_cdHSoS7VQ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-model-gateway/src/http.ts",
       "analysedLine": 1847,
@@ -1899,10 +2009,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGJvda_cdHSoS7T2",
+      "issueId": "AaDwTGJvda_cdHSoS7T2",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
       "analysedLine": 794,
@@ -1912,10 +2023,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V3",
+      "issueId": "AaDwTHcjda_cdHSoS7V3",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 128,
@@ -1925,10 +2037,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V4",
+      "issueId": "AaDwTHcjda_cdHSoS7V4",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 131,
@@ -1938,10 +2051,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcjda_cdHSoS7V5",
+      "issueId": "AaDwTHcjda_cdHSoS7V5",
       "rule": "javascript:S9382",
       "file": "scripts/measure-managed-lsp-closeout.mjs",
       "analysedLine": 143,
@@ -1951,10 +2065,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHJAda_cdHSoS7VZ",
+      "issueId": "AaDwTHJAda_cdHSoS7VZ",
       "rule": "typescript:S9382",
       "file": "packages/keiko-connectors/src/atlassian-sync-lane.ts",
       "analysedLine": 252,
@@ -1964,10 +2079,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcxda_cdHSoS7V_",
+      "issueId": "AaDwTHcxda_cdHSoS7V_",
       "rule": "javascript:S9382",
       "file": "scripts/assemble-portable-release-assets.mjs",
       "analysedLine": 700,
@@ -1977,10 +2093,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGmmda_cdHSoS7Ul",
+      "issueId": "AaDwTGmmda_cdHSoS7Ul",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/gitRoutes.ts",
       "analysedLine": 1582,
@@ -1997,7 +2114,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92lIpud5JuSxb0cpB",
+      "issueId": "AaE92lIpud5JuSxb0cpB",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
       "analysedLine": 10,
@@ -2007,10 +2124,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92lIpud5JuSxb0cpC",
+      "issueId": "AaE92lIpud5JuSxb0cpC",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
       "analysedLine": 44,
@@ -2020,10 +2138,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG6Uda_cdHSoS7U5",
+      "issueId": "AaDwTG6Uda_cdHSoS7U5",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/editor-agent-client.ts",
       "analysedLine": 349,
@@ -2033,10 +2152,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHhJda_cdHSoS7Wf",
+      "issueId": "AaDwTHhJda_cdHSoS7Wf",
       "rule": "javascript:S9382",
       "file": "scripts/prepare-approved-sidecar-payloads.mjs",
       "analysedLine": 421,
@@ -2046,10 +2166,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGbOda_cdHSoS7UR",
+      "issueId": "AaDwTGbOda_cdHSoS7UR",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/coding-context/codeContextConnector.ts",
       "analysedLine": 280,
@@ -2059,10 +2180,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHZ0da_cdHSoS7Vq",
+      "issueId": "AaDwTHZ0da_cdHSoS7Vq",
       "rule": "javascript:S9382",
       "file": "scripts/portable-launch-setup-smoke.mjs",
       "analysedLine": 497,
@@ -2072,10 +2194,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTFgkda_cdHSoS7TU",
+      "issueId": "AaDwTFgkda_cdHSoS7TU",
       "rule": "typescript:S9382",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchPanel.tsx",
       "analysedLine": 454,
@@ -2085,10 +2208,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGlpda_cdHSoS7Uj",
+      "issueId": "AaDwTGlpda_cdHSoS7Uj",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/native-file-dialog/route.ts",
       "analysedLine": 233,
@@ -2098,10 +2222,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHFrda_cdHSoS7VT",
+      "issueId": "AaDwTHFrda_cdHSoS7VT",
       "rule": "typescript:S7503",
       "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
       "analysedLine": 213,
@@ -2118,7 +2243,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGEMda_cdHSoS7Tq",
+      "issueId": "AaDwTGEMda_cdHSoS7Tq",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/crawl/crawl-runner.ts",
       "analysedLine": 227,
@@ -2128,10 +2253,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHdJda_cdHSoS7WB",
+      "issueId": "AaDwTHdJda_cdHSoS7WB",
       "rule": "javascript:S9382",
       "file": "scripts/check-retrieval-quality.mjs",
       "analysedLine": 747,
@@ -2141,10 +2267,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGgOda_cdHSoS7UY",
+      "issueId": "AaDwTGgOda_cdHSoS7UY",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/voice-live-dictation.ts",
       "analysedLine": 625,
@@ -2161,7 +2288,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTG0_da_cdHSoS7U2",
+      "issueId": "AaDwTG0_da_cdHSoS7U2",
       "rule": "typescript:S9382",
       "file": "packages/keiko-workspace/src/repoSearch.ts",
       "analysedLine": 1858,
@@ -2171,10 +2298,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGnpda_cdHSoS7Un",
+      "issueId": "AaDwTGnpda_cdHSoS7Un",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/files.ts",
       "analysedLine": 787,
@@ -2184,10 +2312,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGnpda_cdHSoS7Uo",
+      "issueId": "AaDwTGnpda_cdHSoS7Uo",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/files.ts",
       "analysedLine": 1814,
@@ -2197,10 +2326,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92lWaud5JuSxb0cpE",
+      "issueId": "AaE92lWaud5JuSxb0cpE",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
       "analysedLine": 53,
@@ -2213,7 +2343,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92lWaud5JuSxb0cpF",
+      "issueId": "AaE92lWaud5JuSxb0cpF",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
       "analysedLine": 54,
@@ -2226,7 +2356,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92lWaud5JuSxb0cpG",
+      "issueId": "AaE92lWaud5JuSxb0cpG",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
       "analysedLine": 55,
@@ -2239,7 +2369,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGq9da_cdHSoS7Uy",
+      "issueId": "AaDwTGq9da_cdHSoS7Uy",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
       "analysedLine": 1212,
@@ -2256,7 +2386,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGDvda_cdHSoS7Tp",
+      "issueId": "AaDwTGDvda_cdHSoS7Tp",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/discovery/extract.ts",
       "analysedLine": 1293,
@@ -2266,10 +2396,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGAyda_cdHSoS7Tl",
+      "issueId": "AaDwTGAyda_cdHSoS7Tl",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/indexing/bounded-indexing.ts",
       "analysedLine": 392,
@@ -2279,10 +2410,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGAcda_cdHSoS7Tk",
+      "issueId": "AaDwTGAcda_cdHSoS7Tk",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts",
       "analysedLine": 772,
@@ -2292,10 +2424,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGjlda_cdHSoS7Ud",
+      "issueId": "AaDwTGjlda_cdHSoS7Ud",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/local-knowledge-remediation.ts",
       "analysedLine": 288,
@@ -2305,10 +2438,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTGDvda_cdHSoS7To",
+      "issueId": "AaDwTGDvda_cdHSoS7To",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/discovery/extract.ts",
       "analysedLine": 1009,
@@ -2318,10 +2452,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY5",
+      "issueId": "AaFcmF2sKA4ddiRM6TY5",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 57,
@@ -2334,7 +2469,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY6",
+      "issueId": "AaFcmF2sKA4ddiRM6TY6",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 79,
@@ -2347,7 +2482,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY7",
+      "issueId": "AaFcmF2sKA4ddiRM6TY7",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 119,
@@ -2360,7 +2495,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY8",
+      "issueId": "AaFcmF2sKA4ddiRM6TY8",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 140,
@@ -2373,7 +2508,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY9",
+      "issueId": "AaFcmF2sKA4ddiRM6TY9",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 173,
@@ -2386,7 +2521,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY-",
+      "issueId": "AaFcmF2sKA4ddiRM6TY-",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 238,
@@ -2399,7 +2534,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY_",
+      "issueId": "AaFcmF2sKA4ddiRM6TY_",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 271,
@@ -2412,7 +2547,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TZA",
+      "issueId": "AaFcmF2sKA4ddiRM6TZA",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 303,
@@ -2425,7 +2560,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKcMi_dZV_EiBOVCZ",
+      "issueId": "AaFqKcMi_dZV_EiBOVCZ",
       "rule": "css:S9440",
       "file": "design-system/components.css",
       "analysedLine": 65,
@@ -2438,7 +2573,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZW",
+      "issueId": "AaFcmF6RKA4ddiRM6TZW",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 71,
@@ -2451,7 +2586,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZX",
+      "issueId": "AaFcmF6RKA4ddiRM6TZX",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 98,
@@ -2464,7 +2599,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZY",
+      "issueId": "AaFcmF6RKA4ddiRM6TZY",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 119,
@@ -2477,7 +2612,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZZ",
+      "issueId": "AaFcmF6RKA4ddiRM6TZZ",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 152,
@@ -2490,7 +2625,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZa",
+      "issueId": "AaFcmF6RKA4ddiRM6TZa",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 267,
@@ -2503,7 +2638,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKcK-_dZV_EiBOVCV",
+      "issueId": "AaFqKcK-_dZV_EiBOVCV",
       "rule": "css:S9440",
       "file": "design-system/ds.css",
       "analysedLine": 357,
@@ -2516,7 +2651,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92rYkud5JuSxb0cqc",
+      "issueId": "AaE92rYkud5JuSxb0cqc",
       "rule": "css:S9423",
       "file": "design-system/ds.css",
       "analysedLine": 743,
@@ -2529,7 +2664,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZt",
+      "issueId": "AaFcmF64KA4ddiRM6TZt",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 164,
@@ -2542,7 +2677,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZu",
+      "issueId": "AaFcmF64KA4ddiRM6TZu",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 191,
@@ -2555,7 +2690,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZv",
+      "issueId": "AaFcmF64KA4ddiRM6TZv",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 235,
@@ -2568,7 +2703,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZw",
+      "issueId": "AaFcmF64KA4ddiRM6TZw",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 365,
@@ -2581,7 +2716,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZx",
+      "issueId": "AaFcmF64KA4ddiRM6TZx",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 388,
@@ -2594,7 +2729,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92rodud5JuSxb0cqe",
+      "issueId": "AaE92rodud5JuSxb0cqe",
       "rule": "css:S9423",
       "file": "design-system/git-window.html",
       "analysedLine": 46,
@@ -2607,7 +2742,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZB",
+      "issueId": "AaFcmF5CKA4ddiRM6TZB",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 90,
@@ -2620,7 +2755,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZC",
+      "issueId": "AaFcmF5CKA4ddiRM6TZC",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 115,
@@ -2633,7 +2768,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZD",
+      "issueId": "AaFcmF5CKA4ddiRM6TZD",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 137,
@@ -2646,7 +2781,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZE",
+      "issueId": "AaFcmF5CKA4ddiRM6TZE",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 162,
@@ -2659,7 +2794,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZF",
+      "issueId": "AaFcmF5CKA4ddiRM6TZF",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 184,
@@ -2672,7 +2807,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZG",
+      "issueId": "AaFcmF5CKA4ddiRM6TZG",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 205,
@@ -2685,7 +2820,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZH",
+      "issueId": "AaFcmF5CKA4ddiRM6TZH",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 226,
@@ -2698,7 +2833,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZI",
+      "issueId": "AaFcmF5CKA4ddiRM6TZI",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 248,
@@ -2711,7 +2846,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZJ",
+      "issueId": "AaFcmF5CKA4ddiRM6TZJ",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 271,
@@ -2724,7 +2859,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZK",
+      "issueId": "AaFcmF5CKA4ddiRM6TZK",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 294,
@@ -2737,7 +2872,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZL",
+      "issueId": "AaFcmF5CKA4ddiRM6TZL",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 318,
@@ -2750,7 +2885,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZM",
+      "issueId": "AaFcmF5CKA4ddiRM6TZM",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 341,
@@ -2763,7 +2898,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZN",
+      "issueId": "AaFcmF5CKA4ddiRM6TZN",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 366,
@@ -2776,7 +2911,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZO",
+      "issueId": "AaFcmF5CKA4ddiRM6TZO",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 391,
@@ -2789,7 +2924,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZP",
+      "issueId": "AaFcmF5CKA4ddiRM6TZP",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 415,
@@ -2802,7 +2937,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZQ",
+      "issueId": "AaFcmF5CKA4ddiRM6TZQ",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 442,
@@ -2815,7 +2950,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZR",
+      "issueId": "AaFcmF5CKA4ddiRM6TZR",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 462,
@@ -2828,7 +2963,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZS",
+      "issueId": "AaFcmF5CKA4ddiRM6TZS",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 483,
@@ -2841,7 +2976,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZk",
+      "issueId": "AaFcmF6pKA4ddiRM6TZk",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 63,
@@ -2854,7 +2989,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZl",
+      "issueId": "AaFcmF6pKA4ddiRM6TZl",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 76,
@@ -2867,7 +3002,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZm",
+      "issueId": "AaFcmF6pKA4ddiRM6TZm",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 89,
@@ -2880,7 +3015,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZn",
+      "issueId": "AaFcmF6pKA4ddiRM6TZn",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 163,
@@ -2893,7 +3028,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZo",
+      "issueId": "AaFcmF6pKA4ddiRM6TZo",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 182,
@@ -2906,7 +3041,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZp",
+      "issueId": "AaFcmF6pKA4ddiRM6TZp",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 228,
@@ -2919,7 +3054,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZq",
+      "issueId": "AaFcmF6pKA4ddiRM6TZq",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 283,
@@ -2932,7 +3067,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZr",
+      "issueId": "AaFcmF6pKA4ddiRM6TZr",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 301,
@@ -2945,7 +3080,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZs",
+      "issueId": "AaFcmF6pKA4ddiRM6TZs",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 354,
@@ -2958,7 +3093,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92rnIud5JuSxb0cqd",
+      "issueId": "AaE92rnIud5JuSxb0cqd",
       "rule": "css:S9423",
       "file": "design-system/keiko-data.css",
       "analysedLine": 142,
@@ -2971,7 +3106,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKcLi_dZV_EiBOVCW",
+      "issueId": "AaFqKcLi_dZV_EiBOVCW",
       "rule": "css:S9440",
       "file": "design-system/keiko-inputs.css",
       "analysedLine": 175,
@@ -2984,7 +3119,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKcMG_dZV_EiBOVCX",
+      "issueId": "AaFqKcMG_dZV_EiBOVCX",
       "rule": "css:S9440",
       "file": "design-system/motion.html",
       "analysedLine": 37,
@@ -2997,7 +3132,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKcMG_dZV_EiBOVCY",
+      "issueId": "AaFqKcMG_dZV_EiBOVCY",
       "rule": "css:S9440",
       "file": "design-system/motion.html",
       "analysedLine": 56,
@@ -3010,7 +3145,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6EKA4ddiRM6TZV",
+      "issueId": "AaFcmF6EKA4ddiRM6TZV",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/motion.html",
       "analysedLine": 258,
@@ -3023,7 +3158,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZb",
+      "issueId": "AaFcmF6XKA4ddiRM6TZb",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 60,
@@ -3036,7 +3171,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZc",
+      "issueId": "AaFcmF6XKA4ddiRM6TZc",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 112,
@@ -3049,7 +3184,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZd",
+      "issueId": "AaFcmF6XKA4ddiRM6TZd",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 131,
@@ -3062,7 +3197,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZe",
+      "issueId": "AaFcmF6XKA4ddiRM6TZe",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 169,
@@ -3075,7 +3210,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZf",
+      "issueId": "AaFcmF6XKA4ddiRM6TZf",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 184,
@@ -3088,7 +3223,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZg",
+      "issueId": "AaFcmF6XKA4ddiRM6TZg",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 204,
@@ -3101,7 +3236,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZh",
+      "issueId": "AaFcmF6XKA4ddiRM6TZh",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 221,
@@ -3114,7 +3249,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpb",
+      "issueId": "AaE92l8Vud5JuSxb0cpb",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 8532,
@@ -3124,10 +3259,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpc",
+      "issueId": "AaE92l8Vud5JuSxb0cpc",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 8977,
@@ -3137,10 +3273,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaFqKb1k_dZV_EiBOVCQ",
+      "issueId": "AaFqKb1k_dZV_EiBOVCQ",
       "rule": "css:S9440",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 3168,
@@ -3153,7 +3290,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKb1k_dZV_EiBOVCR",
+      "issueId": "AaFqKb1k_dZV_EiBOVCR",
       "rule": "css:S9440",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 3174,
@@ -3166,7 +3303,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGhvda_cdHSoS7Ua",
+      "issueId": "AaDwTGhvda_cdHSoS7Ua",
       "rule": "typescript:S7503",
       "file": "packages/keiko-server/src/voice-realtime.ts",
       "analysedLine": 916,
@@ -3183,7 +3320,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHDqda_cdHSoS7VR",
+      "issueId": "AaDwTHDqda_cdHSoS7VR",
       "rule": "typescript:S9382",
       "file": "packages/keiko-model-gateway/src/http.ts",
       "analysedLine": 1853,
@@ -3193,10 +3330,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGHBda_cdHSoS7Tr",
+      "issueId": "AaDwTGHBda_cdHSoS7Tr",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts",
       "analysedLine": 470,
@@ -3206,10 +3344,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpd",
+      "issueId": "AaE92l8Vud5JuSxb0cpd",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9272,
@@ -3222,7 +3361,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpe",
+      "issueId": "AaE92l8Vud5JuSxb0cpe",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9273,
@@ -3235,7 +3374,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpg",
+      "issueId": "AaE92l8Vud5JuSxb0cpg",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9279,
@@ -3248,7 +3387,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cph",
+      "issueId": "AaE92l8Vud5JuSxb0cph",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9282,
@@ -3261,7 +3400,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpi",
+      "issueId": "AaE92l8Vud5JuSxb0cpi",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9285,
@@ -3274,7 +3413,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpj",
+      "issueId": "AaE92l8Vud5JuSxb0cpj",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9368,
@@ -3284,10 +3423,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpk",
+      "issueId": "AaE92l8Vud5JuSxb0cpk",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9369,
@@ -3300,7 +3440,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpl",
+      "issueId": "AaE92l8Vud5JuSxb0cpl",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9374,
@@ -3313,7 +3453,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpm",
+      "issueId": "AaE92l8Vud5JuSxb0cpm",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9375,
@@ -3326,7 +3466,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpn",
+      "issueId": "AaE92l8Vud5JuSxb0cpn",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9376,
@@ -3339,7 +3479,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpo",
+      "issueId": "AaE92l8Vud5JuSxb0cpo",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9380,
@@ -3352,7 +3492,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpp",
+      "issueId": "AaE92l8Vud5JuSxb0cpp",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9381,
@@ -3365,7 +3505,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpq",
+      "issueId": "AaE92l8Vud5JuSxb0cpq",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9382,
@@ -3378,7 +3518,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpr",
+      "issueId": "AaE92l8Vud5JuSxb0cpr",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9383,
@@ -3391,7 +3531,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cps",
+      "issueId": "AaE92l8Vud5JuSxb0cps",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9389,
@@ -3404,7 +3544,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpt",
+      "issueId": "AaE92l8Vud5JuSxb0cpt",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9390,
@@ -3417,7 +3557,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpu",
+      "issueId": "AaE92l8Vud5JuSxb0cpu",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9395,
@@ -3430,7 +3570,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpv",
+      "issueId": "AaE92l8Vud5JuSxb0cpv",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9402,
@@ -3440,10 +3580,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpw",
+      "issueId": "AaE92l8Vud5JuSxb0cpw",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9412,
@@ -3456,7 +3597,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpx",
+      "issueId": "AaE92l8Vud5JuSxb0cpx",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9418,
@@ -3469,7 +3610,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpy",
+      "issueId": "AaE92l8Vud5JuSxb0cpy",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9428,
@@ -3482,7 +3623,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpz",
+      "issueId": "AaE92l8Vud5JuSxb0cpz",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9443,
@@ -3495,7 +3636,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp0",
+      "issueId": "AaE92l8Vud5JuSxb0cp0",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9446,
@@ -3508,7 +3649,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp1",
+      "issueId": "AaE92l8Vud5JuSxb0cp1",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9453,
@@ -3521,7 +3662,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp2",
+      "issueId": "AaE92l8Vud5JuSxb0cp2",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9460,
@@ -3531,10 +3672,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp3",
+      "issueId": "AaE92l8Vud5JuSxb0cp3",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9461,
@@ -3547,7 +3689,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp4",
+      "issueId": "AaE92l8Vud5JuSxb0cp4",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9462,
@@ -3560,7 +3702,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp5",
+      "issueId": "AaE92l8Vud5JuSxb0cp5",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9463,
@@ -3573,7 +3715,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp6",
+      "issueId": "AaE92l8Vud5JuSxb0cp6",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9464,
@@ -3586,7 +3728,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp7",
+      "issueId": "AaE92l8Vud5JuSxb0cp7",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9465,
@@ -3599,7 +3741,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp8",
+      "issueId": "AaE92l8Vud5JuSxb0cp8",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9473,
@@ -3612,7 +3754,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp9",
+      "issueId": "AaE92l8Vud5JuSxb0cp9",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9474,
@@ -3625,7 +3767,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp-",
+      "issueId": "AaE92l8Vud5JuSxb0cp-",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 9475,
@@ -3638,7 +3780,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqD",
+      "issueId": "AaE92l8Vud5JuSxb0cqD",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 13226,
@@ -3651,7 +3793,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqE",
+      "issueId": "AaE92l8Vud5JuSxb0cqE",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 13231,
@@ -3664,7 +3806,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqF",
+      "issueId": "AaE92l8Vud5JuSxb0cqF",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 13235,
@@ -3677,7 +3819,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHcDda_cdHSoS7Vw",
+      "issueId": "AaDwTHcDda_cdHSoS7Vw",
       "rule": "javascript:S9382",
       "file": "scripts/check-context-quality.mjs",
       "analysedLine": 802,
@@ -3690,7 +3832,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHcDda_cdHSoS7Vx",
+      "issueId": "AaDwTHcDda_cdHSoS7Vx",
       "rule": "javascript:S9382",
       "file": "scripts/check-context-quality.mjs",
       "analysedLine": 815,
@@ -3703,7 +3845,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHcDda_cdHSoS7Vy",
+      "issueId": "AaDwTHcDda_cdHSoS7Vy",
       "rule": "javascript:S9382",
       "file": "scripts/check-context-quality.mjs",
       "analysedLine": 1255,
@@ -3716,7 +3858,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHgfda_cdHSoS7WY",
+      "issueId": "AaDwTHgfda_cdHSoS7WY",
       "rule": "javascript:S9382",
       "file": "scripts/check-retrieval-latency.mjs",
       "analysedLine": 213,
@@ -3726,10 +3868,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHgfda_cdHSoS7WZ",
+      "issueId": "AaDwTHgfda_cdHSoS7WZ",
       "rule": "javascript:S9382",
       "file": "scripts/check-retrieval-latency.mjs",
       "analysedLine": 218,
@@ -3739,10 +3882,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHdJda_cdHSoS7WA",
+      "issueId": "AaDwTHdJda_cdHSoS7WA",
       "rule": "javascript:S9382",
       "file": "scripts/check-retrieval-quality.mjs",
       "analysedLine": 652,
@@ -3752,10 +3896,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHeQda_cdHSoS7WH",
+      "issueId": "AaDwTHeQda_cdHSoS7WH",
       "rule": "javascript:S9382",
       "file": "scripts/check-ui-static-js-compat.mjs",
       "analysedLine": 54,
@@ -3765,10 +3910,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHeQda_cdHSoS7WI",
+      "issueId": "AaDwTHeQda_cdHSoS7WI",
       "rule": "javascript:S9382",
       "file": "scripts/check-ui-static-js-compat.mjs",
       "analysedLine": 127,
@@ -3778,10 +3924,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHXxda_cdHSoS7Vk",
+      "issueId": "AaDwTHXxda_cdHSoS7Vk",
       "rule": "javascript:S9382",
       "file": "scripts/lib/context-quality-corpus.mjs",
       "analysedLine": 250,
@@ -3794,7 +3941,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHeCda_cdHSoS7WF",
+      "issueId": "AaDwTHeCda_cdHSoS7WF",
       "rule": "javascript:S9382",
       "file": "scripts/transpile-ui-static-js.mjs",
       "analysedLine": 47,
@@ -3804,10 +3951,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHeCda_cdHSoS7WG",
+      "issueId": "AaDwTHeCda_cdHSoS7WG",
       "rule": "javascript:S9382",
       "file": "scripts/transpile-ui-static-js.mjs",
       "analysedLine": 94,
@@ -3817,10 +3965,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHesda_cdHSoS7WO",
+      "issueId": "AaDwTHesda_cdHSoS7WO",
       "rule": "javascript:S9382",
       "file": "scripts/verify-release-required-checks.mjs",
       "analysedLine": 572,
@@ -3830,10 +3979,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaFcmF5jKA4ddiRM6TZU",
+      "issueId": "AaFcmF5jKA4ddiRM6TZU",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/dataviz.html",
       "analysedLine": 142,
@@ -3846,7 +3996,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTG-jda_cdHSoS7VC",
+      "issueId": "AaDwTG-jda_cdHSoS7VC",
       "rule": "typescript:S9382",
       "file": "packages/keiko-cli/src/ui.ts",
       "analysedLine": 366,
@@ -3856,10 +4006,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTF-8da_cdHSoS7Td",
+      "issueId": "AaDwTF-8da_cdHSoS7Td",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/parsers/large-document/progressive-pdf.ts",
       "analysedLine": 203,
@@ -3869,10 +4020,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTF_Kda_cdHSoS7Te",
+      "issueId": "AaDwTF_Kda_cdHSoS7Te",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/parsers/large-document/synthetic-source.ts",
       "analysedLine": 93,
@@ -3882,10 +4034,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGKtda_cdHSoS7T4",
+      "issueId": "AaDwTGKtda_cdHSoS7T4",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/assuredPreFilter.ts",
       "analysedLine": 147,
@@ -3895,10 +4048,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGL_da_cdHSoS7T6",
+      "issueId": "AaDwTGL_da_cdHSoS7T6",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/editor/codingContextProviders.ts",
       "analysedLine": 772,
@@ -3908,10 +4062,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGkUda_cdHSoS7Ug",
+      "issueId": "AaDwTGkUda_cdHSoS7Ug",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/grounded-document-evidence.ts",
       "analysedLine": 858,
@@ -3921,10 +4076,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGiLda_cdHSoS7Ub",
+      "issueId": "AaDwTGiLda_cdHSoS7Ub",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/load-csp.ts",
       "analysedLine": 34,
@@ -3934,10 +4090,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpJ",
+      "issueId": "AaE92l8Uud5JuSxb0cpJ",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 624,
@@ -3947,10 +4104,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpK",
+      "issueId": "AaE92l8Uud5JuSxb0cpK",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 634,
@@ -3960,10 +4118,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpL",
+      "issueId": "AaE92l8Uud5JuSxb0cpL",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 722,
@@ -3976,7 +4135,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpM",
+      "issueId": "AaE92l8Uud5JuSxb0cpM",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 805,
@@ -3989,7 +4148,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpN",
+      "issueId": "AaE92l8Uud5JuSxb0cpN",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 806,
@@ -4002,7 +4161,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpO",
+      "issueId": "AaE92l8Uud5JuSxb0cpO",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 810,
@@ -4015,7 +4174,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpP",
+      "issueId": "AaE92l8Uud5JuSxb0cpP",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 811,
@@ -4028,7 +4187,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpW",
+      "issueId": "AaE92l8Uud5JuSxb0cpW",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 7248,
@@ -4041,7 +4200,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpX",
+      "issueId": "AaE92l8Uud5JuSxb0cpX",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 7249,
@@ -4054,7 +4213,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpY",
+      "issueId": "AaE92l8Vud5JuSxb0cpY",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 7250,
@@ -4067,7 +4226,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpZ",
+      "issueId": "AaE92l8Vud5JuSxb0cpZ",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 8102,
@@ -4080,7 +4239,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cpa",
+      "issueId": "AaE92l8Vud5JuSxb0cpa",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 8103,
@@ -4093,7 +4252,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cp_",
+      "issueId": "AaE92l8Vud5JuSxb0cp_",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 10272,
@@ -4106,7 +4265,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqA",
+      "issueId": "AaE92l8Vud5JuSxb0cqA",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 11040,
@@ -4119,7 +4278,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqB",
+      "issueId": "AaE92l8Vud5JuSxb0cqB",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 11041,
@@ -4132,7 +4291,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqC",
+      "issueId": "AaE92l8Vud5JuSxb0cqC",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 12226,
@@ -4145,7 +4304,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqH",
+      "issueId": "AaE92l8Vud5JuSxb0cqH",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 15448,
@@ -4158,7 +4317,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqI",
+      "issueId": "AaE92l8Vud5JuSxb0cqI",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 15449,
@@ -4171,7 +4330,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqJ",
+      "issueId": "AaE92l8Vud5JuSxb0cqJ",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 15450,
@@ -4184,7 +4343,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqK",
+      "issueId": "AaE92l8Vud5JuSxb0cqK",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 15973,
@@ -4197,7 +4356,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqL",
+      "issueId": "AaE92l8Vud5JuSxb0cqL",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 15974,
@@ -4210,7 +4369,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqM",
+      "issueId": "AaE92l8Vud5JuSxb0cqM",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 17446,
@@ -4223,7 +4382,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqN",
+      "issueId": "AaE92l8Vud5JuSxb0cqN",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 17447,
@@ -4236,7 +4395,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqO",
+      "issueId": "AaE92l8Vud5JuSxb0cqO",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 17448,
@@ -4249,7 +4408,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqP",
+      "issueId": "AaE92l8Vud5JuSxb0cqP",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 18427,
@@ -4262,7 +4421,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqQ",
+      "issueId": "AaE92l8Vud5JuSxb0cqQ",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 18428,
@@ -4275,7 +4434,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqR",
+      "issueId": "AaE92l8Vud5JuSxb0cqR",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 19919,
@@ -4288,7 +4447,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqS",
+      "issueId": "AaE92l8Vud5JuSxb0cqS",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 19920,
@@ -4301,7 +4460,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqT",
+      "issueId": "AaE92l8Vud5JuSxb0cqT",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 21807,
@@ -4314,7 +4473,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqU",
+      "issueId": "AaE92l8Vud5JuSxb0cqU",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 21808,
@@ -4327,7 +4486,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqV",
+      "issueId": "AaE92l8Vud5JuSxb0cqV",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 21809,
@@ -4340,7 +4499,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqW",
+      "issueId": "AaE92l8Vud5JuSxb0cqW",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 22348,
@@ -4353,7 +4512,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqX",
+      "issueId": "AaE92l8Vud5JuSxb0cqX",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 22349,
@@ -4366,7 +4525,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpR",
+      "issueId": "AaE92l8Uud5JuSxb0cpR",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 2317,
@@ -4376,10 +4535,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqY",
+      "issueId": "AaE92rXJud5JuSxb0cqY",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 332,
@@ -4389,10 +4549,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqZ",
+      "issueId": "AaE92rXJud5JuSxb0cqZ",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 333,
@@ -4402,10 +4563,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqa",
+      "issueId": "AaE92rXJud5JuSxb0cqa",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 334,
@@ -4415,10 +4577,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92rXJud5JuSxb0cqb",
+      "issueId": "AaE92rXJud5JuSxb0cqb",
       "rule": "css:S9423",
       "file": "design-system/keiko-tokens.css",
       "analysedLine": 335,
@@ -4428,10 +4591,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaFcmF5PKA4ddiRM6TZT",
+      "issueId": "AaFcmF5PKA4ddiRM6TZT",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/patterns.html",
       "analysedLine": 262,
@@ -4444,7 +4608,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpS",
+      "issueId": "AaE92l8Uud5JuSxb0cpS",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 2322,
@@ -4454,10 +4618,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpU",
+      "issueId": "AaE92l8Uud5JuSxb0cpU",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 5337,
@@ -4467,10 +4632,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaFqKb1k_dZV_EiBOVCS",
+      "issueId": "AaFqKb1k_dZV_EiBOVCS",
       "rule": "css:S9440",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 10137,
@@ -4483,7 +4649,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTGU5da_cdHSoS7UD",
+      "issueId": "AaDwTGU5da_cdHSoS7UD",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
       "analysedLine": 220,
@@ -4493,10 +4659,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGU5da_cdHSoS7UE",
+      "issueId": "AaDwTGU5da_cdHSoS7UE",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
       "analysedLine": 240,
@@ -4506,10 +4673,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaE92l8Vud5JuSxb0cqG",
+      "issueId": "AaE92l8Vud5JuSxb0cqG",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 14479,
@@ -4519,10 +4687,11 @@
           "severity": "MEDIUM"
         }
       ],
-      "resolution": "documented-exception"
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGWfda_cdHSoS7UG",
+      "issueId": "AaDwTGWfda_cdHSoS7UG",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/qualityIntelligence/runIngestion.ts",
       "analysedLine": 2292,
@@ -4532,10 +4701,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG4dda_cdHSoS7U4",
+      "issueId": "AaDwTG4dda_cdHSoS7U4",
       "rule": "typescript:S9382",
       "file": "packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts",
       "analysedLine": 912,
@@ -4545,10 +4715,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHg2da_cdHSoS7We",
+      "issueId": "AaDwTHg2da_cdHSoS7We",
       "rule": "javascript:S9382",
       "file": "scripts/build-ui.mjs",
       "analysedLine": 84,
@@ -4558,10 +4729,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHWYda_cdHSoS7Ve",
+      "issueId": "AaDwTHWYda_cdHSoS7Ve",
       "rule": "javascript:S9382",
       "file": "scripts/dev-runner.mjs",
       "analysedLine": 645,
@@ -4571,10 +4743,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGVFda_cdHSoS7UF",
+      "issueId": "AaDwTGVFda_cdHSoS7UF",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaRenderPort.ts",
       "analysedLine": 71,
@@ -4584,10 +4757,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTH5ida_cdHSoS7Wg",
+      "issueId": "AaDwTH5ida_cdHSoS7Wg",
       "rule": "javascript:S9382",
       "file": "sandbox/scripts/stop.mjs",
       "analysedLine": 43,
@@ -4597,10 +4771,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHaEda_cdHSoS7Vr",
+      "issueId": "AaDwTHaEda_cdHSoS7Vr",
       "rule": "javascript:S9382",
       "file": "scripts/dev-start.mjs",
       "analysedLine": 484,
@@ -4610,10 +4785,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTGUoda_cdHSoS7UC",
+      "issueId": "AaDwTGUoda_cdHSoS7UC",
       "rule": "typescript:S9382",
       "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaRetry.ts",
       "analysedLine": 88,
@@ -4623,10 +4799,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpV",
+      "issueId": "AaE92l8Uud5JuSxb0cpV",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 5612,
@@ -4639,7 +4816,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHgsda_cdHSoS7Wa",
+      "issueId": "AaDwTHgsda_cdHSoS7Wa",
       "rule": "javascript:S9382",
       "file": "scripts/check-import-policy.mjs",
       "analysedLine": 434,
@@ -4649,10 +4826,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHgsda_cdHSoS7Wb",
+      "issueId": "AaDwTHgsda_cdHSoS7Wb",
       "rule": "javascript:S9382",
       "file": "scripts/check-import-policy.mjs",
       "analysedLine": 452,
@@ -4662,10 +4840,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHgsda_cdHSoS7Wc",
+      "issueId": "AaDwTHgsda_cdHSoS7Wc",
       "rule": "javascript:S9382",
       "file": "scripts/check-import-policy.mjs",
       "analysedLine": 615,
@@ -4675,10 +4854,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHXLda_cdHSoS7Vj",
+      "issueId": "AaDwTHXLda_cdHSoS7Vj",
       "rule": "javascript:S9382",
       "file": "scripts/installable-package-smoke.mjs",
       "analysedLine": 2619,
@@ -4688,10 +4868,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHcQda_cdHSoS7Vz",
+      "issueId": "AaDwTHcQda_cdHSoS7Vz",
       "rule": "javascript:S9382",
       "file": "scripts/check-package-graph.mjs",
       "analysedLine": 414,
@@ -4701,10 +4882,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHf7da_cdHSoS7WW",
+      "issueId": "AaDwTHf7da_cdHSoS7WW",
       "rule": "javascript:S9382",
       "file": "scripts/clean.mjs",
       "analysedLine": 64,
@@ -4714,10 +4896,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHd4da_cdHSoS7WD",
+      "issueId": "AaDwTHd4da_cdHSoS7WD",
       "rule": "javascript:S9382",
       "file": "scripts/workspace-graph.mjs",
       "analysedLine": 88,
@@ -4727,10 +4910,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHd4da_cdHSoS7WE",
+      "issueId": "AaDwTHd4da_cdHSoS7WE",
       "rule": "javascript:S9382",
       "file": "scripts/workspace-graph.mjs",
       "analysedLine": 95,
@@ -4740,10 +4924,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHgMda_cdHSoS7WX",
+      "issueId": "AaDwTHgMda_cdHSoS7WX",
       "rule": "javascript:S9382",
       "file": "scripts/installable-memory-smoke.mjs",
       "analysedLine": 204,
@@ -4753,10 +4938,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHFrda_cdHSoS7VU",
+      "issueId": "AaDwTHFrda_cdHSoS7VU",
       "rule": "typescript:S9382",
       "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
       "analysedLine": 287,
@@ -4766,10 +4952,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHFrda_cdHSoS7VS",
+      "issueId": "AaDwTHFrda_cdHSoS7VS",
       "rule": "typescript:S9382",
       "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
       "analysedLine": 139,
@@ -4779,10 +4966,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTF_zda_cdHSoS7Tf",
+      "issueId": "AaDwTF_zda_cdHSoS7Tf",
       "rule": "typescript:S9382",
       "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
       "analysedLine": 204,
@@ -4792,10 +4980,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTF_zda_cdHSoS7Tg",
+      "issueId": "AaDwTF_zda_cdHSoS7Tg",
       "rule": "typescript:S7503",
       "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
       "analysedLine": 221,
@@ -4812,7 +5001,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaE92l8Uud5JuSxb0cpT",
+      "issueId": "AaE92l8Uud5JuSxb0cpT",
       "rule": "css:S9423",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 2677,
@@ -4825,7 +5014,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKb1k_dZV_EiBOVCT",
+      "issueId": "AaFqKb1k_dZV_EiBOVCT",
       "rule": "css:S9424",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 5545,
@@ -4838,7 +5027,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaFqKb1k_dZV_EiBOVCU",
+      "issueId": "AaFqKb1k_dZV_EiBOVCU",
       "rule": "css:S9424",
       "file": "packages/keiko-ui/src/app/globals.css",
       "analysedLine": 5549,
@@ -4851,7 +5040,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHLdda_cdHSoS7Vc",
+      "issueId": "AaDwTHLdda_cdHSoS7Vc",
       "rule": "typescript:S9382",
       "file": "packages/keiko-harness/src/loop.ts",
       "analysedLine": 281,
@@ -4861,10 +5050,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG7gda_cdHSoS7U6",
+      "issueId": "AaDwTG7gda_cdHSoS7U6",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/browser/session.ts",
       "analysedLine": 427,
@@ -4874,10 +5064,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG7gda_cdHSoS7U7",
+      "issueId": "AaDwTG7gda_cdHSoS7U7",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/browser/session.ts",
       "analysedLine": 870,
@@ -4887,10 +5078,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTG7gda_cdHSoS7U8",
+      "issueId": "AaDwTG7gda_cdHSoS7U8",
       "rule": "typescript:S9382",
       "file": "packages/keiko-tools/src/browser/session.ts",
       "analysedLine": 1029,
@@ -4900,10 +5092,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     },
     {
-      "key": "AaDwTHDqda_cdHSoS7VP",
+      "issueId": "AaDwTHDqda_cdHSoS7VP",
       "rule": "typescript:S9382",
       "file": "packages/keiko-model-gateway/src/http.ts",
       "analysedLine": 1814,
@@ -4913,10 +5106,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaE92ltnud5JuSxb0cpI",
+      "issueId": "AaE92ltnud5JuSxb0cpI",
       "rule": "typescript:S1077",
       "file": "packages/keiko-ui/src/app/components/desktop/windows/ConnectionsLayer.tsx",
       "analysedLine": 539,
@@ -4929,7 +5123,7 @@
       "resolution": "corrected-in-code"
     },
     {
-      "key": "AaDwTHHVda_cdHSoS7VX",
+      "issueId": "AaDwTHHVda_cdHSoS7VX",
       "rule": "typescript:S9382",
       "file": "packages/keiko-evaluations/src/runner.ts",
       "analysedLine": 372,
@@ -4939,10 +5133,11 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
     },
     {
-      "key": "AaDwTHg2da_cdHSoS7Wd",
+      "issueId": "AaDwTHg2da_cdHSoS7Wd",
       "rule": "javascript:S9382",
       "file": "scripts/build-ui.mjs",
       "analysedLine": 59,
@@ -4952,7 +5147,8 @@
           "severity": "LOW"
         }
       ],
-      "resolution": "reviewed-preserve-sequencing"
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
     }
   ],
   "verification": {
@@ -4963,7 +5159,7 @@
       "computedValueComparisons": 34944,
       "differences": 0
     },
-    "requiredGates": "Final scoped local validation passed: root/UI typechecking, full root/UI lint plus final touched-file lint, formatting, architecture and negative checks, UI coverage, Editor smoke, bundle evidence and local Sonar. The historical full root run and the successful 62-test governed-runtime recheck are recorded separately under unitSuite. These are local verification outcomes; no CI or integration result is claimed.",
+    "requiredGates": "The previous scoped validation applies to a34e60bda and is recorded below. The follow-up CI repairs and dependency updates are undergoing fresh local validation; no final green claim is made for the current uncommitted wave.",
     "localSonar": {
       "status": "passed",
       "findingCount": 0,
@@ -5076,12 +5272,16 @@
       "pageErrors": 0,
       "missingRequiredSelectors": 0
     },
-    "cloudAnalysis": "Not published or changed by this task. A final public-API check still reports the latest Cloud analysis at c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add (2026-10-23T18:49:11+0000). Source corrections require a subsequent Cloud analysis; documented exceptions have not been silently dismissed.",
+    "cloudAnalysis": "PR #4069 at a34e60bda reports zero unresolved code issues. Its quality gate fails new-code coverage (77.3% versus 80%); this is being reproduced and repaired. Main still analyses c8fb7e2d: 161 unresolved after 193 individually documented dispositions. No source repair was manually marked resolved.",
     "format": "passed",
     "designSystemGitPrototype": {
       "artifact": "docs/design-system/evidence/sonarcloud-2026-10-24/git-prototype-proof.json",
       "producer": "node docs/design-system/evidence/sonarcloud-2026-10-24/git-prototype-preservation.mjs",
-      "states": ["changes", "history", "empty"],
+      "states": [
+        "changes",
+        "history",
+        "empty"
+      ],
       "stateNodeCount": 9,
       "computedValueComparisons": 360,
       "differences": 0,
@@ -5113,24 +5313,94 @@
       "localSonar": "passed with zero unresolved changed-file findings; S9382 supplemented with targeted ESLint verification",
       "format": "passed",
       "contextQualityCli": "passed"
+    },
+    "cloudDispositions": {
+      "falsePositives": 132,
+      "ownerAcceptedDesigns": 61,
+      "receipts": [
+        "docs/qa/sonarcloud-approved-exceptions-cloud-2026-10-24.json",
+        "docs/qa/sonarcloud-sequential-exceptions-cloud-2026-10-24.json",
+        "docs/qa/sonarcloud-accepted-designs-cloud-2026-10-24.json"
+      ],
+      "globalRulesOrGatesChanged": false
+    },
+    "ciFollowUp": {
+      "state": "Local revalidation in progress; required semantic-duplication gate remains red after the necessary security update.",
+      "typecheck": "passed on governed Node 24.18.0/npm 11.16.0",
+      "nativeMacos": "passed complete npm run check:native:macos; original startup bound unchanged",
+      "nativeServiceHost": {
+        "passedTests": 70,
+        "failedTests": 0,
+        "additionalCompatibilityCases": [
+          "Patched Zod rejects oversized arrays before per-item preprocessing.",
+          "Actual GitLab SDK validates string-valued header records and rejects invalid numeric values."
+        ]
+      },
+      "osv": {
+        "image": "ghcr.io/google/osv-scanner-action@sha256:d54770fe0b09493894e76a02aaed9f51a0513fa57c5186452a755d257b0068a6",
+        "beforeUnwaivedFindings": 17,
+        "afterUnwaivedFindings": 0,
+        "waiversAdded": 0
+      },
+      "gitleaks": {
+        "version": "8.30.1",
+        "firstCommitFalsePositives": 602,
+        "historyRangeAfterPreciseNonsecretAllowance": 0,
+        "currentJsonFiles": 9,
+        "currentJsonFindings": 0,
+        "syntheticNegativeControlFindings": 1,
+        "syntheticNegativeControlExit": 1
+      },
+      "fixtureParser": {
+        "actualOriginalProducerCasesFailed": 3,
+        "actualCurrentProducerCasesPassed": 3,
+        "regressionTests": 5,
+        "gitComputedComparisons": 360,
+        "gitStylesheetInputs": 10,
+        "svgPixelComparisons": 40,
+        "svgTargets": 57,
+        "svgStylesheetInputs": 11,
+        "comparisonDifferences": 0
+      },
+      "targetedTests": {
+        "files": 4,
+        "passed": 108,
+        "failed": 0
+      },
+      "localSonar": "passed with zero unresolved changed-file findings",
+      "fallowAudit": "docs/qa/sonarcloud-fallow-upgrade-audit-2026-10-24.json",
+      "fullRootTest": "running with governed runtime and provisioned USearch; no concurrent UI coverage",
+      "contextIntegrationCoverage": {
+        "passedTests": 67,
+        "newParallelRehydrationStatements": "all executed, with positive V8 line counts",
+        "scope": "Real fixed corpus, ordered scenario results, three excluded-file round trips, preserved compaction records and detected mutation. Standalone performance budgets remain unchanged and outside coverage-instrumented shared tests."
+      },
+      "architecture": "Dependency/import/contract boundaries, vector index, governed-tool contract and catalog conformance pass. Full aggregate is blocked by the expected stale lockfile binding in the existing tool-catalog performance evidence; regenerate only the candidate measurement in its pinned Linux ARM64 reference container after a clean signed snapshot."
     }
   },
   "lowerSeverityTriage": [
     {
-      "rules": ["typescript:S9382", "javascript:S9382"],
+      "rules": [
+        "typescript:S9382",
+        "javascript:S9382"
+      ],
       "issueCount": 177,
-      "assessment": "All 177 findings individually reviewed. Four independent in-memory QA-fixture cases corrected; 173 exact original loops retained for documented dependency, retry, stream, measurement, worker-bound, resource or order reasons. Cloud dispositions remain pending.",
+      "assessment": "177 individually reviewed: four QA-fixture code corrections, 112 evidenced false positives and 61 explicitly owner-accepted serial designs. All 173 retained loops preserve exact original source.",
       "audit": "docs/qa/sonarcloud-await-in-loop-2026-10-24.json"
     },
     {
-      "rules": ["Web:ImgWithoutAltCheck"],
+      "rules": [
+        "Web:ImgWithoutAltCheck"
+      ],
       "issueCount": 57,
       "assessment": "57 static SVG accessible-name findings across ten design-system reference pages. Inspect each SVG role: name meaningful visual content and explicitly hide decorative icons from accessibility. These are SVG findings, not missing alt text on screenshots.",
       "fileCount": 10,
       "disposition": "All 57 findings corrected under the subsequently authorized SVG scope."
     },
     {
-      "rules": ["typescript:S1077"],
+      "rules": [
+        "typescript:S1077"
+      ],
       "issueCount": 1,
       "assessment": "The connection SVG contains non-interactive line/particle/preview geometry. Connection semantics and localized native controls live in the separate badge layer. Only the decorative SVG is hidden; Tab/Enter/Space removal and the arm-before-confirm behavior remain covered.",
       "disposition": "Corrected under the subsequently authorized SVG scope; only the non-interactive SVG is hidden."
@@ -5145,7 +5415,10 @@
       "changes": [
         {
           "rule": "javascript:S2486",
-          "files": ["design-system/git-window.html", "design-system/motion.html"],
+          "files": [
+            "design-system/git-window.html",
+            "design-system/motion.html"
+          ],
           "change": "Use optional catch bindings for the deliberate, unchanged restricted-storage theme fallback."
         },
         {
@@ -5186,7 +5459,7 @@
     }
   },
   "lowHangingFruitRecommendation": {
-    "remainingLowerSeverityIssues": 173,
+    "remainingLowerSeverityIssues": 62,
     "firstBatch": {
       "issueCount": 58,
       "groups": [
@@ -5205,12 +5478,16 @@
       "status": "completed"
     },
     "deferBlanketChange": {
-      "rules": ["typescript:S9382", "javascript:S9382"],
+      "rules": [
+        "typescript:S9382",
+        "javascript:S9382"
+      ],
       "issueCount": 177,
       "reason": "Review loop dependencies before changing ordering or concurrency.",
       "status": "Individual review complete; no blanket concurrency change."
     },
-    "cloudRefresh": "The public unresolved issue inventory still reports 354 because these local changes have not been published or analysed by SonarCloud."
+    "cloudRefresh": "The public unresolved issue inventory still reports 354 because these local changes have not been published or analysed by SonarCloud.",
+    "remainingUnreviewedLowerSeverityIssues": 0
   },
   "additionalSvgScope": {
     "ownerDirection": "Owner explicitly requested all 57 reference-page SVG findings and the ConnectionsLayer SVG finding.",
@@ -5233,6 +5510,12 @@
     "audit": "docs/qa/sonarcloud-await-in-loop-2026-10-24.json",
     "correctedInCode": 4,
     "preservedWithIndividualReview": 173,
-    "productFilesUnchangedForThisPhase": true
-  }
+    "productFilesUnchangedForThisPhase": true,
+    "cloudDispositions": {
+      "falsePositives": 112,
+      "ownerAcceptedDesigns": 61,
+      "pending": 0
+    }
+  },
+  "schemaVersion": 2
 }

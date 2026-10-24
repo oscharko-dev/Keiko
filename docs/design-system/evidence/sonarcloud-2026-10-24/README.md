@@ -13,7 +13,9 @@ hashes. They are targeted preservation checks, not a claim of complete product e
   The [177-finding individual review](../../../qa/sonarcloud-await-in-loop-2026-10-24.json)
   records why the other 173 loops retain their exact original source. These are not blanket false
   positives: protocol dependencies and measurement isolation differ from resource and callback-order
-  trade-offs requiring owner/analyzer review. No Cloud statuses or rule settings were changed.
+  trade-offs. SonarCloud now records 112 individually evidenced loop false positives and 61
+  explicitly owner-accepted design choices. All 173 retained loop texts are unchanged; no global
+  rule settings or gate thresholds changed. Four source corrections await integrated-source analysis.
 
 - `node docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs` checks 34,944
   computed values over 32 global/module CSS fixtures in eight theme, contrast and input modes,
@@ -31,4 +33,23 @@ hashes. They are targeted preservation checks, not a claim of complete product e
 The application connection SVG is decorative; the independently layered localized buttons remain
 accessible. `ConnectionsLayer.a11y.test.tsx` verifies their native Tab/Enter/Space two-stage removal.
 The complete issue inventory, owner-approved exceptions and gate results live in
-`docs/qa/sonarcloud-blocker-medium-2026-10-24.json`. Cloud statuses require a subsequent Cloud analysis.
+`docs/qa/sonarcloud-blocker-medium-2026-10-24.json`. The initial 354 findings comprise 161 source corrections and 193 individually documented
+Cloud dispositions (132 false positives and 61 owner-accepted designs). Main still requires an
+analysis of the integrated source to close the 161 source corrections. PR #4069 already reports zero
+unresolved code issues; coverage and other required checks remain independently enforced.
+
+The Git and SVG producers use `fixture-html.mjs` and the HTML parser to remove script elements
+and inline local stylesheets, including uppercase tags and links without an XML closing slash.
+The Git comparison disables page JavaScript. Both producers block browser network requests.
+Proofs hash the shared helper and every loaded stylesheet; guards require five stylesheet inputs
+per Git revision and eleven distinct stylesheet inputs for the ten SVG pages. The owned grid
+interaction run retains its inline handlers and removes external scripts. Parser regression cases
+live in `scripts/__tests__/sonar-fixture-html.test.mjs`.
+
+Schema 2 uses `issueId` for public Sonar identifiers and file/hash records for stylesheet digests.
+The first immutable PR commit triggered 602 Gitleaks generic-key false positives: 600 public issue
+identifiers verified against the original API snapshot and two digests verified against the actual
+stylesheet bytes. The history-only `.gitleaks.toml` intersection names that exact commit, three
+evidence paths and the verified field shapes/digest lines. Future commits remain fully scanned.
+Current proof/inventory JSON passes the pinned scanner; a fresh synthetic credential-shaped
+negative control still fails it. No credential is included in these artifacts.

@@ -1,0 +1,3563 @@
+{
+  "schemaVersion": 1,
+  "reviewDate": "2026-10-24",
+  "baselineRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "analyzerVersion": "3.34.0",
+  "mode": "semantic",
+  "minimumTokens": 100,
+  "minimumLines": 10,
+  "ignoreImports": true,
+  "baselineWholeProjectGroups": 2107,
+  "currentChangedFileGroups": 94,
+  "classificationCounts": {
+    "unchanged-source-new-maximal-fingerprint": 8,
+    "baseline-fingerprint": 80,
+    "new-css-clone-after-cascade-cleanup": 1,
+    "new-fixture-data-shape": 5
+  },
+  "state": "The unchanged required semantic-clone gate is red after the security upgrade. No ignore, baseline exemption, threshold or workflow change has been applied. These groups require a safe repair or an explicit scope/policy decision; this audit does not dismiss them.",
+  "limitations": [
+    "Fingerprint presence proves that a normalized group already existed, not that every current instance was present.",
+    "Whole-line-span presence establishes retained source for the additional unchanged groups; it is not an equivalence proof for surrounding behavior.",
+    "Five groups compare QA fixture tuples with unrelated literal-only lookup data; one new CSS group follows removal of an unnecessary importance flag."
+  ],
+  "groups": [
+    {
+      "fingerprint": "dup:3189ebcd",
+      "tokens": 147,
+      "lines": 22,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 134,
+          "end_line": 155,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 109,
+          "end_line": 130,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 58,
+          "end_line": 79,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 58,
+          "end_line": 79,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 53,
+          "end_line": 74,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 81,
+          "end_line": 102,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/files.ts",
+          "start_line": 1602,
+          "end_line": 1623,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/gitDelivery/actionSheetRoutes.ts",
+          "start_line": 97,
+          "end_line": 118,
+          "start_col": 2,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/gitDelivery/requestGuards.ts",
+          "start_line": 25,
+          "end_line": 46,
+          "start_col": 2,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 40,
+          "end_line": 61,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 210,
+          "end_line": 231,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 45,
+          "end_line": 66,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/promptEnhancer/routes.ts",
+          "start_line": 58,
+          "end_line": 79,
+          "start_col": 2,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/qualityIntelligence/connectorRoutes.ts",
+          "start_line": 40,
+          "end_line": 61,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/qualityIntelligence/handoffRoutes.ts",
+          "start_line": 59,
+          "end_line": 80,
+          "start_col": 2,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/qualityIntelligence/reviewRoutes.ts",
+          "start_line": 37,
+          "end_line": 58,
+          "start_col": 2,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/qualityIntelligence/runRoutes.ts",
+          "start_line": 65,
+          "end_line": 86,
+          "start_col": 2,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 64,
+          "end_line": 85,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 142,
+          "end_line": 163,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 107,
+          "end_line": 128,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 63,
+          "end_line": 84,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 41,
+          "end_line": 62,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 46,
+          "end_line": 67,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 113,
+          "end_line": 134,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 40,
+          "end_line": 61,
+          "start_col": 9,
+          "end_col": 4
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:f6ea7b6b",
+      "tokens": 154,
+      "lines": 23,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 155,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 130,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 79,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 79,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 74,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 102,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/files.ts",
+          "start_line": 1601,
+          "end_line": 1623,
+          "start_col": 46,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 231,
+          "start_col": 24,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 66,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/qualityIntelligence/connectorRoutes.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 85,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 163,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 128,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 84,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 62,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 67,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 112,
+          "end_line": 134,
+          "start_col": 18,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 18,
+          "end_col": 4
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:a0cb273d",
+      "tokens": 155,
+      "lines": 23,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 155,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 130,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 79,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 79,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 74,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 102,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/files.ts",
+          "start_line": 1601,
+          "end_line": 1623,
+          "start_col": 29,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 231,
+          "start_col": 15,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 66,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 85,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 163,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 128,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 84,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 62,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 67,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 112,
+          "end_line": 134,
+          "start_col": 9,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 9,
+          "end_col": 4
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:ede68a62",
+      "tokens": 161,
+      "lines": 23,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 155,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 130,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 79,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 79,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 74,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 102,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 231,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 66,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 85,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 163,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 128,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 84,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 62,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 67,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 112,
+          "end_line": 134,
+          "start_col": 0,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 39,
+          "end_line": 61,
+          "start_col": 0,
+          "end_col": 4
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:ccd94254",
+      "tokens": 118,
+      "lines": 22,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 152,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 127,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 76,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 76,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 71,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 99,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/files.ts",
+          "start_line": 1601,
+          "end_line": 1620,
+          "start_col": 63,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/gateway-setup.ts",
+          "start_line": 413,
+          "end_line": 434,
+          "start_col": 43,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 228,
+          "start_col": 45,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 63,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/qualityIntelligence/connectorRoutes.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/run-handlers.ts",
+          "start_line": 97,
+          "end_line": 118,
+          "start_col": 39,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 82,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 160,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 125,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 81,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 59,
+          "start_col": 39,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 64,
+          "start_col": 39,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/voice-handlers.ts",
+          "start_line": 98,
+          "end_line": 119,
+          "start_col": 39,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 112,
+          "end_line": 131,
+          "start_col": 39,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 39,
+          "end_col": 67
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:786e462a",
+      "tokens": 125,
+      "lines": 22,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 152,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 127,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 76,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.ts",
+          "start_line": 279,
+          "end_line": 298,
+          "start_col": 0,
+          "end_col": 25
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 76,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 71,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 99,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 228,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 63,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/run-handlers.ts",
+          "start_line": 97,
+          "end_line": 118,
+          "start_col": 0,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 82,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 160,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 125,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 81,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 59,
+          "start_col": 0,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 64,
+          "start_col": 0,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/voice-handlers.ts",
+          "start_line": 98,
+          "end_line": 119,
+          "start_col": 0,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 112,
+          "end_line": 131,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 0,
+          "end_col": 67
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:d58e661e",
+      "tokens": 177,
+      "lines": 26,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 158,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 133,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 82,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 82,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 77,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 105,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 234,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 69,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 88,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 166,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 131,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 87,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 65,
+          "start_col": 0,
+          "end_col": 83
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 70,
+          "start_col": 0,
+          "end_col": 83
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:92d69721",
+      "tokens": 128,
+      "lines": 22,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
+          "start_line": 133,
+          "end_line": 152,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/atlassian/syncRoutes.ts",
+          "start_line": 108,
+          "end_line": 127,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/browser.ts",
+          "start_line": 57,
+          "end_line": 76,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/command-runner-routes.ts",
+          "start_line": 57,
+          "end_line": 76,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/docs-browser.ts",
+          "start_line": 52,
+          "end_line": 71,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/editor/verificationRoutes.ts",
+          "start_line": 80,
+          "end_line": 99,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/gitRepositoryRoutes.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 209,
+          "end_line": 228,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+          "start_line": 44,
+          "end_line": 63,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/run-handlers.ts",
+          "start_line": 97,
+          "end_line": 118,
+          "start_col": 0,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/runtime/containerRoutes.ts",
+          "start_line": 63,
+          "end_line": 82,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/store-handlers.ts",
+          "start_line": 141,
+          "end_line": 160,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/task-workspace/routes.ts",
+          "start_line": 106,
+          "end_line": 125,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/terminal-routes.ts",
+          "start_line": 62,
+          "end_line": 81,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/update-remediation-routes.ts",
+          "start_line": 40,
+          "end_line": 59,
+          "start_col": 0,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/update-session-routes.ts",
+          "start_line": 45,
+          "end_line": 64,
+          "start_col": 0,
+          "end_col": 71
+        },
+        {
+          "file": "packages/keiko-server/src/voice-handlers.ts",
+          "start_line": 98,
+          "end_line": 119,
+          "start_col": 0,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/voice-recap.ts",
+          "start_line": 112,
+          "end_line": 131,
+          "start_col": 0,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/workspace-state-handlers.ts",
+          "start_line": 39,
+          "end_line": 58,
+          "start_col": 0,
+          "end_col": 67
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:dd0f4588",
+      "tokens": 829,
+      "lines": 219,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-dataviz.css",
+          "start_line": 38,
+          "end_line": 253,
+          "start_col": 0,
+          "end_col": 1
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 12377,
+          "end_line": 12595,
+          "start_col": 0,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:7fcf6777",
+      "tokens": 807,
+      "lines": 180,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": false,
+      "classification": "new-css-clone-after-cascade-cleanup",
+      "instances": [
+        {
+          "file": "design-system/keiko-data.css",
+          "start_line": 99,
+          "end_line": 278,
+          "start_col": 25,
+          "end_col": 1
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 12198,
+          "end_line": 12377,
+          "start_col": 19,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:057c4d87",
+      "tokens": 697,
+      "lines": 129,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 240,
+          "end_line": 368,
+          "start_col": 40,
+          "end_col": 33
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 303,
+          "end_line": 416,
+          "start_col": 80,
+          "end_col": 33
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:4ac220e3",
+      "tokens": 667,
+      "lines": 138,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-ai.css",
+          "start_line": 187,
+          "end_line": 322,
+          "start_col": 15,
+          "end_col": 8
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 11828,
+          "end_line": 11965,
+          "start_col": 35,
+          "end_col": 8
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:1d027c46",
+      "tokens": 573,
+      "lines": 119,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 272,
+          "end_line": 390,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13630,
+          "end_line": 13748,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:37e3d650",
+      "tokens": 559,
+      "lines": 134,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 110,
+          "end_line": 243,
+          "start_col": 18,
+          "end_col": 29
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 199,
+          "end_line": 303,
+          "start_col": 53,
+          "end_col": 30
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:813aea2a",
+      "tokens": 547,
+      "lines": 115,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 421,
+          "end_line": 535,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13779,
+          "end_line": 13893,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:f83e3135",
+      "tokens": 535,
+      "lines": 118,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 11,
+          "end_line": 128,
+          "start_col": 0,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13373,
+          "end_line": 13490,
+          "start_col": 0,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:633733bc",
+      "tokens": 535,
+      "lines": 56,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 60,
+          "end_line": 115,
+          "start_col": 64,
+          "end_col": 97
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 434,
+          "end_line": 486,
+          "start_col": 14,
+          "end_col": 97
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:012051cc",
+      "tokens": 514,
+      "lines": 112,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-ai.css",
+          "start_line": 320,
+          "end_line": 431,
+          "start_col": 74,
+          "end_col": 1
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 11969,
+          "end_line": 12080,
+          "start_col": 21,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:c819ea41",
+      "tokens": 447,
+      "lines": 68,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-editor-tokens.css",
+          "start_line": 27,
+          "end_line": 94,
+          "start_col": 2,
+          "end_col": 28
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 499,
+          "end_line": 555,
+          "start_col": 2,
+          "end_col": 31
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:04352bc9",
+      "tokens": 114,
+      "lines": 31,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 66,
+          "end_line": 79,
+          "start_col": 30,
+          "end_col": 29
+        },
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 89,
+          "end_line": 104,
+          "start_col": 88,
+          "end_col": 24
+        },
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 121,
+          "end_line": 134,
+          "start_col": 26,
+          "end_col": 22
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 438,
+          "end_line": 451,
+          "start_col": 30,
+          "end_col": 29
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 461,
+          "end_line": 475,
+          "start_col": 88,
+          "end_col": 24
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1101,
+          "end_line": 1131,
+          "start_col": 26,
+          "end_col": 22
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1155,
+          "end_line": 1172,
+          "start_col": 40,
+          "end_col": 18
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:ece740e0",
+      "tokens": 395,
+      "lines": 70,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/1295/browser/capture.mjs",
+          "start_line": 21,
+          "end_line": 90,
+          "start_col": 33,
+          "end_col": 33
+        },
+        {
+          "file": "docs/design-system/evidence/1300/browser/capture.mjs",
+          "start_line": 88,
+          "end_line": 152,
+          "start_col": 31,
+          "end_col": 21
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:72dea5e8",
+      "tokens": 259,
+      "lines": 60,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 199,
+          "end_line": 258,
+          "start_col": 23,
+          "end_col": 22
+        },
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 274,
+          "end_line": 323,
+          "start_col": 63,
+          "end_col": 39
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 333,
+          "end_line": 423,
+          "start_col": 63,
+          "end_col": 17
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:4d9b8d58",
+      "tokens": 102,
+      "lines": 18,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 60,
+          "end_line": 77,
+          "start_col": 75,
+          "end_col": 16
+        },
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 89,
+          "end_line": 103,
+          "start_col": 93,
+          "end_col": 16
+        },
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 120,
+          "end_line": 144,
+          "start_col": 21,
+          "end_col": 16
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 434,
+          "end_line": 449,
+          "start_col": 31,
+          "end_col": 16
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 461,
+          "end_line": 474,
+          "start_col": 93,
+          "end_col": 16
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1100,
+          "end_line": 1116,
+          "start_col": 21,
+          "end_col": 11
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1155,
+          "end_line": 1171,
+          "start_col": 45,
+          "end_col": 17
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:015ef999",
+      "tokens": 115,
+      "lines": 121,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": false,
+      "classification": "new-fixture-data-shape",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+          "start_line": 18,
+          "end_line": 90,
+          "start_col": 2,
+          "end_col": 153
+        },
+        {
+          "file": "packages/keiko-activity-log/src/reader/support-analyze.ts",
+          "start_line": 2104,
+          "end_line": 2142,
+          "start_col": 2,
+          "end_col": 51
+        },
+        {
+          "file": "packages/keiko-workspace/src/document-extraction.ts",
+          "start_line": 65,
+          "end_line": 93,
+          "start_col": 2,
+          "end_col": 26
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 123,
+          "end_line": 237,
+          "start_col": 2,
+          "end_col": 97
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 239,
+          "end_line": 359,
+          "start_col": 2,
+          "end_col": 97
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 384,
+          "end_line": 499,
+          "start_col": 2,
+          "end_col": 90
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:bd387089",
+      "tokens": 150,
+      "lines": 30,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 999,
+          "end_line": 1028,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 1029,
+          "end_line": 1058,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 1059,
+          "end_line": 1088,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 1089,
+          "end_line": 1118,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 1119,
+          "end_line": 1148,
+          "start_col": 2,
+          "end_col": 3
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:d5938f66",
+      "tokens": 331,
+      "lines": 71,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-nav.css",
+          "start_line": 182,
+          "end_line": 252,
+          "start_col": 15,
+          "end_col": 1
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 14081,
+          "end_line": 14151,
+          "start_col": 35,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:1923dc2f",
+      "tokens": 360,
+      "lines": 72,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 999,
+          "end_line": 1070,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 1071,
+          "end_line": 1142,
+          "start_col": 2,
+          "end_col": 3
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:97c3c096",
+      "tokens": 127,
+      "lines": 24,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 162,
+          "end_line": 185,
+          "start_col": 22,
+          "end_col": 39
+        },
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 254,
+          "end_line": 277,
+          "start_col": 33,
+          "end_col": 26
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 235,
+          "end_line": 255,
+          "start_col": 22,
+          "end_col": 39
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 315,
+          "end_line": 335,
+          "start_col": 33,
+          "end_col": 26
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 555,
+          "end_line": 573,
+          "start_col": 58,
+          "end_col": 35
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:7df4fe2d",
+      "tokens": 337,
+      "lines": 36,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1206,
+          "end_line": 1240,
+          "start_col": 8,
+          "end_col": 22
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1287,
+          "end_line": 1322,
+          "start_col": 17,
+          "end_col": 16
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:02f0256d",
+      "tokens": 127,
+      "lines": 25,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 401,
+          "end_line": 425,
+          "start_col": 47,
+          "end_col": 16
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1211,
+          "end_line": 1219,
+          "start_col": 18,
+          "end_col": 20
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1245,
+          "end_line": 1253,
+          "start_col": 18,
+          "end_col": 20
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1292,
+          "end_line": 1300,
+          "start_col": 16,
+          "end_col": 18
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1327,
+          "end_line": 1335,
+          "start_col": 16,
+          "end_col": 18
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:2a876344",
+      "tokens": 307,
+      "lines": 94,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 25,
+          "end_line": 118,
+          "start_col": 2,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 118,
+          "end_line": 199,
+          "start_col": 2,
+          "end_col": 29
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:930f84b7",
+      "tokens": 117,
+      "lines": 120,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": false,
+      "classification": "new-fixture-data-shape",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+          "start_line": 18,
+          "end_line": 94,
+          "start_col": 13,
+          "end_col": 104
+        },
+        {
+          "file": "packages/keiko-activity-log/src/reader/support-analyze.ts",
+          "start_line": 2104,
+          "end_line": 2143,
+          "start_col": 40,
+          "end_col": 39
+        },
+        {
+          "file": "packages/keiko-workspace/src/document-extraction.ts",
+          "start_line": 65,
+          "end_line": 94,
+          "start_col": 10,
+          "end_col": 30
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 125,
+          "end_line": 241,
+          "start_col": 4,
+          "end_col": 89
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 380,
+          "end_line": 499,
+          "start_col": 6,
+          "end_col": 90
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:f567450a",
+      "tokens": 116,
+      "lines": 117,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": false,
+      "classification": "new-fixture-data-shape",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+          "start_line": 18,
+          "end_line": 91,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "packages/keiko-activity-log/src/reader/support-analyze.ts",
+          "start_line": 2104,
+          "end_line": 2142,
+          "start_col": 2,
+          "end_col": 52
+        },
+        {
+          "file": "packages/keiko-workspace/src/document-extraction.ts",
+          "start_line": 65,
+          "end_line": 93,
+          "start_col": 2,
+          "end_col": 27
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 123,
+          "end_line": 238,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 384,
+          "end_line": 500,
+          "start_col": 2,
+          "end_col": 3
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:996e4937",
+      "tokens": 298,
+      "lines": 31,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1240,
+          "end_line": 1270,
+          "start_col": 2,
+          "end_col": 3
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1322,
+          "end_line": 1352,
+          "start_col": 16,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:5405e233",
+      "tokens": 105,
+      "lines": 105,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": false,
+      "classification": "new-fixture-data-shape",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+          "start_line": 17,
+          "end_line": 79,
+          "start_col": 17,
+          "end_col": 3
+        },
+        {
+          "file": "packages/keiko-activity-log/src/reader/support-analyze.ts",
+          "start_line": 2103,
+          "end_line": 2133,
+          "start_col": 64,
+          "end_col": 47
+        },
+        {
+          "file": "packages/keiko-ui/src/lib/http.ts",
+          "start_line": 255,
+          "end_line": 282,
+          "start_col": 80,
+          "end_col": 40
+        },
+        {
+          "file": "packages/keiko-workspace/src/document-extraction.ts",
+          "start_line": 64,
+          "end_line": 90,
+          "start_col": 60,
+          "end_col": 27
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 122,
+          "end_line": 226,
+          "start_col": 49,
+          "end_col": 3
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:c69ec3f5",
+      "tokens": 258,
+      "lines": 64,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-ai.css",
+          "start_line": 10,
+          "end_line": 71,
+          "start_col": 0,
+          "end_col": 12
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 11647,
+          "end_line": 11710,
+          "start_col": 0,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:7b440052",
+      "tokens": 255,
+      "lines": 59,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-ai.css",
+          "start_line": 114,
+          "end_line": 171,
+          "start_col": 15,
+          "end_col": 20
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 11754,
+          "end_line": 11812,
+          "start_col": 36,
+          "end_col": 17
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:e0288348",
+      "tokens": 270,
+      "lines": 53,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3355,
+          "end_line": 3407,
+          "start_col": 6,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3415,
+          "end_line": 3463,
+          "start_col": 5,
+          "end_col": 7
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:e13b163a",
+      "tokens": 120,
+      "lines": 120,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": false,
+      "classification": "new-fixture-data-shape",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+          "start_line": 17,
+          "end_line": 94,
+          "start_col": 17,
+          "end_col": 104
+        },
+        {
+          "file": "packages/keiko-activity-log/src/reader/support-analyze.ts",
+          "start_line": 2103,
+          "end_line": 2143,
+          "start_col": 64,
+          "end_col": 39
+        },
+        {
+          "file": "packages/keiko-workspace/src/document-extraction.ts",
+          "start_line": 64,
+          "end_line": 94,
+          "start_col": 60,
+          "end_col": 30
+        },
+        {
+          "file": "scripts/check-error-observability.mjs",
+          "start_line": 122,
+          "end_line": 241,
+          "start_col": 49,
+          "end_col": 89
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:70983b9d",
+      "tokens": 257,
+      "lines": 35,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1239,
+          "end_line": 1266,
+          "start_col": 2,
+          "end_col": 22
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1279,
+          "end_line": 1313,
+          "start_col": 0,
+          "end_col": 30
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:e7f6576a",
+      "tokens": 239,
+      "lines": 47,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 128,
+          "end_line": 174,
+          "start_col": 15,
+          "end_col": 18
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13490,
+          "end_line": 13536,
+          "start_col": 35,
+          "end_col": 18
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:bf0b4cb8",
+      "tokens": 118,
+      "lines": 19,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-editor-tokens.css",
+          "start_line": 185,
+          "end_line": 203,
+          "start_col": 4,
+          "end_col": 38
+        },
+        {
+          "file": "design-system/keiko-editor-tokens.css",
+          "start_line": 225,
+          "end_line": 243,
+          "start_col": 2,
+          "end_col": 36
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1217,
+          "end_line": 1235,
+          "start_col": 4,
+          "end_col": 38
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1298,
+          "end_line": 1316,
+          "start_col": 2,
+          "end_col": 36
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:7ec66b4c",
+      "tokens": 157,
+      "lines": 28,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 269,
+          "end_line": 296,
+          "start_col": 24,
+          "end_col": 49
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 328,
+          "end_line": 352,
+          "start_col": 24,
+          "end_col": 49
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 548,
+          "end_line": 572,
+          "start_col": 53,
+          "end_col": 35
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:d22d0fe2",
+      "tokens": 168,
+      "lines": 28,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3380,
+          "end_line": 3407,
+          "start_col": 6,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3408,
+          "end_line": 3435,
+          "start_col": 6,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3436,
+          "end_line": 3463,
+          "start_col": 6,
+          "end_col": 7
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:4b5c2a88",
+      "tokens": 231,
+      "lines": 49,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-data.css",
+          "start_line": 53,
+          "end_line": 101,
+          "start_col": 15,
+          "end_col": 17
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 12148,
+          "end_line": 12196,
+          "start_col": 35,
+          "end_col": 17
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:641e1f42",
+      "tokens": 153,
+      "lines": 51,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-model-gateway/src/resilience.ts",
+          "start_line": 281,
+          "end_line": 331,
+          "start_col": 12,
+          "end_col": 31
+        },
+        {
+          "file": "packages/keiko-server/src/chat-activity.ts",
+          "start_line": 218,
+          "end_line": 263,
+          "start_col": 24,
+          "end_col": 57
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2980,
+          "end_line": 3025,
+          "start_col": 17,
+          "end_col": 52
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:35d58376",
+      "tokens": 225,
+      "lines": 48,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-nav.css",
+          "start_line": 135,
+          "end_line": 182,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 14034,
+          "end_line": 14081,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:86dff83e",
+      "tokens": 241,
+      "lines": 78,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/chat-activity.ts",
+          "start_line": 211,
+          "end_line": 288,
+          "start_col": 31,
+          "end_col": 12
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2978,
+          "end_line": 3046,
+          "start_col": 21,
+          "end_col": 85
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:11225fb1",
+      "tokens": 212,
+      "lines": 46,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-nav.css",
+          "start_line": 90,
+          "end_line": 135,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13989,
+          "end_line": 14034,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:9fa559b0",
+      "tokens": 140,
+      "lines": 52,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.ts",
+          "start_line": 388,
+          "end_line": 439,
+          "start_col": 20,
+          "end_col": 20
+        },
+        {
+          "file": "packages/keiko-server/src/deps-activity.ts",
+          "start_line": 46,
+          "end_line": 86,
+          "start_col": 10,
+          "end_col": 77
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2939,
+          "end_line": 2979,
+          "start_col": 10,
+          "end_col": 76
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:8573d787",
+      "tokens": 230,
+      "lines": 33,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/voice-live-dictation.ts",
+          "start_line": 213,
+          "end_line": 245,
+          "start_col": 0,
+          "end_col": 37
+        },
+        {
+          "file": "packages/keiko-server/src/voice-realtime.ts",
+          "start_line": 717,
+          "end_line": 749,
+          "start_col": 0,
+          "end_col": 37
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:6350c22c",
+      "tokens": 201,
+      "lines": 45,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-data.css",
+          "start_line": 9,
+          "end_line": 53,
+          "start_col": 0,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 12104,
+          "end_line": 12148,
+          "start_col": 0,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:9369e656",
+      "tokens": 196,
+      "lines": 106,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+          "start_line": 10295,
+          "end_line": 10400,
+          "start_col": 6,
+          "end_col": 3
+        },
+        {
+          "file": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
+          "start_line": 341,
+          "end_line": 433,
+          "start_col": 4,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:a1b6a360",
+      "tokens": 129,
+      "lines": 24,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-editor-tokens.css",
+          "start_line": 85,
+          "end_line": 108,
+          "start_col": 53,
+          "end_col": 40
+        },
+        {
+          "file": "design-system/keiko-semantic-tokens.css",
+          "start_line": 258,
+          "end_line": 279,
+          "start_col": 22,
+          "end_col": 37
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 318,
+          "end_line": 337,
+          "start_col": 22,
+          "end_col": 37
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:5fcee907",
+      "tokens": 191,
+      "lines": 29,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 283,
+          "end_line": 311,
+          "start_col": 20,
+          "end_col": 39
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1319,
+          "end_line": 1332,
+          "start_col": 68,
+          "end_col": 79
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:350e92db",
+      "tokens": 189,
+      "lines": 31,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-editor-tokens.css",
+          "start_line": 147,
+          "end_line": 177,
+          "start_col": 2,
+          "end_col": 19
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1170,
+          "end_line": 1193,
+          "start_col": 2,
+          "end_col": 35
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:817342d9",
+      "tokens": 188,
+      "lines": 46,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 177,
+          "end_line": 222,
+          "start_col": 17,
+          "end_col": 41
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1197,
+          "end_line": 1216,
+          "start_col": 34,
+          "end_col": 81
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:e3b290d8",
+      "tokens": 186,
+      "lines": 43,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 194,
+          "end_line": 236,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13552,
+          "end_line": 13594,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:27704fdb",
+      "tokens": 186,
+      "lines": 30,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 222,
+          "end_line": 251,
+          "start_col": 22,
+          "end_col": 41
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1238,
+          "end_line": 1250,
+          "start_col": 70,
+          "end_col": 81
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:bd87d04a",
+      "tokens": 185,
+      "lines": 33,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 251,
+          "end_line": 283,
+          "start_col": 40,
+          "end_col": 39
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1277,
+          "end_line": 1297,
+          "start_col": 28,
+          "end_col": 79
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:d5302c5c",
+      "tokens": 177,
+      "lines": 45,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 116,
+          "end_line": 139,
+          "start_col": 0,
+          "end_col": 25
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1094,
+          "end_line": 1138,
+          "start_col": 0,
+          "end_col": 28
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:9339ec85",
+      "tokens": 176,
+      "lines": 37,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 236,
+          "end_line": 272,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13594,
+          "end_line": 13630,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:f7f0cda7",
+      "tokens": 166,
+      "lines": 46,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.ts",
+          "start_line": 323,
+          "end_line": 368,
+          "start_col": 2,
+          "end_col": 5
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2941,
+          "end_line": 2982,
+          "start_col": 2,
+          "end_col": 69
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:46313dc9",
+      "tokens": 186,
+      "lines": 35,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/voice-live-dictation.ts",
+          "start_line": 569,
+          "end_line": 598,
+          "start_col": 2,
+          "end_col": 21
+        },
+        {
+          "file": "packages/keiko-server/src/voice-realtime.ts",
+          "start_line": 865,
+          "end_line": 899,
+          "start_col": 2,
+          "end_col": 21
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:1b750a00",
+      "tokens": 108,
+      "lines": 57,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 83,
+          "end_line": 110,
+          "start_col": 0,
+          "end_col": 26
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13341,
+          "end_line": 13397,
+          "start_col": 0,
+          "end_col": 12
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13445,
+          "end_line": 13472,
+          "start_col": 0,
+          "end_col": 26
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:c874cbc6",
+      "tokens": 177,
+      "lines": 51,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/deps-activity.ts",
+          "start_line": 39,
+          "end_line": 88,
+          "start_col": 12,
+          "end_col": 69
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2931,
+          "end_line": 2981,
+          "start_col": 16,
+          "end_col": 85
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:1a8a5ee8",
+      "tokens": 103,
+      "lines": 31,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-dataviz.css",
+          "start_line": 12,
+          "end_line": 25,
+          "start_col": 23,
+          "end_col": 18
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 422,
+          "end_line": 434,
+          "start_col": 23,
+          "end_col": 18
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 1109,
+          "end_line": 1139,
+          "start_col": 36,
+          "end_col": 16
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:512311bc",
+      "tokens": 145,
+      "lines": 32,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-nav.css",
+          "start_line": 32,
+          "end_line": 63,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13931,
+          "end_line": 13962,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:234d87ad",
+      "tokens": 142,
+      "lines": 36,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-tokens.css",
+          "start_line": 6,
+          "end_line": 27,
+          "start_col": 2,
+          "end_col": 25
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 27,
+          "end_line": 62,
+          "start_col": 2,
+          "end_col": 19
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:ced2471e",
+      "tokens": 142,
+      "lines": 32,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-inputs.css",
+          "start_line": 390,
+          "end_line": 421,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13748,
+          "end_line": 13779,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:27cbab12",
+      "tokens": 106,
+      "lines": 49,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/bounded-request-body.ts",
+          "start_line": 141,
+          "end_line": 180,
+          "start_col": 19,
+          "end_col": 12
+        },
+        {
+          "file": "packages/keiko-server/src/grounded-orchestrator.ts",
+          "start_line": 936,
+          "end_line": 984,
+          "start_col": 12,
+          "end_col": 89
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2917,
+          "end_line": 2957,
+          "start_col": 11,
+          "end_col": 85
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:f0f01eb1",
+      "tokens": 140,
+      "lines": 11,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+          "start_line": 349,
+          "end_line": 355,
+          "start_col": 53,
+          "end_col": 78
+        },
+        {
+          "file": "scripts/check-retrieval-quality.mjs",
+          "start_line": 705,
+          "end_line": 715,
+          "start_col": 67,
+          "end_col": 5
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:a98be098",
+      "tokens": 136,
+      "lines": 71,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+          "start_line": 8380,
+          "end_line": 8450,
+          "start_col": 6,
+          "end_col": 3
+        },
+        {
+          "file": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
+          "start_line": 237,
+          "end_line": 294,
+          "start_col": 4,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:b189ee94",
+      "tokens": 127,
+      "lines": 14,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "docs/design-system/evidence/1295/browser/capture.mjs",
+          "start_line": 158,
+          "end_line": 171,
+          "start_col": 39,
+          "end_col": 40
+        },
+        {
+          "file": "docs/design-system/evidence/1300/browser/capture.mjs",
+          "start_line": 1082,
+          "end_line": 1095,
+          "start_col": 32,
+          "end_col": 40
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:0639376d",
+      "tokens": 119,
+      "lines": 28,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-nav.css",
+          "start_line": 63,
+          "end_line": 90,
+          "start_col": 15,
+          "end_col": 10
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 13962,
+          "end_line": 13989,
+          "start_col": 35,
+          "end_col": 10
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:4b9d9f55",
+      "tokens": 127,
+      "lines": 79,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
+          "start_line": 256,
+          "end_line": 334,
+          "start_col": 6,
+          "end_col": 67
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2874,
+          "end_line": 2920,
+          "start_col": 6,
+          "end_col": 20
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:dbc529b4",
+      "tokens": 126,
+      "lines": 32,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 7839,
+          "end_line": 7870,
+          "start_col": 19,
+          "end_col": 26
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 8023,
+          "end_line": 8054,
+          "start_col": 62,
+          "end_col": 26
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:4661c8d9",
+      "tokens": 117,
+      "lines": 15,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
+          "start_line": 276,
+          "end_line": 290,
+          "start_col": 22,
+          "end_col": 4
+        },
+        {
+          "file": "packages/keiko-model-gateway/src/resilience.ts",
+          "start_line": 372,
+          "end_line": 386,
+          "start_col": 10,
+          "end_col": 6
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:6d08a29a",
+      "tokens": 111,
+      "lines": 14,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "design-system/keiko-dataviz.css",
+          "start_line": 12,
+          "end_line": 25,
+          "start_col": 2,
+          "end_col": 32
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 422,
+          "end_line": 434,
+          "start_col": 2,
+          "end_col": 32
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:abc8d631",
+      "tokens": 108,
+      "lines": 31,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 2883,
+          "end_line": 2913,
+          "start_col": 42,
+          "end_col": 12
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 7130,
+          "end_line": 7160,
+          "start_col": 19,
+          "end_col": 13
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:6a6d4342",
+      "tokens": 117,
+      "lines": 21,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 3635,
+          "end_line": 3655,
+          "start_col": 6,
+          "end_col": 54
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 3703,
+          "end_line": 3723,
+          "start_col": 6,
+          "end_col": 56
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:d6a53146",
+      "tokens": 121,
+      "lines": 33,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/deps-activity.ts",
+          "start_line": 43,
+          "end_line": 75,
+          "start_col": 15,
+          "end_col": 2
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 3025,
+          "end_line": 3057,
+          "start_col": 36,
+          "end_col": 2
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:62116daf",
+      "tokens": 120,
+      "lines": 29,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
+          "start_line": 276,
+          "end_line": 304,
+          "start_col": 25,
+          "end_col": 45
+        },
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
+          "start_line": 77,
+          "end_line": 100,
+          "start_col": 10,
+          "end_col": 45
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:19b33e26",
+      "tokens": 118,
+      "lines": 39,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/grounded-orchestrator.ts",
+          "start_line": 947,
+          "end_line": 985,
+          "start_col": 8,
+          "end_col": 78
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2921,
+          "end_line": 2958,
+          "start_col": 15,
+          "end_col": 76
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:43ac8354",
+      "tokens": 112,
+      "lines": 29,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/gitRoutes.ts",
+          "start_line": 1294,
+          "end_line": 1322,
+          "start_col": 0,
+          "end_col": 7
+        },
+        {
+          "file": "packages/keiko-server/src/gitRoutes.ts",
+          "start_line": 1525,
+          "end_line": 1540,
+          "start_col": 0,
+          "end_col": 7
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:ba70ec5a",
+      "tokens": 101,
+      "lines": 26,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 16616,
+          "end_line": 16641,
+          "start_col": 20,
+          "end_col": 1
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 20530,
+          "end_line": 20548,
+          "start_col": 24,
+          "end_col": 1
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:12df6617",
+      "tokens": 110,
+      "lines": 21,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3225,
+          "end_line": 3245,
+          "start_col": 16,
+          "end_col": 97
+        },
+        {
+          "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
+          "start_line": 3321,
+          "end_line": 3341,
+          "start_col": 5,
+          "end_col": 34
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:a047bfe0",
+      "tokens": 103,
+      "lines": 34,
+      "baselineFingerprintPresent": false,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "unchanged-source-new-maximal-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-model-gateway/src/resilience.ts",
+          "start_line": 275,
+          "end_line": 308,
+          "start_col": 11,
+          "end_col": 78
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 3020,
+          "end_line": 3048,
+          "start_col": 21,
+          "end_col": 85
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:9508d382",
+      "tokens": 109,
+      "lines": 28,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 16621,
+          "end_line": 16648,
+          "start_col": 18,
+          "end_col": 31
+        },
+        {
+          "file": "packages/keiko-ui/src/app/globals.css",
+          "start_line": 16666,
+          "end_line": 16692,
+          "start_col": 62,
+          "end_col": 28
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:6e60f8d2",
+      "tokens": 113,
+      "lines": 49,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/coding-sidecar-gateway.ts",
+          "start_line": 577,
+          "end_line": 625,
+          "start_col": 4,
+          "end_col": 20
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 2924,
+          "end_line": 2959,
+          "start_col": 4,
+          "end_col": 83
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:3f96ddf5",
+      "tokens": 110,
+      "lines": 18,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 1586,
+          "end_line": 1603,
+          "start_col": 0,
+          "end_col": 63
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-remediation.ts",
+          "start_line": 83,
+          "end_line": 97,
+          "start_col": 7,
+          "end_col": 63
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:c3eb6da8",
+      "tokens": 104,
+      "lines": 11,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 1578,
+          "end_line": 1588,
+          "start_col": 7,
+          "end_col": 75
+        },
+        {
+          "file": "packages/keiko-server/src/memory-embedding.ts",
+          "start_line": 270,
+          "end_line": 280,
+          "start_col": 0,
+          "end_col": 75
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:adba87eb",
+      "tokens": 100,
+      "lines": 31,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "packages/keiko-server/src/coding-sidecar-gateway.ts",
+          "start_line": 667,
+          "end_line": 697,
+          "start_col": 8,
+          "end_col": 20
+        },
+        {
+          "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+          "start_line": 3025,
+          "end_line": 3049,
+          "start_col": 15,
+          "end_col": 67
+        }
+      ]
+    },
+    {
+      "fingerprint": "dup:4b5f1dc4",
+      "tokens": 100,
+      "lines": 23,
+      "baselineFingerprintPresent": true,
+      "allWholeLineSpansPresentInBaseline": true,
+      "classification": "baseline-fingerprint",
+      "instances": [
+        {
+          "file": "scripts/check-context-quality.mjs",
+          "start_line": 91,
+          "end_line": 113,
+          "start_col": 6,
+          "end_col": 22
+        },
+        {
+          "file": "scripts/check-retrieval-latency.mjs",
+          "start_line": 30,
+          "end_line": 42,
+          "start_col": 6,
+          "end_col": 22
+        }
+      ]
+    }
+  ]
+}

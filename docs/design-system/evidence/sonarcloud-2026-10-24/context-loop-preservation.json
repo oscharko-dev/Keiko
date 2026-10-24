@@ -3,7 +3,7 @@
   "producer": "docs/design-system/evidence/sonarcloud-2026-10-24/context-loop-preservation.mjs",
   "producerSha256": "f23b97663cbddcd51cbb47fe23dbc4cee50878b5c31550b9bb66a9d1ecd9dc91",
   "sources": {
-    "scripts/check-context-quality.mjs": "fa7377e0123e07a621464c7caa75888a9be8a68fb9c4ecf73586ea32f90979c3",
+    "scripts/check-context-quality.mjs": "9ecc05e29db7cb5d4c1f3ab4bd03a77e34a7be3b41dd11c9f51a580bf3a74b37",
     "scripts/lib/context-quality-corpus.mjs": "79a910021282ab8b3c4381fe20643a9471ee5032f8d23e0c8700dad88f577442"
   },
   "comparison": {

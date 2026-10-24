@@ -1,9 +1,10 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "baselineRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
-  "nodeVersion": "v24.22.0",
+  "nodeVersion": "v24.18.0",
   "chromiumVersion": "156.0.8078.4",
-  "harnessSha256": "48d5d57c5131b95e596e53889ce4a73baccfae6e5ee783e4474d6d8f932246ce",
+  "harnessSha256": "0a6e061f58c88f6346fb0579470fec09466b05723d8b87d506e60e1dba95d0b5",
+  "fixtureHtmlHelperSha256": "da60782f0e78a0ea12d04a77c3722dee22a2e3947f99c7d1a8a472b13ab276fd",
   "fileSha256": {
     "design-system/Keiko Icon System.html": "d813bd7b374879713d4afd0ff4a67ff9746ac9666c62788748ba7ba9790d6f77",
     "design-system/ai-components.html": "56b19425d36d5e05d3a0c4b14710699e8596f14e27cabc6b356b80015dd4efb0",
@@ -16,20 +17,53 @@
     "design-system/dataviz.html": "211f5b5e69baf2d4627e7d28ff3230f947bfe1de4b116e8a2e14f24c614c8bd3",
     "design-system/patterns.html": "c8c0cf021828539ca84ccd8bb3400a3ace23a502809a28ab740f2b8980d84f03"
   },
-  "stylesheetSha256": {
-    "design-system/keiko-fonts.css": "6c487e130c799b7141882c158cf9ec587ce6b86074aa27b9bd68836702816aaf",
-    "design-system/keiko-tokens.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",
-    "design-system/keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
-    "design-system/ds.css": "6c76abd249c8b668ea8a408ba5d3162519f4f0b40f88c46d5b584d68e9be1a76",
-    "design-system/components.css": "42453c59fb59a08797822f224d4939f18eb851a4f44056ebd9182a8063763123",
-    "design-system/keiko-inputs.css": "2af2f2a99e8e0f68356a0f514e87a4d478fc9432109843744801e80914ac0f60",
-    "design-system/keiko-data.css": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270",
-    "design-system/lift-doc.css": "b102a6ce5f3c76168e9642ef0f4e2e0ed198e93f4255d867a04c35b986b78cde",
-    "design-system/keiko-ai.css": "0874e344c4465364d6bca9ddeb8ac76e3b6aedbab14924f4981704d51c364bdf",
-    "design-system/keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b",
-    "design-system/keiko-dataviz.css": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1"
-  },
-  "scope": "Restore only the reported SVG start tags from the baseline in otherwise current HTML/CSS; scripts and network are disabled. Compare static pixels in four theme/contrast modes and run SVG-specific axe rules. This isolates SVG semantics from the separately verified CSS corrections.",
+  "stylesheetSha256": [
+    {
+      "file": "design-system/keiko-fonts.css",
+      "sha256": "6c487e130c799b7141882c158cf9ec587ce6b86074aa27b9bd68836702816aaf"
+    },
+    {
+      "file": "design-system/keiko-tokens.css",
+      "sha256": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d"
+    },
+    {
+      "file": "design-system/keiko-semantic-tokens.css",
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
+    },
+    {
+      "file": "design-system/ds.css",
+      "sha256": "6c76abd249c8b668ea8a408ba5d3162519f4f0b40f88c46d5b584d68e9be1a76"
+    },
+    {
+      "file": "design-system/components.css",
+      "sha256": "42453c59fb59a08797822f224d4939f18eb851a4f44056ebd9182a8063763123"
+    },
+    {
+      "file": "design-system/keiko-inputs.css",
+      "sha256": "2af2f2a99e8e0f68356a0f514e87a4d478fc9432109843744801e80914ac0f60"
+    },
+    {
+      "file": "design-system/keiko-data.css",
+      "sha256": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270"
+    },
+    {
+      "file": "design-system/lift-doc.css",
+      "sha256": "b102a6ce5f3c76168e9642ef0f4e2e0ed198e93f4255d867a04c35b986b78cde"
+    },
+    {
+      "file": "design-system/keiko-ai.css",
+      "sha256": "0874e344c4465364d6bca9ddeb8ac76e3b6aedbab14924f4981704d51c364bdf"
+    },
+    {
+      "file": "design-system/keiko-nav.css",
+      "sha256": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
+    },
+    {
+      "file": "design-system/keiko-dataviz.css",
+      "sha256": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1"
+    }
+  ],
+  "scope": "Restore only the reported SVG start tags from the baseline in otherwise current HTML/CSS. The HTML parser removes fixture script elements and browser requests are blocked; owned measurement/axe code is injected. Compare full-page pixels from scroll position zero with a neutral pointer, settled fonts and CSS/SMIL timelines at zero in four theme/contrast modes. Run SVG-specific axe rules. This isolates SVG semantics from separately verified CSS corrections.",
   "dataGridInteraction": {
     "identicalBehavior": true,
     "nativeTable": true,
@@ -54,7 +88,7 @@
   "failedComparisons": 0,
   "targets": [
     {
-      "key": "AaFcmF6hKA4ddiRM6TZi",
+      "issueId": "AaFcmF6hKA4ddiRM6TZi",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/Keiko Icon System.html",
       "analysedLine": 382,
@@ -70,7 +104,7 @@
       "accessibleName": "Search icon with two gaps"
     },
     {
-      "key": "AaFcmF6hKA4ddiRM6TZj",
+      "issueId": "AaFcmF6hKA4ddiRM6TZj",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/Keiko Icon System.html",
       "analysedLine": 400,
@@ -86,7 +120,7 @@
       "accessibleName": "Terminal icon with flat stroke caps and an unbroken frame"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY5",
+      "issueId": "AaFcmF2sKA4ddiRM6TY5",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 57,
@@ -102,7 +136,7 @@
       "accessibleName": "Assistant"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY6",
+      "issueId": "AaFcmF2sKA4ddiRM6TY6",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 79,
@@ -118,7 +152,7 @@
       "accessibleName": "Assistant"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY7",
+      "issueId": "AaFcmF2sKA4ddiRM6TY7",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 119,
@@ -134,7 +168,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY8",
+      "issueId": "AaFcmF2sKA4ddiRM6TY8",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 140,
@@ -150,7 +184,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY9",
+      "issueId": "AaFcmF2sKA4ddiRM6TY9",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 173,
@@ -166,7 +200,7 @@
       "accessibleName": "Assistant"
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY-",
+      "issueId": "AaFcmF2sKA4ddiRM6TY-",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 238,
@@ -182,7 +216,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TY_",
+      "issueId": "AaFcmF2sKA4ddiRM6TY_",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 271,
@@ -198,7 +232,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF2sKA4ddiRM6TZA",
+      "issueId": "AaFcmF2sKA4ddiRM6TZA",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/ai-components.html",
       "analysedLine": 303,
@@ -214,7 +248,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZW",
+      "issueId": "AaFcmF6RKA4ddiRM6TZW",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 71,
@@ -230,7 +264,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZX",
+      "issueId": "AaFcmF6RKA4ddiRM6TZX",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 98,
@@ -246,7 +280,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZY",
+      "issueId": "AaFcmF6RKA4ddiRM6TZY",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 119,
@@ -262,7 +296,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZZ",
+      "issueId": "AaFcmF6RKA4ddiRM6TZZ",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 152,
@@ -278,7 +312,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6RKA4ddiRM6TZa",
+      "issueId": "AaFcmF6RKA4ddiRM6TZa",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/data-grid.html",
       "analysedLine": 267,
@@ -294,7 +328,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZt",
+      "issueId": "AaFcmF64KA4ddiRM6TZt",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 164,
@@ -310,7 +344,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZu",
+      "issueId": "AaFcmF64KA4ddiRM6TZu",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 191,
@@ -326,7 +360,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZv",
+      "issueId": "AaFcmF64KA4ddiRM6TZv",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 235,
@@ -342,7 +376,7 @@
       "accessibleName": "Completed"
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZw",
+      "issueId": "AaFcmF64KA4ddiRM6TZw",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 365,
@@ -358,7 +392,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF64KA4ddiRM6TZx",
+      "issueId": "AaFcmF64KA4ddiRM6TZx",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/flows.html",
       "analysedLine": 388,
@@ -374,7 +408,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZB",
+      "issueId": "AaFcmF5CKA4ddiRM6TZB",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 90,
@@ -390,7 +424,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZC",
+      "issueId": "AaFcmF5CKA4ddiRM6TZC",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 115,
@@ -406,7 +440,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZD",
+      "issueId": "AaFcmF5CKA4ddiRM6TZD",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 137,
@@ -422,7 +456,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZE",
+      "issueId": "AaFcmF5CKA4ddiRM6TZE",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 162,
@@ -438,7 +472,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZF",
+      "issueId": "AaFcmF5CKA4ddiRM6TZF",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 184,
@@ -454,7 +488,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZG",
+      "issueId": "AaFcmF5CKA4ddiRM6TZG",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 205,
@@ -470,7 +504,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZH",
+      "issueId": "AaFcmF5CKA4ddiRM6TZH",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 226,
@@ -486,7 +520,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZI",
+      "issueId": "AaFcmF5CKA4ddiRM6TZI",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 248,
@@ -502,7 +536,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZJ",
+      "issueId": "AaFcmF5CKA4ddiRM6TZJ",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 271,
@@ -518,7 +552,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZK",
+      "issueId": "AaFcmF5CKA4ddiRM6TZK",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 294,
@@ -534,7 +568,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZL",
+      "issueId": "AaFcmF5CKA4ddiRM6TZL",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 318,
@@ -550,7 +584,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZM",
+      "issueId": "AaFcmF5CKA4ddiRM6TZM",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 341,
@@ -566,7 +600,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZN",
+      "issueId": "AaFcmF5CKA4ddiRM6TZN",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 366,
@@ -582,7 +616,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZO",
+      "issueId": "AaFcmF5CKA4ddiRM6TZO",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 391,
@@ -598,7 +632,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZP",
+      "issueId": "AaFcmF5CKA4ddiRM6TZP",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 415,
@@ -614,7 +648,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZQ",
+      "issueId": "AaFcmF5CKA4ddiRM6TZQ",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 442,
@@ -630,7 +664,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZR",
+      "issueId": "AaFcmF5CKA4ddiRM6TZR",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 462,
@@ -646,7 +680,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF5CKA4ddiRM6TZS",
+      "issueId": "AaFcmF5CKA4ddiRM6TZS",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/index.html",
       "analysedLine": 483,
@@ -662,7 +696,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZk",
+      "issueId": "AaFcmF6pKA4ddiRM6TZk",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 63,
@@ -678,7 +712,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZl",
+      "issueId": "AaFcmF6pKA4ddiRM6TZl",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 76,
@@ -694,7 +728,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZm",
+      "issueId": "AaFcmF6pKA4ddiRM6TZm",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 89,
@@ -710,7 +744,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZn",
+      "issueId": "AaFcmF6pKA4ddiRM6TZn",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 163,
@@ -726,7 +760,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZo",
+      "issueId": "AaFcmF6pKA4ddiRM6TZo",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 182,
@@ -742,7 +776,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZp",
+      "issueId": "AaFcmF6pKA4ddiRM6TZp",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 228,
@@ -758,7 +792,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZq",
+      "issueId": "AaFcmF6pKA4ddiRM6TZq",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 283,
@@ -774,7 +808,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZr",
+      "issueId": "AaFcmF6pKA4ddiRM6TZr",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 301,
@@ -790,7 +824,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6pKA4ddiRM6TZs",
+      "issueId": "AaFcmF6pKA4ddiRM6TZs",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/inputs.html",
       "analysedLine": 354,
@@ -806,7 +840,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6EKA4ddiRM6TZV",
+      "issueId": "AaFcmF6EKA4ddiRM6TZV",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/motion.html",
       "analysedLine": 258,
@@ -822,7 +856,7 @@
       "accessibleName": "Data-flow connector example"
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZb",
+      "issueId": "AaFcmF6XKA4ddiRM6TZb",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 60,
@@ -838,7 +872,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZc",
+      "issueId": "AaFcmF6XKA4ddiRM6TZc",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 112,
@@ -854,7 +888,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZd",
+      "issueId": "AaFcmF6XKA4ddiRM6TZd",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 131,
@@ -870,7 +904,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZe",
+      "issueId": "AaFcmF6XKA4ddiRM6TZe",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 169,
@@ -886,7 +920,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZf",
+      "issueId": "AaFcmF6XKA4ddiRM6TZf",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 184,
@@ -902,7 +936,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZg",
+      "issueId": "AaFcmF6XKA4ddiRM6TZg",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 204,
@@ -918,7 +952,7 @@
       "accessibleName": null
     },
     {
-      "key": "AaFcmF6XKA4ddiRM6TZh",
+      "issueId": "AaFcmF6XKA4ddiRM6TZh",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/nav-components.html",
       "analysedLine": 221,
@@ -934,7 +968,7 @@
       "accessibleName": "Completed"
     },
     {
-      "key": "AaFcmF5jKA4ddiRM6TZU",
+      "issueId": "AaFcmF5jKA4ddiRM6TZU",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/dataviz.html",
       "analysedLine": 142,
@@ -950,7 +984,7 @@
       "accessibleName": "Example success rate with a mid-series dip and overall upward trend"
     },
     {
-      "key": "AaFcmF5PKA4ddiRM6TZT",
+      "issueId": "AaFcmF5PKA4ddiRM6TZT",
       "rule": "Web:ImgWithoutAltCheck",
       "file": "design-system/patterns.html",
       "analysedLine": 262,

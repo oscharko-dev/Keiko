@@ -157,3 +157,20 @@ paths = ['''^docs/qa/evidence/3881/acceptance-ledger\.json$''']
 targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''^\s*"authentic(?:Old)?OwnerCommit": "a535fae06f6b26f278614cc049a67e02caef5aa2",\s*$''']
+
+
+[[allowlists]]
+description = "PR #4069: 600 verified public Sonar issue identifiers and two verified design-token stylesheet SHA-256 fields in the immutable first review commit were detected as generic API keys. This history-only exemption intersects that commit, the three evidence paths, the exact public-ID field shape or exact source-hash lines, and the generic rule. Current records use issueId and file/hash records instead. No credential, future commit or whole file is exempted."
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["a34e60bda61ec0cf82e2dda28b3d511861a8b426"]
+paths = [
+  '''^docs/qa/sonarcloud-(?:blocker-medium|await-in-loop)-2026-10-24\.json$''',
+  '''^docs/design-system/evidence/sonarcloud-2026-10-24/svg-accessibility-proof\.json$''',
+]
+regexTarget = "line"
+regexes = [
+  '''^\s*"(?:key|issueKey)"\s*:\s*"Aa[A-Za-z0-9_-]{18}",?\s*$''',
+  '''^\s*"design-system/keiko-tokens\.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",?\s*$''',
+  '''^\s*"design-system/keiko-semantic-tokens\.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",?\s*$''',
+]

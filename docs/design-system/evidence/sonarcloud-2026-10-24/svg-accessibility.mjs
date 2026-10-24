@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { chromium } from "playwright";
+import { projectFixtureHtml } from "./fixture-html.mjs";
 
 const baseline = "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add";
 const report = JSON.parse(
@@ -33,15 +34,15 @@ function svgGeometry(element) {
 
 function targetRecord(issue, index, original, current) {
   if (JSON.stringify(svgGeometry(original)) !== JSON.stringify(svgGeometry(current))) {
-    throw new Error("SVG geometry changed at " + issue.key);
+    throw new Error("SVG geometry changed at " + issue.issueId);
   }
   const name = current.getAttribute("aria-label");
   const decorative = current.getAttribute("aria-hidden") === "true";
   if (!decorative && (current.getAttribute("role") !== "img" || !name)) {
-    throw new Error("Missing accessible image name at " + issue.key);
+    throw new Error("Missing accessible image name at " + issue.issueId);
   }
   if (current.querySelector('a[href], [tabindex]:not([tabindex="-1"])')) {
-    throw new Error("An SVG contains interactive descendants at " + issue.key);
+    throw new Error("An SVG contains interactive descendants at " + issue.issueId);
   }
   return {
     ...issue,
@@ -68,7 +69,7 @@ function pagePair(file) {
       const index = oldSvgs.findIndex(
         (svg) => original.nodeLocation(svg).startLine === issue.analysedLine,
       );
-      if (index < 0) throw new Error("Missing baseline SVG at " + issue.key);
+      if (index < 0) throw new Error("Missing baseline SVG at " + issue.issueId);
       const oldTag = original.nodeLocation(oldSvgs[index]).startTag;
       const newTag = current.nodeLocation(newSvgs[index]).startTag;
       patches.push({ ...newTag, text: previous.slice(oldTag.startOffset, oldTag.endOffset) });
@@ -81,21 +82,20 @@ function pagePair(file) {
   return { file, before, after: source, targets };
 }
 
-function inlineStyles(source) {
-  return source.replace(/<link rel="stylesheet" href="([\w-]+\.css)"\s*\/>/gu, (_match, name) => {
-    const file = "design-system/" + name;
-    const css = readFileSync(file, "utf8");
-    stylesheetHashes.set(file, hash(css));
-    return `<style>${css}</style>`;
+function fixtureHtml(source, scriptSelector = "script") {
+  return projectFixtureHtml(source, {
+    scriptSelector,
+    readStylesheet: (name) => {
+      const file = "design-system/" + name;
+      const css = readFileSync(file, "utf8");
+      stylesheetHashes.set(file, hash(css));
+      return css;
+    },
   });
 }
 
-function isolatedHtml(source) {
-  return inlineStyles(source.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gu, ""));
-}
-
 async function exerciseGrid(page, source) {
-  const html = inlineStyles(source.replace(/<script\b[^>]*\bsrc=[^>]*>[\s\S]*?<\/script>/gu, ""));
+  const html = fixtureHtml(source, "script[src]");
   await page.setContent(html);
   const table = page.locator("#grid-table");
   const boxes = table.locator(".rowsel");
@@ -160,16 +160,23 @@ async function checkGrid(page) {
 }
 
 async function render(page, source, mode) {
-  await page.setContent(isolatedHtml(source));
-  await page.evaluate((input) => {
+  await page.setContent(fixtureHtml(source));
+  await page.mouse.move(0, 0);
+  await page.evaluate(async (input) => {
+    window.scrollTo({ left: 0, top: 0, behavior: "instant" });
     document.documentElement.dataset.theme = input.theme;
     if (input.contrast) document.documentElement.dataset.hc = "more";
     else delete document.documentElement.dataset.hc;
+    await document.fonts.ready;
     for (const animation of document.getAnimations()) {
       animation.pause();
       animation.currentTime = 0;
     }
-    for (const svg of document.querySelectorAll("svg")) svg.pauseAnimations();
+    for (const svg of document.querySelectorAll("svg")) {
+      svg.pauseAnimations();
+      svg.setCurrentTime(0);
+    }
+    await new Promise(requestAnimationFrame);
   }, mode);
   return await page.screenshot({ fullPage: true, animations: "disabled", caret: "hide" });
 }
@@ -213,19 +220,23 @@ async function main() {
     await page.route("**/*", (route) => route.abort());
     const dataGridInteraction = await checkGrid(page);
     const result = await checkPages(page);
+    if (stylesheetHashes.size !== 11) {
+      throw new Error("The ten reference pages must load their eleven distinct local stylesheets.");
+    }
     const failures = result.rows.filter(
       (row) => !row.identicalPixels || row.violationCount || row.incompleteCount,
     );
     const proof = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       baselineRevision: baseline,
       nodeVersion: process.version,
       chromiumVersion: browser.version(),
       harnessSha256: hash(readFileSync(new URL(import.meta.url))),
+      fixtureHtmlHelperSha256: hash(readFileSync(new URL("./fixture-html.mjs", import.meta.url))),
       fileSha256: Object.fromEntries(files.map((file) => [file, hash(readFileSync(file))])),
-      stylesheetSha256: Object.fromEntries(stylesheetHashes),
+      stylesheetSha256: [...stylesheetHashes].map(([file, sha256]) => ({ file, sha256 })),
       scope:
-        "Restore only the reported SVG start tags from the baseline in otherwise current HTML/CSS; scripts and network are disabled. Compare static pixels in four theme/contrast modes and run SVG-specific axe rules. This isolates SVG semantics from the separately verified CSS corrections.",
+        "Restore only the reported SVG start tags from the baseline in otherwise current HTML/CSS. The HTML parser removes fixture script elements and browser requests are blocked; owned measurement/axe code is injected. Compare full-page pixels from scroll position zero with a neutral pointer, settled fonts and CSS/SMIL timelines at zero in four theme/contrast modes. Run SVG-specific axe rules. This isolates SVG semantics from separately verified CSS corrections.",
       dataGridInteraction,
       sourceGeometryComparisons: result.targets.length,
       pixelComparisons: result.rows.length,

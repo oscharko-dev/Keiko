@@ -43,7 +43,7 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout                               |
 
 The 2026-09-30 OSV scan found newly reported advisories in the previous lockfile. The patched
-resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-address` 10.7.2.
+resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.9, and `ip-address` 10.7.2.
 The two `brace-expansion` majors are pinned under their respective `minimatch` consumers so neither
 receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
 with the updated lockfile.
@@ -202,8 +202,8 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fast-uri`                    | root                  | 3.1.8   | current        | Patch for GHSA-hrr3-gc8f-f4qj and earlier advisories; exact OSV 2.6.0 lockfile scan passes. PR #3676.                                                                                                                                                                                                                                        |
-| `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                                                        |
+| `fast-uri`                    | root                  | 3.1.9   | major-deferred | Patched 3.x line for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h. Retains the compatible major used by current consumers; 4.2.3 is available. Scoped refresh in PR #4069.                                                                                                                          |
+| `undici`                      | root                  | 8.12.2  | patch-deferred | Reviewed fixes for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The jsdom override uses 8.12.2; the other-consumer override uses 7.30.1. Later 8.12.3 is available; this repair retains the prepared compatible floors from PR #4050. PR #4069.                                                                         |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                                                       |
@@ -249,7 +249,7 @@ or peer graph).
 | `prettier`                    | root                  | 3.9.10  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `knip`                        | root                  | 6.41.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                                                       |
-| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.                                                                                                                                                                                                                                                       |
+| `fallow`                      | root                  | 3.34.0  | patch-deferred | Security floor for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5. The semantic-duplication command and zero-issue threshold are unchanged; 3.35.0 remains a separately qualified follow-up. Reuses the version repair from PR #4050. PR #4069.                                                                                                 |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.11  | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.30  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                                                         |
@@ -629,3 +629,19 @@ The compatibility-gate controls reproduce both failures with 6.4.299 before this
 The owner also retained the existing axe-core 4.12.1 test dependency. GitHub dependency review
 rejects the proposed 4.14.0 MPL-2.0 update under its existing permissive-license policy. This
 disposition adds no license exception or policy change and does not remove accessibility tests.
+
+### 2026-10-24 — Sonar repair CI dependency blockers (PR #4069)
+
+The exact pinned OSV 2.7.0 container reproduced 17 findings on the unchanged baseline locks.
+This repair reuses the bounded dependency versions already prepared in PR #4050: root undici
+7.30.1/8.12.2, fast-uri 3.1.9 and Fallow 3.34.0; native undici 6.29.1/8.12.2 and Zod 4.6.7.
+No OpenCode, Effect or other native package version changes. The native graph removes the three
+nested Zod copies while retaining the existing fixed host, model binding and authority profile.
+
+All 70 native host tests pass, including original issuer-bound MCP refresh, guarded provider
+transport, PTY behavior, the original GitLab direct-access client with valid and malformed header
+records, and an early-rejection control for oversized constrained Zod arrays. This is evidence
+for the tested product/SDK paths rather than a claim of exhaustive upstream API equivalence.
+The same OSV container then reports no unwaived issue; the existing, unchanged, time-boxed
+build-only braces disposition remains recorded in osv-scanner.toml. No advisory waiver, gate
+threshold, provider availability or release approval is added.

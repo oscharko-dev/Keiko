@@ -12,9 +12,44 @@ const { auth } = await import(
   pathToFileURL(join(moduleRoot, "@modelcontextprotocol/client/dist/index.mjs"))
 );
 const { default: matter } = await import(pathToFileURL(join(moduleRoot, "gray-matter/index.js")));
+const { z } = await import(pathToFileURL(join(moduleRoot, "zod/index.js")));
+const { GitLabDirectAccessClient } = await import(
+  pathToFileURL(join(moduleRoot, "gitlab-ai-provider/dist/index.mjs"))
+);
 
 const issuer = "https://issuer.example.test";
 const serverUrl = "https://mcp.example.test/api";
+
+test("constrained Zod collections reject oversized input before validating its elements", () => {
+  let visited = 0;
+  const item = z.preprocess((value) => {
+    visited++;
+    return value;
+  }, z.string());
+  const schema = z.array(item).max(2);
+  assert.deepEqual(schema.parse(["first", "second"]), ["first", "second"]);
+  visited = 0;
+  const result = schema.safeParse([0, 1, 2]);
+  assert.equal(result.success, false);
+  assert.equal(visited, 0);
+  assert.deepEqual(
+    result.error.issues.map((issue) => issue.code),
+    ["too_big"],
+  );
+});
+
+test("the original GitLab provider validates header records with the patched Zod runtime", async () => {
+  const valid = { token: "fixture-token", headers: { Authorization: "fixture-header" } };
+  let response = valid;
+  const client = new GitLabDirectAccessClient({
+    instanceUrl: "https://gitlab.example.test",
+    getHeaders: () => ({}),
+    fetch: () => Promise.resolve(Response.json(response)),
+  });
+  assert.deepEqual(await client.getDirectAccessToken(), valid);
+  response = { token: "fixture-token", headers: { Authorization: 123 } };
+  await assert.rejects(client.getDirectAccessToken(true), { name: "GitLabError" });
+});
 
 async function oauthFixture(storedIssuer = issuer) {
   const store = original.memoryStore();

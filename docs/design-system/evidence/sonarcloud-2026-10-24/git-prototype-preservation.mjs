@@ -2,9 +2,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright";
+import { projectFixtureHtml } from "./fixture-html.mjs";
 
 const baseline = "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add";
 const file = "design-system/git-window.html";
+const stylesheetSources = new Map();
 const states = ["changes", "history", "empty"];
 const properties = [
   "display",
@@ -29,12 +31,18 @@ function source(path, revision) {
 }
 
 function fixtureHtml(revision) {
-  return source(file, revision)
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gu, "")
-    .replace(
-      /<link rel="stylesheet" href="([\w-]+\.css)"\s*\/>/gu,
-      (_match, stylesheet) => `<style>${source("design-system/" + stylesheet, revision)}</style>`,
-    );
+  return projectFixtureHtml(source(file, revision), {
+    readStylesheet: (name) => {
+      const file = "design-system/" + name;
+      const css = source(file, revision);
+      stylesheetSources.set(`${revision}:${file}`, {
+        file,
+        revision,
+        sha256: createHash("sha256").update(css).digest("hex"),
+      });
+      return css;
+    },
+  });
 }
 
 // Execute only the showcase's state projection, without running its embedded scripts.
@@ -90,6 +98,8 @@ function writeProof(browser, result) {
     file,
     sourceSha256: hash(source(file, 1)),
     harnessSha256: hash(readFileSync(new URL(import.meta.url))),
+    fixtureHtmlHelperSha256: hash(readFileSync(new URL("./fixture-html.mjs", import.meta.url))),
+    stylesheetSources: [...stylesheetSources.values()],
     nodeVersion: process.version,
     chromiumVersion: browser.version(),
     states,
@@ -110,13 +120,16 @@ function writeProof(browser, result) {
 async function main() {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({ javaScriptEnabled: false });
     await page.route("**/*", (route) => route.abort());
     const result = { comparisons: 0, differences: [] };
     for (const state of states) {
       const original = await readState(page, state, 0);
       const current = await readState(page, state, 1);
       compareState(state, original, current, result);
+    }
+    if (stylesheetSources.size !== 10) {
+      throw new Error("Both prototype revisions must load their five local stylesheets.");
     }
     writeProof(browser, result);
   } finally {
