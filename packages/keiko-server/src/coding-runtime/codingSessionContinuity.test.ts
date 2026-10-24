@@ -184,6 +184,31 @@ describe("the continuity service over a state directory", () => {
     );
   });
 
+  it("starts anyway, and records one failed line, when the retained root cannot be listed", () => {
+    const dir = stateDir();
+    mkdirSync(join(dir, "coding-runtime"), { recursive: true });
+    // A file where the directory of entries belongs: listing it fails, which is not a refusal.
+    writeFileSync(retainedSessionRoot(dir), "not a directory");
+    const log = createBufferedServerLogSink();
+
+    const service = createStateCodingSessionContinuity({
+      stateDir: dir,
+      retention: undefined,
+      history: undefined,
+      activityLog: log,
+    });
+
+    expect(service.store).toBeDefined();
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      level: "warn",
+      extra: { action: "prune", outcome: "failed", reason: "copy-failed" },
+    });
+    expect(Array.isArray((event?.extra as { frames?: unknown } | undefined)?.frames)).toBe(true);
+    expect(JSON.stringify(event)).not.toContain(dir);
+  });
+
   it("writes nothing at startup when there was nothing to remove", () => {
     const log = createBufferedServerLogSink();
 

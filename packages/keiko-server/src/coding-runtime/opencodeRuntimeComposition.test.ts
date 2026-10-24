@@ -723,6 +723,8 @@ interface FixtureContinuity {
   readonly requests: { readonly method: string; readonly path: string; readonly body?: string }[];
   /** The id a fork gets; `ses_tool` is the one session the rest of the fixture answers for. */
   readonly forkedSessionId?: string;
+  /** The runtime answers the session listing with a server error: it cannot be asked at all. */
+  readonly listFails?: boolean;
 }
 
 function optionalSessionContinuity(control: StartBridgeControl | undefined): {
@@ -762,7 +764,10 @@ const CONTINUITY_ROUTES: readonly ContinuityRoute[] = [
     method: "GET",
     pattern: /^\/api\/session$/u,
     recorded: false,
-    respond: (held, _match, _body, session): Response => v2Envelope(held.sessions.map(session)),
+    respond: (held, _match, _body, session): Response =>
+      held.listFails === true
+        ? new Response("{}", { status: 500 })
+        : v2Envelope(held.sessions.map(session)),
   },
   {
     method: "POST",
@@ -9661,6 +9666,7 @@ describe("native session continuity in the composition", () => {
       forkedSessionId?: string;
       /** False leaves every session route to the fixture's own, as for a run that continues nothing. */
       serveSessions?: boolean;
+      listFails?: boolean;
     } = {},
   ): { readonly continuity: FixtureContinuity; readonly calls: StoreCalls } {
     const calls: StoreCalls = {
@@ -9718,6 +9724,7 @@ describe("native session continuity in the composition", () => {
           { id: "msg_earlier_2", type: "earlier-run-answer" },
         ],
         requests: [],
+        ...(options.listFails === true ? { listFails: true } : {}),
         ...(options.forkedSessionId === undefined
           ? {}
           : { forkedSessionId: options.forkedSessionId }),
@@ -9887,6 +9894,29 @@ describe("native session continuity in the composition", () => {
     ]);
     // An entry the runtime does not see the way its manifest says is never used again.
     expect(world.calls.removed).toContain(TASK);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+
+  it("records a runtime that cannot be asked for its sessions with its error and fails the readiness", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({ listFails: true });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+      activityLog,
+      expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+    });
+
+    // Not a mismatch the retained entry caused, so the line carries the failure's frames.
+    const [failed] = continuityLines(activityLog);
+    expect(failed).toMatchObject({
+      action: "resume",
+      outcome: "failed",
+      reason: "session-mismatch",
+    });
+    expect(Array.isArray(failed?.frames)).toBe(true);
     expect(fixture.runtime.manager.health().status).toBe("stopped");
   });
 

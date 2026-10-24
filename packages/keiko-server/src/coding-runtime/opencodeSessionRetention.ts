@@ -120,7 +120,7 @@ export type RetainResult =
       readonly entryCount: number;
       readonly prunedCount: number;
     }
-  | { readonly ok: false; readonly reason: RetentionRefusal; readonly error?: unknown };
+  | { readonly ok: false; readonly reason: RetentionRefusal };
 
 export type CheckoutResult =
   | {
@@ -135,7 +135,6 @@ export type CheckoutResult =
       readonly reason: RetentionRefusal;
       /** The refusal can never become valid, so the entry was removed. */
       readonly removed: boolean;
-      readonly error?: unknown;
     };
 
 export interface PruneResult {
@@ -241,29 +240,25 @@ class Store {
         entryCount: pruned.entryCount,
         prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
       };
-    } catch (error) {
-      return { ok: false, reason: "copy-failed", error };
     } finally {
+      // A refusal is a result; a filesystem or database failure propagates to the caller, which owns
+      // the log port and records it with its frames and causes.
       rmSync(staging, { recursive: true, force: true });
     }
   }
 
   public checkout(input: Parameters<RetainedSessionStore["checkout"]>[0]): CheckoutResult {
     const entry = join(this.root, retainedSessionKey(input.binding.taskId));
-    try {
-      if (!existsSync(entry)) return { ok: false, reason: "no-retained-state", removed: false };
-      const manifest = this.readManifest(entry);
-      const refusal =
-        manifest === undefined
-          ? ("integrity-failed" as const)
-          : this.bindingRefusal(manifest, input.binding);
-      if (manifest === undefined || refusal !== undefined) {
-        return this.refuse(input.binding.taskId, refusal ?? "integrity-failed");
-      }
-      return this.copyOut(entry, manifest, input);
-    } catch (error) {
-      return { ok: false, reason: "copy-failed", removed: false, error };
+    if (!existsSync(entry)) return { ok: false, reason: "no-retained-state", removed: false };
+    const manifest = this.readManifest(entry);
+    const refusal =
+      manifest === undefined
+        ? ("integrity-failed" as const)
+        : this.bindingRefusal(manifest, input.binding);
+    if (manifest === undefined || refusal !== undefined) {
+      return this.refuse(input.binding.taskId, refusal ?? "integrity-failed");
     }
+    return this.copyOut(entry, manifest, input);
   }
 
   public remove(taskId: string): void {
@@ -414,8 +409,10 @@ class Store {
     if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
     try {
       return parseManifest(JSON.parse(readFileSync(path, "utf8")) as unknown);
-    } catch {
-      return undefined;
+    } catch (error) {
+      // Text that is not JSON is a manifest that cannot be trusted; an unreadable file is a failure.
+      if (error instanceof SyntaxError) return undefined;
+      throw error;
     }
   }
 
@@ -537,9 +534,16 @@ function fileSize(path: string): number | undefined {
   try {
     const stat = statSync(path);
     return stat.isFile() ? stat.size : undefined;
-  } catch {
-    return undefined;
+  } catch (error) {
+    // Only an absent path is "no file"; a path that cannot be examined is a failure.
+    if (isAbsentPath(error)) return undefined;
+    throw error;
   }
+}
+
+function isAbsentPath(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 function hashFile(path: string): { readonly sha256: string; readonly bytes: number } {
@@ -606,6 +610,17 @@ interface SessionRow {
   readonly time_suspended?: unknown;
 }
 
+/** The audit could not read what it must: the schema is not the one it knows. */
+class AuditRefused extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "AuditRefused";
+  }
+}
+
+/** The `code` node:sqlite gives every error SQLite reports (an unopenable file, a missing table). */
+const SQLITE_ERROR = "ERR_SQLITE_ERROR";
+
 /**
  * Proves that a database holds exactly one session, the expected one, and no state that could act
  * with authority a later run does not have: saved grants, credentials, queued inputs, a staged undo.
@@ -616,8 +631,15 @@ export function auditDatabase(path: string, expected: AuditExpectation): AuditRe
   try {
     database = new DatabaseSync(path, { readOnly: true });
     return auditOpenDatabase(database, expected);
-  } catch {
-    return { ok: false, reason: "schema-unknown" };
+  } catch (error) {
+    // A file SQLite cannot open or whose tables are not the ones audited is an unknown schema.
+    if (
+      error instanceof AuditRefused ||
+      (error as { code?: unknown } | undefined)?.code === SQLITE_ERROR
+    ) {
+      return { ok: false, reason: "schema-unknown" };
+    }
+    throw error;
   } finally {
     database?.close();
   }
@@ -681,8 +703,10 @@ function emptyRuleset(value: unknown): boolean {
   try {
     const parsed: unknown = JSON.parse(value);
     return parsed === null || (Array.isArray(parsed) && parsed.length === 0);
-  } catch {
-    return false;
+  } catch (error) {
+    // A ruleset that is not JSON is not provably empty.
+    if (error instanceof SyntaxError) return false;
+    throw error;
   }
 }
 
@@ -691,7 +715,7 @@ function rowCount(database: DatabaseSync, sql: string, ...parameters: string[]):
   const count = row?.n;
   if (typeof count === "bigint") return Number(count);
   if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
-    throw new Error("retained-count-invalid");
+    throw new AuditRefused("retained-count-invalid");
   }
   return count;
 }

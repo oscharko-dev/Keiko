@@ -177,23 +177,37 @@ export function createStateCodingSessionContinuity(
         isLiveTask: (taskId) => input.history?.get(taskId) !== undefined,
       })
     : undefined;
-  const pruned = store?.prune();
-  if (
-    pruned !== undefined &&
-    pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota > 0
-  ) {
-    recordSessionContinuity(input.activityLog, {
-      runId: "session-retention-startup",
-      action: "prune",
-      outcome: "pruned",
-      entryCount: pruned.entryCount,
-      prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
-    });
-  }
+  if (store !== undefined) pruneAtStartup(store, input.activityLog);
   return createCodingSessionContinuity({
     store,
     taskOfRun: (runId) => input.history?.forRun(runId)?.id,
   });
+}
+
+/** A prune that cannot run is one `failed` line; the server starts, and the next retain prunes. */
+function pruneAtStartup(store: RetainedSessionStore, activityLog: ServerLogSink | undefined): void {
+  const runId = "session-retention-startup";
+  try {
+    const pruned = store.prune();
+    const prunedCount = pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota;
+    if (prunedCount > 0) {
+      recordSessionContinuity(activityLog, {
+        runId,
+        action: "prune",
+        outcome: "pruned",
+        entryCount: pruned.entryCount,
+        prunedCount,
+      });
+    }
+  } catch (error) {
+    recordSessionContinuity(activityLog, {
+      runId,
+      action: "prune",
+      outcome: "failed",
+      reason: "copy-failed",
+      error,
+    });
+  }
 }
 
 const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({

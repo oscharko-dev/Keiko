@@ -2069,9 +2069,22 @@ async function bindRunSession(
   if (continuation === undefined || context === undefined) {
     return createAndEchoV2Session(client, run.workspaceRoot, signal);
   }
-  const bound = await bindContinuedSession(client, continuation, run.workspaceRoot, signal);
-  const forked = continuation.intent.kind === "fork";
   const line = continuedSessionLine(context, run, continuation);
+  let bound: Awaited<ReturnType<typeof bindContinuedSession>>;
+  try {
+    bound = await bindContinuedSession(client, continuation, run.workspaceRoot, signal);
+  } catch (error) {
+    // Not a refusal (the runtime could not be asked, or the run was cancelled): the readiness fails
+    // with the error itself, and the continuity line says the session was never bound.
+    recordSessionContinuity(input.activityLog, {
+      ...line,
+      outcome: "failed",
+      reason: "session-mismatch",
+      error,
+    });
+    throw error;
+  }
+  const forked = continuation.intent.kind === "fork";
   if (!bound.ok) {
     // An entry the runtime does not see the way its manifest says can never be used again.
     if (bound.reason === "session-mismatch") context.service.store?.remove(continuation.taskId);

@@ -51,7 +51,13 @@ interface StoreCalls {
   readonly removed: string[];
 }
 
-function fakeStore(results: { checkout?: CheckoutResult; retain?: RetainResult | Error } = {}): {
+function fakeStore(
+  results: {
+    checkout?: CheckoutResult | Error;
+    retain?: RetainResult | Error;
+    remove?: Error;
+  } = {},
+): {
   readonly store: RetainedSessionStore;
   readonly calls: StoreCalls;
 } {
@@ -59,15 +65,15 @@ function fakeStore(results: { checkout?: CheckoutResult; retain?: RetainResult |
   const store: RetainedSessionStore = {
     checkout: (input) => {
       calls.checkouts.push(input);
-      return (
-        results.checkout ?? {
-          ok: true,
-          sessionId: SESSION,
-          databaseBytes: 2048,
-          messageCount: 9,
-          ageMs: 4000,
-        }
-      );
+      const result = results.checkout ?? {
+        ok: true,
+        sessionId: SESSION,
+        databaseBytes: 2048,
+        messageCount: 9,
+        ageMs: 4000,
+      };
+      if (result instanceof Error) throw result;
+      return result;
     },
     retain: (input) => {
       calls.retains.push(input);
@@ -83,6 +89,7 @@ function fakeStore(results: { checkout?: CheckoutResult; retain?: RetainResult |
     },
     remove: (taskId) => {
       calls.removed.push(taskId);
+      if (results.remove !== undefined) throw results.remove;
     },
     prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
   };
@@ -248,7 +255,6 @@ describe("seeding a run's database from a task's retained entry", () => {
     ["pending-input", "refused"],
     ["schema-unknown", "refused"],
     ["session-mismatch", "refused"],
-    ["copy-failed", "failed"],
   ] as const)("falls back with %s and records it as %s", (reason, outcome) => {
     const h = harness({ results: { checkout: { ok: false, reason, removed: false } } });
     h.service.declare(RUN, RESUME);
@@ -286,19 +292,17 @@ describe("seeding a run's database from a task's retained entry", () => {
     ]);
   });
 
-  it("records a failed checkout with its error frames", () => {
-    const h = harness({
-      results: {
-        checkout: { ok: false, reason: "copy-failed", removed: false, error: new Error("EIO") },
-      },
-    });
+  it("starts fresh and records a checkout that throws with its error frames", () => {
+    const h = harness({ results: { checkout: new Error("EIO: /secret/path") } });
     h.service.declare(RUN, RESUME);
 
-    seedContinuation(h.context, location());
+    expect(() => seedContinuation(h.context, location())).not.toThrow();
 
+    expect(h.outcomes).toEqual([{ kind: "fresh", reason: "copy-failed" }]);
     const [line] = lines(h);
     expect(line).toMatchObject({ outcome: "failed", reason: "copy-failed", level: "warn" });
     expect(Array.isArray((line as { frames?: unknown }).frames)).toBe(true);
+    expect(JSON.stringify(line)).not.toContain("/secret/path");
   });
 
   it("seeds the database a real store retained and refuses it for another workspace", () => {
@@ -495,6 +499,18 @@ describe("binding a run to the retained session it resumes", () => {
     expect(
       await bindContinuedSession(fake.client, continuation(RESUME), WORKSPACE, undefined),
     ).toMatchObject({ ok: false, reason: "history-oversized" });
+  });
+
+  it("propagates a runtime that cannot be asked instead of calling it a mismatch", async () => {
+    const fake = fakeClient({
+      sessions: () => {
+        throw new Error("socket hang up");
+      },
+    });
+
+    await expect(
+      bindContinuedSession(fake.client, continuation(RESUME), WORKSPACE, undefined),
+    ).rejects.toThrow("socket hang up");
   });
 
   it("starts under the default agent: a session left under plan is switched back, one under build is not", async () => {
@@ -778,7 +794,6 @@ describe("retaining a settled run", () => {
     ["grant-present", "refused"],
     ["pending-input", "refused"],
     ["database-oversized", "refused"],
-    ["copy-failed", "failed"],
   ] as const)(
     "records a store refusal of %s as %s and drops the stale entry",
     (reason, outcome) => {
@@ -801,6 +816,36 @@ describe("retaining a settled run", () => {
     const [line] = lines(h);
     expect(line).toMatchObject({ outcome: "failed", reason: "copy-failed" });
     expect(JSON.stringify(line)).not.toContain("/secret/path");
+    // The previous entry no longer describes the task once a later run could not be retained.
+    expect(h.calls.removed).toEqual([TASK]);
+  });
+
+  it("records a removal that throws as its own failed line and still records the outcome", () => {
+    const h = harness({
+      results: { retain: { ok: false, reason: "grant-present" }, remove: new Error("EPERM") },
+    });
+
+    expect(() => {
+      retainSettledRun(h.context, run, "succeeded");
+    }).not.toThrow();
+
+    expect(lines(h)).toMatchObject([
+      { action: "retain", outcome: "failed", reason: "copy-failed" },
+      { action: "retain", outcome: "refused", reason: "grant-present" },
+    ]);
+  });
+
+  it("removes the entry of a skipped run without throwing when the removal fails", () => {
+    const h = harness({ results: { remove: new Error("EPERM") } });
+
+    expect(() => {
+      retainSettledRun(h.context, run, "failed");
+    }).not.toThrow();
+
+    expect(lines(h)).toMatchObject([
+      { outcome: "failed", reason: "copy-failed" },
+      { outcome: "skipped", reason: "not-succeeded" },
+    ]);
   });
 
   it("never writes the workspace path or the task id into the line", () => {

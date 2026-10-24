@@ -379,8 +379,23 @@ describe("retaining a settled run's session state", () => {
     mkdirSync(join(f.root, "elsewhere"));
     symlinkSync(join(f.root, "elsewhere"), f.storeRoot);
 
-    expect(retain(f)).toMatchObject({ ok: false, reason: "copy-failed" });
+    // A store that cannot be trusted is a failure for the caller to record, not a refusal.
+    expect(() => retain(f)).toThrow("retained-root-invalid");
     expect(readdirSync(join(f.root, "elsewhere"))).toEqual([]);
+  });
+
+  it("throws, rather than reporting a missing database, when the source cannot be examined", () => {
+    const f = fixture();
+
+    expect(() =>
+      f.store.retain({
+        binding: binding(),
+        sessionId: SESSION_ID,
+        directory: WORKSPACE,
+        sourceDatabase: join(f.root, "x".repeat(5000)),
+      }),
+    ).toThrow(/ENAMETOOLONG/u);
+    expect(existsSync(f.storeRoot) ? entryNames(f) : []).toEqual([]);
   });
 });
 
@@ -560,13 +575,13 @@ describe("checking a retained entry out for a resuming run", () => {
     const destination = join(f.root, "occupied.db");
     writeFileSync(destination, "someone else's file");
 
-    const result = f.store.checkout({
-      binding: binding(),
-      directory: WORKSPACE,
-      destinationDatabase: destination,
-    });
-
-    expect(result).toMatchObject({ ok: false, reason: "copy-failed", removed: false });
+    expect(() =>
+      f.store.checkout({
+        binding: binding(),
+        directory: WORKSPACE,
+        destinationDatabase: destination,
+      }),
+    ).toThrow(/EEXIST/u);
     expect(readFileSync(destination, "utf8")).toBe("someone else's file");
     expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
   });

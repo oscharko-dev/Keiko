@@ -11,7 +11,7 @@ import {
   type SessionContinuityRecord,
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
-import type { RetainedSessionBinding } from "./opencodeSessionRetention.js";
+import type { CheckoutResult, RetainedSessionBinding } from "./opencodeSessionRetention.js";
 import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 
@@ -118,16 +118,23 @@ export function seedContinuation(
   const taskId = intent.kind === "resume" ? intent.taskId : intent.sourceTaskId;
   const store = context.service.store;
   if (!context.native || store === undefined) {
-    fallBack(context, location, intent, context.native ? "disabled" : "not-native-profile");
+    recordFallBack(context, location, intent, context.native ? "disabled" : "not-native-profile");
     return undefined;
   }
-  const checkout = store.checkout({
-    binding: bindingOf(context, location, taskId),
-    directory: location.workspaceRoot,
-    destinationDatabase: runtimeDatabasePath(location.runRoot),
-  });
+  let checkout: CheckoutResult;
+  try {
+    checkout = store.checkout({
+      binding: bindingOf(context, location, taskId),
+      directory: location.workspaceRoot,
+      destinationDatabase: runtimeDatabasePath(location.runRoot),
+    });
+  } catch (error) {
+    // A filesystem or database failure of the copy: the run starts fresh and the line carries it.
+    recordFallBack(context, location, intent, "copy-failed", error);
+    return undefined;
+  }
   if (!checkout.ok) {
-    fallBack(context, location, intent, checkout.reason, checkout.error);
+    recordFallBack(context, location, intent, checkout.reason);
     return undefined;
   }
   return {
@@ -140,7 +147,7 @@ export function seedContinuation(
   };
 }
 
-function fallBack(
+function recordFallBack(
   context: SessionContinuationContext,
   location: ContinuedRunLocation,
   intent: ContinuityIntent,
@@ -204,9 +211,11 @@ export async function bindContinuedSession(
     await resetAgent(client, sessionId, retained.agent, continuation.intent.kind, signal);
     return { ok: true, sessionId, baselineIds };
   } catch (error) {
-    return error instanceof ContinuationRefused
-      ? { ok: false, reason: error.reason, error: error.cause ?? error }
-      : { ok: false, reason: "session-mismatch", error };
+    if (error instanceof ContinuationRefused) {
+      return { ok: false, reason: error.reason, error: error.cause ?? error };
+    }
+    // Anything else is not a refusal: it propagates to the composition, which records it.
+    throw error;
   }
 }
 
@@ -377,12 +386,31 @@ export function retainSettledRun(
   }
   // An entry always describes the latest settled state of its task: a run that leaves none removes
   // the previous one, unless retention is off and there is none to remove.
-  if (store !== undefined && taskId !== undefined) store.remove(taskId);
+  if (store !== undefined && taskId !== undefined) removeEntry(context, store, taskId, line);
   recordSessionContinuity(context.activityLog, {
     ...line,
     outcome: "skipped",
     reason: reason ?? "no-task",
   });
+}
+
+/** Removes a task's entry; a removal that fails is one `failed` line, never a failed disposal. */
+function removeEntry(
+  context: SessionContinuationContext,
+  store: NonNullable<CodingSessionContinuity["store"]>,
+  taskId: string,
+  line: Pick<SessionContinuityRecord, "runId" | "action" | "taskId">,
+): void {
+  try {
+    store.remove(taskId);
+  } catch (error) {
+    recordSessionContinuity(context.activityLog, {
+      ...line,
+      outcome: "failed",
+      reason: "copy-failed",
+      error,
+    });
+  }
 }
 
 function skipReason(
@@ -428,14 +456,16 @@ function attemptRetain(
       });
       return;
     }
-    store.remove(taskId);
+    removeEntry(context, store, taskId, line);
     recordSessionContinuity(context.activityLog, {
       ...line,
-      outcome: result.reason === "copy-failed" ? "failed" : "refused",
+      outcome: "refused",
       reason: result.reason,
-      ...(result.error === undefined ? {} : { error: result.error }),
     });
   } catch (error) {
+    // The copy or the audit failed on the filesystem or in the database: the previous entry no
+    // longer describes the task, so it goes, and the line carries the failure.
+    removeEntry(context, store, taskId, line);
     recordSessionContinuity(context.activityLog, {
       ...line,
       outcome: "failed",
