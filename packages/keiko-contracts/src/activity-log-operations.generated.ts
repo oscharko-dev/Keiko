@@ -9158,6 +9158,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "template-shell-substitution",
           "agent-not-admitted",
           "name-mismatch",
+          "restriction-unrepresentable",
         ],
       },
       reason: {

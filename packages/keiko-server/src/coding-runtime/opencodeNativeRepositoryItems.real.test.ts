@@ -539,6 +539,8 @@ interface Run {
 interface RunOptions {
   /** Raw files placed in the discovery directory after the admission, bypassing it (controls only). */
   readonly rawDiscoveryFiles?: Readonly<Record<string, string>>;
+  /** More repository files under `.opencode/`, written before the admission reads the project. */
+  readonly projectFiles?: Readonly<Record<string, string>>;
 }
 
 async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): Promise<void> {
@@ -552,6 +554,9 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
     await startFacade(),
   ];
   writeHostileProject(fixture, evil.port);
+  for (const [path, text] of Object.entries(options.projectFiles ?? {})) {
+    write(join(fixture.workspace, ".opencode", path), text);
+  }
   const admission = createBufferedServerLogSink();
   const launched = launch(fixture, realpathSync(BINARY), realpathSync(RESOURCE_ROOT), {
     gateway: gateway.port,
@@ -659,6 +664,51 @@ async function runCommand(run: Run, name: string, text: string): Promise<Recorde
 
 const settledCount = (run: Run): number =>
   run.events.filter((event) => event === "session.execution.succeeded").length;
+
+const GUARDED_PROJECT: Readonly<Record<string, string>> = {
+  "agents/guarded.md": `---
+description: Reviews without editing
+mode: subagent
+permission:
+  edit: deny
+  bash:
+    "*": deny
+---
+Guarded reviewer prompt.
+`,
+  "commands/guardedwork.md":
+    "---\ndescription: Delegate to the guarded reviewer\nagent: guarded\n---\nGuarded work on $ARGUMENTS\n",
+  "commands/helperwork.md":
+    "---\ndescription: Delegate to the helper\nagent: helper\n---\nHelper work on $ARGUMENTS\n",
+};
+
+function guardedCopy(run: Run): string {
+  return join(openCodeConfigDirectory(run.fixture.state), "agents", "guarded.md");
+}
+
+/**
+ * Runs a command whose agent answers with one scripted write of `file`, and reports whether the
+ * file landed and whether the native policy hook was asked for the edit.
+ */
+async function commandWrite(
+  run: Run,
+  command: string,
+  file: string,
+): Promise<{ readonly written: boolean; readonly asked: boolean }> {
+  const path = join(run.fixture.workspace, file);
+  const asked = run.facade.requests.length;
+  const before = run.gateway.requests.length;
+  run.gateway.next = { name: "write", arguments: { path, content: "written\n" } };
+  await run.client.command(run.sessionId, command, "the change");
+  // The scripted call, then the turn that reads its result.
+  await expect
+    .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(before + 2);
+  const editAsked = run.facade.requests
+    .slice(asked)
+    .some((recorded) => object(recorded.body)?.permission === "edit");
+  return { written: existsSync(path), asked: editAsked };
+}
 
 describe("pinned native OpenCode repository items", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
@@ -882,6 +932,35 @@ describe("pinned native OpenCode repository items", () => {
       });
     },
     120_000,
+  );
+
+  // #3897 review: an agent's own deny rule survives the admission, and the original runtime applies
+  // it before the native policy hook is asked; an ordinary admitted agent's write is asked through
+  // the hook and lands, and the hostile helper's dropped `allow` still leaves its write to the hook.
+  it.skipIf(skip)(
+    "keeps an admitted agent's deny rule: the runtime refuses its write without asking the hook",
+    async () => {
+      await withRun({ projectFiles: GUARDED_PROJECT }, async (run) => {
+        const agents = await listedWhen(run, "/api/agent", "guarded");
+        const guarded = agents.find((agent) => agent.id === "guarded");
+        expect(JSON.stringify(guarded?.permissions)).toContain("deny");
+        expect(readFileSync(guardedCopy(run), "utf8")).toContain(`  "edit": deny`);
+
+        expect(await commandWrite(run, "guardedwork", "GUARDED.txt")).toEqual({
+          written: false,
+          asked: false,
+        });
+        expect(await commandWrite(run, "delegated", "REVIEWED.txt")).toEqual({
+          written: true,
+          asked: true,
+        });
+        expect(await commandWrite(run, "helperwork", "HELPED.txt")).toEqual({
+          written: true,
+          asked: true,
+        });
+      });
+    },
+    180_000,
   );
 
   // The control proves why the frontmatter is rendered anew: handed to the producer as written, the

@@ -178,6 +178,85 @@ describe("custom agent sanitization", () => {
     expect(outcome.strippedOtherKeyCount).toBe(2);
   });
 
+  // #3897 review: a restriction the agent declares stays a restriction in the copy.
+  it("keeps an agent's deny rules, drops its allow and ask rules, and renders them anew", () => {
+    const outcome = admitted(
+      sanitize(
+        "agent",
+        [
+          "---",
+          "description: Guarded",
+          "permission:",
+          "  edit: deny",
+          "  webfetch: ask",
+          "  read: allow",
+          "  # a comment inside the block",
+          "  bash:",
+          '    "*": deny',
+          "    git status: allow",
+          "    'rm -rf *': deny",
+          '  "mcp_*": deny',
+          "---",
+          "body",
+        ].join("\n"),
+      ),
+    );
+
+    expect(outcome.content).toBe(
+      [
+        "---",
+        'description: "Guarded"',
+        "permission:",
+        '  "edit": deny',
+        '  "bash":',
+        '    "*": deny',
+        '    "rm -rf *": deny',
+        '  "mcp_*": deny',
+        "mode: subagent",
+        "---",
+        "body",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("reads the permission block at its own indentation", () => {
+    const outcome = admitted(
+      sanitize("agent", "---\npermission:\n    bash:\n        ls *: deny\n---\nbody"),
+    );
+
+    expect(outcome.content).toContain('permission:\n  "bash":\n    "ls *": deny\n');
+  });
+
+  it("writes no permission key when the agent denies nothing", () => {
+    const outcome = admitted(
+      sanitize("agent", "---\npermission:\n  edit: allow\n  bash:\n    '*': ask\n---\nbody"),
+    );
+
+    expect(outcome.content).toBe("---\nmode: subagent\n---\nbody\n");
+    expect(outcome.strippedAuthorityKeyCount).toBe(1);
+  });
+
+  it.each([
+    ["a scalar permission", "permission: deny"],
+    ["a permission list", "permission:\n  - edit"],
+    ["an unknown value", "permission:\n  edit: never"],
+    ["an inline comment", "permission:\n  edit: deny # keep"],
+    ["a nested pattern map", "permission:\n  bash:\n    git:\n      status: deny"],
+    ["a misaligned pattern", "permission:\n  bash:\n    a: deny\n      b: deny"],
+    ["a dedented line", "permission:\n    edit: deny\n  bash: deny"],
+    ["tab indentation", "permission:\n\tedit: deny"],
+    ["an uppercase action", "permission:\n  Edit: deny"],
+    ["an alias-looking pattern", "permission:\n  bash:\n    *: deny"],
+    ["a flow mapping", "permission: { edit: deny }"],
+    ["a tool switched off", "tools:\n  bash: false"],
+    ["a flow tool switch", "tools: { write: false }"],
+  ])("refuses an agent whose restrictions cannot be kept: %s", (_label, frontmatter) => {
+    expect(refusal(sanitize("agent", `---\n${frontmatter}\n---\nbody`))).toBe(
+      "restriction-unrepresentable",
+    );
+  });
+
   it("admits an agent without frontmatter as a subagent with no description", () => {
     const outcome = admitted(sanitize("agent", "Plain system prompt.\n"));
 

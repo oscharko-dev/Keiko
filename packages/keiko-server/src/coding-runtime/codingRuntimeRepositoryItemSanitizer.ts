@@ -46,6 +46,7 @@ export const REPOSITORY_ITEM_REFUSAL_REASONS = [
   "template-shell-substitution",
   "agent-not-admitted",
   "name-mismatch",
+  "restriction-unrepresentable",
 ] as const;
 export type RepositoryItemRefusalReason = (typeof REPOSITORY_ITEM_REFUSAL_REASONS)[number];
 
@@ -153,6 +154,8 @@ interface FrontmatterEntry {
   readonly key: string;
   readonly value: string;
   readonly continuation: string[];
+  /** The continuation lines as written, with their indentation (an agent's permission map). */
+  readonly rawContinuation: string[];
 }
 
 interface PreparedItem {
@@ -227,6 +230,7 @@ function parseEntries(lines: readonly string[]): Step<readonly FrontmatterEntry[
 function continueEntry(entries: readonly FrontmatterEntry[], line: string): boolean {
   const previous = entries.at(-1);
   previous?.continuation.push(line.trim());
+  previous?.rawContinuation.push(line);
   return previous !== undefined;
 }
 
@@ -234,7 +238,7 @@ function startEntry(entries: FrontmatterEntry[], line: string): boolean {
   const match = KEY_LINE.exec(line);
   const key = match?.[1];
   if (key === undefined || entries.some((entry) => entry.key === key)) return false;
-  entries.push({ key, value: (match?.[2] ?? "").trim(), continuation: [] });
+  entries.push({ key, value: (match?.[2] ?? "").trim(), continuation: [], rawContinuation: [] });
   return true;
 }
 
@@ -373,10 +377,132 @@ function agentFields(entries: readonly FrontmatterEntry[]): Step<ReadFields> {
     optionalField(entries, "description", descriptionReader("agent")),
     optionalField(entries, "temperature", boundedNumberReader(TEMPERATURE_MAX)),
     optionalField(entries, "top_p", boundedNumberReader(TOP_P_MAX)),
+    agentRestrictions(entries),
   ]);
   if (!fields.ok) return fields;
   const effective = mode.value?.[1] === "primary" ? "primary" : "subagent";
   return ok({ fields: [...fields.value, ["mode", effective] as const], mode: effective });
+}
+
+/**
+ * An agent's own permission rules, kept where they restrict (#3897 review): a repository reviewer
+ * that denies `edit` must stay unable to edit. Only `deny` is forwarded. An `allow` or `ask` rule
+ * would widen nothing behind Keiko's policy hook, which decides every allowed or asked action, but
+ * the runtime lets a later rule override an earlier one, so a forwarded `allow` could undo one of
+ * Keiko's own denials before the hook is asked; a configured `deny` is final. Dropping an `allow`
+ * exception can only narrow the agent. The closed grammar is an action with a value, or an action
+ * with a one-level map of quoted or plain patterns to values. Any other shape, and a `tools` switch
+ * that turns a tool off (which cannot be carried over faithfully), refuses the whole agent instead
+ * of silently dropping a restriction; a switch that only turns tools on is dropped like any other
+ * authority key.
+ */
+function agentRestrictions(entries: readonly FrontmatterEntry[]): Step<Field | undefined> {
+  if (disablesTools(entryNamed(entries, "tools"))) return refuse("restriction-unrepresentable");
+  const permission = entryNamed(entries, "permission");
+  if (permission === undefined) return ok(undefined);
+  if (permission.value.length > 0) return refuse("restriction-unrepresentable");
+  const denied = deniedRules(permission.rawContinuation);
+  if (denied === undefined) return refuse("restriction-unrepresentable");
+  return ok(denied.length === 0 ? undefined : (["permission", `\n${denied.join("\n")}`] as const));
+}
+
+function disablesTools(tools: FrontmatterEntry | undefined): boolean {
+  if (tools === undefined) return false;
+  return [tools.value, ...tools.continuation].some((line) => /\bfalse\b/u.test(line));
+}
+
+type PermissionLine =
+  | { readonly kind: "rule"; readonly action: string; readonly value: string | undefined }
+  | { readonly kind: "pattern"; readonly pattern: string; readonly value: string };
+
+interface PermissionBlock {
+  readonly denied: string[];
+  actionIndent: number | undefined;
+  patternIndent: number | undefined;
+  /** The action whose pattern map is open, and the deny rules read from it so far. */
+  open: { readonly action: string; readonly denies: string[] } | undefined;
+}
+
+/** The rendered `deny` rules of a permission block, or undefined when its shape is not closed. */
+function deniedRules(lines: readonly string[]): string[] | undefined {
+  const block: PermissionBlock = {
+    denied: [],
+    actionIndent: undefined,
+    patternIndent: undefined,
+    open: undefined,
+  };
+  for (const line of lines) {
+    if (line.trim().startsWith("#")) continue;
+    const parsed = permissionLine(block, line);
+    if (parsed === undefined || !applyPermissionLine(block, parsed)) return undefined;
+  }
+  flushPatternRules(block);
+  return block.denied;
+}
+
+function applyPermissionLine(block: PermissionBlock, parsed: PermissionLine): boolean {
+  if (parsed.kind === "pattern") {
+    if (block.open === undefined) return false;
+    if (parsed.value === "deny") block.open.denies.push(`    ${parsed.pattern}: deny`);
+    return true;
+  }
+  flushPatternRules(block);
+  block.patternIndent = undefined;
+  block.open = parsed.value === undefined ? { action: parsed.action, denies: [] } : undefined;
+  if (parsed.value === "deny") block.denied.push(`  ${parsed.action}: deny`);
+  return true;
+}
+
+/** One line of the block, read at its indentation: an action line, or a pattern below one. */
+function permissionLine(block: PermissionBlock, line: string): PermissionLine | undefined {
+  const indent = /^ */u.exec(line)?.[0].length ?? 0;
+  const content = line.slice(indent);
+  if (indent === 0 || content.startsWith("\t")) return undefined;
+  block.actionIndent ??= indent;
+  if (indent === block.actionIndent) return actionLine(content);
+  if (indent < block.actionIndent) return undefined;
+  block.patternIndent ??= indent;
+  return indent === block.patternIndent ? patternLine(content) : undefined;
+}
+
+function actionLine(content: string): PermissionLine | undefined {
+  const rule = PERMISSION_ACTION_LINE.exec(content);
+  if (rule === null) return undefined;
+  return { kind: "rule", action: quotedName(rule[1] ?? ""), value: rule[2] };
+}
+
+function patternLine(content: string): PermissionLine | undefined {
+  const pattern = PERMISSION_PATTERN_LINE.exec(content);
+  if (pattern === null) return undefined;
+  return { kind: "pattern", pattern: quotedName(pattern[1] ?? ""), value: pattern[2] ?? "" };
+}
+
+/**
+ * A name rendered as a double-quoted YAML string. The grammar admits no escape inside either
+ * quoting style, so the quoted text is the literal name.
+ */
+function quotedName(written: string): string {
+  const quoted = written.startsWith('"') || written.startsWith("'");
+  return JSON.stringify(quoted ? written.slice(1, -1) : written);
+}
+
+const PERMISSION_VALUE = "(deny|allow|ask)";
+/** `edit: deny`, `"mcp_*": deny`, or `edit:` opening a pattern map. */
+const PERMISSION_ACTION_LINE = new RegExp(
+  String.raw`^([a-z][a-z0-9_]{0,63}|"[a-z0-9_*]{1,64}"):(?:[ \t]+${PERMISSION_VALUE})?[ \t]*$`,
+  "u",
+);
+/** `"*": deny` or `git status: allow`, inside an action's pattern map. */
+const PERMISSION_PATTERN_LINE = new RegExp(
+  String.raw`^("[^"\\\p{Cc}]{1,200}"|'[^'\p{Cc}]{1,200}'|[A-Za-z0-9_./][A-Za-z0-9_./* -]{0,199}):[ \t]+${PERMISSION_VALUE}[ \t]*$`,
+  "u",
+);
+
+function flushPatternRules(block: PermissionBlock): void {
+  const open = block.open;
+  if (open !== undefined && open.denies.length > 0)
+    block.denied.push(`  ${open.action}:`, ...open.denies);
+  block.open = undefined;
 }
 
 // A command that names an agent switches the session to it unless the agent is a subagent, which
@@ -435,5 +561,9 @@ export function hasShellSubstitution(template: string): boolean {
 }
 
 function renderItem(fields: readonly Field[], body: string): string {
-  return ["---", ...fields.map(([key, value]) => `${key}: ${value}`), "---", body, ""].join("\n");
+  // A block value (the agent's restrictions) starts on the next line.
+  const lines = fields.map(([key, value]) =>
+    value.startsWith("\n") ? `${key}:${value}` : `${key}: ${value}`,
+  );
+  return ["---", ...lines, "---", body, ""].join("\n");
 }
