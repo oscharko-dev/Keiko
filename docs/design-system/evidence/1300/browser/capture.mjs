@@ -539,6 +539,12 @@ const STATIC_API_BODIES = {
   "/api/workflows": { workflows: [] },
   "/api/chats": { chats: [DEMO_CHAT] },
   "/api/chats/messages": { messages: [] },
+  [`/api/chats/${DEMO_CHAT.id}/draft`]: { text: "", revision: 0 },
+  [`/api/chats/${DEMO_CHAT.id}/skill`]: {
+    selection: { revision: 0, skill: null },
+    availability: "none",
+  },
+  "/api/coding-workbench/app-session/browser": { state: "active", requests: [], approvals: [] },
   "/api/chats/context": {
     modelId: DEMO_MODELS[0].id,
     contextWindowTokens: DEMO_CONTEXT_PROFILE.maxInputTokens,

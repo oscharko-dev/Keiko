@@ -934,7 +934,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         safetyIdentifier,
       );
       if (negotiationRequest === undefined) return { ok: false, kind: "unsupported-model" };
-      return negotiate(negotiationRequest);
+      return await negotiate(negotiationRequest);
     };
   }
 

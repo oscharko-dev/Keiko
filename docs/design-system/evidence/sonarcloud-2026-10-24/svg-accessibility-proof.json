@@ -1,0 +1,1291 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "nodeVersion": "v24.22.0",
+  "chromiumVersion": "156.0.8078.4",
+  "harnessSha256": "48d5d57c5131b95e596e53889ce4a73baccfae6e5ee783e4474d6d8f932246ce",
+  "fileSha256": {
+    "design-system/Keiko Icon System.html": "d813bd7b374879713d4afd0ff4a67ff9746ac9666c62788748ba7ba9790d6f77",
+    "design-system/ai-components.html": "56b19425d36d5e05d3a0c4b14710699e8596f14e27cabc6b356b80015dd4efb0",
+    "design-system/data-grid.html": "e2e29d591314a2077d3382b4f05b6dd6daca60d83b31b34df3d4f52dd7472ada",
+    "design-system/flows.html": "bdd36a9d3fa4aec73dc80820fe08b52c90eb0c1274a62419902bb9012468842a",
+    "design-system/index.html": "56bec78d9941925d48542dd691ba3e25000ac6a8d18de498d3ae8bb4d2368ae3",
+    "design-system/inputs.html": "55fc51d51d70fc9dbc374203e661422a904c1f057bb83a398ba235def06e496b",
+    "design-system/motion.html": "69978914713d3b9d965af258249d65792346cf361d642a7467f2e8bbe94c4fb7",
+    "design-system/nav-components.html": "17abd53e50e68816c498982e58278b6afd3e3242b76216268fe3f0c0d87f8607",
+    "design-system/dataviz.html": "211f5b5e69baf2d4627e7d28ff3230f947bfe1de4b116e8a2e14f24c614c8bd3",
+    "design-system/patterns.html": "c8c0cf021828539ca84ccd8bb3400a3ace23a502809a28ab740f2b8980d84f03"
+  },
+  "stylesheetSha256": {
+    "design-system/keiko-fonts.css": "6c487e130c799b7141882c158cf9ec587ce6b86074aa27b9bd68836702816aaf",
+    "design-system/keiko-tokens.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",
+    "design-system/keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
+    "design-system/ds.css": "6c76abd249c8b668ea8a408ba5d3162519f4f0b40f88c46d5b584d68e9be1a76",
+    "design-system/components.css": "42453c59fb59a08797822f224d4939f18eb851a4f44056ebd9182a8063763123",
+    "design-system/keiko-inputs.css": "2af2f2a99e8e0f68356a0f514e87a4d478fc9432109843744801e80914ac0f60",
+    "design-system/keiko-data.css": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270",
+    "design-system/lift-doc.css": "b102a6ce5f3c76168e9642ef0f4e2e0ed198e93f4255d867a04c35b986b78cde",
+    "design-system/keiko-ai.css": "0874e344c4465364d6bca9ddeb8ac76e3b6aedbab14924f4981704d51c364bdf",
+    "design-system/keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b",
+    "design-system/keiko-dataviz.css": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1"
+  },
+  "scope": "Restore only the reported SVG start tags from the baseline in otherwise current HTML/CSS; scripts and network are disabled. Compare static pixels in four theme/contrast modes and run SVG-specific axe rules. This isolates SVG semantics from the separately verified CSS corrections.",
+  "dataGridInteraction": {
+    "identicalBehavior": true,
+    "nativeTable": true,
+    "rowCount": 6,
+    "sortedNames": [
+      "Schema Linter",
+      "Release Notes",
+      "PR Reviewer",
+      "Doc Summariser",
+      "Triage Bot",
+      "Changelog Drafter"
+    ],
+    "initialSortDirection": "descending",
+    "sortDirection": "ascending",
+    "selectedAll": 6,
+    "cleared": 0,
+    "selectedOne": 1,
+    "mixed": true
+  },
+  "sourceGeometryComparisons": 57,
+  "pixelComparisons": 40,
+  "failedComparisons": 0,
+  "targets": [
+    {
+      "key": "AaFcmF6hKA4ddiRM6TZi",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/Keiko Icon System.html",
+      "analysedLine": 382,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "named image",
+      "accessibleName": "Search icon with two gaps"
+    },
+    {
+      "key": "AaFcmF6hKA4ddiRM6TZj",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/Keiko Icon System.html",
+      "analysedLine": 400,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "named image",
+      "accessibleName": "Terminal icon with flat stroke caps and an unbroken frame"
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY5",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 57,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "named image",
+      "accessibleName": "Assistant"
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY6",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 79,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "named image",
+      "accessibleName": "Assistant"
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY7",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 119,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 2,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY8",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 140,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 3,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY9",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 173,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 4,
+      "disposition": "named image",
+      "accessibleName": "Assistant"
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY-",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 238,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 5,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TY_",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 271,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 6,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF2sKA4ddiRM6TZA",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 303,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 7,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6RKA4ddiRM6TZW",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 71,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6RKA4ddiRM6TZX",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 98,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6RKA4ddiRM6TZY",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 119,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 2,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6RKA4ddiRM6TZZ",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 152,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 3,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6RKA4ddiRM6TZa",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 267,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 4,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF64KA4ddiRM6TZt",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 164,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF64KA4ddiRM6TZu",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 191,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF64KA4ddiRM6TZv",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 235,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 2,
+      "disposition": "named image",
+      "accessibleName": "Completed"
+    },
+    {
+      "key": "AaFcmF64KA4ddiRM6TZw",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 365,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 3,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF64KA4ddiRM6TZx",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 388,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 4,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZB",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 90,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZC",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 115,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZD",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 137,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 2,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZE",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 162,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 3,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZF",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 184,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 4,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZG",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 205,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 5,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZH",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 226,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 6,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZI",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 248,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 7,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZJ",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 271,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 8,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZK",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 294,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 9,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZL",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 318,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 10,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZM",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 341,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 11,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZN",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 366,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 12,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZO",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 391,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 13,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZP",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 415,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 14,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZQ",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 442,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 15,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZR",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 462,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 16,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF5CKA4ddiRM6TZS",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 483,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 17,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZk",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 63,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZl",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 76,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZm",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 89,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 2,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZn",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 163,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 3,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZo",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 182,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 4,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZp",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 228,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 5,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZq",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 283,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 6,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZr",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 301,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 7,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6pKA4ddiRM6TZs",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 354,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 8,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6EKA4ddiRM6TZV",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/motion.html",
+      "analysedLine": 258,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "named image",
+      "accessibleName": "Data-flow connector example"
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZb",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 60,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZc",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 112,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 1,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZd",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 131,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 2,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZe",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 169,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 3,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZf",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 184,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 4,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZg",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 204,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 5,
+      "disposition": "decorative",
+      "accessibleName": null
+    },
+    {
+      "key": "AaFcmF6XKA4ddiRM6TZh",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 221,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 6,
+      "disposition": "named image",
+      "accessibleName": "Completed"
+    },
+    {
+      "key": "AaFcmF5jKA4ddiRM6TZU",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/dataviz.html",
+      "analysedLine": 142,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "named image",
+      "accessibleName": "Example success rate with a mid-series dip and overall upward trend"
+    },
+    {
+      "key": "AaFcmF5PKA4ddiRM6TZT",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/patterns.html",
+      "analysedLine": 262,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code",
+      "svgIndex": 0,
+      "disposition": "named image",
+      "accessibleName": "Active connection between Chat and Files"
+    }
+  ],
+  "modes": [
+    {
+      "file": "design-system/Keiko Icon System.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/Keiko Icon System.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/Keiko Icon System.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/Keiko Icon System.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/ai-components.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/ai-components.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/ai-components.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/ai-components.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/data-grid.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/data-grid.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/data-grid.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/data-grid.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/flows.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/flows.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/flows.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/flows.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/index.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/index.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/index.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/index.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/inputs.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/inputs.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/inputs.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/inputs.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/motion.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/motion.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/motion.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/motion.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/nav-components.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/nav-components.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/nav-components.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/nav-components.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/dataviz.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/dataviz.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/dataviz.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/dataviz.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/patterns.html",
+      "theme": "dark",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/patterns.html",
+      "theme": "light",
+      "contrast": false,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/patterns.html",
+      "theme": "dark",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    },
+    {
+      "file": "design-system/patterns.html",
+      "theme": "light",
+      "contrast": true,
+      "identicalPixels": true,
+      "violationCount": 0,
+      "incompleteCount": 0
+    }
+  ]
+}

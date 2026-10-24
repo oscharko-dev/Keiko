@@ -1212,7 +1212,7 @@ function localKnowledgeOcrAdapter(deps: UiHandlerDeps): OcrAdapter {
 async function localKnowledgeExtractionCapabilitiesFor(
   adapter: OcrAdapter,
 ): Promise<ExtractionCapabilityAvailability> {
-  return discoverExtractionCapabilities({ ocr: adapter });
+  return await discoverExtractionCapabilities({ ocr: adapter });
 }
 
 function localKnowledgeProgressiveExtractors(

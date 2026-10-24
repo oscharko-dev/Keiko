@@ -632,7 +632,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
         return { ok: false, kind: "unsupported-model" };
       }
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
-      return negotiate(
+      return await negotiate(
         buildLiveDictationNegotiationRequest(
           resolved.provider,
           resolved.transcriptionModel,

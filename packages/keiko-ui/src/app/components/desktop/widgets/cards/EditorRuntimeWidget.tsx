@@ -5267,7 +5267,12 @@ function EditorRuntimeWidget({
       {hasTarget ? (
         <EditorBreadcrumbBar filePath={file} path={breadcrumbPath} onReveal={revealSymbol} />
       ) : null}
-      <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
+      <div
+        className={`ed-host ${runtimeStyles.cmpEditorHost}`}
+        id={tabpanelId}
+        role="tabpanel"
+        aria-labelledby={tabId}
+      >
         {panel}
         {fileHistoryOpen && root !== undefined && file !== undefined ? (
           <EditorFileHistoryPanel

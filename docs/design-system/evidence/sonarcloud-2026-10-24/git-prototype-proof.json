@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "file": "design-system/git-window.html",
+  "sourceSha256": "fff5aab41a75c63136523f28e746df647456ee78c5660941bd58ebbc52cc34c3",
+  "harnessSha256": "fcccb78f6d2b9286be11d860e3781468d60a119ab04b0b048517fbf7b57c3f29",
+  "nodeVersion": "v24.22.0",
+  "chromiumVersion": "156.0.8078.4",
+  "states": ["changes", "history", "empty"],
+  "stateNodeCount": 9,
+  "switcherNodeCount": 1,
+  "accessibleSwitcherGroup": true,
+  "computedValueComparisons": 360,
+  "differences": []
+}

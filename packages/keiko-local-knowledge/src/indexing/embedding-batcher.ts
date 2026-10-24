@@ -225,7 +225,7 @@ async function embedSingleChunkWithModel(
   signal: AbortSignal | undefined,
   logContext: IndexingLogContext | undefined,
 ): Promise<OpenAIEmbeddingOutcome> {
-  return adapter.request({
+  return await adapter.request({
     endpoint: adapter.endpoint,
     apiKey: adapter.apiKey,
     ...(adapter.apiKeyHeaderName !== undefined
@@ -571,7 +571,7 @@ async function embedArrayBatchWithRetry(
   };
   const attemptOnce = async (): Promise<TimedOutcome<OpenAIEmbeddingBatchOutcome>> => {
     state.attempts += 1;
-    return timedAttempt(async () => requestBatch(batchRequestFor(options, state.remaining)));
+    return timedAttempt(() => requestBatch(batchRequestFor(options, state.remaining)));
   };
   let attempted = await attemptOnce();
   while (state.zeroProgressRetries < retry.maxRetries) {

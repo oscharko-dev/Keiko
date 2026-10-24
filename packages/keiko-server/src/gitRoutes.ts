@@ -1586,7 +1586,7 @@ async function runBlame(
 ): Promise<GitProcessResult> {
   const endLine = request.startLine + request.maxLines - 1;
   const path = gitPath(repo.selectedRootPrefix, request.path) ?? request.path;
-  return options.runner(
+  return await options.runner(
     [
       ...GIT_BASE_ARGS,
       "-C",

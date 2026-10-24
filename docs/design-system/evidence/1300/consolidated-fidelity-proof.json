@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
+  "postCssSha256": "28905465b336f83a8ef1a6ba307432e0e2a098c12b5803585b5d8f508299571b",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -15,15 +15,15 @@
     "keiko-tokens.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",
     "keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
     "keiko-ai.css": "0874e344c4465364d6bca9ddeb8ac76e3b6aedbab14924f4981704d51c364bdf",
-    "keiko-data.css": "de90773fc5654626cd47c5eda0dda29002af359a9eccc272b3769822fbdb3b13",
+    "keiko-data.css": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270",
     "keiko-dataviz.css": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1",
-    "keiko-inputs.css": "18f699c14c7d28c50f0f4061174903c8aab21c67b0578cf7e17b34289f9e4054",
+    "keiko-inputs.css": "2af2f2a99e8e0f68356a0f514e87a4d478fc9432109843744801e80914ac0f60",
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-10-04T13:58:22.311Z",
-    "generatedAt": "2026-10-04T13:58:25.435Z",
-    "repoHeadSha": "528a7eda39b91efe864d0f0a727d228895d1e3b4"
+    "startedAt": "2026-10-24T02:58:03.349Z",
+    "generatedAt": "2026-10-24T02:58:08.117Z",
+    "repoHeadSha": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -277,7 +277,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.3999999761581421,
+    "durationMs": 0,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,

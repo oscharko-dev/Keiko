@@ -1411,7 +1411,7 @@ async function rankedByIndex(
 ): Promise<readonly { readonly scopePath: string }[]> {
   const provider = lease.provider;
   if (provider === undefined) return [];
-  return provider.search({
+  return await provider.search({
     query: {
       kind: retrievalKind(request.mode),
       text: request.query,

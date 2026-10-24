@@ -172,7 +172,11 @@
   border: 3px solid var(--slider-thumb-border);
   box-shadow: 0 0 0 1px var(--slider-thumb-ring);
   cursor: pointer;
-  transition: transform 0.1s;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .c-slider input[type="range"]::-webkit-slider-thumb {
+    transition: transform 0.1s;
+  }
 }
 .c-slider input[type="range"]::-moz-range-thumb {
   width: 16px;

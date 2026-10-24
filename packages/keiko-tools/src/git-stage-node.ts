@@ -114,7 +114,7 @@ export async function stageExactFiles(
     new Set(request.pathspecs).size !== request.pathspecs.length
   )
     return false;
-  return withGitIndexTransaction(
+  return await withGitIndexTransaction(
     ctx.workspaceRoot,
     async (transaction): Promise<boolean> => {
       if (!(await ctx.check()) || !(await gitStageAttributesSupported(ctx, request.pathspecs)))

@@ -128,3 +128,8 @@ All 17 artifacts were regenerated; 12 screenshot files changed bytes, while the 
 records bind the current twelve UI sources and four harness inputs. The evidence freshness
 gate passes. This is updater presentation and declared BFF recovery evidence; native package
 replacement, process-generation ownership and SSD qualification remain separate obligations.
+
+The SonarCloud CSS maintenance on 2026-10-24 regenerated the original nine-case Chromium producer
+on macOS arm64 with Node 24.22.0. All nine cases passed in 56.8 seconds, including the real-BFF
+outage case; the unchanged freshness gate passed. These updater fixtures qualify presentation and
+BFF recovery only. They do not replace the separate Editor smoke or native update qualification.

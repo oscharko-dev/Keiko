@@ -797,10 +797,15 @@ async function rehydrateScenario(scenario) {
   const excludedMetas = excludedRepoFileMetas(result, scenario.repoMetas);
   const { fs, scope } = buildRepoFs();
   const provenance = buildProvenanceMap(excludedMetas);
-  const fileHashes = new Map();
-  for (const meta of excludedMetas) {
-    fileHashes.set(meta.scopePath, await fileContentHash(fs, corpusAbsolutePath(meta.scopePath)));
-  }
+  // These reads share an immutable in-memory snapshot and have no inter-file dependencies.
+  const fileHashes = new Map(
+    await Promise.all(
+      excludedMetas.map(async (meta) => [
+        meta.scopePath,
+        await fileContentHash(fs, corpusAbsolutePath(meta.scopePath)),
+      ]),
+    ),
+  );
   const records = buildCompactionRecords({
     result,
     lanes: redacted,
@@ -809,11 +814,12 @@ async function rehydrateScenario(scenario) {
     fileHashes,
   });
   const enrichedById = enrichedSpanIndex(records);
-  const roundTrips = [];
-  for (const meta of excludedMetas) {
-    const ref = enrichedById.get(meta.id) ?? provenance.get(meta.id);
-    roundTrips.push(await rehydrateProvenanceRef(ref, scope, fs));
-  }
+  const roundTrips = await Promise.all(
+    excludedMetas.map((meta) => {
+      const ref = enrichedById.get(meta.id) ?? provenance.get(meta.id);
+      return rehydrateProvenanceRef(ref, scope, fs);
+    }),
+  );
   const mutatedResult = await probeInvalidation(excludedMetas, enrichedById, provenance);
   return { id: scenario.id, excludedMetas, records, roundTrips, mutatedResult };
 }
@@ -1249,12 +1255,9 @@ function reportFailures(onFail, vacuity, budgetResult) {
   }
 }
 
-async function rehydrateScenarios(scenarios) {
-  const rehydrations = [];
-  for (const scenario of scenarios) {
-    rehydrations.push(await rehydrateScenario(scenario));
-  }
-  return rehydrations;
+function rehydrateScenarios(scenarios) {
+  // Each fixed scenario owns its file systems, allocation and invalidation probe.
+  return Promise.all(scenarios.map(rehydrateScenario));
 }
 
 export async function runContextQualityCheck({ budgetPath = DEFAULT_BUDGET_PATH, log, fail } = {}) {

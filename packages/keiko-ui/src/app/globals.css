@@ -718,8 +718,8 @@ button {
   min-width: 0;
 }
 
-.number-control-input {
-  padding-right: calc(var(--number-stepper-size) + var(--number-stepper-right) + 8px) !important;
+input.number-control-input {
+  padding-right: calc(var(--number-stepper-size) + var(--number-stepper-right) + 8px);
 }
 
 .number-control-input::-webkit-outer-spin-button,
@@ -801,14 +801,14 @@ button {
   border-color: var(--border-strong);
 }
 
-.ksel-trigger-open-down {
-  border-bottom-right-radius: 0 !important;
-  border-bottom-left-radius: 0 !important;
+.ksel-trigger.ksel-trigger-open-down {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
-.ksel-trigger-open-up {
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
+.ksel-trigger.ksel-trigger-open-up {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .ksel-trigger-caret {
@@ -1268,9 +1268,9 @@ button {
     --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 48%, transparent);
     --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 62%, transparent);
   }
-  .rb-edge-badge-btn,
-  .rb-edge-badge-static {
-    background: var(--button-secondary-surface) !important;
+  :root .rb-edge-badge-btn,
+  :root .rb-edge-badge-static {
+    background: var(--button-secondary-surface);
   }
   .rb-edge-badge-icon {
     transform: scale(1.1);
@@ -2670,11 +2670,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .srch .srch-box {
   margin: 12px 12px 4px;
 }
-.srch-label {
+.tw-label.srch-label {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 12px 6px !important;
+  margin: 10px 12px 6px;
 }
 .srch-meta {
   font-size: 10px;
@@ -3165,13 +3165,21 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   justify-content: space-between;
   transform-origin: 50% 100%;
   will-change: opacity, transform;
-  animation: cmp-normal-controls-exit 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-composer-motion-layer-normal {
+    animation: cmp-normal-controls-exit 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
 }
 .cmp-composer-motion-layer-voice {
   justify-content: center;
   transform-origin: 50% 50%;
   will-change: opacity, transform;
-  animation: cmp-voice-controls-ghost-leave 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-composer-motion-layer-voice {
+    animation: cmp-voice-controls-ghost-leave 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
 }
 .cmp-composer-motion-layer .cmp-bar-voice-dialog {
   flex: 1 1 auto;
@@ -5542,11 +5550,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 @keyframes conn-dot-pulse {
   0%,
   100% {
-    r: 5;
+    r: 5px;
     opacity: 0.95;
   }
   50% {
-    r: 7;
+    r: 7px;
     opacity: 0.6;
   }
 }
@@ -5609,7 +5617,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 /* Reduced-motion: a clearly-different static dashed stroke instead of any movement. */
 .conn-path[data-reduced-motion="true"] {
   stroke-dasharray: 3 6;
-  animation: none !important;
+  animation: none;
 }
 .conn-particle {
   fill: var(--accent);
@@ -7245,9 +7253,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 
 :root[data-input-modality="pointer"] .mem-add input:focus {
-  outline: none !important;
-  border-color: var(--line-soft) !important;
-  box-shadow: none !important;
+  outline: none;
+  border-color: var(--line-soft);
+  box-shadow: none;
 }
 .mem-add button {
   width: 36px;
@@ -8099,8 +8107,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 :root[data-input-modality="pointer"] .dlg-input:focus {
-  outline: none !important;
-  box-shadow: none !important;
+  outline: none;
+  box-shadow: none;
 }
 .dlg-input::placeholder {
   color: var(--text-faint);
@@ -9268,21 +9276,21 @@ select.dlg-input {
 .ed-host .monaco-editor .scrollbar.vertical {
   background: var(--ed-bg);
 }
-.monaco-editor .scrollbar .slider {
-  background: var(--ed-scrollbar-thumb) !important;
-  border-radius: 999px !important;
-  transition: background var(--dur-fast) var(--ease-out) !important;
+:root .monaco-editor .scrollbar .slider {
+  background: var(--ed-scrollbar-thumb);
+  border-radius: 999px;
+  transition: background var(--dur-fast) var(--ease-out);
 }
-.monaco-editor .scrollbar .slider:hover,
-.monaco-editor .scrollbar .slider.active,
-.monaco-editor .scrollbar .slider.dragging {
-  background: var(--ed-scrollbar-thumb-hover) !important;
+:root .monaco-editor .scrollbar .slider:hover,
+:root .monaco-editor .scrollbar .slider.active,
+:root .monaco-editor .scrollbar .slider.dragging {
+  background: var(--ed-scrollbar-thumb-hover);
 }
-.monaco-editor .scrollbar.vertical .slider {
-  min-width: 8px !important;
+:root .monaco-editor .scrollbar.vertical .slider {
+  min-width: 8px;
 }
-.monaco-editor .scrollbar.horizontal .slider {
-  min-height: 8px !important;
+:root .monaco-editor .scrollbar.horizontal .slider {
+  min-height: 8px;
 }
 .keiko-editor-diagnostic-marker {
   display: block;
@@ -9366,33 +9374,33 @@ select.dlg-input {
 .ed-host .monaco-editor .monaco-resizable-hover,
 .ed-host .monaco-editor .monaco-hover {
   max-width: var(--ed-hover-max-width) !important;
-  min-width: 0 !important;
+  min-width: 0;
   box-sizing: border-box;
   overflow: hidden;
 }
 .ed-host .monaco-editor .monaco-resizable-hover {
-  border: 1px solid var(--popover-border) !important;
-  border-radius: var(--radius-floating) !important;
-  background: var(--surface-primary) !important;
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-floating);
+  background: var(--surface-primary);
   box-shadow: var(--popover-shadow);
 }
 .ed-host .monaco-editor .monaco-hover {
-  border: 1px solid var(--popover-border) !important;
-  border-radius: var(--radius-floating) !important;
-  background: var(--surface-primary) !important;
-  color: var(--text-primary) !important;
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-floating);
+  background: var(--surface-primary);
+  color: var(--text-primary);
   box-shadow: var(--popover-shadow);
   font-size: var(--text-body-sm);
   line-height: var(--leading-normal);
 }
 .ed-host .monaco-editor .monaco-resizable-hover > .monaco-hover {
-  border: 0 !important;
-  border-radius: inherit !important;
+  border: 0;
+  border-radius: inherit;
   box-shadow: none;
 }
 .ed-host .monaco-editor .monaco-hover a,
 .ed-host .monaco-editor .monaco-hover .action-label {
-  color: var(--text-accent) !important;
+  color: var(--text-accent);
 }
 .ed-host .monaco-editor .monaco-hover .monaco-scrollable-element,
 .ed-host .monaco-editor .monaco-hover .monaco-hover-content,
@@ -9409,13 +9417,13 @@ select.dlg-input {
 .ed-host .monaco-editor .monaco-hover .hover-row-contents,
 .ed-host .monaco-editor .monaco-hover .hover-contents,
 .ed-host .monaco-editor .monaco-hover .rendered-markdown {
-  white-space: normal !important;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 .ed-host .monaco-editor .monaco-hover code,
 .ed-host .monaco-editor .monaco-hover pre {
   border-radius: var(--radius-control);
-  background: var(--surface-inset) !important;
+  background: var(--surface-inset);
   color: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -9425,7 +9433,7 @@ select.dlg-input {
   max-width: 100%;
   min-width: 0;
   border-top: 1px solid var(--border-subtle);
-  background: var(--surface-secondary) !important;
+  background: var(--surface-secondary);
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button {
   width: 28px;
@@ -9440,39 +9448,42 @@ select.dlg-input {
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,
 .ed-host .monaco-editor .monaco-hover .hover-copy-button .codicon {
-  color: currentColor !important;
+  color: currentColor;
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {
-  background: color-mix(in oklch, var(--text-primary) 10%, transparent) !important;
+  background: color-mix(in oklch, var(--text-primary) 10%, transparent);
   border-color: transparent;
   color: var(--text-primary);
   box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85);
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button:active {
   transform: translateY(1px) scale(0.98);
-  background: var(--button-secondary-surface-hover) !important;
+  background: var(--button-secondary-surface-hover);
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button:focus {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
-.monaco-hover.workbench-hover {
+:root .monaco-hover.workbench-hover,
+:root .monaco-hover.workbench-hover.with-pointer {
   max-width: min(220px, calc(100vw - 24px)) !important;
-  border: 1px solid var(--popover-border) !important;
-  border-radius: var(--radius-control) !important;
-  background: var(--surface-primary) !important;
-  color: var(--text-primary) !important;
-  box-shadow: var(--popover-shadow) !important;
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-control);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  box-shadow: var(--popover-shadow);
   font-size: var(--text-body-sm);
   line-height: var(--leading-snug);
 }
 .monaco-hover.workbench-hover .hover-contents {
   padding: 4px 8px;
 }
-.workbench-hover-pointer:after {
-  background-color: var(--surface-primary) !important;
-  border-right: 1px solid var(--popover-border) !important;
-  border-bottom: 1px solid var(--popover-border) !important;
+:root .workbench-hover-pointer:after,
+:root .workbench-hover-container:not(:focus-within).locked .workbench-hover-pointer:after,
+:root .workbench-hover-container:focus-within .workbench-hover-pointer:after {
+  background-color: var(--surface-primary);
+  border-right: 1px solid var(--popover-border);
+  border-bottom: 1px solid var(--popover-border);
 }
 .ed-line {
   display: flex;
@@ -10134,7 +10145,11 @@ select.dlg-input {
   font-size: 13px;
   text-decoration: none;
   transform: translateY(-180%);
-  transition: transform 0.15s;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .skip-link {
+    transition: transform 0.15s;
+  }
 }
 .skip-link:focus {
   transform: none;
@@ -10269,7 +10284,7 @@ select.dlg-input {
 }
 :root[data-input-modality="pointer"] .cmp-model-select:focus {
   outline: none;
-  box-shadow: none !important;
+  box-shadow: none;
 }
 
 /* ---------- RIGHT RAIL ---------- */
@@ -11037,8 +11052,8 @@ html[data-keiko-gateway-setup-open="true"] {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 :root[data-input-modality="pointer"] .gw-input:focus {
-  outline: none !important;
-  box-shadow: none !important;
+  outline: none;
+  box-shadow: none;
 }
 .gw-input::placeholder {
   color: var(--text-faint);
@@ -12223,7 +12238,7 @@ html[data-keiko-gateway-setup-open="true"] {
 
 /* loading skeleton rows */
 .c-table.is-loading tbody td {
-  color: transparent !important;
+  color: transparent;
 }
 .c-table.is-loading tbody td * {
   visibility: hidden;
@@ -13222,17 +13237,17 @@ html[data-keiko-gateway-setup-open="true"] {
   background: var(--feedback-danger-surface);
 }
 
-.pe-safety-warning {
-  margin-top: var(--space-4) !important;
+.pe-section .pe-safety-warning {
+  margin-top: var(--space-4);
   padding: var(--space-4);
   border-left: 3px solid var(--feedback-warning);
   border-radius: var(--radius-control);
   background: var(--feedback-warning-surface);
-  color: var(--text-primary) !important;
+  color: var(--text-primary);
 }
 
-.pe-grounding-meta {
-  margin-top: var(--space-4) !important;
+.pe-section .pe-grounding-meta {
+  margin-top: var(--space-4);
 }
 
 .pe-evidence {
@@ -15444,10 +15459,10 @@ html[data-keiko-gateway-setup-open="true"] {
 
 /* Destructive confirm button in modal — danger style.
    --ink-inverse on --danger = 6.07:1 (WCAG AA). --fg is near-white = ~2.84:1 (FAIL). */
-.lkd-btn-destructive {
-  color: var(--button-danger-text) !important;
-  background: var(--button-danger-surface) !important;
-  border-color: var(--feedback-danger) !important;
+.dlg-foot .dlg-btn.lkd-btn-destructive {
+  color: var(--button-danger-text);
+  background: var(--button-danger-surface);
+  border-color: var(--feedback-danger);
 }
 .lkd-btn-destructive:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -15970,8 +15985,8 @@ html[data-keiko-gateway-setup-open="true"] {
 :root[data-input-modality="pointer"] .mc-dialog-textarea:focus,
 :root[data-input-modality="pointer"] .mc-dialog-input:focus,
 :root[data-input-modality="pointer"] .mc-dialog-select:focus {
-  outline: none !important;
-  box-shadow: none !important;
+  outline: none;
+  box-shadow: none;
 }
 
 .mc-dialog-textarea:focus-visible,
@@ -17443,9 +17458,9 @@ html[data-keiko-gateway-setup-open="true"] {
 :root[data-input-modality="pointer"] .qi-input:focus,
 :root[data-input-modality="pointer"] .qi-textarea:focus,
 :root[data-input-modality="pointer"] .qi-select:focus {
-  outline: none !important;
-  border-color: var(--line) !important;
-  box-shadow: none !important;
+  outline: none;
+  border-color: var(--line);
+  box-shadow: none;
 }
 select.qi-select {
   appearance: none;
@@ -18424,8 +18439,8 @@ select.qi-select {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 :root[data-input-modality="pointer"] .figma-snapshot-input:focus {
-  outline: none !important;
-  box-shadow: none !important;
+  outline: none;
+  box-shadow: none;
 }
 .figma-snapshot-input[aria-invalid="true"] {
   border-color: var(--input-border-error);
@@ -19916,8 +19931,8 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 :root[data-input-modality="pointer"] .wf-dialog-input:focus {
-  outline: none !important;
-  border-color: var(--line) !important;
+  outline: none;
+  border-color: var(--line);
 }
 .wf-dialog-error {
   font-size: 12.5px;
@@ -21804,9 +21819,9 @@ button.figma-view-preview {
   border-color: var(--accent);
 }
 :root[data-input-modality="pointer"] .scope-grounding-select:focus {
-  outline: none !important;
-  border-color: var(--line-soft) !important;
-  box-shadow: none !important;
+  outline: none;
+  border-color: var(--line-soft);
+  box-shadow: none;
 }
 .scope-grounding-select option {
   /* explicit pair — Chromium dark option popups honor option CSS (cf. .cmp-model-select option) */
@@ -22345,8 +22360,8 @@ button.figma-view-preview {
 
 :root[data-input-modality="pointer"] .chat-history-open:focus,
 :root[data-input-modality="pointer"] .chat-history-title-input:focus {
-  outline: none !important;
-  box-shadow: none !important;
+  outline: none;
+  box-shadow: none;
 }
 
 .chat-history-title {

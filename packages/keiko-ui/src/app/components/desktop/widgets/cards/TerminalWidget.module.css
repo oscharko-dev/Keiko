@@ -50,9 +50,9 @@
 
 :global(:root[data-input-modality="pointer"]) .lazyWidgetScope :global(.tm-field input:focus),
 :global(:root[data-input-modality="pointer"]) .lazyWidgetScope :global(.tm-field select:focus) {
-  outline: none !important;
-  border-color: var(--line-strong) !important;
-  box-shadow: none !important;
+  outline: none;
+  border-color: var(--line-strong);
+  box-shadow: none;
 }
 
 .lazyWidgetScope :global(.tm-field input):focus-visible,
