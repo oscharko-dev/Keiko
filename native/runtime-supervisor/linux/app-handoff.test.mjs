@@ -244,7 +244,25 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
   throw new Error("native fixture did not reach the selected owned version");
 }
 
+async function startupObservation(launchId) {
+  const trace = async (kind) => {
+    try {
+      return JSON.parse(await readFile(join(stateDir, `fixture-${kind}-${launchId}.json`), "utf8"));
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    classification: "native-fixture-startup-failure",
+    ownerExitCode: initialOwner.exitCode,
+    ownerSignal: initialOwner.signalCode,
+    startup: await trace("startup"),
+    failure: await trace("failure"),
+  };
+}
+
 async function initialStart(launcher, helper, hash) {
+  const requestedAt = Date.now();
   const launchId = randomBytes(16).toString("hex");
   knownLaunchIds.add(launchId);
   initialOwner = spawn(launcher, ["--own-app-runtime", helper, hash], {
@@ -295,17 +313,28 @@ async function initialStart(launcher, helper, hash) {
   // Observe the complete startup grant already admitted by the native owner.
   const readyDeadline = performance.now() + INITIAL_START_TIMEOUT_MS;
   let ready = false;
+  let lastObservation;
   while (!ready && performance.now() < readyDeadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/state`, {
         signal: AbortSignal.timeout(500),
       });
-      ready = response.ok && (await response.json()).pid === started.payload.readUInt32LE(0);
-    } catch {
+      const body = await response.json();
+      ready = response.ok && body.pid === started.payload.readUInt32LE(0);
+      lastObservation = {
+        status: response.status,
+        expectedPid: body.pid === started.payload.readUInt32LE(0),
+      };
+    } catch (error) {
+      lastObservation = { unavailable: unavailableObservation(error) };
       // The actual root must consume and prove its metadata port before ownership commits.
     }
     if (!ready) await delay(20);
   }
+  if (!ready)
+    console.error(
+      JSON.stringify({ ...(await startupObservation(launchId)), requestedAt, lastObservation }),
+    );
   assert(ready);
   initialOwner.stdio[3].write(commitPacket(launchId));
   assert.equal((await appResponse(reader)).kind, 5);
