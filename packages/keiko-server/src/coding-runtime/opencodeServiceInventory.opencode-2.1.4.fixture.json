@@ -1,0 +1,793 @@
+{
+  "version": "2.1.4",
+  "operations": [
+    {
+      "operationId": "agent.get",
+      "method": "GET",
+      "path": "/api/agent/{agentID}"
+    },
+    {
+      "operationId": "agent.list",
+      "method": "GET",
+      "path": "/api/agent"
+    },
+    {
+      "operationId": "command.list",
+      "method": "GET",
+      "path": "/api/command"
+    },
+    {
+      "operationId": "config.get",
+      "method": "GET",
+      "path": "/api/config"
+    },
+    {
+      "operationId": "config.shells",
+      "method": "GET",
+      "path": "/api/config/shell"
+    },
+    {
+      "operationId": "credential.activate",
+      "method": "POST",
+      "path": "/api/credential/{credentialID}/activate"
+    },
+    {
+      "operationId": "credential.create",
+      "method": "POST",
+      "path": "/api/credential"
+    },
+    {
+      "operationId": "credential.list",
+      "method": "GET",
+      "path": "/api/credential"
+    },
+    {
+      "operationId": "credential.remove",
+      "method": "DELETE",
+      "path": "/api/credential/{credentialID}"
+    },
+    {
+      "operationId": "credential.update",
+      "method": "PATCH",
+      "path": "/api/credential/{credentialID}"
+    },
+    {
+      "operationId": "debug.heapDump",
+      "method": "POST",
+      "path": "/api/debug/heap-dump"
+    },
+    {
+      "operationId": "debug.location.evict",
+      "method": "DELETE",
+      "path": "/api/debug/location"
+    },
+    {
+      "operationId": "debug.location.list",
+      "method": "GET",
+      "path": "/api/debug/location"
+    },
+    {
+      "operationId": "event.subscribe",
+      "method": "GET",
+      "path": "/api/event"
+    },
+    {
+      "operationId": "experimental.config.update",
+      "method": "PATCH",
+      "path": "/api/experimental/config"
+    },
+    {
+      "operationId": "experimental.fs.write",
+      "method": "POST",
+      "path": "/api/experimental/fs/write"
+    },
+    {
+      "operationId": "experimental.generate.text",
+      "method": "POST",
+      "path": "/api/experimental/generate"
+    },
+    {
+      "operationId": "experimental.integration.wellknown.add",
+      "method": "POST",
+      "path": "/api/experimental/integration/wellknown"
+    },
+    {
+      "operationId": "experimental.mcp.add",
+      "method": "PUT",
+      "path": "/api/experimental/mcp/{server}"
+    },
+    {
+      "operationId": "experimental.mcp.client",
+      "method": "GET",
+      "path": "/api/experimental/client-mcp"
+    },
+    {
+      "operationId": "experimental.mcp.client.token",
+      "method": "POST",
+      "path": "/api/experimental/client-mcp/token"
+    },
+    {
+      "operationId": "experimental.mcp.connect",
+      "method": "POST",
+      "path": "/api/experimental/mcp/{server}/connect"
+    },
+    {
+      "operationId": "experimental.mcp.disconnect",
+      "method": "POST",
+      "path": "/api/experimental/mcp/{server}/disconnect"
+    },
+    {
+      "operationId": "experimental.mcp.remove",
+      "method": "DELETE",
+      "path": "/api/experimental/mcp/{server}"
+    },
+    {
+      "operationId": "experimental.migration.v1.status",
+      "method": "GET",
+      "path": "/api/experimental/migration/v1"
+    },
+    {
+      "operationId": "experimental.session.export",
+      "method": "GET",
+      "path": "/api/experimental/session/{sessionID}/export"
+    },
+    {
+      "operationId": "experimental.session.import",
+      "method": "POST",
+      "path": "/api/experimental/session/import"
+    },
+    {
+      "operationId": "experimental.session.instructions.entry.list",
+      "method": "GET",
+      "path": "/api/experimental/session/{sessionID}/instructions/entries"
+    },
+    {
+      "operationId": "experimental.session.instructions.entry.put",
+      "method": "PUT",
+      "path": "/api/experimental/session/{sessionID}/instructions/entries/{key}"
+    },
+    {
+      "operationId": "experimental.session.instructions.entry.remove",
+      "method": "DELETE",
+      "path": "/api/experimental/session/{sessionID}/instructions/entries/{key}"
+    },
+    {
+      "operationId": "experimental.session.skill",
+      "method": "POST",
+      "path": "/api/experimental/session/{sessionID}/skill"
+    },
+    {
+      "operationId": "experimental.session.stats",
+      "method": "GET",
+      "path": "/api/experimental/session/stats"
+    },
+    {
+      "operationId": "experimental.session.wait",
+      "method": "POST",
+      "path": "/api/experimental/session/{sessionID}/wait"
+    },
+    {
+      "operationId": "experimental.voice.instructions",
+      "method": "POST",
+      "path": "/api/experimental/voice/session/{sessionID}/instructions"
+    },
+    {
+      "operationId": "experimental.voice.models",
+      "method": "GET",
+      "path": "/api/experimental/voice/models"
+    },
+    {
+      "operationId": "experimental.voice.session",
+      "method": "POST",
+      "path": "/api/experimental/voice/session"
+    },
+    {
+      "operationId": "form.list",
+      "method": "GET",
+      "path": "/api/form"
+    },
+    {
+      "operationId": "fs.find",
+      "method": "GET",
+      "path": "/api/fs/find"
+    },
+    {
+      "operationId": "fs.list",
+      "method": "GET",
+      "path": "/api/fs/list"
+    },
+    {
+      "operationId": "fs.read",
+      "method": "GET",
+      "path": "/api/fs/read/*"
+    },
+    {
+      "operationId": "integration.command.cancel",
+      "method": "DELETE",
+      "path": "/api/integration/{integrationID}/connect/command/{attemptID}"
+    },
+    {
+      "operationId": "integration.command.connect",
+      "method": "POST",
+      "path": "/api/integration/{integrationID}/connect/command"
+    },
+    {
+      "operationId": "integration.command.status",
+      "method": "GET",
+      "path": "/api/integration/{integrationID}/connect/command/{attemptID}"
+    },
+    {
+      "operationId": "integration.connect.external",
+      "method": "POST",
+      "path": "/api/integration/{integrationID}/connect/external"
+    },
+    {
+      "operationId": "integration.connect.key",
+      "method": "POST",
+      "path": "/api/integration/{integrationID}/connect/key"
+    },
+    {
+      "operationId": "integration.get",
+      "method": "GET",
+      "path": "/api/integration/{integrationID}"
+    },
+    {
+      "operationId": "integration.list",
+      "method": "GET",
+      "path": "/api/integration"
+    },
+    {
+      "operationId": "integration.oauth.cancel",
+      "method": "DELETE",
+      "path": "/api/integration/{integrationID}/connect/oauth/{attemptID}"
+    },
+    {
+      "operationId": "integration.oauth.complete",
+      "method": "POST",
+      "path": "/api/integration/{integrationID}/connect/oauth/{attemptID}/complete"
+    },
+    {
+      "operationId": "integration.oauth.connect",
+      "method": "POST",
+      "path": "/api/integration/{integrationID}/connect/oauth"
+    },
+    {
+      "operationId": "integration.oauth.status",
+      "method": "GET",
+      "path": "/api/integration/{integrationID}/connect/oauth/{attemptID}"
+    },
+    {
+      "operationId": "location.get",
+      "method": "GET",
+      "path": "/api/location"
+    },
+    {
+      "operationId": "location.reload",
+      "method": "POST",
+      "path": "/api/location/reload"
+    },
+    {
+      "operationId": "mcp.list",
+      "method": "GET",
+      "path": "/api/mcp"
+    },
+    {
+      "operationId": "mcp.resource.catalog",
+      "method": "GET",
+      "path": "/api/mcp/resource"
+    },
+    {
+      "operationId": "model.default",
+      "method": "GET",
+      "path": "/api/model/default"
+    },
+    {
+      "operationId": "model.list",
+      "method": "GET",
+      "path": "/api/model"
+    },
+    {
+      "operationId": "permission.request.list",
+      "method": "GET",
+      "path": "/api/permission/request"
+    },
+    {
+      "operationId": "permission.saved.list",
+      "method": "GET",
+      "path": "/api/permission/saved"
+    },
+    {
+      "operationId": "permission.saved.remove",
+      "method": "DELETE",
+      "path": "/api/permission/saved/{id}"
+    },
+    {
+      "operationId": "permission.saved.update",
+      "method": "PATCH",
+      "path": "/api/permission/saved/{id}"
+    },
+    {
+      "operationId": "persistentPty.connect",
+      "method": "GET",
+      "path": "/api/experimental/persistent-pty/{ptyID}/connect"
+    },
+    {
+      "operationId": "plugin.check",
+      "method": "POST",
+      "path": "/api/plugin/check"
+    },
+    {
+      "operationId": "plugin.list",
+      "method": "GET",
+      "path": "/api/plugin"
+    },
+    {
+      "operationId": "plugin.update",
+      "method": "POST",
+      "path": "/api/plugin/update"
+    },
+    {
+      "operationId": "project.list",
+      "method": "GET",
+      "path": "/api/project"
+    },
+    {
+      "operationId": "project.update",
+      "method": "PATCH",
+      "path": "/api/project/{projectID}"
+    },
+    {
+      "operationId": "provider.get",
+      "method": "GET",
+      "path": "/api/provider/{providerID}"
+    },
+    {
+      "operationId": "provider.list",
+      "method": "GET",
+      "path": "/api/provider"
+    },
+    {
+      "operationId": "pty.connect",
+      "method": "GET",
+      "path": "/api/pty/{ptyID}/connect"
+    },
+    {
+      "operationId": "pty.connect.token",
+      "method": "POST",
+      "path": "/api/pty/{ptyID}/connect-token"
+    },
+    {
+      "operationId": "pty.create",
+      "method": "POST",
+      "path": "/api/pty"
+    },
+    {
+      "operationId": "pty.get",
+      "method": "GET",
+      "path": "/api/pty/{ptyID}"
+    },
+    {
+      "operationId": "pty.list",
+      "method": "GET",
+      "path": "/api/pty"
+    },
+    {
+      "operationId": "pty.remove",
+      "method": "DELETE",
+      "path": "/api/pty/{ptyID}"
+    },
+    {
+      "operationId": "pty.update",
+      "method": "PUT",
+      "path": "/api/pty/{ptyID}"
+    },
+    {
+      "operationId": "reference.list",
+      "method": "GET",
+      "path": "/api/reference"
+    },
+    {
+      "operationId": "rpc.call",
+      "method": "POST",
+      "path": "/api/rpc/{rpcID}/{method}"
+    },
+    {
+      "operationId": "server.connect",
+      "method": "GET",
+      "path": "/auth/connect/{code}"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.connectToken",
+      "method": "POST",
+      "path": "/api/experimental/persistent-pty/{ptyID}/connect-token"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.create",
+      "method": "POST",
+      "path": "/api/experimental/session/{sessionID}/terminal"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.get",
+      "method": "GET",
+      "path": "/api/experimental/persistent-pty/{ptyID}"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.handoff",
+      "method": "POST",
+      "path": "/api/experimental/persistent-pty/handoff"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.list",
+      "method": "GET",
+      "path": "/api/experimental/session/{sessionID}/terminal"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.read",
+      "method": "GET",
+      "path": "/api/experimental/session/{sessionID}/terminal/read"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.remove",
+      "method": "DELETE",
+      "path": "/api/experimental/persistent-pty/{ptyID}"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.shutdown",
+      "method": "POST",
+      "path": "/api/experimental/persistent-pty/shutdown"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.snapshot",
+      "method": "GET",
+      "path": "/api/experimental/persistent-pty/{ptyID}/snapshot"
+    },
+    {
+      "operationId": "server.experimental.persistentPty.update",
+      "method": "PUT",
+      "path": "/api/experimental/persistent-pty/{ptyID}"
+    },
+    {
+      "operationId": "server.info",
+      "method": "GET",
+      "path": "/api/info"
+    },
+    {
+      "operationId": "server.pair",
+      "method": "POST",
+      "path": "/api/pair"
+    },
+    {
+      "operationId": "session.active",
+      "method": "GET",
+      "path": "/api/session/active"
+    },
+    {
+      "operationId": "session.background",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/background"
+    },
+    {
+      "operationId": "session.command",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/command"
+    },
+    {
+      "operationId": "session.compact",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/compact"
+    },
+    {
+      "operationId": "session.context",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/context"
+    },
+    {
+      "operationId": "session.create",
+      "method": "POST",
+      "path": "/api/session"
+    },
+    {
+      "operationId": "session.diff",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/diff"
+    },
+    {
+      "operationId": "session.environment",
+      "method": "PUT",
+      "path": "/api/session/{sessionID}/environment"
+    },
+    {
+      "operationId": "session.fork",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/fork"
+    },
+    {
+      "operationId": "session.form.cancel",
+      "method": "DELETE",
+      "path": "/api/session/{sessionID}/form/{formID}"
+    },
+    {
+      "operationId": "session.form.create",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/form"
+    },
+    {
+      "operationId": "session.form.get",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/form/{formID}"
+    },
+    {
+      "operationId": "session.form.list",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/form"
+    },
+    {
+      "operationId": "session.form.reply",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/form/{formID}/reply"
+    },
+    {
+      "operationId": "session.generate",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/generate"
+    },
+    {
+      "operationId": "session.get",
+      "method": "GET",
+      "path": "/api/session/{sessionID}"
+    },
+    {
+      "operationId": "session.inbox.cancel",
+      "method": "DELETE",
+      "path": "/api/session/{sessionID}/inbox/{inboxID}"
+    },
+    {
+      "operationId": "session.inbox.list",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/inbox"
+    },
+    {
+      "operationId": "session.inbox.update",
+      "method": "PATCH",
+      "path": "/api/session/{sessionID}/inbox/{inboxID}"
+    },
+    {
+      "operationId": "session.interrupt",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/interrupt"
+    },
+    {
+      "operationId": "session.list",
+      "method": "GET",
+      "path": "/api/session"
+    },
+    {
+      "operationId": "session.log",
+      "method": "GET",
+      "path": "/api/experimental/session/{sessionID}/log"
+    },
+    {
+      "operationId": "session.message.get",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/message/{messageID}"
+    },
+    {
+      "operationId": "session.message.list",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/message"
+    },
+    {
+      "operationId": "session.move",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/move"
+    },
+    {
+      "operationId": "session.permission.create",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/permission"
+    },
+    {
+      "operationId": "session.permission.get",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/permission/{requestID}"
+    },
+    {
+      "operationId": "session.permission.list",
+      "method": "GET",
+      "path": "/api/session/{sessionID}/permission"
+    },
+    {
+      "operationId": "session.permission.reply",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/permission/{requestID}/reply"
+    },
+    {
+      "operationId": "session.prompt",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/prompt"
+    },
+    {
+      "operationId": "session.remove",
+      "method": "DELETE",
+      "path": "/api/session/{sessionID}"
+    },
+    {
+      "operationId": "session.revert.clear",
+      "method": "DELETE",
+      "path": "/api/session/{sessionID}/revert"
+    },
+    {
+      "operationId": "session.revert.commit",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/revert/commit"
+    },
+    {
+      "operationId": "session.revert.stage",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/revert/stage"
+    },
+    {
+      "operationId": "session.shell",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/shell"
+    },
+    {
+      "operationId": "session.switchAgent",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/agent"
+    },
+    {
+      "operationId": "session.switchModel",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/model"
+    },
+    {
+      "operationId": "session.synthetic",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/synthetic"
+    },
+    {
+      "operationId": "session.update",
+      "method": "PATCH",
+      "path": "/api/session/{sessionID}"
+    },
+    {
+      "operationId": "session.view",
+      "method": "POST",
+      "path": "/api/session/{sessionID}/view"
+    },
+    {
+      "operationId": "shell.create",
+      "method": "POST",
+      "path": "/api/shell"
+    },
+    {
+      "operationId": "shell.get",
+      "method": "GET",
+      "path": "/api/shell/{id}"
+    },
+    {
+      "operationId": "shell.list",
+      "method": "GET",
+      "path": "/api/shell"
+    },
+    {
+      "operationId": "shell.output",
+      "method": "GET",
+      "path": "/api/shell/{id}/output"
+    },
+    {
+      "operationId": "shell.remove",
+      "method": "DELETE",
+      "path": "/api/shell/{id}"
+    },
+    {
+      "operationId": "skill.list",
+      "method": "GET",
+      "path": "/api/skill"
+    },
+    {
+      "operationId": "vcs.base",
+      "method": "GET",
+      "path": "/api/vcs/base"
+    },
+    {
+      "operationId": "vcs.branch.list",
+      "method": "GET",
+      "path": "/api/vcs/branch"
+    },
+    {
+      "operationId": "vcs.diff",
+      "method": "GET",
+      "path": "/api/vcs/diff"
+    },
+    {
+      "operationId": "vcs.get",
+      "method": "GET",
+      "path": "/api/vcs"
+    },
+    {
+      "operationId": "vcs.init",
+      "method": "POST",
+      "path": "/api/vcs/init"
+    },
+    {
+      "operationId": "vcs.status",
+      "method": "GET",
+      "path": "/api/vcs/status"
+    },
+    {
+      "operationId": "websearch.providers",
+      "method": "GET",
+      "path": "/api/websearch/provider"
+    },
+    {
+      "operationId": "websearch.query",
+      "method": "POST",
+      "path": "/api/websearch"
+    },
+    {
+      "operationId": "worktree.create",
+      "method": "POST",
+      "path": "/api/worktree"
+    },
+    {
+      "operationId": "worktree.list",
+      "method": "GET",
+      "path": "/api/worktree"
+    },
+    {
+      "operationId": "worktree.refresh",
+      "method": "POST",
+      "path": "/api/worktree/refresh"
+    },
+    {
+      "operationId": "worktree.remove",
+      "method": "DELETE",
+      "path": "/api/worktree"
+    }
+  ],
+  "cliCommands": [
+    "acp",
+    "api",
+    "auth export",
+    "auth import",
+    "auth list",
+    "auth login",
+    "auth logout",
+    "auth switch",
+    "debug agents",
+    "debug config",
+    "debug heap-dump",
+    "debug paths",
+    "mcp add",
+    "mcp auth",
+    "mcp list",
+    "mcp logout",
+    "mini",
+    "models",
+    "pair",
+    "plugin add",
+    "plugin check",
+    "plugin list",
+    "plugin remove",
+    "plugin update",
+    "reload",
+    "run",
+    "serve",
+    "service get",
+    "service restart",
+    "service set",
+    "service start",
+    "service status",
+    "service stop",
+    "service unset",
+    "session delete",
+    "session export",
+    "session import",
+    "session list",
+    "stats",
+    "uninstall",
+    "upgrade"
+  ]
+}

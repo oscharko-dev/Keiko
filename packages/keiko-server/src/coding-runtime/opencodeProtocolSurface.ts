@@ -11,7 +11,12 @@ export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
 export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
   "ba49adfd85f7fa2aee7ec8e513bd1d993a9df15ef79236e3c20f173af7fca6c2";
 
-const OPENCODE_V2_APPROVED_ENDPOINTS = [
+/**
+ * The admitted operations as `METHOD path`. The complete service inventory
+ * (`opencodeServiceInventory.ts`) derives its `admitted` disposition from this list instead of
+ * restating it.
+ */
+export const OPENCODE_V2_APPROVED_ENDPOINTS = [
   "GET /api/info",
   "GET /api/session",
   "POST /api/session",
