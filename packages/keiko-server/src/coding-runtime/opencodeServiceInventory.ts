@@ -428,12 +428,13 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten([
   ),
   refused("not-yet-implemented", 3904, ["S02"], ["session.remove", "session.update"]),
   refused("not-yet-implemented", 3904, ["S03"], ["session.fork"]),
-  refused(
-    "not-yet-implemented",
-    3904,
+  keikoOperation(
+    "Coding History task export (local, redacted)",
+    "coding-runtime/codingTaskExport.ts",
     ["S05"],
-    ["experimental.session.import", "experimental.session.export"],
+    ["experimental.session.export"],
   ),
+  refused("not-yet-implemented", 3904, ["S05"], ["experimental.session.import"]),
   refused(
     "not-yet-implemented",
     3904,
@@ -522,7 +523,13 @@ export const OPENCODE_CLI_DISPOSITIONS = flatten([
   refused("not-yet-implemented", 3903, ["C04"], ["mcp add", "mcp auth", "mcp list", "mcp logout"]),
   refused("not-yet-implemented", 3903, ["C05"], ["plugin list", "plugin remove"]),
   refused("leaves-machine", 3903, ["C05"], ["plugin add", "plugin check", "plugin update"]),
-  refused("not-yet-implemented", 3904, ["S05"], ["session export", "session import"]),
+  keikoOperation(
+    "Coding History task export (local, redacted)",
+    "coding-runtime/codingTaskExport.ts",
+    ["S05"],
+    ["session export"],
+  ),
+  refused("not-yet-implemented", 3904, ["S05"], ["session import"]),
   refused("not-yet-implemented", 3904, ["S02"], ["session delete"]),
   refused("leaves-machine", 3904, ["S06"], ["upgrade"]),
 ]);
