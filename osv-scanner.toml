@@ -15,7 +15,10 @@
 # History: the GHSA-mh99-v99m-4gvg brace-expansion waiver (recorded during #2696, PR #2700) was
 # removed when its own revisit condition arrived: upstream shipped patched releases on both
 # affected lines and the lockfile moved to 1.1.18/5.0.9, so the id-wide suppression would only
-# have hidden a reintroduced vulnerable release from the one gate positioned to catch it.
+# have hidden a reintroduced vulnerable release from the one gate positioned to catch it. The
+# fallow GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5 waivers (#3898) were removed on their revisit
+# condition: the owner decided the duplication gate (generated files excluded, the rest frozen in a
+# shrink-only baseline, `scripts/check-semantic-duplication.mjs`) and fallow moved to 3.35.0.
 
 [[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
@@ -41,50 +44,4 @@ Revisit condition: drop this entry as soon as braces publishes a patched release
 @next/eslint-plugin-next stops depending on micromatch. Recorded during #3534 (PR #3679): GitHub
 reviewed the advisory on 2026-10-02 at 22:36 UTC, after the last green scan on dev, and OSV began
 matching it minutes later.
-"""
-
-[[IgnoredVulns]]
-id = "GHSA-h4fr-cmh5-qr62"
-ignoreUntil = 2026-11-21
-reason = """
-Fallow lets an analyzed repository steer which paths it reads: a `.*` glob segment can make it
-test paths in the parent directory (GHSA-h4fr-cmh5-qr62), and Jest/Vitest `projects` entries can
-make it read files outside the project (GHSA-jfwm-3p3c-6hx5). Both low; patched in 3.34.0.
-
-Reach: fallow@3.9.1 is a root devDependency (flagged dev, `npm ls --omit=dev fallow` is empty) that
-only `check:semantic-duplication` runs, and only against this repository's own tree, whose
-`.*` patterns and test `projects` a committer writes. No user, shipped artifact or untrusted
-repository reaches it.
-
-Why not the patch: fallow 3.34 makes `dupes --fail-on-issues` exit non-zero, which 3.9.1 never did.
-The same scoped command (`--changed-since` the merge base, as CI runs it) then fails on 1,272 clone
-groups, most of them in generated registries, so adopting the patch switches on a duplication gate
-across the repository. That is a separately governed gate decision (exclusions or a shrink-only
-baseline), not a dependency patch, and is recorded as a follow-up of PR #4064.
-
-Revisit condition: drop both entries when that decision lands and fallow moves to the patched line,
-or on the ignoreUntil date, whichever is first.
-"""
-
-[[IgnoredVulns]]
-id = "GHSA-jfwm-3p3c-6hx5"
-ignoreUntil = 2026-11-21
-reason = """
-Fallow lets an analyzed repository steer which paths it reads: a `.*` glob segment can make it
-test paths in the parent directory (GHSA-h4fr-cmh5-qr62), and Jest/Vitest `projects` entries can
-make it read files outside the project (GHSA-jfwm-3p3c-6hx5). Both low; patched in 3.34.0.
-
-Reach: fallow@3.9.1 is a root devDependency (flagged dev, `npm ls --omit=dev fallow` is empty) that
-only `check:semantic-duplication` runs, and only against this repository's own tree, whose
-`.*` patterns and test `projects` a committer writes. No user, shipped artifact or untrusted
-repository reaches it.
-
-Why not the patch: fallow 3.34 makes `dupes --fail-on-issues` exit non-zero, which 3.9.1 never did.
-The same scoped command (`--changed-since` the merge base, as CI runs it) then fails on 1,272 clone
-groups, most of them in generated registries, so adopting the patch switches on a duplication gate
-across the repository. That is a separately governed gate decision (exclusions or a shrink-only
-baseline), not a dependency patch, and is recorded as a follow-up of PR #4064.
-
-Revisit condition: drop both entries when that decision lands and fallow moves to the patched line,
-or on the ignoreUntil date, whichever is first.
 """
