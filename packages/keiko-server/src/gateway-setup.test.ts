@@ -8605,6 +8605,56 @@ describe("handleGatewaySetup", () => {
     },
   );
 
+  // #3905: Settings builds providers from the same discovery, so the observed deployment must reach
+  // the stored provider there too, survive a save whose discovery states none, and follow a re-point.
+  it("keeps the observed deployment identity on the provider across saves", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-deployment-identity-");
+    const alias = (model: string | undefined): ReturnType<typeof parseModelDiscovery> =>
+      parseModelDiscovery({
+        data: [
+          {
+            model_name: "identity-chat",
+            ...(model === undefined ? {} : { litellm_params: { model } }),
+            model_info: { mode: "chat" },
+          },
+        ],
+      });
+    let discovery = alias("ollama/gemma-3");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-deployment-identity-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovery),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const identity = (): string | undefined =>
+      requiredGatewayConfig(deps).providers.find((provider) => provider.modelId === "identity-chat")
+        ?.deploymentIdentitySha256;
+    const save = async (body: Record<string, unknown>): Promise<void> => {
+      expect((await handleGatewaySetup(ctx(body), deps)).status).toBe(200);
+    };
+
+    await save({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" });
+    const first = identity();
+    expect(first).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first).toBe(
+      alias("ollama/gemma-3").modelMetadata?.["identity-chat"]?.deploymentIdentitySha256,
+    );
+
+    // A discovery that states no deployment is silence, not a change: the identity is kept.
+    discovery = alias(undefined);
+    await save({ preserveExisting: true, apiKey: "rotated-secret-token" });
+    expect(identity()).toBe(first);
+
+    discovery = alias("ollama/qwen-3");
+    await save({ preserveExisting: true, apiKey: "rotated-secret-token" });
+    expect(identity()).toMatch(/^[a-f0-9]{64}$/u);
+    expect(identity()).not.toBe(first);
+    deps.store.close();
+  });
+
   it("lets the operator explicitly mark one discovered chat model as coding-safe", async () => {
     const uiDir = await tempDir("keiko-gw-ui-coding-safe-");
     const deps = buildUiHandlerDeps({
