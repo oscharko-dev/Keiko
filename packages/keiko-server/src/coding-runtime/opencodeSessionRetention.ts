@@ -20,6 +20,8 @@ import {
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
+
 /**
  * Server-owned retention of a settled native run's own session state (S02/S03, #3904).
  *
@@ -97,10 +99,16 @@ export type RetentionRefusal =
 /**
  * Which audit check refused a copy as `schema-unknown`, so a refusal names the table or read that
  * failed without naming any content: rows in a table Keiko does not model, a copy SQLite cannot
- * read, a database or table the audit cannot read as it expects, or a count that is not one.
+ * read, a database or table the audit cannot read as it expects, a count that is not one, or a
+ * schema that is not the producer's persistence contract for the session's runtime version.
  */
 export type RetentionAuditCheck =
-  "kv-rows" | "workspace-rows" | "copy-unreadable" | "audit-unreadable" | "count-invalid";
+  | "kv-rows"
+  | "workspace-rows"
+  | "copy-unreadable"
+  | "audit-unreadable"
+  | "count-invalid"
+  | "schema-drift";
 
 /** What a retained entry is valid for. A resume must present the same task, workspace and version. */
 export interface RetainedSessionBinding {
@@ -692,6 +700,9 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
       return { ok: false, reason: "schema-unknown", check: UNKNOWN_STATE_CHECKS[name] };
     }
   }
+  if (!matchesPersistenceContract(database, expected.version)) {
+    return { ok: false, reason: "schema-unknown", check: "schema-drift" };
+  }
   const sessions = database
     .prepare(
       "SELECT id, directory, version, parent_id, workspace_id, permission, revert, time_archived, time_suspended FROM session_v2",
@@ -709,6 +720,51 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
     expected.sessionId,
   );
   return { ok: true, messageCount };
+}
+
+interface SchemaObjectRow {
+  readonly type?: unknown;
+  readonly name?: unknown;
+}
+
+/**
+ * Whether the database has exactly the tables and columns the producer's own migrations create
+ * for the session's runtime version (`opencodePersistenceContract.ts`), and no view or trigger. An
+ * added table or column may hold state none of the checks above examined, so it is refused even
+ * when empty; a missing one is not the schema the audit knows either. SQLite's own `sqlite_*`
+ * tables are the engine's, not the producer's.
+ */
+function matchesPersistenceContract(database: DatabaseSync, version: string): boolean {
+  const contract = Object.hasOwn(OPENCODE_PERSISTENCE_SCHEMAS, version)
+    ? OPENCODE_PERSISTENCE_SCHEMAS[version]
+    : undefined;
+  if (contract === undefined) return false;
+  const objects = database
+    .prepare(
+      String.raw`SELECT type, name FROM sqlite_master WHERE type IN ('table', 'view', 'trigger') AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`,
+    )
+    .all() as SchemaObjectRow[];
+  const tables = objects.flatMap((row) =>
+    row.type === "table" && typeof row.name === "string" ? [row.name] : [],
+  );
+  if (tables.length !== objects.length || !sameMembers(tables, Object.keys(contract))) {
+    return false;
+  }
+  // Every table is one of the contract's own keys by now, so the lookup cannot reach a prototype.
+  return tables.every((table) => sameMembers(columnNames(database, table), contract[table]));
+}
+
+function columnNames(database: DatabaseSync, table: string): readonly string[] {
+  const rows = database.prepare("SELECT name FROM pragma_table_xinfo(?)").all(table) as {
+    readonly name?: unknown;
+  }[];
+  return rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : []));
+}
+
+function sameMembers(actual: readonly string[], expected: readonly string[] | undefined): boolean {
+  if (actual.length !== expected?.length) return false;
+  const known = new Set(expected);
+  return new Set(actual).size === actual.length && actual.every((name) => known.has(name));
 }
 
 function sessionRefusal(

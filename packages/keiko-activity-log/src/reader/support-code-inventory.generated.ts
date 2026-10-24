@@ -1160,6 +1160,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/coding-runtime/opencodeNativeQuestions",
   "keiko-server/coding-runtime/opencodeNativeSessionTree",
   "keiko-server/coding-runtime/opencodeNativeTools",
+  "keiko-server/coding-runtime/opencodePersistenceContract",
   "keiko-server/coding-runtime/opencodePromptInputs",
   "keiko-server/coding-runtime/opencodeProtocol",
   "keiko-server/coding-runtime/opencodeProtocolSurface",

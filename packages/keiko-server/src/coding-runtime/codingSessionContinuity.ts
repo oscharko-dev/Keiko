@@ -269,11 +269,19 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
     // task read as one chain; a fork also names the task it was forked from.
     taskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     // Which audit check made a copy `schema-unknown` (#3904): a table name class, never content.
+    // `schema-drift`: the database is not the producer's persistence contract (#3908 AC4).
     auditCheck: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["kv-rows", "workspace-rows", "copy-unreadable", "audit-unreadable", "count-invalid"],
+      values: [
+        "kv-rows",
+        "workspace-rows",
+        "copy-unreadable",
+        "audit-unreadable",
+        "count-invalid",
+        "schema-drift",
+      ],
     },
     sourceTaskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     boundary: {

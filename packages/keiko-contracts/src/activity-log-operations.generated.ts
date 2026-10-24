@@ -11366,6 +11366,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "copy-unreadable",
           "audit-unreadable",
           "count-invalid",
+          "schema-drift",
         ],
       },
       sourceTaskDigest: {

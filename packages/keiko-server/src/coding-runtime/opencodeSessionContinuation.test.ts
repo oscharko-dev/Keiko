@@ -12,6 +12,7 @@ import {
   type ContinuityOutcome,
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
+import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import {
   bindContinuedSession,
   retainSettledRun,
@@ -343,33 +344,22 @@ describe("seeding a run's database from a task's retained entry", () => {
   });
 });
 
-/** A database shaped like the runtime's, with the one session `SESSION` in `WORKSPACE`. */
+/**
+ * A database with the runtime's persistence contract (`opencodePersistenceContract.ts`), holding
+ * the one session `SESSION` in `WORKSPACE`.
+ */
 function realisticDatabase(path: string): void {
   const database = new DatabaseSync(path);
   try {
-    database.exec(
-      `CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL, version TEXT NOT NULL,
-         parent_id TEXT, workspace_id TEXT, permission TEXT, revert TEXT, time_archived INTEGER,
-         time_suspended INTEGER);
-       CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT);`,
-    );
-    for (const table of [
-      "permission",
-      "credential",
-      "account",
-      "account_state",
-      "control_account",
-      "session_pending",
-      "session_inbox",
-      "kv",
-      "workspace",
-    ]) {
-      database.exec(`CREATE TABLE "${table}" (id INTEGER PRIMARY KEY, value TEXT)`);
+    for (const [table, columns] of Object.entries(OPENCODE_PERSISTENCE_SCHEMAS["2.1.4"] ?? {})) {
+      database.exec(`CREATE TABLE "${table}" (${columns.map((name) => `"${name}"`).join(", ")})`);
     }
     database
       .prepare("INSERT INTO session_v2 (id, directory, version) VALUES (?, ?, ?)")
       .run(SESSION, WORKSPACE, "2.1.4");
-    database.prepare("INSERT INTO session_message VALUES ('msg_1', ?, 'x')").run(SESSION);
+    database
+      .prepare("INSERT INTO session_message (id, session_id, data) VALUES ('msg_1', ?, 'x')")
+      .run(SESSION);
   } finally {
     database.close();
   }

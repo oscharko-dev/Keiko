@@ -24,6 +24,7 @@ import {
   openCodeConfigDirectory,
   OPENCODE_RUNTIME_READINESS_PROMPT,
 } from "./opencodeLaunchProfile.js";
+import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
@@ -792,6 +793,62 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
     300_000,
   );
 
+  // #3908 AC4: the whole database crosses the retention boundary, so its schema is bound to the
+  // producer's persistence contract. A real run's database has exactly that schema, and a table
+  // or a session column beyond it is refused even with identity, version and known state intact.
+  it.skipIf(skip)(
+    "binds retained state to the producer's persistence contract and refuses schema additions",
+    async () => {
+      await withWorld(async (world) => {
+        const { sessionId } = await settledRun(world, ["FIRST-QUESTION"]);
+        const source = join(world.fixture.root, "first-run", "state", "opencode.db");
+        const contract = OPENCODE_PERSISTENCE_SCHEMAS[OPENCODE_PINNED_VERSION];
+        expect(contract).toBeDefined();
+        expect(persistenceSchema(source)).toEqual(
+          Object.fromEntries(
+            Object.entries(contract ?? {}).map(([table, columns]) => [table, [...columns].sort()]),
+          ),
+        );
+
+        const retainCopy = (database: string): ReturnType<RetainedSessionStore["retain"]> =>
+          world.store.retain({
+            binding: binding(),
+            sessionId,
+            directory: world.fixture.workspace,
+            sourceDatabase: database,
+          });
+        const addedTable = driftedCopy(
+          world,
+          "added-table",
+          'CREATE TABLE "extra_state" ("value"); INSERT INTO "extra_state" VALUES (1);',
+        );
+        const addedColumn = driftedCopy(
+          world,
+          "added-column",
+          "ALTER TABLE session_v2 ADD COLUMN extra_grant TEXT; UPDATE session_v2 SET extra_grant = 'x';",
+        );
+        const entry = join(world.fixture.root, "retained", retainedSessionKey(TASK_ID));
+        const entryBefore = readFileSync(join(entry, "opencode.db"));
+        for (const drifted of [addedTable, addedColumn]) {
+          const before = readFileSync(drifted);
+          expect(retainCopy(drifted)).toEqual({
+            ok: false,
+            reason: "schema-unknown",
+            check: "schema-drift",
+          });
+          // The drifted state is not carried forward: the task keeps its earlier audited entry,
+          // and the refused source is left exactly as it was.
+          expect(readFileSync(join(entry, "opencode.db")).equals(entryBefore)).toBe(true);
+          expect(readFileSync(drifted).equals(before)).toBe(true);
+        }
+
+        // Positive control: the unaltered database of the same run is retained.
+        expect(retainCopy(source)).toMatchObject({ ok: true });
+      });
+    },
+    240_000,
+  );
+
   it.skipIf(skip)(
     "refuses a retained state of another workspace, another runtime version or a state the runtime does not see that way",
     async () => {
@@ -839,6 +896,42 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
     240_000,
   );
 });
+
+/** Every producer table (SQLite's own excepted) with its sorted column names. */
+function persistenceSchema(path: string): Record<string, readonly string[]> {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const tables = database
+      .prepare(
+        String.raw`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\' ORDER BY name`,
+      )
+      .all() as { readonly name: string }[];
+    return Object.fromEntries(
+      tables.map(({ name }) => [
+        name,
+        (database.prepare("SELECT name FROM pragma_table_xinfo(?)").all(name) as { name: string }[])
+          .map((column) => column.name)
+          .sort(),
+      ]),
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/** A consistent copy of the settled run's database with one schema change applied. */
+function driftedCopy(world: World, name: string, change: string): string {
+  const copy = join(world.fixture.root, `${name}.db`);
+  const source = new DatabaseSync(join(world.fixture.root, "first-run", "state", "opencode.db"), {
+    readOnly: true,
+  });
+  source.prepare("VACUUM INTO ?").run(copy);
+  source.close();
+  const target = new DatabaseSync(copy);
+  target.exec(change);
+  target.close();
+  return copy;
+}
 
 /** The runtime keeps writing its database while it lives; compacting is done once it is idle. */
 async function stopRuntimeDatabase(client: OpenCodeV2HttpClient): Promise<void> {

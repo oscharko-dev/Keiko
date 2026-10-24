@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import {
   auditDatabase,
   createRetainedSessionStore,
@@ -50,35 +51,27 @@ interface RuntimeDatabaseOptions {
   readonly messages?: number;
   /** Tables the runtime of this fixture does not have. */
   readonly without?: readonly string[];
+  /** Schema changes applied after the runtime's own tables exist (a drift control). */
+  readonly alter?: string;
 }
 
-const EMPTY_TABLES = [
-  "permission",
-  "credential",
-  "account",
-  "account_state",
-  "control_account",
-  "session_pending",
-  "session_inbox",
-  "kv",
-  "workspace",
-];
-
 /**
- * A database shaped like the pinned runtime's, reduced to the tables and columns the audit reads.
- * The real runtime's own database is audited in `opencodeNativeSessionResume.real.test.ts`.
+ * A database with the pinned runtime's persistence contract: every table and column its
+ * migrations create, untyped and unconstrained. The real runtime's own database is audited in
+ * `opencodeNativeSessionResume.real.test.ts`.
  */
 function runtimeDatabase(path: string, options: RuntimeDatabaseOptions = {}): void {
   const database = new DatabaseSync(path);
   try {
     createTables(database, options.without ?? []);
+    if (options.alter !== undefined) database.exec(options.alter);
     insertSession(database, SESSION_ID, options.session ?? {});
     for (let index = 0; index < (options.extraSessions ?? 0); index += 1) {
       insertSession(database, `ses_extra_${String(index)}`, {});
     }
     for (let index = 0; index < (options.messages ?? 3); index += 1) {
       database
-        .prepare("INSERT INTO session_message VALUES (?, ?, ?)")
+        .prepare("INSERT INTO session_message (id, session_id, data) VALUES (?, ?, ?)")
         .run(`msg_${String(index)}`, SESSION_ID, `SECRET-CONVERSATION-${String(index)}`);
     }
     insertRows(database, options.rows ?? {});
@@ -88,21 +81,17 @@ function runtimeDatabase(path: string, options: RuntimeDatabaseOptions = {}): vo
 }
 
 function createTables(database: DatabaseSync, without: readonly string[]): void {
-  database.exec(
-    `CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL, version TEXT NOT NULL,
-       parent_id TEXT, workspace_id TEXT, permission TEXT, revert TEXT, time_archived INTEGER,
-       time_suspended INTEGER);
-     CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT);`,
-  );
-  for (const table of EMPTY_TABLES.filter((name) => !without.includes(name))) {
-    database.exec(`CREATE TABLE "${table}" (id INTEGER PRIMARY KEY, value TEXT)`);
+  const contract = OPENCODE_PERSISTENCE_SCHEMAS[VERSION] ?? {};
+  for (const [table, columns] of Object.entries(contract)) {
+    if (without.includes(table)) continue;
+    database.exec(`CREATE TABLE "${table}" (${columns.map((name) => `"${name}"`).join(", ")})`);
   }
 }
 
 function insertRows(database: DatabaseSync, rows: Readonly<Record<string, number>>): void {
   for (const [table, count] of Object.entries(rows)) {
     for (let index = 0; index < count; index += 1) {
-      database.prepare(`INSERT INTO "${table}" (value) VALUES (?)`).run("x");
+      database.prepare(`INSERT INTO "${table}" DEFAULT VALUES`).run();
     }
   }
 }
@@ -274,7 +263,7 @@ describe("retaining a settled run's session state", () => {
     try {
       writer.exec("PRAGMA journal_mode=WAL");
       writer.exec(
-        `INSERT INTO session_message VALUES ('msg_wal', '${SESSION_ID}', 'only in the log')`,
+        `INSERT INTO session_message (id, session_id, data) VALUES ('msg_wal', '${SESSION_ID}', 'only in the log')`,
       );
 
       expect(retain(f)).toMatchObject({ ok: true, messageCount: 4 });
@@ -305,6 +294,49 @@ describe("retaining a settled run's session state", () => {
     ["an archived session", { session: { time_archived: 4 } }, "session-mismatch"],
     ["a second session", { extraSessions: 1 }, "session-mismatch"],
     ["an unknown schema", { without: ["permission"] }, "schema-unknown", "audit-unreadable"],
+    // #3908 AC4: a schema beyond the producer's persistence contract is state no check examined.
+    [
+      "a table the runtime does not create, with a row",
+      { alter: 'CREATE TABLE "extra_state" ("value"); INSERT INTO "extra_state" VALUES (1);' },
+      "schema-unknown",
+      "schema-drift",
+    ],
+    [
+      "an empty table the runtime does not create",
+      { alter: 'CREATE TABLE "extra_state" ("value");' },
+      "schema-unknown",
+      "schema-drift",
+    ],
+    [
+      "a session column the runtime does not create",
+      { alter: "ALTER TABLE session_v2 ADD COLUMN extra_grant;" },
+      "schema-unknown",
+      "schema-drift",
+    ],
+    [
+      "a session column the runtime creates removed",
+      { alter: "ALTER TABLE session_v2 DROP COLUMN resume_attempts;" },
+      "schema-unknown",
+      "schema-drift",
+    ],
+    [
+      "a runtime table removed that no other check reads",
+      { without: ["instruction_state"] },
+      "schema-unknown",
+      "schema-drift",
+    ],
+    [
+      "a view",
+      { alter: "CREATE VIEW extra_view AS SELECT id FROM session_v2;" },
+      "schema-unknown",
+      "schema-drift",
+    ],
+    [
+      "a trigger",
+      { alter: "CREATE TRIGGER extra_trigger AFTER INSERT ON kv BEGIN SELECT 1; END;" },
+      "schema-unknown",
+      "schema-drift",
+    ],
   ] as const)("refuses a database that carries %s", (_name, database, reason, check?: string) => {
     const f = fixture(database);
 
@@ -312,6 +344,17 @@ describe("retaining a settled run's session state", () => {
 
     // A `schema-unknown` refusal names the audit check that failed (#3904), never content.
     expect(result).toEqual({ ok: false, reason, ...(check === undefined ? {} : { check }) });
+    expect(entryNames(f)).toEqual([]);
+  });
+
+  it("refuses a runtime version without a producer-derived persistence contract", () => {
+    const f = fixture({ session: { version: "9.9.9" } });
+
+    expect(retain(f, { runtimeVersion: "9.9.9" })).toEqual({
+      ok: false,
+      reason: "schema-unknown",
+      check: "schema-drift",
+    });
     expect(entryNames(f)).toEqual([]);
   });
 
@@ -494,7 +537,9 @@ describe("checking a retained entry out for a resuming run", () => {
     retain(f);
     const database = join(entryDirectory(f), "opencode.db");
     const tampered = new DatabaseSync(database);
-    tampered.exec("INSERT INTO session_message VALUES ('msg_forged', 'ses_retained_1', 'forged')");
+    tampered.exec(
+      "INSERT INTO session_message (id, session_id, data) VALUES ('msg_forged', 'ses_retained_1', 'forged')",
+    );
     tampered.close();
 
     const refused = checkout(f);
@@ -549,7 +594,7 @@ describe("checking a retained entry out for a resuming run", () => {
       retain(f);
       const database = join(entryDirectory(f), "opencode.db");
       const poisoned = new DatabaseSync(database);
-      poisoned.exec(`INSERT INTO "${table}" (value) VALUES ('x')`);
+      poisoned.exec(`INSERT INTO "${table}" DEFAULT VALUES`);
       poisoned.close();
       // A forged manifest that vouches for the poisoned bytes: the audit still refuses them.
       const manifestPath = join(entryDirectory(f), "manifest.json");

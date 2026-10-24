@@ -1876,7 +1876,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     identity, the session id, the runtime version and the input window the history was built under.
     The copy must hold exactly one top-level session and no row in any grant, credential or pending
     table, no suspended or archived session, no staged revert and an empty permission ruleset;
-    an unknown schema is refused rather than guessed. Bounds: 128 MiB an entry, 512 MiB and 32
+    an unknown schema is refused rather than guessed. Because the whole database crosses this
+    boundary, its schema is bound to the producer's persistence contract
+    (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns the pinned
+    runtime's own migrations create for the session's runtime version, derived from a genuine 2.1.4
+    database and proven against a real settled run (`opencodeNativeSessionResume.real.test.ts`). An
+    added table or column (even an empty one), a view, a trigger, a missing one, or a version with no
+    contract is refused as `schema-unknown` with the audit check `schema-drift`, so a producer
+    upgrade cannot carry unexamined persisted state forward. A new runtime version needs its own
+    producer-derived contract before its state is retained. Bounds: 128 MiB an entry, 512 MiB and 32
     entries in all, 14 days, 3,000 messages; the store prunes on startup and on every retain, and an
     entry whose task Coding History no longer holds is removed. `KEIKO_CODING_SESSION_RETENTION=off`
     retains, resumes and forks nothing; any other unknown value fails closed to off.
