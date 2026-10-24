@@ -116,7 +116,9 @@ export function withSelectedMarkdownSkill(
     });
     return withAttemptCheck(
       { ...request, messages: withLeadingMarkdownSkillInstructions(request.messages, skill) },
-      () => void current(),
+      () => {
+        current();
+      },
     );
   });
 }

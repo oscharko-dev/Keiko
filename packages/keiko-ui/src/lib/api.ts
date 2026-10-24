@@ -154,7 +154,6 @@ import type {
   GitEditorDiffScope,
   GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
-import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
@@ -192,6 +191,7 @@ import {
   type DesktopChatStreamEventType,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
+  type MarkdownSkillReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
