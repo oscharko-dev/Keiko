@@ -1,5 +1,5 @@
 // Shared mechanics for owned, local design-system fixtures. No product data is accepted here.
-export async function setFixtureTheme(page, mode) {
+async function setFixtureTheme(page, mode) {
   await page.evaluate(
     ({ theme, hc }) => {
       for (const [name, value] of Object.entries({ theme, hc })) {

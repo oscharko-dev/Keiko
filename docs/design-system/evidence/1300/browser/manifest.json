@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "captureSha256": "0cd542aa60a1bcff34f042368a6dddf4a5028141253ec9d059f1499cc5223aff",
+  "captureSha256": "d27c21e0e1008f7bfdebea4ca64eb68cf8f59eefa5a1f0beb210ed4305c845d8",
   "sourceFiles": [
     {
       "path": "design-system/keiko-ai.css",
@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "0cd542aa60a1bcff34f042368a6dddf4a5028141253ec9d059f1499cc5223aff"
+      "sha256": "d27c21e0e1008f7bfdebea4ca64eb68cf8f59eefa5a1f0beb210ed4305c845d8"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -101,7 +101,7 @@
     },
     {
       "path": "scripts/lib/css-rendered-evidence.mjs",
-      "sha256": "877003c391663b5a72953c30f273abd038e6f4d7a4fc5ecdae3c4eae173e2ae2"
+      "sha256": "a6b9b6b82aab0067d8cfc0c73a4338190e7a22ce06348f1efa2491d1f9d8467b"
     },
     {
       "path": "scripts/lib/design-evidence-sources.mjs",

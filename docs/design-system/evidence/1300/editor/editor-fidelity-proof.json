@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "0cd542aa60a1bcff34f042368a6dddf4a5028141253ec9d059f1499cc5223aff"
+      "sha256": "d27c21e0e1008f7bfdebea4ca64eb68cf8f59eefa5a1f0beb210ed4305c845d8"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -101,7 +101,7 @@
     },
     {
       "path": "scripts/lib/css-rendered-evidence.mjs",
-      "sha256": "877003c391663b5a72953c30f273abd038e6f4d7a4fc5ecdae3c4eae173e2ae2"
+      "sha256": "a6b9b6b82aab0067d8cfc0c73a4338190e7a22ce06348f1efa2491d1f9d8467b"
     },
     {
       "path": "scripts/lib/design-evidence-sources.mjs",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-10-24T11:22:15.518Z",
-    "repoHeadSha": "567553b9d69de0ab8fcce219b0fccb041dd9779d"
+    "generatedAt": "2026-10-24T13:31:53.011Z",
+    "repoHeadSha": "fccca6030c7dea385afa8e9b25256b368e1b0cbf"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

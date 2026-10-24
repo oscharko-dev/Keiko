@@ -16,7 +16,7 @@ import {
 // The harness rebuilds the static export itself so the source and rendered CSS evidence cannot drift:
 //   node docs/design-system/evidence/1300/browser/capture.mjs
 //
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, readdir, mkdir } from "node:fs/promises";
