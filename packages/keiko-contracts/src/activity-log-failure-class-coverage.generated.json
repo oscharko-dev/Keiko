@@ -8970,6 +8970,12 @@
               "required": true
             },
             {
+              "name": "jvmTemporaryScope",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "modelsFetch",
               "type": "string",
               "dataClass": "closed-enum",

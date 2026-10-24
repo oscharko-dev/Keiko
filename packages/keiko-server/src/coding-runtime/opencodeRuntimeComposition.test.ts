@@ -1890,6 +1890,7 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(launch?.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(launch?.env.PATH).toBeUndefined();
     expect(launch?.env.HOME).not.toBe("/host/home");
+    expect(launch?.env.JAVA_TOOL_OPTIONS).toBe(`'-Djava.io.tmpdir=${join(runRoot, "tmp")}'`);
     expect(launch?.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, "config", "opencode"));
     expect(
       fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/openapi.json"),

@@ -361,6 +361,12 @@ const PROVIDER_POLICY_BOUND_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["disabled", "enabled"],
     },
+    jvmTemporaryScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["run-private"],
+    },
     toolProfile: {
       type: "string",
       dataClass: "closed-enum",
@@ -1602,7 +1608,11 @@ async function materializePrepare(
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-  const result = preparedLaunch(input, bridge, profile.env);
+  const result = preparedLaunch(
+    input,
+    bridge,
+    preparedEnvironment(profile.env, request.env, runRoot),
+  );
   persistPreparedRun(runs, request, runRoot, password, configDigest, {
     continuation,
     mcp,
@@ -1647,6 +1657,22 @@ function nativeMcpAdmission(
     mode: request.env.KEIKO_CODING_MODE,
     home: join(runRoot, "home"),
   });
+}
+
+/** JVMs on Darwin ignore TMPDIR for their OS-derived default. Keep their temp files inside the
+ * already-created private state without widening the process's writable roots. */
+function preparedEnvironment(
+  profile: Readonly<Record<string, string>>,
+  inherited: Readonly<Record<string, string>>,
+  runRoot: string,
+): Readonly<Record<string, string>> {
+  const temporary = join(runRoot, "tmp");
+  // These are JVM environment-option quotes, not a shell command; retain literal path characters.
+  const javaTemporary = "'-Djava.io.tmpdir=" + temporary.replaceAll("'", "'\"'\"'") + "'";
+  return {
+    ...profile,
+    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, javaTemporary].filter(Boolean).join(" "),
+  };
 }
 
 /** The prepared launch: the profile's environment plus the run's two capabilities. */
@@ -1759,6 +1785,7 @@ function recordProviderPolicyBound(
         providerPolicy: gatewayOnly ? "gateway-only" : "absent",
         freeModels: profile.env.OPENCODE_DISABLE_FREE_MODELS === "1" ? "disabled" : "enabled",
         modelsFetch: profile.env.OPENCODE_DISABLE_MODELS_FETCH === "1" ? "disabled" : "enabled",
+        jvmTemporaryScope: "run-private",
         toolProfile,
       },
     ),

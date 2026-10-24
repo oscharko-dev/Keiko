@@ -8815,6 +8815,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["disabled", "enabled"],
       },
+      jvmTemporaryScope: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["run-private"],
+      },
       toolProfile: {
         type: "string",
         dataClass: "closed-enum",
