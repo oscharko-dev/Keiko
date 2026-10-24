@@ -42,6 +42,7 @@ import {
   type CodingRuntimePauseResult,
   type CodingRuntimeManagerDeps,
   type OpenCodeLifecycleAdapter,
+  type OpenCodeLifecycleSettlement,
   type OpenCodeLifecycleHandshakeRequest,
   type OpenCodeLifecyclePrepareRequest,
   type OpenCodeLifecyclePrepareResult,
@@ -96,6 +97,18 @@ import {
 import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
 import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
+import {
+  recordSessionContinuity,
+  type CodingSessionContinuity,
+} from "./codingSessionContinuity.js";
+import {
+  bindContinuedSession,
+  retainSettledRun,
+  seedContinuation,
+  withoutBaseline,
+  type RunContinuation,
+  type SessionContinuationContext,
+} from "./opencodeSessionContinuation.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import {
   acceptPromptInputs,
@@ -428,6 +441,17 @@ export interface OpenCodeRuntimeCompositionInput {
     | "markRuntimeRecoveryRequired"
     | "releaseRuntimeAfterReap"
   >;
+  /**
+   * Native session continuity (S02/S03, #3904): the shared service through which the orchestrator
+   * asks a run to resume or fork a task's retained session and reads what happened, and the
+   * workspace identity a retained entry is bound to. Absent keeps every run on a fresh session.
+   */
+  readonly sessionContinuity?:
+    | {
+        readonly service: CodingSessionContinuity;
+        readonly workspaceId: string;
+      }
+    | undefined;
 }
 
 type SafeToolSettlement = NonNullable<
@@ -584,6 +608,8 @@ interface PreparedRun {
   promptFileBytes?: number | undefined;
   /** How a slash command's turn is shown in the history (`opencodeCommands.ts`). */
   readonly commandPresentation: OpenCodeCommandPresentation;
+  /** The retained session this run's database was seeded with (`opencodeSessionContinuation.ts`). */
+  continuation?: RunContinuation | undefined;
   /** The undo staged in the runtime, when there is one (`opencodeRevert.ts`). */
   revert?: OpenCodeStagedRevert | undefined;
   /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
@@ -1205,7 +1231,8 @@ function lifecycleAdapter(
             dispose();
           };
     },
-    dispose: (runId, signal): Promise<boolean> => disposeRun(input, bridge, runs, runId, signal),
+    dispose: (runId, signal, settlement): Promise<boolean> =>
+      disposeRun(input, bridge, runs, runId, signal, settlement),
   };
 }
 
@@ -1215,6 +1242,7 @@ async function disposeRun(
   runs: Map<string, PreparedRun>,
   runId: string,
   signal?: AbortSignal,
+  settlement?: OpenCodeLifecycleSettlement,
 ): Promise<boolean> {
   const run = runs.get(runId);
   if (run !== undefined) run.ready = false;
@@ -1227,6 +1255,7 @@ async function disposeRun(
     if (!currentDisposal(runs, run, signal)) return false;
     await run.runtimeAdapter?.close();
     if (!currentDisposal(runs, run, signal)) return false;
+    retainOnDispose(input, run, settlement);
     rmSync(run.runRoot, { recursive: true, force: true });
     runs.delete(runId);
     return true;
@@ -1234,6 +1263,30 @@ async function disposeRun(
     recordCompositionDisposalFailure(input.diagnostics, runId, "run-dispose", error);
     return false;
   }
+}
+
+/**
+ * The runtime is reaped, so its database is quiescent. A run that settled normally leaves it as its
+ * task's retained entry before the private state is removed (`retainSettledRun`); any other run
+ * removes the task's now-stale entry. Never throws.
+ */
+function retainOnDispose(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  settlement: OpenCodeLifecycleSettlement | undefined,
+): void {
+  const context = continuationContext(input);
+  if (context === undefined) return;
+  retainSettledRun(
+    context,
+    {
+      runId: run.runId,
+      runRoot: run.runRoot,
+      workspaceRoot: run.workspaceRoot,
+      sessionId: run.sessionId,
+    },
+    settlement?.terminalStatus,
+  );
 }
 
 function disposalCancelled(signal: AbortSignal | undefined): boolean {
@@ -1308,6 +1361,7 @@ async function materializePrepare(
   serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
   createPrivateState(runRoot);
+  const continuation = serviceHost === undefined ? seedRun(input, request, runRoot) : undefined;
   await bridge.start();
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
@@ -1345,7 +1399,7 @@ async function materializePrepare(
         );
   if (serviceHost !== undefined && program === undefined)
     throw new Error("host-preparation-invalid");
-  persistPreparedRun(runs, request, runRoot, password, configDigest, program);
+  persistPreparedRun(runs, request, runRoot, password, configDigest, program, continuation);
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
 }
 
@@ -1365,6 +1419,36 @@ async function admitRepositoryItems(
   });
 }
 
+function continuationContext(
+  input: OpenCodeRuntimeCompositionInput,
+): SessionContinuationContext | undefined {
+  const continuity = input.sessionContinuity;
+  if (continuity === undefined) return undefined;
+  return {
+    service: continuity.service,
+    workspaceId: continuity.workspaceId,
+    native: input.toolProfile === "native",
+    runtimeVersion: input.portable.verification.summary.upstreamVersion,
+    maxInputTokens: input.contextGeometry.maxInputTokens,
+    activityLog: input.activityLog,
+  };
+}
+
+/** Seeds the run's private runtime database when the run asked to continue a task's session. */
+function seedRun(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): RunContinuation | undefined {
+  const context = continuationContext(input);
+  if (context === undefined) return undefined;
+  return seedContinuation(context, {
+    runId: request.runId,
+    runRoot,
+    workspaceRoot: request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
+  });
+}
+
 function persistPreparedRun(
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
@@ -1372,6 +1456,7 @@ function persistPreparedRun(
   password: string,
   configDigest: string,
   program: PreparedOpenCodeServiceHostLaunch | undefined,
+  continuation?: RunContinuation,
 ): void {
   const run = preparedRun(
     request.runId,
@@ -1383,6 +1468,7 @@ function persistPreparedRun(
     request.env.KEIKO_CODING_MODE,
   );
   if (program !== undefined) run.serviceHostPrepared = true;
+  if (continuation !== undefined) run.continuation = continuation;
   runs.set(request.runId, run);
 }
 
@@ -1661,7 +1747,7 @@ function readinessV2Ports(
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
       // A reconnect opens another event stream for the same run, not another sidecar session.
       // Keep the creation promise so concurrent subscriptions cannot create competing sessions.
-      sessionCreation ??= createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      sessionCreation ??= bindRunSession(input, run, client, request.signal);
       fixedSessionId = await sessionCreation;
       streamCount += 1;
       if (fixedSessionId !== "")
@@ -1703,7 +1789,13 @@ function readinessV2Ports(
       let messages: readonly Readonly<Record<string, unknown>>[] = [];
       try {
         messages = await client.messages(fixedSessionId, signal);
-        const events = history.project(fixedSessionId, messages, checkpoints[fixedSessionId]);
+        // A continued session already holds the messages of earlier runs, which Coding History has
+        // and the timeline must not show again: the projection starts after them.
+        const events = history.project(
+          fixedSessionId,
+          withoutBaseline(messages, run.continuation?.baselineIds),
+          checkpoints[fixedSessionId],
+        );
         staged.clear();
         for (const event of events) {
           const safe = history.takeSignal(event);
@@ -1960,6 +2052,69 @@ function recordOpenCodeV2HistoryFailure(
   });
 }
 
+/**
+ * The session a run works in: its own new one, or, when its database was seeded from a task's
+ * retained entry, the retained session resumed or forked (`bindContinuedSession`). A continued
+ * session that cannot be bound to this run's workspace fails the run's readiness: it is never
+ * replaced by a fresh one inside a database that still holds the other.
+ */
+async function bindRunSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const continuation = run.continuation;
+  const context = continuationContext(input);
+  if (continuation === undefined || context === undefined) {
+    return createAndEchoV2Session(client, run.workspaceRoot, signal);
+  }
+  const bound = await bindContinuedSession(client, continuation, run.workspaceRoot, signal);
+  const forked = continuation.intent.kind === "fork";
+  const line = continuedSessionLine(context, run, continuation);
+  if (!bound.ok) {
+    // An entry the runtime does not see the way its manifest says can never be used again.
+    if (bound.reason === "session-mismatch") context.service.store?.remove(continuation.taskId);
+    recordSessionContinuity(input.activityLog, {
+      ...line,
+      outcome: "failed",
+      reason: bound.reason,
+      ...(bound.error === undefined ? {} : { error: bound.error }),
+    });
+    return "";
+  }
+  continuation.baselineIds = bound.baselineIds;
+  context.service.settle(run.runId, { kind: forked ? "forked" : "resumed" });
+  recordSessionContinuity(input.activityLog, {
+    ...line,
+    outcome: forked ? "forked" : "resumed",
+    databaseBytes: continuation.databaseBytes,
+    messageCount: bound.baselineIds.size,
+    ageMs: continuation.ageMs,
+  });
+  return bound.sessionId;
+}
+
+function continuedSessionLine(
+  context: SessionContinuationContext,
+  run: PreparedRun,
+  continuation: RunContinuation,
+): Pick<
+  Parameters<typeof recordSessionContinuity>[1],
+  "runId" | "action" | "taskId" | "sourceTaskId" | "boundary"
+> {
+  const intent = continuation.intent;
+  const taskId = intent.kind === "resume" ? intent.taskId : context.service.taskOfRun(run.runId);
+  return {
+    runId: run.runId,
+    action: intent.kind,
+    ...(taskId === undefined ? {} : { taskId }),
+    ...(intent.kind === "fork"
+      ? { sourceTaskId: intent.sourceTaskId, boundary: intent.boundary.kind }
+      : {}),
+  };
+}
+
 async function createAndEchoV2Session(
   client: OpenCodeV2HttpClient,
   directory: string,
@@ -2043,6 +2198,52 @@ async function challengeV2Gateway(
     return false;
   }
   const signal = request.signal ?? AbortSignal.timeout(request.timeoutMs);
+  if (run.continuation === undefined) {
+    return runGatewayChallenge(input, run, client, sessionId, signal);
+  }
+  return challengeInScratchSession(input, run, client, signal);
+}
+
+/**
+ * The gateway recognises its readiness probe only as a request that holds nothing but the probe, so
+ * a continued run, whose session holds a conversation, proves the route in a scratch session of its
+ * own database and removes it again: the continued session never carries a handshake turn, and the
+ * run's database ends up with exactly the one session the run works in.
+ */
+async function challengeInScratchSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal,
+): Promise<boolean> {
+  let scratchId: string;
+  try {
+    const created = await client.createSession(run.workspaceRoot, signal);
+    if (!validCreatedSession(created.id, created.location, run.workspaceRoot)) {
+      throw new Error("opencode-v2-session-invalid");
+    }
+    scratchId = created.id;
+  } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "scratch-session-failed");
+    return false;
+  }
+  const verified = await runGatewayChallenge(input, run, client, scratchId, signal);
+  try {
+    await client.removeSession(scratchId, signal);
+    return verified;
+  } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "scratch-session-failed");
+    return false;
+  }
+}
+
+async function runGatewayChallenge(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
   const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, signal);
   let verified = false;
   try {
@@ -2074,7 +2275,8 @@ type GatewayChallengePreconditionFailure =
   | "session-missing"
   | "capability-invalid"
   | "live-verification-failed"
-  | "gateway-refused";
+  | "gateway-refused"
+  | "scratch-session-failed";
 
 function gatewayChallengePrecondition(
   input: OpenCodeRuntimeCompositionInput,

@@ -370,7 +370,23 @@ export interface OpenCodeLifecycleAdapter {
     request: OpenCodeLifecycleHandshakeRequest,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
   monitor?: ((request: OpenCodeLifecycleMonitorRequest) => (() => void) | undefined) | undefined;
-  dispose?: ((runId: string, signal?: AbortSignal) => boolean | Promise<boolean>) | undefined;
+  dispose?:
+    | ((
+        runId: string,
+        signal?: AbortSignal,
+        settlement?: OpenCodeLifecycleSettlement,
+      ) => boolean | Promise<boolean>)
+    | undefined;
+}
+
+/**
+ * How the run ended, handed to the lifecycle at disposal (S02, #3904): `succeeded` only for an
+ * orderly stop the orchestrator requested after the run's work ended normally. Any teardown the
+ * manager began itself (an unexpected exit, a reconcile) reports `failed`, so a state the runtime
+ * left mid-turn is never taken for a settled one.
+ */
+export interface OpenCodeLifecycleSettlement {
+  readonly terminalStatus: CodingRuntimeTerminalStatus;
 }
 
 /**
@@ -594,6 +610,8 @@ interface ActiveRuntime {
   shutdownBarrierComplete: boolean;
   stopPromise: Promise<CodingRuntimeStopResult> | undefined;
   stopResultStatus: CodingRuntimeTerminalStatus;
+  /** The first teardown was a `stop()` call, not an unexpected exit or a reconcile. */
+  orderlyStop?: boolean;
   stopRequested: boolean;
   /**
    * Set synchronously by the FIRST teardown initiator (stop/takeover/reconcile OR handleExit) so
@@ -853,6 +871,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // the tree could still fail its reap, clearing the active slot and admitting a new runtime
     // over a live one.
     if (active.stopPromise !== undefined) return active.stopPromise;
+    active.orderlyStop = !active.tearingDown;
     active.tearingDown = true;
     const stopping = this.stopActive(active);
     active.stopPromise = stopping;
@@ -1730,7 +1749,9 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         active.openCodeLifecycleAdapter?.dispose !== undefined &&
         !(await boundedLifecycleDisposal(
           (signal): boolean | Promise<boolean> =>
-            active.openCodeLifecycleAdapter?.dispose?.(active.context.runId, signal) ?? false,
+            active.openCodeLifecycleAdapter?.dispose?.(active.context.runId, signal, {
+              terminalStatus: active.orderlyStop === true ? active.stopResultStatus : "failed",
+            }) ?? false,
           active.shutdownTimeoutMs,
           (error): void => {
             emitRuntimeDisposalFailure(this.deps, active.context.runId, error);

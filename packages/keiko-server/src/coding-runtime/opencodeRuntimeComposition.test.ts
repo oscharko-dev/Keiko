@@ -29,6 +29,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } f
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import {
+  createCodingSessionContinuity,
+  type CodingSessionContinuity,
+} from "./codingSessionContinuity.js";
+import { retainedSessionKey, type RetainedSessionStore } from "./opencodeSessionRetention.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
@@ -633,6 +638,8 @@ interface StartBridgeControl {
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   /** The gateway route refused the readiness challenge's model request (#3603). */
   readonly gatewayRefused?: boolean;
+  /** Native session continuity (S02/S03, #3904): the shared service and what the runtime holds. */
+  readonly continuity?: FixtureContinuity;
   readonly runControl?: {
     readonly promptBodies: string[];
     /**
@@ -699,6 +706,134 @@ interface StartBridgeControl {
     runtime: OpenCodeRuntimeComposition,
     runRoot: string,
   ) => void | Promise<void>;
+}
+
+/**
+ * What the fake runtime holds for a continued run: the sessions its list reports (mutated by the
+ * creation, fork and removal routes), the messages every session answers (oldest first) and the
+ * session-level requests it was asked, in arrival order.
+ */
+interface FixtureContinuity {
+  readonly service: CodingSessionContinuity;
+  readonly workspaceId: string;
+  /** False leaves every session route to the fixture's own. */
+  readonly serveSessions: boolean;
+  readonly sessions: string[];
+  messages: readonly Record<string, unknown>[];
+  readonly requests: { readonly method: string; readonly path: string; readonly body?: string }[];
+  /** The id a fork gets; `ses_tool` is the one session the rest of the fixture answers for. */
+  readonly forkedSessionId?: string;
+}
+
+function optionalSessionContinuity(control: StartBridgeControl | undefined): {
+  readonly sessionContinuity?: {
+    readonly service: CodingSessionContinuity;
+    readonly workspaceId: string;
+  };
+} {
+  return control?.continuity === undefined
+    ? {}
+    : {
+        sessionContinuity: {
+          service: control.continuity.service,
+          workspaceId: control.continuity.workspaceId,
+        },
+      };
+}
+
+interface ContinuityRoute {
+  readonly method: string;
+  readonly pattern: RegExp;
+  /** Whether the request is one of the session-level routes this change adds, which are recorded. */
+  readonly recorded: boolean;
+  readonly respond: (
+    held: FixtureContinuity,
+    match: RegExpExecArray,
+    body: string | undefined,
+    session: (id: string) => Record<string, unknown>,
+  ) => Response;
+}
+
+const SESSION_ID_PATTERN = "(ses_[A-Za-z0-9_]+)";
+
+/** The routes of a continued run's runtime: list, create, remove, fork and the messages. */
+const CONTINUITY_ROUTES: readonly ContinuityRoute[] = [
+  {
+    method: "GET",
+    pattern: /^\/api\/session$/u,
+    recorded: false,
+    respond: (held, _match, _body, session): Response => v2Envelope(held.sessions.map(session)),
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/session$/u,
+    recorded: true,
+    respond: (held, _match, _body, session): Response => {
+      const id = `ses_scratch_${String(held.requests.length)}`;
+      held.sessions.push(id);
+      return v2Envelope(session(id));
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: new RegExp(`^/api/session/${SESSION_ID_PATTERN}$`, "u"),
+    recorded: true,
+    respond: (held, match): Response => {
+      const index = held.sessions.indexOf(match[1] ?? "");
+      if (index >= 0) held.sessions.splice(index, 1);
+      return new Response(null, { status: 204 });
+    },
+  },
+  {
+    method: "POST",
+    pattern: new RegExp(`^/api/session/${SESSION_ID_PATTERN}/fork$`, "u"),
+    recorded: true,
+    respond: (held, match, body, session): Response => {
+      const before = (JSON.parse(body ?? "{}") as { before?: string }).before;
+      const id = held.forkedSessionId ?? "ses_tool";
+      held.sessions.push(id);
+      const boundary =
+        before === undefined
+          ? { type: "through", messageID: "msg_last" }
+          : { type: "before", messageID: before };
+      return v2Envelope({ ...session(id), fork: { sessionID: match[1], boundary } });
+    },
+  },
+  {
+    method: "GET",
+    pattern: new RegExp(`^/api/session/${SESSION_ID_PATTERN}/message$`, "u"),
+    recorded: false,
+    respond: (held): Response => v2Envelope([...held.messages].reverse()),
+  },
+];
+
+function continuityRoute(
+  method: string,
+  path: string,
+): { readonly route: ContinuityRoute; readonly match: RegExpExecArray } | undefined {
+  for (const route of CONTINUITY_ROUTES) {
+    const match = route.method === method ? route.pattern.exec(path) : null;
+    if (match !== null) return { route, match };
+  }
+  return undefined;
+}
+
+/** The session routes of a continued run's runtime; `undefined` leaves the route to the fixture. */
+function continuityResponse(
+  held: FixtureContinuity | undefined,
+  path: string,
+  init: RequestInit | undefined,
+  directory: string,
+): Response | undefined {
+  if (held?.serveSessions !== true) return undefined;
+  const method = init?.method ?? "GET";
+  const body = typeof init?.body === "string" ? init.body : undefined;
+  const found = continuityRoute(method, path);
+  if (found === undefined) return undefined;
+  if (found.route.recorded) {
+    held.requests.push({ method, path, ...(body === undefined ? {} : { body }) });
+  }
+  return found.route.respond(held, found.match, body, (id) => ({ id, location: { directory } }));
 }
 
 function optionalSpawnGuard(control: StartBridgeControl | undefined): {
@@ -998,6 +1133,13 @@ async function startBridgeFixture(
         ),
       );
     }
+    const continued = continuityResponse(
+      control?.continuity,
+      path,
+      init,
+      capturedLaunch?.cwd ?? "",
+    );
+    if (continued !== undefined) return Promise.resolve(continued);
     if (path === "/api/session/ses_tool/message" && control?.runControl?.revert !== undefined) {
       return Promise.resolve(v2Envelope([...control.runControl.revert.messages].reverse()));
     }
@@ -1151,6 +1293,7 @@ async function startBridgeFixture(
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
     ...optionalSpawnGuard(control),
+    ...optionalSessionContinuity(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> =>
         Promise.resolve(control?.gatewayRefused !== true),
@@ -9493,3 +9636,348 @@ function observeNativeReadBytes(
     },
   };
 }
+
+// S02/S03 (#3904, ADR-0137 D10): the run that continues a task's retained session. The composition
+// seeds the run's private database from the task's entry before the runtime starts, binds the
+// started runtime to the retained (or forked) session, proves the gateway route in a scratch
+// session, shows only what the run adds, and retains the database of a run that settled normally.
+describe("native session continuity in the composition", () => {
+  const TASK = "task-continued";
+
+  interface StoreCalls {
+    readonly checkouts: Parameters<RetainedSessionStore["checkout"]>[0][];
+    readonly retains: Parameters<RetainedSessionStore["retain"]>[0][];
+    readonly removed: string[];
+    readonly seededDirectoryExisted: boolean[];
+  }
+
+  function continuedWorld(
+    options: {
+      sessions?: string[];
+      retainedSessionId?: string;
+      checkout?: ReturnType<RetainedSessionStore["checkout"]>;
+      retain?: ReturnType<RetainedSessionStore["retain"]>;
+      messages?: readonly Record<string, unknown>[];
+      forkedSessionId?: string;
+      /** False leaves every session route to the fixture's own, as for a run that continues nothing. */
+      serveSessions?: boolean;
+    } = {},
+  ): { readonly continuity: FixtureContinuity; readonly calls: StoreCalls } {
+    const calls: StoreCalls = {
+      checkouts: [],
+      retains: [],
+      removed: [],
+      seededDirectoryExisted: [],
+    };
+    const store: RetainedSessionStore = {
+      checkout: (input) => {
+        calls.checkouts.push(input);
+        calls.seededDirectoryExisted.push(existsSync(dirname(input.destinationDatabase)));
+        return (
+          options.checkout ?? {
+            ok: true,
+            sessionId: options.retainedSessionId ?? "ses_tool",
+            databaseBytes: 4096,
+            messageCount: 4,
+            ageMs: 60_000,
+          }
+        );
+      },
+      retain: (input) => {
+        calls.retains.push(input);
+        return (
+          options.retain ?? {
+            ok: true,
+            databaseBytes: 4096,
+            messageCount: 6,
+            entryCount: 1,
+            prunedCount: 0,
+          }
+        );
+      },
+      remove: (taskId) => {
+        calls.removed.push(taskId);
+      },
+      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+    };
+    const service = createCodingSessionContinuity({
+      store,
+      taskOfRun: (runId) => (runId === FIXTURE_RUN_ID ? TASK : undefined),
+    });
+    return {
+      calls,
+      continuity: {
+        service,
+        workspaceId: "workspace-continued",
+        serveSessions: options.serveSessions ?? true,
+        sessions: options.sessions ?? [options.retainedSessionId ?? "ses_tool"],
+        // Messages of an earlier run that the history projection could not even parse: if the run
+        // projected them it would fail its readiness, so a started run proves they were left out.
+        messages: options.messages ?? [
+          { id: "msg_earlier_1", type: "earlier-run-user-turn" },
+          { id: "msg_earlier_2", type: "earlier-run-answer" },
+        ],
+        requests: [],
+        ...(options.forkedSessionId === undefined
+          ? {}
+          : { forkedSessionId: options.forkedSessionId }),
+      },
+    };
+  }
+
+  function continuityLines(
+    log: ReturnType<typeof createBufferedServerLogSink>,
+  ): Record<string, unknown>[] {
+    return log.events
+      .filter((event) => event.op === "coding-runtime.session-continuity")
+      .map((event) => ({ ...event, ...(event.extra as Record<string, unknown>) }));
+  }
+
+  const native = { readToolProfile: (): "native" => "native" } as const;
+  const facade = (): CodingToolFacade => ({
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  });
+
+  it("resumes the retained session: seeded before the start, proved in a scratch session, shown from what the run adds", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const governedEvents: OpenCodeReconciliationEvent[] = [];
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+      activityLog,
+      governedEvents,
+    });
+    try {
+      // Seeded into the run's own private state, after that state exists and before the runtime ran.
+      expect(world.calls.checkouts).toHaveLength(1);
+      const [checkout] = world.calls.checkouts;
+      expect(
+        checkout?.destinationDatabase.endsWith(join(FIXTURE_RUN_ID, "state", "opencode.db")),
+      ).toBe(true);
+      expect(world.calls.seededDirectoryExisted).toEqual([true]);
+      expect(checkout?.binding).toMatchObject({
+        taskId: TASK,
+        runtimeVersion: OPENCODE_VERSION,
+        maxInputTokens: 61_440,
+      });
+      expect(checkout?.directory).toBe(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
+
+      // The handshake runs in a scratch session that is removed again: the run holds one session,
+      // no new session was created for the work, and the continued one carries no handshake turn.
+      expect(world.continuity.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "POST /api/session",
+        "DELETE /api/session/ses_scratch_1",
+      ]);
+      expect(world.continuity.sessions).toEqual(["ses_tool"]);
+
+      // Only the readiness creation event: the earlier run's messages were never projected.
+      expect(governedEvents).toHaveLength(1);
+
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "resumed" });
+      const [line] = continuityLines(activityLog);
+      expect(line).toMatchObject({
+        action: "resume",
+        outcome: "resumed",
+        taskDigest: retainedSessionKey(TASK),
+        databaseBytes: 4096,
+        messageCount: 2,
+        ageMs: 60_000,
+        correlationId: FIXTURE_RUN_ID,
+      });
+      const written = activityLog.events.find(
+        (event) => event.op === "coding-runtime.session-continuity",
+      );
+      expectActivityLogProof(
+        "coding-runtime.session-continuity.emitted-line",
+        formatActivityLogProofLine(written ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("forks the retained session through its end and removes the source from the run's database", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({ retainedSessionId: "ses_source", forkedSessionId: "ses_tool" });
+    world.continuity.service.declare(FIXTURE_RUN_ID, {
+      kind: "fork",
+      sourceTaskId: "task-source",
+      boundary: { kind: "end" },
+    });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+      activityLog,
+    });
+    try {
+      expect(world.calls.checkouts[0]?.binding.taskId).toBe("task-source");
+      expect(
+        world.continuity.requests.slice(0, 2).map(({ method, path }) => `${method} ${path}`),
+      ).toEqual(["POST /api/session/ses_source/fork", "DELETE /api/session/ses_source"]);
+      expect(world.continuity.requests[0]?.body).toBe("{}");
+      expect(world.continuity.sessions).toEqual(["ses_tool"]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "forked" });
+      expect(continuityLines(activityLog)).toMatchObject([
+        {
+          action: "fork",
+          outcome: "forked",
+          boundary: "end",
+          taskDigest: retainedSessionKey(TASK),
+          sourceTaskDigest: retainedSessionKey("task-source"),
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("starts a fresh session with the task's history when the entry is refused, and says why", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const sessionCreateCalls: string[] = [];
+    const world = continuedWorld({
+      checkout: { ok: false, reason: "version-changed", removed: true },
+      serveSessions: false,
+    });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+      activityLog,
+      sessionCreateCalls,
+    });
+    try {
+      // The fixture's own routes answered: a new session was created, as for any fresh run.
+      expect(sessionCreateCalls).toEqual(["ses_tool"]);
+      expect(world.continuity.requests).toEqual([]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({
+        kind: "fresh",
+        reason: "version-changed",
+      });
+      expect(continuityLines(activityLog)).toMatchObject([
+        { action: "resume", outcome: "refused", reason: "version-changed", level: "warn" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("fails the run's readiness when the runtime does not hold exactly the retained session", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({ sessions: ["ses_tool", "ses_unexpected"] });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+      activityLog,
+      diagnostics,
+      expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+    });
+
+    // The failed binding, then the disposal of the run that never started: it retains nothing.
+    expect(continuityLines(activityLog)).toMatchObject([
+      { action: "resume", outcome: "failed", reason: "session-mismatch" },
+      { action: "retain", outcome: "skipped", reason: "not-succeeded" },
+    ]);
+    // An entry the runtime does not see the way its manifest says is never used again.
+    expect(world.calls.removed).toContain(TASK);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+
+  it("retains the database of a run that succeeded, and only of one that did", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+      activityLog,
+    });
+    const database = world.calls.checkouts[0]?.destinationDatabase ?? "";
+
+    await fixture.runtime.manager.stop(FIXTURE_RUN_ID, "succeeded");
+
+    expect(world.calls.retains).toHaveLength(1);
+    expect(world.calls.retains[0]).toMatchObject({
+      binding: { taskId: TASK, runtimeVersion: OPENCODE_VERSION },
+      sessionId: "ses_tool",
+      sourceDatabase: database,
+    });
+    expect(world.calls.removed).toEqual([]);
+    expect(continuityLines(activityLog).at(-1)).toMatchObject({
+      action: "retain",
+      outcome: "retained",
+      taskDigest: retainedSessionKey(TASK),
+      databaseBytes: 4096,
+      messageCount: 6,
+    });
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "removes the task's entry instead of retaining when the run ended %s",
+    async (status) => {
+      const activityLog = createBufferedServerLogSink();
+      const world = continuedWorld();
+      world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+      const fixture = await startBridgeFixture(facade(), undefined, {
+        ...native,
+        continuity: world.continuity,
+        activityLog,
+      });
+
+      await fixture.runtime.manager.stop(FIXTURE_RUN_ID, status);
+
+      expect(world.calls.retains).toEqual([]);
+      expect(world.calls.removed).toEqual([TASK]);
+      expect(continuityLines(activityLog).at(-1)).toMatchObject({
+        action: "retain",
+        outcome: "skipped",
+        reason: "not-succeeded",
+      });
+    },
+  );
+
+  it("retains the database of a run that continued nothing, so the next run of its task can resume it", async () => {
+    const world = continuedWorld({ serveSessions: false });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...native,
+      continuity: world.continuity,
+    });
+
+    await fixture.runtime.manager.stop(FIXTURE_RUN_ID, "succeeded");
+
+    expect(world.calls.checkouts).toEqual([]);
+    expect(world.calls.retains).toMatchObject([
+      { binding: { taskId: TASK }, sessionId: "ses_tool" },
+    ]);
+  });
+
+  it("keeps a mapped tool profile on a fresh session and retains nothing", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({ serveSessions: false });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      continuity: world.continuity,
+      activityLog,
+    });
+
+    await fixture.runtime.manager.stop(FIXTURE_RUN_ID, "succeeded");
+
+    expect(world.calls.checkouts).toEqual([]);
+    expect(world.calls.retains).toEqual([]);
+    expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({
+      kind: "fresh",
+      reason: "not-native-profile",
+    });
+    expect(continuityLines(activityLog).map((line) => line.reason)).toEqual([
+      "not-native-profile",
+      "not-native-profile",
+    ]);
+  });
+});

@@ -38,6 +38,7 @@ import {
   type CodingRuntimeManager,
   type CodingRuntimeManagerDeps,
   type CodingRuntimeLaunchRequest,
+  type OpenCodeLifecycleAdapter,
   type ReviewedCodexEgressPolicy,
 } from "./codingRuntimeManager.js";
 import {
@@ -4475,6 +4476,76 @@ describe("coding runtime manager", () => {
       "dispose:run-1988",
       "release:run-1988",
     ]);
+  });
+
+  // S02 (#3904): the lifecycle learns how the run ended when its state is disposed, so a database
+  // is retained only for a run that an orderly stop settled normally.
+  it.each([
+    ["succeeded", "succeeded"],
+    ["failed", "failed"],
+    ["cancelled", "cancelled"],
+    [undefined, "cancelled"],
+  ] as const)(
+    "hands the lifecycle the status an orderly stop(%s) ended the run with",
+    async (requested, terminalStatus) => {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const dispose = vi.fn<NonNullable<OpenCodeLifecycleAdapter["dispose"]>>(() => true);
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        openCodeLifecycleAdapter: {
+          handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+          dispose,
+        },
+      });
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+
+      await manager.stop("run-1988", requested);
+
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(dispose.mock.calls[0]?.[0]).toBe("run-1988");
+      expect(dispose.mock.calls[0]?.[2]).toEqual({ terminalStatus });
+    },
+  );
+
+  it("reports a runtime that exited on its own as failed, even when a stop folds onto that teardown as succeeded", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const dispose = vi.fn<NonNullable<OpenCodeLifecycleAdapter["dispose"]>>(() => true);
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+        dispose,
+      },
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    // The runtime exits cleanly by itself mid-run; the orchestrator's stop arrives in the same tick.
+    child.exit(0);
+    const stopped = manager.stop("run-1988", "succeeded");
+    await stopped;
+
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(dispose.mock.calls[0]?.[2]).toEqual({ terminalStatus: "failed" });
   });
 
   it("does not dispose or release a runtime whose complete-tree reap is unproven", async () => {
