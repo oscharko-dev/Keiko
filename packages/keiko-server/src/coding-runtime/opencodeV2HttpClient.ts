@@ -158,6 +158,18 @@ export interface OpenCodeV2StagedRevert {
   readonly files: readonly OpenCodeV2FileDiff[];
 }
 
+/**
+ * The session `session.fork` created (`Session.Info` of the pinned 2.1.4 schema, reduced to what
+ * Keiko checks): its id, the directory the runtime placed it in, the session it was forked from and
+ * the boundary the copy ended at. `before` ends it just ahead of a message, `through` at the last one.
+ */
+export interface OpenCodeV2ForkedSession {
+  readonly id: string;
+  readonly directory: string;
+  readonly sourceSessionId: string;
+  readonly boundary: { readonly type: "before" | "through"; readonly messageId: string };
+}
+
 export interface OpenCodeV2HttpClient {
   info(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
   document(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
@@ -199,6 +211,23 @@ export interface OpenCodeV2HttpClient {
     inputs?: Pick<OpenCodeV2PromptInputs, "files">,
   ): Promise<void>;
   interrupt(sessionId: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Copies a session's messages into a new session of the same location (`POST
+   * /api/session/{sessionID}/fork`, operation `session.fork`). With `before` the copy ends just
+   * ahead of that message; without it the copy runs through the session's last message. The source
+   * is untouched, and the copied messages get new ids in the new session.
+   */
+  forkSession(
+    sessionId: string,
+    before?: string,
+    signal?: AbortSignal,
+  ): Promise<OpenCodeV2ForkedSession>;
+  /**
+   * Deletes a session and its messages (`DELETE /api/session/{sessionID}`, operation
+   * `session.remove`). Keiko removes only sessions it created itself in a run's private state: the
+   * source of a fork and the scratch session of a readiness challenge.
+   */
+  removeSession(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
    * Switches the primary agent that runs the session's SUBSEQUENT provider turns
    * (`POST /api/session/{sessionID}/agent`, operation `session.switchAgent`). Only the closed
@@ -419,6 +448,31 @@ function fileDiffs(value: unknown): readonly OpenCodeV2FileDiff[] {
       deletions: nonNegativeInteger(diff?.deletions),
     };
   });
+}
+
+function forkBoundary(value: unknown): OpenCodeV2ForkedSession["boundary"] {
+  const boundary = record(value);
+  const type = boundary?.type;
+  const messageId = boundary?.messageID;
+  if ((type !== "before" && type !== "through") || typeof messageId !== "string") {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  if (!MESSAGE_ID.test(messageId)) throw new Error("opencode-v2-envelope-invalid");
+  return { type, messageId };
+}
+
+function forkedSession(value: Readonly<Record<string, unknown>>): OpenCodeV2ForkedSession {
+  const fork = record(value.fork);
+  const directory = record(value.location)?.directory;
+  const id = value.id;
+  const source = fork?.sessionID;
+  if (typeof id !== "string" || typeof source !== "string" || typeof directory !== "string") {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  if (!SESSION_ID.test(id) || !SESSION_ID.test(source)) {
+    throw new Error("opencode-v2-envelope-invalid");
+  }
+  return { id, directory, sourceSessionId: source, boundary: forkBoundary(fork?.boundary) };
 }
 
 function stagedRevert(value: Readonly<Record<string, unknown>>): OpenCodeV2StagedRevert {
@@ -793,6 +847,20 @@ export function createOpenCodeV2HttpClient(
     },
     interrupt: async (sessionId, signal): Promise<void> => {
       await request("POST", `/api/session/${safeSessionId(sessionId)}/interrupt`, {}, signal);
+    },
+    forkSession: async (sessionId, before, signal): Promise<OpenCodeV2ForkedSession> =>
+      forkedSession(
+        objectEnvelope(
+          await request(
+            "POST",
+            `/api/session/${safeSessionId(sessionId)}/fork`,
+            before === undefined ? {} : { before: safeMessageId(before) },
+            signal,
+          ),
+        ),
+      ),
+    removeSession: async (sessionId, signal): Promise<void> => {
+      await request("DELETE", `/api/session/${safeSessionId(sessionId)}`, undefined, signal);
     },
     switchAgent: async (sessionId, agent, signal): Promise<void> => {
       await request(

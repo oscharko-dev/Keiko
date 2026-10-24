@@ -426,8 +426,7 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten([
       "mcp.resource.catalog",
     ],
   ),
-  refused("not-yet-implemented", 3904, ["S02"], ["session.remove", "session.update"]),
-  refused("not-yet-implemented", 3904, ["S03"], ["session.fork"]),
+  refused("not-yet-implemented", 3904, ["S02"], ["session.update"]),
   keikoOperation(
     "Coding History task export (local, redacted)",
     "coding-runtime/codingTaskExport.ts",

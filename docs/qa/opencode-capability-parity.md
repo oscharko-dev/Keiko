@@ -635,10 +635,10 @@ table with an owner. The diff unit test pins both fixtures.
 
 | Disposition                             | HTTP operations | CLI commands |
 | --------------------------------------- | --------------- | ------------ |
-| `admitted`                              | 21              | 0            |
+| `admitted`                              | 23              | 0            |
 | `covered`                               | 6               | 0            |
 | `keiko-operation`                       | 8               | 5            |
-| `refused`                               | 114             | 36           |
+| `refused`                               | 112             | 36           |
 | refused: `leaves-machine`               | 8               | 4            |
 | refused: `keiko-owns-workspace-binding` | 9               | 0            |
 | refused: `keiko-owns-authority`         | 6               | 0            |
@@ -646,7 +646,7 @@ table with an owner. The diff unit test pins both fixtures.
 | refused: `keiko-owns-credentials`       | 16              | 6            |
 | refused: `experimental-unadmitted`      | 19              | 0            |
 | refused: `host-surface`                 | 19              | 17           |
-| refused: `not-yet-implemented`          | 32              | 8            |
+| refused: `not-yet-implemented`          | 30              | 8            |
 | Total                                   | 149             | 41           |
 
 #### HTTP operations (149)
@@ -752,7 +752,7 @@ table with an owner. The diff unit test pins both fixtures.
 | `session.create`                                 | `POST /api/session`                                                        | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.diff`                                   | `GET /api/session/{sessionID}/diff`                                        | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.environment`                            | `PUT /api/session/{sessionID}/environment`                                 | `refused`         | `keiko-owns-authority`                                                              | #3901 | T11      |
-| `session.fork`                                   | `POST /api/session/{sessionID}/fork`                                       | `refused`         | `not-yet-implemented`                                                               | #3904 | S03      |
+| `session.fork`                                   | `POST /api/session/{sessionID}/fork`                                       | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.form.cancel`                            | `DELETE /api/session/{sessionID}/form/{formID}`                            | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.form.create`                            | `POST /api/session/{sessionID}/form`                                       | `refused`         | `host-surface`                                                                      | #3899 | T18      |
 | `session.form.get`                               | `GET /api/session/{sessionID}/form/{formID}`                               | `covered`         | through `form.list`                                                                 | -     | T18      |
@@ -774,7 +774,7 @@ table with an owner. The diff unit test pins both fixtures.
 | `session.permission.list`                        | `GET /api/session/{sessionID}/permission`                                  | `covered`         | through `permission.request.list`                                                   | -     | S16      |
 | `session.permission.reply`                       | `POST /api/session/{sessionID}/permission/{requestID}/reply`               | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.prompt`                                 | `POST /api/session/{sessionID}/prompt`                                     | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
-| `session.remove`                                 | `DELETE /api/session/{sessionID}`                                          | `refused`         | `not-yet-implemented`                                                               | #3904 | S02      |
+| `session.remove`                                 | `DELETE /api/session/{sessionID}`                                          | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.revert.clear`                           | `DELETE /api/session/{sessionID}/revert`                                   | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.revert.commit`                          | `POST /api/session/{sessionID}/revert/commit`                              | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.revert.stage`                           | `POST /api/session/{sessionID}/revert/stage`                               | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |

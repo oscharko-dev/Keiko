@@ -1371,7 +1371,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "ba49adfd85f7fa2aee7ec8e513bd1d993a9df15ef79236e3c20f173af7fca6c2",
+      "c08462194087e6f64c159e68dbbd4bc2f8ce11c7d1d8547fbbd6d0c2b3e466ef",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");

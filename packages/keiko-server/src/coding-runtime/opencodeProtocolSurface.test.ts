@@ -235,6 +235,31 @@ describe("OpenCode 2.1.4 admitted V2 protocol surface", () => {
     expect([...commandPaths].sort()).toEqual(["/api/command", "/api/session/{sessionID}/command"]);
   });
 
+  it("admits the session fork with its closed body and the fork boundary it reports", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const fork = dig(projection, "paths", "/api/session/{sessionID}/fork", "post");
+    const body = dig(fork, "requestBody", "content", "application/json", "schema");
+    expect(dig(fork, "requestBody", "required")).toBe(true);
+    expect(dig(body, "additionalProperties")).toBe(false);
+    // The fork point is the message to fork BEFORE, optionally null: nothing else selects it.
+    expect(Object.keys(dig(body, "properties") as object)).toEqual(["before"]);
+    const schemas = dig(projection, "components", "schemas") as Readonly<Record<string, unknown>>;
+    expect(JSON.stringify(schemas["Session.ForkBoundary"])).toContain('"before"');
+    expect(JSON.stringify(schemas["Session.ForkBoundary"])).toContain('"through"');
+    expect(JSON.stringify(fork)).toContain("#/components/schemas/MessageNotFoundErrorEncoded");
+  });
+
+  it("admits the session removal as the only operation on a session itself", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const session = dig(projection, "paths", "/api/session/{sessionID}") as
+      Readonly<Record<string, unknown>> | undefined;
+    // `session.get` and `session.update` stay refused: only the delete is admitted on this path.
+    expect(Object.keys(session ?? {})).toEqual(["delete"]);
+    expect(JSON.stringify(dig(session, "delete"))).toContain(
+      "#/components/schemas/SessionNotFoundErrorEncoded",
+    );
+  });
+
   it("pins the current digest to the projection of the captured document", () => {
     const { digest } = projectOpenCodeV2ProtocolSurface(fixture);
     expect(digest).toBe(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256);

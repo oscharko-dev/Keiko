@@ -30,14 +30,14 @@ export const OPENCODE_RUNTIME_VERSION_PINS: readonly OpenCodeRuntimeVersionPin[]
     tag: "v2.1.4",
     commit: "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824",
     rawSchemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
-    protocolSurfaceSha256: "ba49adfd85f7fa2aee7ec8e513bd1d993a9df15ef79236e3c20f173af7fca6c2",
+    protocolSurfaceSha256: "c08462194087e6f64c159e68dbbd4bc2f8ce11c7d1d8547fbbd6d0c2b3e466ef",
   }),
   Object.freeze({
     version: "2.0.10",
     tag: "v2.0.10",
     commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
     rawSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
-    protocolSurfaceSha256: "a4bc6046cff5a3d8a2a5cba8192c3371d99fc6b5f86d01fa66a7ef9ad102679e",
+    protocolSurfaceSha256: "b140ec4625403b4402a5b5849c9939125690f51580a1e3e0eefd1035ec3c008c",
   }),
 ]);
 

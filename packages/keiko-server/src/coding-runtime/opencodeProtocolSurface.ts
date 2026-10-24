@@ -9,7 +9,7 @@ export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
   "keiko-opencode-protocol-surface-v2" as const;
 /** The current pin's structural digest; per-version values live in `opencodeRuntimeVersions.ts`. */
 export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
-  "ba49adfd85f7fa2aee7ec8e513bd1d993a9df15ef79236e3c20f173af7fca6c2";
+  "c08462194087e6f64c159e68dbbd4bc2f8ce11c7d1d8547fbbd6d0c2b3e466ef";
 
 /**
  * The admitted operations as `METHOD path`. The complete service inventory
@@ -38,6 +38,8 @@ export const OPENCODE_V2_APPROVED_ENDPOINTS = [
   "GET /api/event",
   "GET /api/command",
   "POST /api/session/{sessionID}/command",
+  "POST /api/session/{sessionID}/fork",
+  "DELETE /api/session/{sessionID}",
 ] as const;
 
 export interface OpenCodeProtocolSurfaceProjection {
