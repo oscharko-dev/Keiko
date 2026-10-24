@@ -202,8 +202,8 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fast-uri`                    | root                  | 3.1.8   | current        | Patch for GHSA-hrr3-gc8f-f4qj and earlier advisories; exact OSV 2.6.0 lockfile scan passes. PR #3676.                                                                                                                                                                                                                                        |
-| `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                                                        |
+| `fast-uri`                    | root                  | 3.1.9   | current        | Patch for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h; recursive OSV 2.7.0 scan passes. PR #4050.                                                                                                                                                                                                  |
+| `undici`                      | root                  | 8.12.2  | current        | Security patch for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The separate major-7 override advances to 7.30.1; the private host retains patched major-6 and major-8 consumers. PR #4050.                                                                                                                             |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                                                       |
@@ -249,7 +249,7 @@ or peer graph).
 | `prettier`                    | root                  | 3.9.10  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `knip`                        | root                  | 6.41.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                                                       |
-| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.                                                                                                                                                                                                                                                       |
+| `fallow`                      | root                  | 3.34.0  | current        | Security patch for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5; semantic duplication keeps its existing command, thresholds and failure behavior. PR #4050.                                                                                                                                                                                  |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.11  | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.30  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                                                         |
@@ -629,3 +629,42 @@ The compatibility-gate controls reproduce both failures with 6.4.299 before this
 The owner also retained the existing axe-core 4.12.1 test dependency. GitHub dependency review
 rejects the proposed 4.14.0 MPL-2.0 update under its existing permissive-license policy. This
 disposition adds no license exception or policy change and does not remove accessibility tests.
+
+## PR #4050: service-host Zod and development URI security patches
+
+On 2026-10-23 the required OSV Scanner 2.7.0 job reported
+[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) in the private
+OpenCode service-host lockfile. Its existing override mechanism now resolves every Zod consumer
+to 4.6.7, removing the vulnerable 3.25.76, 4.1.8 and 4.6.5 copies. The original GitLab provider
+remains unchanged: its actual direct-access client accepts string-valued header records and
+rejects malformed values with the patched runtime. The complete service-host suite passes
+70 tests, including the existing MCP issuer binding, native routes and governed tool boundaries.
+
+The collection regression is reproduced against the original Zod 4.1.8: an array exceeding its
+declared maximum still validates all three elements and accumulates their errors. With 4.6.7,
+the same input visits no elements and returns only the size violation. The committed regression
+also checks valid input at the size boundary. This is scoped proof for constrained collections,
+not a claim that unbounded schemas impose an application-specific input limit.
+
+The same local recursive scan then found GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg,
+GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h in development-only fast-uri 3.1.8. Its existing
+root override advances to 3.1.9. With both lockfiles updated, OSV Scanner 2.7.0 reports no issues
+under the unchanged repository configuration. No suppression or gate threshold was added or
+relaxed. The governed dependency table above records the active version, 3.1.9.
+
+The subsequent workflow-hygiene run on `b2a8763e4` reported ten findings across four
+package/version pairs after the undici and fallow advisories were updated on 2026-10-23.
+The exact local recursive OSV 2.7.0 invocation reproduces those ten findings. The root jsdom
+consumer now resolves undici 8.12.2, and the other root override pins the patched 7.30.1 lane.
+The private host retains its existing major-version boundaries with undici 6.29.1 and 8.12.2.
+Fallow advances to 3.34.0 for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5; its exact-version
+configuration contract moves with the dependency. The semantic duplication command, thresholds,
+changed-file scope and failure behavior remain unchanged.
+
+With these updates the same recursive OSV scan reports no issues. The complete 70-test native
+service-host suite, 46 dependency-currency and external-quality configuration tests, and 11
+jsdom-backed transcript-follow tests pass locally. Dependency currency, dependency hygiene,
+TypeScript toolchain, install-script approvals and the diff-scoped semantic duplication gate pass.
+These results do not resolve the separate tool-catalog reference-evidence freshness failure:
+the changed root lockfile still requires a new candidate measurement on the declared reference
+environment. The reference evidence and its acceptance policy remain unchanged.

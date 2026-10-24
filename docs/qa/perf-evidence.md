@@ -9,7 +9,7 @@ The committed performance evidence documents live in `docs/release/`:
 | `1580-workspace-perf-evidence.json`      | Workspace browser-performance measurement                             | `npm run check:perf-evidence:workspace`      |
 | `2952-coding-runtime-calibration.json`   | Frozen native coding-runtime reference samples and provenance         | `npm run check:perf-evidence:coding-runtime` |
 | `2952-coding-runtime-perf-evidence.json` | Native coding-runtime candidate measurements                          | `npm run check:perf-evidence:coding-runtime` |
-| `3415-tool-catalog-calibration.json`     | Frozen tool-catalog reference samples and provenance                  | `npm run check:tool-catalog-performance`     |
+| `3415-tool-catalog-calibration.json`     | Tool-catalog reference samples and pair provenance                    | `npm run check:tool-catalog-performance`     |
 | `3415-tool-catalog-perf-evidence.json`   | Tool-catalog candidate compiler and lookup measurements               | `npm run check:tool-catalog-performance`     |
 
 ## When evidence must be regenerated
@@ -108,12 +108,15 @@ ceilings. A ruler recalibration rebinds the calibration digest but carries every
 forward unchanged; it cannot widen or opportunistically tighten a threshold from one noisy run.
 The candidate binds the measured tool-catalog source tree and lockfile; both documents bind the
 measurement ruler and reference environment. A routine source or lockfile update therefore writes
-a new candidate against the frozen calibration and budget. It never moves the threshold.
+a new candidate against the frozen calibration and budget in the original container procedure;
+the portable procedure below replaces both measurements while preserving the budget. Neither moves
+the threshold.
 `npm run check:tool-catalog-performance` runs a fresh deterministic work check on every invocation,
 then evaluates the committed reference evidence. Fresh local or CI wall-clock values are reported
 for diagnosis and are never compared with the reference threshold.
 
-The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
+There are two explicit reference procedures. The original reference environment is the pinned
+Linux arm64 Node image below with at least 14 logical cores.
 The repository command creates a self-contained clone at the exact source revision, installs and
 builds inside the container, supplies the image identity to the producer, validates the candidate,
 and copies only the candidate document back. It refuses a dirty working tree because a clean clone
@@ -122,6 +125,37 @@ could not reproduce that subject.
 ```bash
 npm run perf:evidence:regen:tool-catalog
 ```
+
+For a machine without that original environment, or to refresh an existing portable pair, use:
+
+```bash
+npm run perf:evidence:regen:tool-catalog:portable -- --baseline origin/dev
+```
+
+Start from an installed checkout with `npm run build:packages` completed so the producer's workspace
+imports exist. Commit the implementation first and fetch the intended baseline before this command.
+It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 24.18.0, npm 11.16.0,
+and a dedicated Linux, macOS or Windows x64/arm64 host with at least 14 logical cores. It archives
+the baseline into a separate directory, installs both lockfiles with `npm ci --ignore-scripts`,
+and builds both package trees. Two fresh Node processes then measure the baseline and candidate
+with the candidate's identical measurement ruler. Do not run other builds or benchmarks concurrently.
+
+Schema 2 (`functional-performance-paired-host`) records both commit IDs, the previous calibration
+and budget digests, and matching host fingerprints: OS release, CPU model digest, core count,
+memory, Node version and Node binary digest. It replaces calibration and candidate together and
+carries all six numeric maxima and ceilings forward exactly. Both runs must pass those limits;
+there is no host-speed multiplier or automatic threshold recalibration. Case identities and the
+complete sampling procedure must match, and source, ruler or host changes during the run abort it.
+The old single-candidate writer refuses a portable calibration. A portable refresh always measures
+both revisions again; it cannot attach new samples to a previous host's measurements.
+
+Review and commit all three generated documents. Their commit IDs identify the measured source
+commits before the evidence-only commit; the documents themselves are outside the subject digest.
+The retained baseline directory allows inspection. This procedure applies only to the tool-catalog
+target and does not change the editor D12 or coding-runtime reference environments.
+If either run exceeds a budget, both completed measurements are retained as `failed-pair.json`
+in the scratch directory for diagnosis. The command fails and leaves governed evidence untouched;
+inspect host load and the measured values before deciding whether another run is justified.
 
 The V2 case is added with the explicit one-time extension mode:
 
@@ -207,11 +241,12 @@ throwaway clone below; only after mounting your working checkout directly re-run
   host is an environment verdict, not a product regression — fix the load, not the code. Since
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
   decide; before that, an overrun destroyed the evidence that would have shown it.
-- **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
-  cap budgets, and every writer mode of the tool-catalog evidence (`--rebind-case-identity`,
-  `--recalibrate`, `--extend-managed-runtime`, `--write-measurement`) requires the container to
-  report exactly the committed reference environment: 16 logical cores and `totalMemoryBytes`
-  67302940672 (a 64 GiB VM), as recorded in `docs/release/3415-tool-catalog-calibration.json`.
+- **VM sizing (macOS Docker Desktop, original container procedure).** The default VM allocation
+  (~8 GiB) is marginal for the cap budgets. Against a schema 1 tool-catalog calibration, the
+  container writer modes (`--rebind-case-identity`, `--recalibrate`, `--extend-managed-runtime`,
+  `--write-measurement`) require exactly its recorded environment. The historical calibration
+  before #4050 recorded 16 logical cores and `totalMemoryBytes` 67302940672 (a 64 GiB VM).
+  A schema 2 calibration instead requires the complete portable pair procedure described above.
   Configure the VM at 64 GiB / 16 CPUs
   (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`) and
   verify it before a rebind; an 8 GiB VM fails with

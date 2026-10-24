@@ -127,6 +127,20 @@ runtime version and payload/native-helper digests must match the frozen calibrat
 incompatible document is rejected as a provenance defect. The bounded provider fixture isolates
 runtime performance; its evidence is not approved live-model or platform-signature qualification.
 
+**D8 — Tool-catalog evidence permits an explicit paired-host reference (#4050).** The tool-catalog
+target's previous exact Linux ARM64 environment became unavailable while security lockfile updates
+invalidated its candidate subject. Its schema 2 alternative measures an ancestor baseline and the
+candidate in separate fresh processes on the same dedicated host, with their own clean installs
+and builds and the candidate's identical ruler. The host records OS/architecture, OS release, core
+count, memory, CPU-model digest and Node-binary digest; the pinned Node/npm versions and minimum
+fourteen-core requirement remain. Each pair records both source commits and its predecessor
+calibration/budget digests. Every existing absolute maximum and ceiling remains unchanged, and
+both the baseline and candidate must satisfy them. A host change requires a new complete pair;
+single-candidate refresh against a portable calibration is rejected. Case-identity, sample-integrity,
+subject-freshness and ruler-binding checks continue to fail closed. No hardware normalization,
+budget widening or reinterpretation of old samples is permitted. This explicit tool-catalog
+procedure does not amend the editor D12 or coding-runtime environments in D6/D7.
+
 ## Consequences
 
 - A noisy neighbour on a shared runner costs one measurement, not the ability to measure.
