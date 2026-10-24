@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "167a5ab3016fa25e553a8a8cb8fd17f86467dfcd4bf06ef6dce8285e9819acfb",
+    "catalogDigest": "06b3b69b94c024c8cd2a82f1d30d07beecaa886bb953550cc8e12ee4baa3e1f2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -9149,9 +9149,7 @@
               "delivery-unresolved-limit",
               "delivery-unsupported",
               "reference-invalid",
-              "reference-media-unsupported",
               "reference-not-file",
-              "reference-not-media",
               "reference-not-text",
               "reference-outside-workspace",
               "reference-sensitive",
@@ -9172,8 +9170,8 @@
         "failureClasses": ["coding-runtime-prompt-inputs"],
         "proofIds": ["coding-runtime.prompt-inputs.settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:394",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:519"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:303",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:426"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -98504,7 +98502,7 @@
     {
       "op": "coding-runtime.prompt-inputs.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:397",
+      "site": "packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts:306",
       "package": "keiko-server"
     },
     {
