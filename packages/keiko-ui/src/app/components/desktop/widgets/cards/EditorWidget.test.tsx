@@ -4302,3 +4302,63 @@ describe("EditorWidget — editor-context shortcut dispatch collision safety (KE
     expect(editorShortcutCommandId(registry, chordEvent("b"))).toBe(HIJACKER.id);
   });
 });
+
+describe("EditorWidget — definition resolver dispatch preservation", () => {
+  it.each([
+    ["type definition", "provideTypeDefinition", requestEditorTypeDefinition],
+    ["implementation", "provideImplementation", requestEditorImplementation],
+  ] as const)(
+    "preserves %s routing, coordinates, cancellation and cross-file navigation",
+    async (_label, name, request) => {
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-existing" }));
+      const wire = {
+        locations: [
+          {
+            path: "src/target.ts",
+            range: { start: { line: 2, character: 4 }, end: { line: 2, character: 9 } },
+          },
+        ],
+        truncated: false,
+      };
+      vi.mocked(request).mockResolvedValueOnce(wire);
+      await renderLoaded({ openEditorFile });
+      const resolver = surface.props?.[name];
+      expect(resolver).toBeDefined();
+      if (resolver === undefined) throw new Error("Definition resolver is unavailable");
+      const identity = { requestId: "definition-preservation", streamId: "editor", sequence: 1 };
+      const query = {
+        request: {
+          request: identity,
+          document: { ...loadedIdentity(), version: 1 },
+          position: { line: 0, column: 6 },
+        },
+        documentText: "const value = 1;\n",
+      };
+      const controller = new AbortController();
+      const response = await resolver(query, controller.signal);
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        {
+          root: "/repo",
+          path: "src/app.ts",
+          languageId: "typescript",
+          text: query.documentText,
+          position: { line: 0, character: 6 },
+        },
+        controller.signal,
+      );
+      expect(response.request).toEqual(identity);
+      expect(response.locations[0]?.path).toBe("src/target.ts");
+      expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+        root: "/repo",
+        path: "src/target.ts",
+        lineStart: 3,
+        lineEnd: 3,
+      });
+      openEditorFile.mockClear();
+      const error = new Error("Language provider unavailable");
+      vi.mocked(request).mockRejectedValueOnce(error);
+      await expect(resolver(query, controller.signal)).rejects.toBe(error);
+      expect(openEditorFile).not.toHaveBeenCalled();
+    },
+  );
+});

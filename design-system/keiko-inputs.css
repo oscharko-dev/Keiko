@@ -8,7 +8,8 @@
    ============================================================ */
 
 /* ── checkbox ────────────────────────────────────────────────── */
-.c-check {
+.c-check,
+.c-radio {
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -17,7 +18,8 @@
   color: var(--text-primary);
   user-select: none;
 }
-.c-check input {
+.c-check input,
+.c-radio input {
   position: absolute;
   opacity: 0;
   width: 0;
@@ -83,21 +85,6 @@
 }
 
 /* ── radio ───────────────────────────────────────────────────── */
-.c-radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  cursor: pointer;
-  font-size: var(--text-body-sm);
-  color: var(--text-primary);
-  user-select: none;
-}
-.c-radio input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
 .c-radio .rb {
   width: 18px;
   height: 18px;
@@ -172,7 +159,11 @@
   border: 3px solid var(--slider-thumb-border);
   box-shadow: 0 0 0 1px var(--slider-thumb-ring);
   cursor: pointer;
-  transition: transform 0.1s;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .c-slider input[type="range"]::-webkit-slider-thumb {
+    transition: transform 0.1s;
+  }
 }
 .c-slider input[type="range"]::-moz-range-thumb {
   width: 16px;

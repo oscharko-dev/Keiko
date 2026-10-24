@@ -63,7 +63,7 @@ export {
 } from "./ranking.js";
 
 // ─── Diversity (MMR) ─────────────────────────────────────────────────────────
-export { reorderByMmr, DEFAULT_MMR_LAMBDA, type MmrItem } from "./diversity.js";
+export { cosineSimilarity, reorderByMmr, DEFAULT_MMR_LAMBDA, type MmrItem } from "./diversity.js";
 
 // ─── Context assembly ────────────────────────────────────────────────────────
 export {

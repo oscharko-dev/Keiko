@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayStreamChunk, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
@@ -212,6 +212,38 @@ describe("agent-run governance", () => {
     expect(modelCalls).toBe(0);
     expect(error).toMatchObject({ name: "AgentRunBudgetExhaustedError" });
     expect(String(error)).not.toContain("secret-prompt-marker");
+  });
+
+  it("preserves lazy asynchronous delegation, consumer errors and iterator cleanup", async () => {
+    const first: GatewayStreamChunk = { type: "delta", token: "first" };
+    const recovered: GatewayStreamChunk = { type: "delta", token: "recovered" };
+    const next = vi.fn().mockResolvedValue({ done: false, value: first });
+    const thrown = vi.fn().mockResolvedValue({ done: false, value: recovered });
+    const returned = vi.fn().mockResolvedValue({ done: true, value: undefined });
+    const upstream: AsyncIterator<GatewayStreamChunk> = { next, throw: thrown, return: returned };
+    const callStream = vi.fn((): AsyncIterable<GatewayStreamChunk> => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => upstream,
+    }));
+    const guarded = createAgentRunBudgetedModelPort({
+      binding: mint("supervised-coding"),
+      workspaceRoot: "/repo",
+      model: { call: (): Promise<NormalizedResponse> => Promise.resolve(response()), callStream },
+      nowIso: () => NOW,
+    });
+    const iterator = guarded
+      .callStream?.({ modelId: "model-1", messages: [] }, new AbortController().signal)
+      [Symbol.asyncIterator]();
+    expect(callStream).not.toHaveBeenCalled();
+    await expect(iterator?.next()).resolves.toEqual({ done: false, value: first });
+    expect(callStream).toHaveBeenCalledOnce();
+    const consumerError = new Error("consumer-recovery");
+    await expect(iterator?.throw?.(consumerError)).resolves.toEqual({
+      done: false,
+      value: recovered,
+    });
+    expect(thrown).toHaveBeenCalledWith(consumerError);
+    await expect(iterator?.return?.()).resolves.toEqual({ done: true, value: undefined });
+    expect(returned).toHaveBeenCalledOnce();
   });
 
   it("charges each tool dispatch and makes the exhausted attempt a zero-call denial", () => {

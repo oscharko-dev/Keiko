@@ -9,6 +9,8 @@ import { Buffer } from "node:buffer";
 import {
   archivedCodeModules,
   generateSupportCodeInventory,
+  generateSupportCodeInventoryData,
+  generateSupportCodeInventoryJson,
 } from "../generate-support-code-inventory.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -70,9 +72,10 @@ describe("support report code inventory", () => {
       "packages/keiko-server/src/bare.ts",
       'import { emitServerDiagnostic } from "diagnostics-log.js"; emitServerDiagnostic(sink, { errorClass: "CustomerBareClass" });',
     );
-    const result = await generateSupportCodeInventory(root);
-    expect(result).toContain('"OpenCodeTurnFailure"');
-    expect(result).toContain('"RuntimeTaskDispatchFailure"');
+    const data = generateSupportCodeInventoryData(root);
+    const result = JSON.stringify(data);
+    expect(data.errorClasses).toContain("OpenCodeTurnFailure");
+    expect(data.errorClasses).toContain("RuntimeTaskDispatchFailure");
     expect(result).not.toContain("Customer");
     expect(result).not.toContain("customerClass");
   });
@@ -153,6 +156,15 @@ describe("support report code inventory", () => {
   });
 
   it("matches the checked-in inventory derived from current product sources", async () => {
+    expect(await generateSupportCodeInventoryJson(repoRoot)).toBe(
+      readFileSync(
+        join(
+          repoRoot,
+          "packages/keiko-activity-log/src/reader/support-code-inventory-data.generated.json",
+        ),
+        "utf8",
+      ),
+    );
     expect(await generateSupportCodeInventory(repoRoot)).toBe(
       readFileSync(
         join(
@@ -190,7 +202,7 @@ describe("support report code inventory", () => {
       "class GeneratedCustomerError extends Error {}",
     );
     symlinkSync(fixture, join(root, "packages/keiko-server/src/CustomerLink.ts"));
-    const result = await generateSupportCodeInventory(root);
+    const result = await generateSupportCodeInventoryJson(root);
     expect(result).toContain('"keiko-server/files"');
     expect(result).toContain('"keiko-ui/app/page"');
     expect(result).toContain('"cli/main"');
@@ -199,7 +211,7 @@ describe("support report code inventory", () => {
     expect(result).toContain('"WORKSPACE_PATH_DENIED"');
     expect(result).not.toContain("Customer");
     expect(result).not.toContain("files.test");
-    expect(await generateSupportCodeInventory(root)).toBe(result);
+    expect(await generateSupportCodeInventoryJson(root)).toBe(result);
   });
   it("ignores ancestor labels and includes closed producer vocabularies", async () => {
     const ancestor = mkdtempSync(join(tmpdir(), "keiko-inventory-"));
@@ -237,7 +249,7 @@ describe("support report code inventory", () => {
       "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.ts",
       'const EXACT_FAILURE_ERROR_KINDS = { LIMIT_REACHED: "validation-failed" }; function activityFailureKind(kind) { return nested === undefined ? kind : `DISCOVERY_FAILED.${nested}`; }',
     );
-    const result = await generateSupportCodeInventory(root);
+    const result = await generateSupportCodeInventoryJson(root);
     for (const symbol of [
       "fetch",
       "push",

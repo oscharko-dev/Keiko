@@ -139,7 +139,7 @@
 
 /* loading skeleton rows */
 .c-table.is-loading tbody td {
-  color: transparent !important;
+  color: transparent;
 }
 .c-table.is-loading tbody td * {
   visibility: hidden;

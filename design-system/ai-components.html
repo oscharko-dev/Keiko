@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -55,6 +55,8 @@
           <div class="ai-msg">
             <span class="ai-avatar"
               ><svg
+                role="img"
+                aria-label="Assistant"
                 width="17"
                 height="17"
                 viewBox="0 0 24 24"
@@ -77,6 +79,8 @@
           <div class="ai-msg">
             <span class="ai-avatar"
               ><svg
+                role="img"
+                aria-label="Assistant"
                 width="17"
                 height="17"
                 viewBox="0 0 24 24"
@@ -117,6 +121,7 @@
             <div class="ai-tool-head">
               <span class="ic"
                 ><svg
+                  aria-hidden="true"
                   width="13"
                   height="13"
                   viewBox="0 0 24 24"
@@ -138,6 +143,7 @@
             <div class="ai-tool-head">
               <span class="ic"
                 ><svg
+                  aria-hidden="true"
                   width="13"
                   height="13"
                   viewBox="0 0 24 24"
@@ -171,6 +177,8 @@
           <div class="ai-msg">
             <span class="ai-avatar"
               ><svg
+                role="img"
+                aria-label="Assistant"
                 width="17"
                 height="17"
                 viewBox="0 0 24 24"
@@ -236,6 +244,7 @@
             <button class="ai-stop"><span class="sq"></span>Stop</button>
             <button class="c-btn c-btn--sm">
               <svg
+                aria-hidden="true"
                 width="13"
                 height="13"
                 viewBox="0 0 24 24"
@@ -269,6 +278,7 @@
             <div class="ai-permit-h">
               <span class="ic"
                 ><svg
+                  aria-hidden="true"
                   width="16"
                   height="16"
                   viewBox="0 0 24 24"
@@ -301,6 +311,7 @@
             <div class="ai-danger-h">
               <span class="ic"
                 ><svg
+                  aria-hidden="true"
                   width="16"
                   height="16"
                   viewBox="0 0 24 24"

@@ -13,7 +13,7 @@ const { auth } = await import(
 );
 const { default: matter } = await import(pathToFileURL(join(moduleRoot, "gray-matter/index.js")));
 const { z } = await import(pathToFileURL(join(moduleRoot, "zod/index.js")));
-const { GitLabDirectAccessClient } = await import(
+const { GitLabDirectAccessClient, gitlabOAuthTokenResponseSchema } = await import(
   pathToFileURL(join(moduleRoot, "gitlab-ai-provider/dist/index.mjs"))
 );
 
@@ -49,6 +49,17 @@ test("the original GitLab provider validates header records with the patched Zod
   assert.deepEqual(await client.getDirectAccessToken(), valid);
   response = { token: "fixture-token", headers: { Authorization: 123 } };
   await assert.rejects(client.getDirectAccessToken(true), { name: "GitLabError" });
+});
+
+test("the original GitLab OAuth schema retains optional tokens and rejects invalid expiry", () => {
+  const token = { access_token: "fixture-access", expires_in: 3600, created_at: 1234 };
+  assert.deepEqual(gitlabOAuthTokenResponseSchema.parse({ ...token, unrelated: "discard" }), token);
+  const refreshed = { ...token, refresh_token: "fixture-refresh" };
+  assert.deepEqual(gitlabOAuthTokenResponseSchema.parse(refreshed), refreshed);
+  assert.equal(
+    gitlabOAuthTokenResponseSchema.safeParse({ ...token, expires_in: "3600" }).success,
+    false,
+  );
 });
 
 async function oauthFixture(storedIssuer = issuer) {

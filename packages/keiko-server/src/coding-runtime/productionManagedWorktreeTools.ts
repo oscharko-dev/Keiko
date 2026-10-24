@@ -1,3 +1,4 @@
+import { ACTIVITY_LOG_DIAGNOSTIC_FIELDS } from "@oscharko-dev/keiko-contracts/runtime/activity-log-diagnostic-fields";
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
@@ -144,12 +145,51 @@ import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOpe
 
 const PROPOSAL_APPROVAL_POLL_MS = 25;
 
-const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOperation({
+const CODING_VERIFICATION_STEP_NAMES = [
+  "test:passed",
+  "targeted-test:passed",
+  "typecheck:passed",
+  "lint:passed",
+  "build:passed",
+  "test:denied",
+  "test:cancelled",
+  "test:dependencies-unavailable",
+  "test:script-missing",
+  "test:skipped",
+  "targeted-test:denied",
+  "targeted-test:cancelled",
+  "targeted-test:dependencies-unavailable",
+  "targeted-test:script-missing",
+  "targeted-test:skipped",
+  "typecheck:denied",
+  "typecheck:cancelled",
+  "typecheck:dependencies-unavailable",
+  "typecheck:script-missing",
+  "typecheck:skipped",
+  "lint:denied",
+  "lint:cancelled",
+  "lint:dependencies-unavailable",
+  "lint:script-missing",
+  "lint:skipped",
+  "build:denied",
+  "build:cancelled",
+  "build:dependencies-unavailable",
+  "build:script-missing",
+  "build:skipped",
+] as const;
+
+const CODING_WORKTREE_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
+  owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+
+const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.tool-availability.failed",
   category: "gateway",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.logOptionalToolAvailabilityFailure",
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
@@ -173,35 +213,18 @@ const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOpera
     },
     // Optional: persisted-line redaction omits an empty frames/causeChain array (an error without
     // Keiko frames or without a cause), so a required one would reject that ordinary failure line.
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-tool-availability"],
   proofIds: ["coding-runtime.tool-availability.failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_EDITOR_REVIEW_DECIDED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.editor-review.decided",
   category: "security",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.editorReviewRequirement",
   fields: {
     mode: {
@@ -218,20 +241,16 @@ const CODING_RUNTIME_EDITOR_REVIEW_DECIDED_OPERATION = defineActivityLogOperatio
       values: ["allowed", "review-required"],
     },
   },
-  causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["coding-editor-mutation"],
   proofIds: ["coding-runtime.editor-review.decided.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_REPOSITORY_RERANK_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.repository-rerank",
   category: "gateway",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.repositoryRerank",
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
@@ -270,35 +289,18 @@ const CODING_RUNTIME_REPOSITORY_RERANK_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["pod-query-failed"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-repository-rerank"],
   proofIds: ["coding-runtime.repository-rerank.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.operator-decision",
   category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.recordScriptTrustWait",
   fields: {
     decision: {
@@ -322,20 +324,16 @@ const CODING_RUNTIME_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
     waitCeilingMs: { type: "integer", dataClass: "duration", required: true },
     pollIntervalMs: { type: "integer", dataClass: "duration", required: true },
   },
-  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["coding-runtime-operator-decision"],
   proofIds: ["coding-runtime.operator-decision.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.verification",
   category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.verification",
   fields: {
     state: {
@@ -350,38 +348,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       maxItems: 5,
-      values: [
-        "test:passed",
-        "targeted-test:passed",
-        "typecheck:passed",
-        "lint:passed",
-        "build:passed",
-        "test:denied",
-        "test:cancelled",
-        "test:dependencies-unavailable",
-        "test:script-missing",
-        "test:skipped",
-        "targeted-test:denied",
-        "targeted-test:cancelled",
-        "targeted-test:dependencies-unavailable",
-        "targeted-test:script-missing",
-        "targeted-test:skipped",
-        "typecheck:denied",
-        "typecheck:cancelled",
-        "typecheck:dependencies-unavailable",
-        "typecheck:script-missing",
-        "typecheck:skipped",
-        "lint:denied",
-        "lint:cancelled",
-        "lint:dependencies-unavailable",
-        "lint:script-missing",
-        "lint:skipped",
-        "build:denied",
-        "build:cancelled",
-        "build:dependencies-unavailable",
-        "build:script-missing",
-        "build:skipped",
-      ],
+      values: CODING_VERIFICATION_STEP_NAMES,
     },
     verifierId: {
       type: "string",
@@ -409,27 +376,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["begin", "complete", "observe"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-verification"],
   proofIds: ["coding-runtime.verification.emitted-line"],
-  releaseImpact: "patch",
 });
 
 type ProposalApprovalWaitOutcome = "approved" | "denied" | "cancelled" | "expired" | "unavailable";
@@ -1411,7 +1363,7 @@ async function rankedByIndex(
 ): Promise<readonly { readonly scopePath: string }[]> {
   const provider = lease.provider;
   if (provider === undefined) return [];
-  return provider.search({
+  return await provider.search({
     query: {
       kind: retrievalKind(request.mode),
       text: request.query,
@@ -2116,7 +2068,15 @@ function recordVerificationNotRun(
   );
 }
 
-type VerificationNotRunLogStep = `${VerificationKind}:${VerificationNotRunReason}`;
+type VerificationPassedLogStep = Extract<
+  (typeof CODING_VERIFICATION_STEP_NAMES)[number],
+  `${string}:passed`
+>;
+
+type VerificationNotRunLogStep = Exclude<
+  (typeof CODING_VERIFICATION_STEP_NAMES)[number],
+  VerificationPassedLogStep
+>;
 
 function verificationNotRunLogStep(step: VerificationNotRunStep): VerificationNotRunLogStep {
   return `${step.kind}:${step.reason}`;

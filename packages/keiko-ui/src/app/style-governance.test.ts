@@ -1,3 +1,5 @@
+import postcss from "postcss";
+import { readStylesheet } from "../../read-stylesheet.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,12 +57,15 @@ function withoutGlobalSelectors(source: string): string {
 }
 
 function localClassNames(source: string): ReadonlySet<string> {
-  return new Set(
-    Array.from(
-      withoutGlobalSelectors(source).matchAll(/(?<![\w-])\.([A-Za-z_][\w-]*)/gmu),
-      (match) => match[1]!,
-    ),
-  );
+  const names = new Set<string>();
+  postcss.parse(source).walkRules((rule) => {
+    for (const match of withoutGlobalSelectors(rule.selector).matchAll(
+      /(?<![\w-])\.([A-Za-z_][\w-]*)/gmu,
+    )) {
+      if (match[1] !== undefined) names.add(match[1]);
+    }
+  });
+  return names;
 }
 
 function globalSelectors(source: string): readonly string[] {
@@ -164,6 +169,14 @@ describe("Design-system styling exception register", () => {
     ).toStrictEqual(new Set(["cmpCard"]));
   });
 
+  it("checks selectors without treating composition filenames as local classes", () => {
+    expect(
+      localClassNames(
+        '.cmpScope { composes: base from "./Shared.module.css"; } .legacyButton { color: red; }',
+      ),
+    ).toStrictEqual(new Set(["cmpScope", "legacyButton"]));
+  });
+
   it("detects added selectors in an already registered exception source", () => {
     const baseline = exceptionDetails(".legacyCard :global(.vendor) { color: red; }", "cmp");
     const expanded = exceptionDetails(
@@ -184,7 +197,7 @@ describe("Design-system styling exception register", () => {
 
   it("does not permit new bare native-control rules in the global stylesheet", () => {
     const globalCssPath = resolve(appDirectory, "globals.css");
-    const globalCss = readFileSync(globalCssPath, "utf8");
+    const globalCss = readStylesheet(globalCssPath);
     const bareNativeRules = Array.from(
       globalCss.matchAll(
         /^(button|input|select|textarea|fieldset|label|summary|details|progress|dialog)\s*\{/gmu,

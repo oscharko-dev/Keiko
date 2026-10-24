@@ -316,22 +316,11 @@ function sourceSha256(path: string): string {
     .digest("hex");
 }
 
-function updateSourceHashes(): JsonObject {
-  const paths = [
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
-    "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
-    "packages/keiko-ui/src/app/globals.css",
-    "packages/keiko-ui/src/lib/api.ts",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-    "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
-  ];
-  return Object.fromEntries(paths.map((path) => [path, sourceSha256(path)]));
+function updateSourceFiles(): readonly JsonObject[] {
+  const paths = JSON.parse(
+    readFileSync(resolve(REPO_ROOT, "scripts/lib/update-ui-evidence-sources.json"), "utf8"),
+  ) as readonly string[];
+  return paths.map((path) => ({ path, sha256: sourceSha256(path) }));
 }
 
 function harnessProvenanceHashes(): JsonObject {
@@ -1737,7 +1726,8 @@ function writeFidelityProof(captures: readonly CaptureRecord[], cssHash: string)
     epic: 3403,
     verdict: "PASS",
     cssSha256: cssHash,
-    sourceSha256: updateSourceHashes(),
+    sourceProvenanceVersion: 2,
+    sourceFiles: updateSourceFiles(),
     harnessProvenanceSha256: harnessProvenanceHashes(),
     harness: "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
     route: "/",
@@ -1777,7 +1767,8 @@ function writeA11yProof(a11yCaptures: readonly A11yCapture[], cssHash: string): 
     verdict: "PASS",
     tool: "axe-core 4.12.1",
     cssSha256: cssHash,
-    sourceSha256: updateSourceHashes(),
+    sourceProvenanceVersion: 2,
+    sourceFiles: updateSourceFiles(),
     harnessProvenanceSha256: harnessProvenanceHashes(),
     wcagTags: WCAG_AA_TAGS,
     gate: "zero axe violations for WCAG 2.0/2.1/2.2 A and AA tags across update window modes, startup notice, and responsive manual path",
@@ -1805,7 +1796,8 @@ function writeManifest(ledgers: readonly UpdateRouteLedger[]): void {
     requiredCiCommand: "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
     artifacts: ARTIFACT_NAMES,
     routeLedger: routeLedgerSummary(ledgers),
-    sourceSha256: updateSourceHashes(),
+    sourceProvenanceVersion: 2,
+    sourceFiles: updateSourceFiles(),
     harnessProvenanceSha256: harnessProvenanceHashes(),
     notes: [
       "Packaged CLI UI renders the real Settings panel, startup notice, WindowsRegistry, and UpdateWindow.",

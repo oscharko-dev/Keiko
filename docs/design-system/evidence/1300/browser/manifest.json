@@ -1,9 +1,127 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "captureSha256": "be6191d8da231bd8a650cdef433d05f479542be0b3ed67ac2ddde915848f7d79",
-  "postCssSha256": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
-  "renderedCssBundleSha256": "38559d161b2dabeffba73b001e8ba4bb2c28db1d9ec3c5ec00e6ac6201dc2f3c",
+  "captureSha256": "d27c21e0e1008f7bfdebea4ca64eb68cf8f59eefa5a1f0beb210ed4305c845d8",
+  "sourceFiles": [
+    {
+      "path": "design-system/keiko-ai.css",
+      "sha256": "182e1bf6a116ae9f2cc94006214a64d3c0b710b495090bd13bc72adc8dd9c2da"
+    },
+    {
+      "path": "design-system/keiko-data.css",
+      "sha256": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270"
+    },
+    {
+      "path": "design-system/keiko-dataviz.css",
+      "sha256": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1"
+    },
+    {
+      "path": "design-system/keiko-editor-tokens.css",
+      "sha256": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
+    },
+    {
+      "path": "design-system/keiko-inputs.css",
+      "sha256": "1051fad455b2a230e130054e6e36bc6f06a8600799a71139bba3a17b13a81408"
+    },
+    {
+      "path": "design-system/keiko-nav.css",
+      "sha256": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
+    },
+    {
+      "path": "design-system/keiko-semantic-tokens.css",
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
+    },
+    {
+      "path": "design-system/keiko-tokens.css",
+      "sha256": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d"
+    },
+    {
+      "path": "design-system/product-token-bindings.json",
+      "sha256": "0c0aae52aba97d91f8b4d033ca21ddc35171561129d94c8becf65659bb3d8584"
+    },
+    {
+      "path": "docs/design-system/evidence/1300/a11y/axe-proof.mjs",
+      "sha256": "f03a4e24ff464eee950efe4171361fa2513f2eebf41e127e37d7e8920ff54f47"
+    },
+    {
+      "path": "docs/design-system/evidence/1300/browser/capture.mjs",
+      "sha256": "d27c21e0e1008f7bfdebea4ca64eb68cf8f59eefa5a1f0beb210ed4305c845d8"
+    },
+    {
+      "path": "docs/design-system/evidence/1300/component-fixture-data.json",
+      "sha256": "0a7ac60fce65bcd555b757e3ef8ca493ec304a640de8eec3d189d7623d205bfd"
+    },
+    {
+      "path": "docs/design-system/evidence/1300/editor/capture.mjs",
+      "sha256": "1f933f519b29d570e47e9423a17dfb121d317039f4efd95a7d7b9401c08a41e5"
+    },
+    {
+      "path": "docs/design-system/evidence/1300/equivalence-harness.mjs",
+      "sha256": "080aa418c840304dda45e2b93bd851681c4c786aef697cbb3772f8227deb4943"
+    },
+    {
+      "path": "docs/design-system/evidence/1300/source-inputs.json",
+      "sha256": "ed8dcf79387c4e049e04f67e508a63382fd82b4c860d458e6e63afd06dc48911"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "7757795074efefa786302d5386dba831ba5aa3482ffbf32d2d13cb850f90f99d"
+    },
+    {
+      "path": "package.json",
+      "sha256": "27b01b39aa41194bbe34ce1d7debeff253cb11a61687b18d234f960f0eca74d3"
+    },
+    {
+      "path": "packages/keiko-ui/design-tokens.mjs",
+      "sha256": "a9421356f4bc74d96a7863a18c36817098bce72ab2e40464fd9a5ced32ed944c"
+    },
+    {
+      "path": "packages/keiko-ui/next.config.mjs",
+      "sha256": "5d2f34ac59dbccc52eb1b485b399caac66dd11b70906d3bea9337e097283191e"
+    },
+    {
+      "path": "packages/keiko-ui/package.json",
+      "sha256": "eaae166c711d047279abd27afea691e348ee8beea7d063f7545bc9ce0b33ea9e"
+    },
+    {
+      "path": "packages/keiko-ui/read-stylesheet.mjs",
+      "sha256": "6a852d3ecd88fc78cd3881f7e609e03d8da1f11bd7154d7025a752cb269949cc"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
+      "sha256": "cff8d9ba0a72bc481669096937ab47a6f2c28bd46a3dffe73bfd4515bdf2ea39"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
+      "sha256": "0054a83ecbf05640a113a46b0108a8a22478b5499142e4d471520dde593836fa"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/globals.css",
+      "sha256": "b4db5a8c3b03e43a4a518a26bf2ada6aef94e0b33f31a5e86a8a444b58e1aa90"
+    },
+    {
+      "path": "scripts/lib/css-rendered-evidence.mjs",
+      "sha256": "a6b9b6b82aab0067d8cfc0c73a4338190e7a22ce06348f1efa2491d1f9d8467b"
+    },
+    {
+      "path": "scripts/lib/design-evidence-sources.mjs",
+      "sha256": "764a3ba84c609808b628f1cd1468cd751aea926fecf418fc4dfd7e0b007db098"
+    },
+    {
+      "path": "scripts/lib/host-executable.mjs",
+      "sha256": "bd0f5e8cb05c8f3e5c57414c6da6e437b1b3848400d2b101bd0e6f8eff494d86"
+    },
+    {
+      "path": "scripts/lib/ui-browser-evidence.mjs",
+      "sha256": "12cde3ce5a98888724a99231ac37acb0099ef55a06a20fd72dc1874fc51fcaf7"
+    },
+    {
+      "path": "scripts/lib/ui-static-root-boundary.mjs",
+      "sha256": "def885e0621a21a7d998dbedce5c5994c5391a3c8a0c1d1fb4070502d1ff0d7f"
+    }
+  ],
+  "postCssSha256": "6c8f21880aea2f6ab15c371bd7541e5fd3494f2bdfe37408153d9e4691663562",
+  "renderedCssBundleSha256": "3699fef885a25dcd2af730cea57fc187c81bbc48a5c1c46c1b233b9b2d54b2da",
   "appPath": "packages/keiko-ui/out",
   "route": "/",
   "shotCount": 108,
@@ -129,7 +247,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1238,
+      "textLen": 1243,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -278,7 +396,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1238,
+      "textLen": 1243,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -427,7 +545,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1238,
+      "textLen": 1243,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -576,7 +694,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1238,
+      "textLen": 1243,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -725,7 +843,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1238,
+      "textLen": 1243,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -874,7 +992,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1238,
+      "textLen": 1243,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1023,7 +1141,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1172,7 +1290,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1321,7 +1439,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1470,7 +1588,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1619,7 +1737,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1768,7 +1886,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1917,7 +2035,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2066,7 +2184,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2215,7 +2333,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2364,7 +2482,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2513,7 +2631,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2662,7 +2780,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1232,
+      "textLen": 1237,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []

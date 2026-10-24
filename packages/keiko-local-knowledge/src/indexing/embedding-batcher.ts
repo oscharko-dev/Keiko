@@ -1,3 +1,15 @@
+import {
+  cancellableDelay,
+  assertCompatibleEmbeddingIdentity,
+  EMBEDDING_NORMALIZATION,
+  l2NormalizeVector,
+  type OpenAIEmbeddingAdapter,
+  type OpenAIEmbeddingBatchOutcome,
+  type OpenAIEmbeddingBatchRequest,
+  type OpenAIEmbeddingErrorKind,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingSuccess,
+} from "@oscharko-dev/keiko-model-gateway";
 // Embedding batcher (Epic #189, Issue #196). Given a batch of chunks already projected to
 // their excerpt text, this module:
 //
@@ -20,19 +32,6 @@ import type {
   KnowledgeCapsuleId,
   VectorRecord,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  assertCompatibleEmbeddingIdentity,
-  EMBEDDING_NORMALIZATION,
-  l2NormalizeVector,
-} from "@oscharko-dev/keiko-model-gateway";
-import type {
-  OpenAIEmbeddingAdapter,
-  OpenAIEmbeddingBatchOutcome,
-  OpenAIEmbeddingBatchRequest,
-  OpenAIEmbeddingErrorKind,
-  OpenAIEmbeddingOutcome,
-  OpenAIEmbeddingSuccess,
-} from "@oscharko-dev/keiko-model-gateway";
 
 import {
   composeVectorRecord,
@@ -225,7 +224,7 @@ async function embedSingleChunkWithModel(
   signal: AbortSignal | undefined,
   logContext: IndexingLogContext | undefined,
 ): Promise<OpenAIEmbeddingOutcome> {
-  return adapter.request({
+  return await adapter.request({
     endpoint: adapter.endpoint,
     apiKey: adapter.apiKey,
     ...(adapter.apiKeyHeaderName !== undefined
@@ -274,20 +273,7 @@ function backoffMs(attempt: number, base: number): number {
 // Cancellable default sleep. Rejects on abort so the retry loop can bail out of its backoff
 // the moment the caller cancels rather than waiting out the full delay.
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted === true) {
-    return Promise.reject(new DOMException("aborted", "AbortError"));
-  }
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    function onAbort(): void {
-      clearTimeout(timer);
-      reject(new DOMException("aborted", "AbortError"));
-    }
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+  return cancellableDelay(ms, signal, "aborted");
 }
 
 interface ResolvedRetry {
@@ -571,7 +557,7 @@ async function embedArrayBatchWithRetry(
   };
   const attemptOnce = async (): Promise<TimedOutcome<OpenAIEmbeddingBatchOutcome>> => {
     state.attempts += 1;
-    return timedAttempt(async () => requestBatch(batchRequestFor(options, state.remaining)));
+    return timedAttempt(async () => await requestBatch(batchRequestFor(options, state.remaining)));
   };
   let attempted = await attemptOnce();
   while (state.zeroProgressRetries < retry.maxRetries) {
