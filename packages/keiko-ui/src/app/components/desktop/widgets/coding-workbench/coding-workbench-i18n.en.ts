@@ -20,6 +20,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.save": "Save",
   "codingWorkbench.history.cancel": "Cancel",
   "codingWorkbench.history.rename": "Rename",
+  "codingWorkbench.history.exportJson": "Export JSON",
+  "codingWorkbench.history.exportMarkdown": "Export Markdown",
+  "codingWorkbench.history.exportHint":
+    "Saves a redacted copy of this task to your device. Nothing is uploaded.",
+  "codingWorkbench.history.exporting": "Preparing export…",
+  "codingWorkbench.history.exportError": "The task could not be exported. Try again.",
   "codingWorkbench.history.finish": "Complete task",
   "codingWorkbench.history.location": "Task workspace location",
   "codingWorkbench.history.transcript": "Previous conversation",

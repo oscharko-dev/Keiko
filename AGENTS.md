@@ -1020,6 +1020,15 @@ messages cut to the per-message bound and `historyTruncated` says Coding History
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
 truncated.". Counts only — never a message, path or run name.
 
+`coding-runtime.history.export` records the human's local export of a Coding History task (Export
+JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
+`completed` or `refused` under the request's correlation. A refusal carries one closed reason
+(`unauthenticated`, `unavailable`, `invalid-format`, `too-large`, `failed`; a failure also its error
+class, frames and cause chain), a completion the format, message, omitted and redacted-message
+counts and the byte size. Message text is stored as the runtime produced it, so the export redacts
+every string again with the evidence redactor and masks absolute host paths; no text, title, branch
+or path ever enters the line (ADR-0137 D4).
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal

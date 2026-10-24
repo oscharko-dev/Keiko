@@ -686,6 +686,32 @@ named for the transcript by position. Only a message cut to its own bound and th
 Coding History itself cut make the activity read as truncated. The body-free
 `client.coding-run.restored` line records the counts of this split (ADR-0173).
 
+A task's History can also leave the machine's UI store, and only by the human's own action (#3904).
+Export JSON and Export Markdown in Coding History call `GET /api/coding-workbench/history/:id/export`
+(`format` `json` or `markdown`), which is admitted like every other History read: a paired app
+session, then the task's operator ownership, an unpaired caller and another operator's task answering
+exactly like an unknown one. The server returns the file's exact text and the browser saves it through
+its own download path; nothing is uploaded and the server keeps no copy. The History store redacts
+only `shortResult` and grounded-answer metadata, not message content, which is stored as the runtime
+produced it, so every string of the export (messages, title, branch) is redacted again at this
+boundary with the product's evidence redactor (built-in secret shapes plus the live configured
+literals). Paths under the task's workspace become workspace-relative, any other absolute path is
+masked with the shared `redactAbsolutePaths` (over-redacting path-like text is accepted), and the
+repository appears as its folder name only. The `keiko-coding-task-export` document (schema version 1)
+carries the Keiko version, the OpenCode version this build pins as a build fact (not an observation
+of a running runtime), the task's title, status, branch, timestamps and run ids, and the stored
+messages in order with role, text and time. Neither the run's mode nor its changed files are in
+Coding History, so neither is exported. A file stays within 8 MiB: the newest messages that fit are
+kept, the older ones are counted as omitted, and only a file that cannot hold its own header is
+refused (413 `CODING_HISTORY_EXPORT_TOO_LARGE`). An unknown `format` is a 400. A saved export is data:
+the human may place it in a workspace and attach it to a new task with an `@file` reference, which
+admits any UTF-8 text file of at most 64 KiB (`opencodePromptInputs.ts`); Keiko offers no import of
+its own, and the file grants no permission or authority. The body-free `coding-runtime.history.export`
+operation records `requested`, then `completed` or `refused` (closed reasons `unauthenticated`,
+`unavailable`, `invalid-format`, `too-large`, `failed`) with the format, message, omitted and
+redacted-message counts and the byte size, never any text; a failed browser download is reported
+through the client diagnostic sink.
+
 Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
 push and pull-request create/update each require their own action-bound, one-use human approval in
 addition to runtime authority; no connector scope or earlier start confirmation pre-approves them.
@@ -1011,8 +1037,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
-  `update` and `share` off, keeps the single `keiko-runtime` provider behind the Model Gateway, and
-  enables native snapshots. The producer appends configured rules after each built-in agent's own
+  `update` and `share` off (a session is never published; the equivalent is the human's local export
+  of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
+  Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
   agent's own denial: the earlier blanket `allow` (and a blanket `ask`) let the Plan agent write
   project files in Full access (#3897 review). Without it every built-in agent keeps the producer's

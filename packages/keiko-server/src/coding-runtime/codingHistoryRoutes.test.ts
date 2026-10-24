@@ -4,6 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+import type { CodingTaskExportDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { RouteContext } from "../routes.js";
 import { matchRoute } from "../routes.js";
@@ -16,7 +23,9 @@ import { createCodingAppSessionChannel } from "../coding-app-session/sessionChan
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
+  exportCodingHistory,
   listCodingHistory,
   readCodingHistory,
   updateCodingHistory,
@@ -26,6 +35,7 @@ let store: UiStore;
 let root: string;
 let id: string;
 let cookie: string;
+const CONFIGURED_KEY = "configured-provider-credential-0123456789";
 let deps: UiHandlerDeps;
 let history: CodingRuntimeHistory;
 const live = vi.fn(() => false);
@@ -56,6 +66,7 @@ beforeEach(() => {
   deps = {
     codingAppSessionChannel: channel,
     codingRuntimeOrchestrator: { getHistory: () => history, hasLiveRun: live },
+    env: { KEIKO_DEFAULT_API_KEY: CONFIGURED_KEY },
   } as unknown as UiHandlerDeps;
 });
 
@@ -85,6 +96,7 @@ describe("paired coding history routes", () => {
       ["GET", ""],
       ["GET", "/task"],
       ["PATCH", "/task"],
+      ["GET", "/task/export"],
     ]) {
       expect(matchRoute(method ?? "", `/api/coding-workbench/history${path ?? ""}`)).toMatchObject({
         definition: { method },
@@ -191,4 +203,156 @@ describe("history request response-shape isolation", () => {
       expect(update).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("paired coding history export", () => {
+  const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+
+  function exportContext(format: string | undefined, taskId = id, paired = true): RouteContext {
+    const query = format === undefined ? "" : `?format=${encodeURIComponent(format)}`;
+    return {
+      ...context("", taskId, paired),
+      url: new URL(`http://localhost/api/coding-workbench/history/${taskId}/export${query}`),
+    };
+  }
+
+  function seed(): void {
+    const history = store.codingHistory;
+    if (history === undefined) throw new Error("Missing history fixture");
+    history.bindRun(id, runId);
+    history.append(id, runId, "intent", "user", `Rotate ${CONFIGURED_KEY} in ${root}/config.json`);
+    history.append(
+      id,
+      runId,
+      "answer",
+      "assistant",
+      `Done. Look at ${root}/src/a.ts and /Users/alice/.ssh/config now. Key sk-abcdefghijklmnopqrstuvwxyz012345.`,
+    );
+  }
+
+  function exported(format?: string): {
+    readonly status: number;
+    readonly body: Record<string, unknown>;
+    readonly headers?: Readonly<Record<string, string | readonly string[]>> | undefined;
+  } {
+    const result = exportCodingHistory(exportContext(format), deps);
+    return { ...result, body: result.body as Record<string, unknown> };
+  }
+
+  it("answers unpaired callers and unknown tasks exactly like an unavailable task", () => {
+    const detail = store.codingHistory ? vi.spyOn(store.codingHistory, "detail") : undefined;
+    const unpaired = exportCodingHistory(exportContext("json", id, false), deps);
+    const unknown = exportCodingHistory(exportContext("json", "unknown"), deps);
+    const noRuntime = exportCodingHistory(exportContext("json"), {
+      ...deps,
+      codingRuntimeOrchestrator: undefined,
+    });
+    expect([unpaired.status, unknown.status, noRuntime.status]).toEqual([404, 404, 404]);
+    expect(new Set([unpaired, unknown, noRuntime].map((r) => JSON.stringify(r.body))).size).toBe(1);
+    expect(detail).toHaveBeenCalledTimes(1);
+  });
+
+  it("never exports another operator's task", () => {
+    seed();
+    history = new CodingRuntimeHistory(store, () => "different-operator", undefined);
+    expect(exported("json").status).toBe(404);
+  });
+
+  it("returns the versioned JSON file with redacted text and the build's version facts", () => {
+    seed();
+    const result = exported();
+    expect(result.status).toBe(200);
+    expect(result.headers).toEqual({ "Cache-Control": "no-store" });
+    expect(result.body).toMatchObject({
+      format: "json",
+      mediaType: "application/json",
+      messageCount: 2,
+      truncated: false,
+    });
+    const content = String(result.body.content);
+    expect(result.body.byteCount).toBe(Buffer.byteLength(content));
+    expect(String(result.body.fileName)).toMatch(/^keiko-coding-task-.+\.json$/u);
+    const document = JSON.parse(content) as CodingTaskExportDocument;
+    expect(document).toMatchObject({
+      schema: "keiko-coding-task-export",
+      schemaVersion: 1,
+      generator: {
+        keikoVersion: SDK_VERSION,
+        opencodeRuntimePinnedVersion: OPENCODE_PINNED_VERSION,
+      },
+      task: { id, title: "Generate tests", branch: "feature/tests", runIds: [runId] },
+    });
+    expect(document.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(document.messages[0]?.text).toBe("Rotate [REDACTED] in config.json");
+    expect(document.messages[1]?.text).toContain("Done. Look at src/a.ts and [REDACTED_PATH]");
+    for (const leaked of [CONFIGURED_KEY, "sk-abcdefghijklmnop", "alice", root, "projectPath"]) {
+      expect(content).not.toContain(leaked);
+    }
+  });
+
+  it("returns the Markdown rendering on request", () => {
+    seed();
+    const result = exported("markdown");
+    expect(result.body).toMatchObject({ format: "markdown", mediaType: "text/markdown" });
+    expect(String(result.body.fileName)).toMatch(/\.md$/u);
+    const content = String(result.body.content);
+    expect(content).toContain("# Keiko coding task export");
+    expect(content).not.toContain(CONFIGURED_KEY);
+    expect(content).not.toContain(root);
+  });
+
+  it("refuses an unknown format before reading any history", () => {
+    const detail = store.codingHistory ? vi.spyOn(store.codingHistory, "detail") : undefined;
+    expect(exported("docx")).toMatchObject({
+      status: 400,
+      body: { error: { code: "INVALID_REQUEST", correlationId: "history-route-test" } },
+    });
+    expect(detail).not.toHaveBeenCalled();
+  });
+
+  it("turns an unexpected storage failure into an opaque, correlated 500", () => {
+    seed();
+    if (store.codingHistory === undefined) throw new Error("Missing history fixture");
+    vi.spyOn(store.codingHistory, "detail").mockImplementation(() => {
+      throw new Error(`database said no at ${root}`);
+    });
+    const result = exported("json");
+    expect(result).toMatchObject({
+      status: 500,
+      body: { error: { code: "INTERNAL", correlationId: "history-route-test" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain(root);
+  });
+
+  it("records the request, its outcome and the counts under the request's correlation", () => {
+    seed();
+    const sink = createBufferedServerLogSink();
+    history = new CodingRuntimeHistory(store, () => "operator", sink);
+    expect(exported("markdown").status).toBe(200);
+    expect(exported("docx").status).toBe(400);
+    const lines = sink.events.map((event) =>
+      expectActivityLogProof(
+        "coding-runtime.history.export.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    );
+    expect(lines.map((line) => [line.correlationId, line.event, line.format, line.reason])).toEqual(
+      [
+        ["history-route-test", "requested", "markdown", undefined],
+        ["history-route-test", "completed", "markdown", undefined],
+        ["history-route-test", "requested", undefined, undefined],
+        ["history-route-test", "refused", undefined, "invalid-format"],
+      ],
+    );
+    expect(lines[1]).toMatchObject({
+      conversationId: id,
+      messageCount: 2,
+      redactedMessageCount: 2,
+      omittedMessageCount: 0,
+    });
+    const logged = JSON.stringify(sink.events);
+    for (const body of [CONFIGURED_KEY, "Generate tests", "alice", root]) {
+      expect(logged).not.toContain(body);
+    }
+  });
 });

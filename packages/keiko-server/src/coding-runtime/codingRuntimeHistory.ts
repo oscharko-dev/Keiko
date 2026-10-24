@@ -20,6 +20,12 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingSafeActivityContent } from "./codingSafeActivityProjection.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
+import {
+  runCodingTaskExport,
+  type CodingTaskExportOptions,
+  type CodingTaskExportRequest,
+  type CodingTaskExportResult,
+} from "./codingTaskExport.js";
 
 // Keep source offsets stable across streaming captures without splitting a UTF-16 surrogate pair.
 function nativeChunkEnd(content: string, offset: number): number {
@@ -299,6 +305,28 @@ export class CodingRuntimeHistory {
         truncated: detail.truncated,
       });
     return detail;
+  }
+
+  /**
+   * The user-controlled local export of one task (#3904). The lookup is the operator-bound read
+   * `detail` uses, so a task of another operator is as unavailable here as it is there; a caller
+   * without an app session never reaches the store.
+   */
+  public exportTask(
+    request: CodingTaskExportRequest,
+    options: Omit<CodingTaskExportOptions, "format">,
+  ): CodingTaskExportResult {
+    return runCodingTaskExport(
+      this.log,
+      request,
+      () => {
+        const operator = this.operator();
+        return operator === undefined
+          ? undefined
+          : this.store.codingHistory?.detail(request.taskId, operator);
+      },
+      options,
+    );
   }
 
   public previousRunId(id: string): string | undefined {

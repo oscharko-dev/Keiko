@@ -22,6 +22,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.save": "Speichern",
   "codingWorkbench.history.cancel": "Abbrechen",
   "codingWorkbench.history.rename": "Umbenennen",
+  "codingWorkbench.history.exportJson": "Als JSON exportieren",
+  "codingWorkbench.history.exportMarkdown": "Als Markdown exportieren",
+  "codingWorkbench.history.exportHint":
+    "Speichert eine bereinigte Kopie dieser Aufgabe auf deinem Gerät. Es wird nichts hochgeladen.",
+  "codingWorkbench.history.exporting": "Export wird vorbereitet…",
+  "codingWorkbench.history.exportError":
+    "Die Aufgabe konnte nicht exportiert werden. Bitte erneut versuchen.",
   "codingWorkbench.history.finish": "Aufgabe abschließen",
   "codingWorkbench.history.location": "Speicherort des Aufgaben-Arbeitsbereichs",
   "codingWorkbench.history.transcript": "Bisheriger Verlauf",

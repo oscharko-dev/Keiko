@@ -1,8 +1,12 @@
 "use client";
-import type {
-  CodingHistoryDetail,
-  CodingHistoryTask,
+import {
+  CODING_TASK_EXPORT_MAX_BYTES,
+  type CodingHistoryDetail,
+  type CodingHistoryTask,
+  type CodingTaskExportFormat,
+  type CodingTaskExportResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 
@@ -40,4 +44,88 @@ export async function updateCodingTask(
   );
   window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
   return result.task;
+}
+
+const EXPORT_FILE_NAME = /^keiko-coding-task-[A-Za-z0-9._-]{1,48}\.(?:json|md)$/u;
+const EXPORT_MEDIA_TYPES = {
+  json: "application/json",
+  markdown: "text/markdown",
+} as const satisfies Record<CodingTaskExportFormat, CodingTaskExportResponse["mediaType"]>;
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasExportIdentity(file: Record<string, unknown>, format: CodingTaskExportFormat): boolean {
+  return (
+    file.format === format &&
+    file.mediaType === EXPORT_MEDIA_TYPES[format] &&
+    typeof file.fileName === "string" &&
+    EXPORT_FILE_NAME.test(file.fileName)
+  );
+}
+
+function hasExportContent(file: Record<string, unknown>): boolean {
+  return (
+    typeof file.content === "string" &&
+    isCount(file.messageCount) &&
+    isCount(file.byteCount) &&
+    file.byteCount <= CODING_TASK_EXPORT_MAX_BYTES &&
+    new TextEncoder().encode(file.content).byteLength === file.byteCount &&
+    typeof file.truncated === "boolean"
+  );
+}
+
+function isExportFile(
+  value: unknown,
+  format: CodingTaskExportFormat,
+): value is CodingTaskExportResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const file: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  return hasExportIdentity(file, format) && hasExportContent(file);
+}
+
+/**
+ * The user-controlled local export of a task (#3904): the server answers with the redacted file's
+ * exact text, which {@link saveCodingTaskExport} hands to the browser's own download path. A
+ * response that is not the file asked for is a contract failure, never a download.
+ */
+export async function exportCodingTask(
+  id: string,
+  format: CodingTaskExportFormat,
+  correlationId?: string,
+): Promise<CodingTaskExportResponse> {
+  await codingAppSessionPairingSettled();
+  return bffFetchJson(
+    `${ROOT}/${encodeURIComponent(id)}/export?format=${format}`,
+    { signal: AbortSignal.timeout(30_000) },
+    {
+      validator: (_path, value): CodingTaskExportResponse => {
+        if (!isExportFile(value, format))
+          throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid coding task export", 502);
+        return value;
+      },
+      ...(correlationId === undefined ? {} : { correlationId }),
+    },
+  );
+}
+
+// Some browser engines cancel a programmatic Blob download when the object URL is revoked in the
+// same task as the synthetic click, so it is released a moment later.
+const DOWNLOAD_URL_REVOKE_DELAY_MS = 250;
+
+/** Saves the file through the browser's download path; nothing leaves the device. */
+export function saveCodingTaskExport(
+  file: Pick<CodingTaskExportResponse, "content" | "fileName" | "mediaType">,
+): void {
+  const url = URL.createObjectURL(
+    new Blob([file.content], { type: `${file.mediaType};charset=utf-8` }),
+  );
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = file.fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_REVOKE_DELAY_MS);
 }

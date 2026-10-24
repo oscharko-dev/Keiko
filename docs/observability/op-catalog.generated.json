@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5341264e741f4024ab568050bea5aa609207a6e153b441c204f6107f41f04c95",
+    "catalogDigest": "6158669e2c66bd85db8da360588820ea0cbeef904a93162e79e961a30911827f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7844,8 +7844,8 @@
         "failureClasses": ["coding-history-persistence"],
         "proofIds": ["coding-runtime.history.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:30",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:160"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:36",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:166"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -7924,6 +7924,103 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:50",
         "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1045"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-runtime.history.export",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-runtime.codingTaskExport.recordExport",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "event": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["requested", "completed", "refused"]
+          },
+          "format": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["json", "markdown"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["unauthenticated", "unavailable", "invalid-format", "too-large", "failed"]
+          },
+          "conversationId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 128
+          },
+          "messageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "omittedMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "redactedMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "byteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "truncated": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "errorClass": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-history-persistence"],
+        "proofIds": ["coding-runtime.history.export.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingTaskExport.ts:32",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingTaskExport.ts:124"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39421,16 +39518,16 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["coding-runtime.history"],
+          "state": ["coding-runtime.history", "coding-runtime.history.export"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["coding-runtime.history"],
+        "requiredCausalOperations": ["coding-runtime.history", "coding-runtime.history.export"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["coding-runtime.history"],
+        "requiredProofOperations": ["coding-runtime.history", "coding-runtime.history.export"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["coding-runtime.history"],
+        "requiredResourceOperations": ["coding-runtime.history", "coding-runtime.history.export"],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -39441,8 +39538,8 @@
           "opaque-id",
           "safe-platform-class"
         ],
-        "requiredFrameOperations": ["coding-runtime.history"],
-        "requiredCauseOperations": ["coding-runtime.history"]
+        "requiredFrameOperations": ["coding-runtime.history", "coding-runtime.history.export"],
+        "requiredCauseOperations": ["coding-runtime.history", "coding-runtime.history.export"]
       },
       {
         "contractKind": "activity-log-failure-class",
@@ -55517,7 +55614,7 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["coding-runtime.history"],
+            "state": ["coding-runtime.history", "coding-runtime.history.export"],
             "end": [],
             "failure": [],
             "loss": []
@@ -55526,10 +55623,14 @@
             {
               "op": "coding-runtime.history",
               "mode": "correlation"
+            },
+            {
+              "op": "coding-runtime.history.export",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["coding-runtime.history"],
+          "resourceSignals": ["coding-runtime.history", "coding-runtime.history.export"],
           "replayReferences": [],
           "operations": [
             {
@@ -55658,6 +55759,104 @@
                 "causeChain": true
               },
               "proofIds": ["coding-runtime.history.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "coding-runtime.history.export",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "byteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "conversationId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "errorClass",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "event",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "format",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "safe-platform-class",
+                  "required": false
+                },
+                {
+                  "name": "messageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "omittedMessageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "redactedMessageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "truncated",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "error-kind",
+                "loss-state",
+                "opaque-id",
+                "safe-platform-class"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["coding-runtime.history.export.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -95974,7 +96173,7 @@
     {
       "op": "coding-runtime.history",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:33",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:39",
       "package": "keiko-server"
     },
     {
@@ -95988,6 +96187,12 @@
       "op": "coding-runtime.history-projection",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:53",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.history.export",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingTaskExport.ts:35",
       "package": "keiko-server"
     },
     {
@@ -98855,6 +99060,7 @@
     "coding-runtime.handshake",
     "coding-runtime.history",
     "coding-runtime.history-projection",
+    "coding-runtime.history.export",
     "coding-runtime.initial-turn.dispatch-failed",
     "coding-runtime.initial-turn.stop-failed",
     "coding-runtime.initialization-transport",

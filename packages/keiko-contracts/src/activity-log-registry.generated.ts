@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5341264e741f4024ab568050bea5aa609207a6e153b441c204f6107f41f04c95" as const;
+  "6158669e2c66bd85db8da360588820ea0cbeef904a93162e79e961a30911827f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -6216,7 +6216,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.history"],
+        state: ["coding-runtime.history", "coding-runtime.history.export"],
         end: [],
         failure: [],
         loss: [],
@@ -6226,9 +6226,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "coding-runtime.history",
           mode: "correlation",
         },
+        {
+          op: "coding-runtime.history.export",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.history"],
+      resourceSignals: ["coding-runtime.history", "coding-runtime.history.export"],
       replayReferences: [],
       operations: [
         {
@@ -6357,6 +6361,104 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.history.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.history.export",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "byteCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "conversationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "errorClass",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "event",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "format",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "messageCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "omittedMessageCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "redactedMessageCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "truncated",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.history.export.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -43537,6 +43639,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.git-metadata.resolved": "tools-workflows",
     "coding-runtime.history": "tools-workflows",
     "coding-runtime.history-projection": "tools-workflows",
+    "coding-runtime.history.export": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.initialization-transport": "tools-workflows",
