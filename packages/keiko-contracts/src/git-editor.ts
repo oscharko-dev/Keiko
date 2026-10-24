@@ -495,6 +495,21 @@ function validateDiffResponseTotals(
   return valid;
 }
 
+function validateResponseByteLimit(
+  input: Readonly<Record<string, unknown>>,
+  maximum: number,
+  errors: string[],
+): boolean {
+  if (
+    isIntegerAtLeast(input.totalBytes, 0) &&
+    input.totalBytes > maximum &&
+    input.truncated !== true
+  ) {
+    return rejectEditorField(errors, "truncated must be true when totalBytes exceeds maxBytes");
+  }
+  return true;
+}
+
 function validateDiffResponseConsistency(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
@@ -507,14 +522,7 @@ function validateDiffResponseConsistency(
   ) {
     valid = rejectEditorField(errors, "totalFiles must not be smaller than files.length");
   }
-  if (
-    isIntegerAtLeast(input.totalBytes, 0) &&
-    input.totalBytes > GIT_EDITOR_DIFF_MAX_BYTES &&
-    input.truncated !== true
-  ) {
-    valid = rejectEditorField(errors, "truncated must be true when totalBytes exceeds maxBytes");
-  }
-  return valid;
+  return validateResponseByteLimit(input, GIT_EDITOR_DIFF_MAX_BYTES, errors) && valid;
 }
 
 function validateDiffResponseFields(
@@ -657,14 +665,7 @@ function validateBlameResponseConsistency(
   ) {
     valid = rejectEditorField(errors, "totalLines must not be smaller than lines.length");
   }
-  if (
-    isIntegerAtLeast(input.totalBytes, 0) &&
-    input.totalBytes > GIT_EDITOR_BLAME_MAX_BYTES &&
-    input.truncated !== true
-  ) {
-    valid = rejectEditorField(errors, "truncated must be true when totalBytes exceeds maxBytes");
-  }
-  return valid;
+  return validateResponseByteLimit(input, GIT_EDITOR_BLAME_MAX_BYTES, errors) && valid;
 }
 
 function validateBlameResponseFields(

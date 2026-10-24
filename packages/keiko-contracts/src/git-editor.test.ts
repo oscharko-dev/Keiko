@@ -1085,3 +1085,137 @@ describe("Git BlameResponse public parser (#3918)", () => {
     });
   });
 });
+
+// Characterize the existing byte-limit contract through both production entry points.
+const responseByteOwners = [
+  {
+    name: "source diff",
+    parse: parseGitEditorDiffResponse,
+    create: diffResponse,
+    maximum: GIT_EDITOR_DIFF_MAX_BYTES,
+    countField: "totalFiles",
+    countError: "totalFiles must not be smaller than files.length",
+  },
+  {
+    name: "public diff",
+    parse: parsePublicGitEditorDiffResponse,
+    create: diffResponse,
+    maximum: GIT_EDITOR_DIFF_MAX_BYTES,
+    countField: "totalFiles",
+    countError: "totalFiles must not be smaller than files.length",
+  },
+  {
+    name: "source blame",
+    parse: parseGitEditorBlameResponse,
+    create: blameResponse,
+    maximum: GIT_EDITOR_BLAME_MAX_BYTES,
+    countField: "totalLines",
+    countError: "totalLines must not be smaller than lines.length",
+  },
+  {
+    name: "public blame",
+    parse: parsePublicGitEditorBlameResponse,
+    create: blameResponse,
+    maximum: GIT_EDITOR_BLAME_MAX_BYTES,
+    countField: "totalLines",
+    countError: "totalLines must not be smaller than lines.length",
+  },
+];
+
+describe("Git Editor response byte consistency (#3918)", () => {
+  it.each(responseByteOwners)(
+    "$name retains its own byte ceiling and ordered errors",
+    ({ parse, create, maximum }) => {
+      for (const totalBytes of [0, maximum - 1, maximum]) {
+        const input = create({ totalBytes, truncated: false });
+        const result = parse(input);
+        expect(result).toEqual({ ok: true, value: input });
+        if (result.ok) expect(result.value).toBe(input);
+      }
+      expect(parse(create({ totalBytes: maximum + 1, truncated: false }))).toEqual({
+        ok: false,
+        errors: ["truncated must be true when totalBytes exceeds maxBytes"],
+      });
+      const truncated = create({ totalBytes: maximum + 1, truncated: true });
+      expect(parse(truncated)).toEqual({ ok: true, value: truncated });
+      for (const totalBytes of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
+        expect(parse(create({ totalBytes, truncated: false }))).toEqual({
+          ok: false,
+          errors: ["totalBytes must be a non-negative integer"],
+        });
+      }
+      expect(parse(create({ totalBytes: maximum + 1, truncated: "invalid", maxBytes: 0 }))).toEqual(
+        {
+          ok: false,
+          errors: [
+            "truncated must be a boolean",
+            "maxBytes invalid",
+            "truncated must be true when totalBytes exceeds maxBytes",
+          ],
+        },
+      );
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name retains byte rejection after an earlier collection-count refusal",
+    ({ parse, create, maximum, countField, countError }) => {
+      const input = create({ [countField]: 0, totalBytes: maximum + 1, truncated: false });
+      expect(parse(input)).toEqual({
+        ok: false,
+        errors: [countError, "truncated must be true when totalBytes exceeds maxBytes"],
+      });
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name preserves repeated byte reads and short-circuited truncation reads",
+    ({ parse, create, maximum }) => {
+      for (const scenario of [
+        { totalBytes: maximum, reads: ["truncated", "totalBytes", "totalBytes", "totalBytes"] },
+        {
+          totalBytes: maximum + 1,
+          reads: ["truncated", "totalBytes", "totalBytes", "totalBytes", "truncated"],
+        },
+        { totalBytes: -1, reads: ["truncated", "totalBytes", "totalBytes"] },
+      ]) {
+        const reads: string[] = [];
+        const input = Object.defineProperties(create(), {
+          totalBytes: {
+            get: (): number => {
+              reads.push("totalBytes");
+              return scenario.totalBytes;
+            },
+          },
+          truncated: {
+            get: (): boolean => {
+              reads.push("truncated");
+              return false;
+            },
+          },
+        });
+        parse(input);
+        expect(reads).toEqual(scenario.reads);
+      }
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name keeps a late byte-read failure opaque after an earlier refusal",
+    ({ parse, create, countField }) => {
+      let reads = 0;
+      const input = Object.defineProperty(create({ [countField]: 0 }), "totalBytes", {
+        get: (): number => {
+          reads++;
+          if (reads === 3) throw new TypeError("fixture-private-body");
+          return 1;
+        },
+      });
+      expect(parse(input)).toEqual({
+        ok: false,
+        errors: ["payload could not be inspected: TypeError"],
+      });
+      expect(reads).toBe(3);
+    },
+  );
+});
