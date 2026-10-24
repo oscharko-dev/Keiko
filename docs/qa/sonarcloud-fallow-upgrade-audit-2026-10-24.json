@@ -15,7 +15,7 @@
     "new-css-clone-after-cascade-cleanup": 1,
     "new-fixture-data-shape": 5
   },
-  "state": "The unchanged required semantic-clone gate is red after the security upgrade. No ignore, baseline exemption, threshold or workflow change has been applied. These groups require a safe repair or an explicit scope/policy decision; this audit does not dismiss them.",
+  "state": "Owner selected a separate, low-risk follow-up scope on 2026-10-24. Planning only: no production clone refactor, profile waiver, baseline exemption, threshold or workflow change has been applied. The current required clone gate remains red.",
   "limitations": [
     "Fingerprint presence proves that a normalized group already existed, not that every current instance was present.",
     "Whole-line-span presence establishes retained source for the additional unchanged groups; it is not an equivalence proof for surrounding behavior.",
@@ -205,7 +205,8 @@
           "start_col": 9,
           "end_col": 4
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:f6ea7b6b",
@@ -348,7 +349,8 @@
           "start_col": 18,
           "end_col": 4
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:a0cb273d",
@@ -484,7 +486,8 @@
           "start_col": 9,
           "end_col": 4
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:ede68a62",
@@ -613,7 +616,8 @@
           "start_col": 0,
           "end_col": 4
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:ccd94254",
@@ -777,7 +781,8 @@
           "start_col": 39,
           "end_col": 67
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:786e462a",
@@ -927,7 +932,8 @@
           "start_col": 0,
           "end_col": 67
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:d58e661e",
@@ -1035,7 +1041,8 @@
           "start_col": 0,
           "end_col": 83
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:92d69721",
@@ -1178,7 +1185,8 @@
           "start_col": 0,
           "end_col": 67
         }
-      ]
+      ],
+      "plannedBatch": "http-body"
     },
     {
       "fingerprint": "dup:dd0f4588",
@@ -1202,7 +1210,8 @@
           "start_col": 0,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:7fcf6777",
@@ -1226,7 +1235,8 @@
           "start_col": 19,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:057c4d87",
@@ -1250,7 +1260,8 @@
           "start_col": 80,
           "end_col": 33
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:4ac220e3",
@@ -1274,7 +1285,8 @@
           "start_col": 35,
           "end_col": 8
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:1d027c46",
@@ -1298,7 +1310,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:37e3d650",
@@ -1322,7 +1335,8 @@
           "start_col": 53,
           "end_col": 30
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:813aea2a",
@@ -1346,7 +1360,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:f83e3135",
@@ -1370,7 +1385,8 @@
           "start_col": 0,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:633733bc",
@@ -1394,7 +1410,8 @@
           "start_col": 14,
           "end_col": 97
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:012051cc",
@@ -1418,7 +1435,8 @@
           "start_col": 21,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:c819ea41",
@@ -1442,7 +1460,8 @@
           "start_col": 2,
           "end_col": 31
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:04352bc9",
@@ -1501,7 +1520,8 @@
           "start_col": 40,
           "end_col": 18
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:ece740e0",
@@ -1525,7 +1545,8 @@
           "start_col": 31,
           "end_col": 21
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:72dea5e8",
@@ -1556,7 +1577,8 @@
           "start_col": 63,
           "end_col": 17
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:4d9b8d58",
@@ -1615,7 +1637,8 @@
           "start_col": 45,
           "end_col": 17
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:015ef999",
@@ -1667,7 +1690,8 @@
           "start_col": 2,
           "end_col": 90
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:bd387089",
@@ -1712,7 +1736,8 @@
           "start_col": 2,
           "end_col": 3
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:d5938f66",
@@ -1736,7 +1761,8 @@
           "start_col": 35,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:1923dc2f",
@@ -1760,7 +1786,8 @@
           "start_col": 2,
           "end_col": 3
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:97c3c096",
@@ -1805,7 +1832,8 @@
           "start_col": 58,
           "end_col": 35
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:7df4fe2d",
@@ -1829,7 +1857,8 @@
           "start_col": 17,
           "end_col": 16
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:02f0256d",
@@ -1874,7 +1903,8 @@
           "start_col": 16,
           "end_col": 18
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:2a876344",
@@ -1898,7 +1928,8 @@
           "start_col": 2,
           "end_col": 29
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:930f84b7",
@@ -1943,7 +1974,8 @@
           "start_col": 6,
           "end_col": 90
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:f567450a",
@@ -1988,7 +2020,8 @@
           "start_col": 2,
           "end_col": 3
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:996e4937",
@@ -2012,7 +2045,8 @@
           "start_col": 16,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:5405e233",
@@ -2057,7 +2091,8 @@
           "start_col": 49,
           "end_col": 3
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:c69ec3f5",
@@ -2081,7 +2116,8 @@
           "start_col": 0,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:7b440052",
@@ -2105,7 +2141,8 @@
           "start_col": 36,
           "end_col": 17
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:e0288348",
@@ -2129,7 +2166,8 @@
           "start_col": 5,
           "end_col": 7
         }
-      ]
+      ],
+      "plannedBatch": "editor-resolvers"
     },
     {
       "fingerprint": "dup:e13b163a",
@@ -2167,7 +2205,8 @@
           "start_col": 49,
           "end_col": 89
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:70983b9d",
@@ -2191,7 +2230,8 @@
           "start_col": 0,
           "end_col": 30
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:e7f6576a",
@@ -2215,7 +2255,8 @@
           "start_col": 35,
           "end_col": 18
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:bf0b4cb8",
@@ -2253,7 +2294,8 @@
           "start_col": 2,
           "end_col": 36
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:7ec66b4c",
@@ -2284,7 +2326,8 @@
           "start_col": 53,
           "end_col": 35
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:d22d0fe2",
@@ -2315,7 +2358,8 @@
           "start_col": 6,
           "end_col": 7
         }
-      ]
+      ],
+      "plannedBatch": "editor-resolvers"
     },
     {
       "fingerprint": "dup:4b5c2a88",
@@ -2339,7 +2383,8 @@
           "start_col": 35,
           "end_col": 17
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:641e1f42",
@@ -2370,7 +2415,8 @@
           "start_col": 17,
           "end_col": 52
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:35d58376",
@@ -2394,7 +2440,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:86dff83e",
@@ -2418,7 +2465,8 @@
           "start_col": 21,
           "end_col": 85
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:11225fb1",
@@ -2442,7 +2490,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:9fa559b0",
@@ -2473,7 +2522,8 @@
           "start_col": 10,
           "end_col": 76
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:8573d787",
@@ -2497,7 +2547,8 @@
           "start_col": 0,
           "end_col": 37
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:6350c22c",
@@ -2521,7 +2572,8 @@
           "start_col": 0,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:9369e656",
@@ -2545,7 +2597,8 @@
           "start_col": 4,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:a1b6a360",
@@ -2576,7 +2629,8 @@
           "start_col": 22,
           "end_col": 37
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:5fcee907",
@@ -2600,7 +2654,8 @@
           "start_col": 68,
           "end_col": 79
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:350e92db",
@@ -2624,7 +2679,8 @@
           "start_col": 2,
           "end_col": 35
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:817342d9",
@@ -2648,7 +2704,8 @@
           "start_col": 34,
           "end_col": 81
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:e3b290d8",
@@ -2672,7 +2729,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:27704fdb",
@@ -2696,7 +2754,8 @@
           "start_col": 70,
           "end_col": 81
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:bd87d04a",
@@ -2720,7 +2779,8 @@
           "start_col": 28,
           "end_col": 79
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:d5302c5c",
@@ -2744,7 +2804,8 @@
           "start_col": 0,
           "end_col": 28
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:9339ec85",
@@ -2768,7 +2829,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:f7f0cda7",
@@ -2792,7 +2854,8 @@
           "start_col": 2,
           "end_col": 69
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:46313dc9",
@@ -2816,7 +2879,8 @@
           "start_col": 2,
           "end_col": 21
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:1b750a00",
@@ -2847,7 +2911,8 @@
           "start_col": 0,
           "end_col": 26
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:c874cbc6",
@@ -2871,7 +2936,8 @@
           "start_col": 16,
           "end_col": 85
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:1a8a5ee8",
@@ -2902,7 +2968,8 @@
           "start_col": 36,
           "end_col": 16
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:512311bc",
@@ -2926,7 +2993,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:234d87ad",
@@ -2950,7 +3018,8 @@
           "start_col": 2,
           "end_col": 19
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:ced2471e",
@@ -2974,7 +3043,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:27cbab12",
@@ -3005,7 +3075,8 @@
           "start_col": 11,
           "end_col": 85
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:f0f01eb1",
@@ -3029,7 +3100,8 @@
           "start_col": 67,
           "end_col": 5
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:a98be098",
@@ -3053,7 +3125,8 @@
           "start_col": 4,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:b189ee94",
@@ -3077,7 +3150,8 @@
           "start_col": 32,
           "end_col": 40
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     },
     {
       "fingerprint": "dup:0639376d",
@@ -3101,7 +3175,8 @@
           "start_col": 35,
           "end_col": 10
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:4b9d9f55",
@@ -3125,7 +3200,8 @@
           "start_col": 6,
           "end_col": 20
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:dbc529b4",
@@ -3149,7 +3225,8 @@
           "start_col": 62,
           "end_col": 26
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:4661c8d9",
@@ -3173,7 +3250,8 @@
           "start_col": 10,
           "end_col": 6
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:6d08a29a",
@@ -3197,7 +3275,8 @@
           "start_col": 2,
           "end_col": 32
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:abc8d631",
@@ -3221,7 +3300,8 @@
           "start_col": 19,
           "end_col": 13
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:6a6d4342",
@@ -3245,7 +3325,8 @@
           "start_col": 6,
           "end_col": 56
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:d6a53146",
@@ -3269,7 +3350,8 @@
           "start_col": 36,
           "end_col": 2
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:62116daf",
@@ -3293,7 +3375,8 @@
           "start_col": 10,
           "end_col": 45
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:19b33e26",
@@ -3317,7 +3400,8 @@
           "start_col": 15,
           "end_col": 76
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:43ac8354",
@@ -3341,7 +3425,8 @@
           "start_col": 0,
           "end_col": 7
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:ba70ec5a",
@@ -3365,7 +3450,8 @@
           "start_col": 24,
           "end_col": 1
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:12df6617",
@@ -3389,7 +3475,8 @@
           "start_col": 5,
           "end_col": 34
         }
-      ]
+      ],
+      "plannedBatch": "editor-resolvers"
     },
     {
       "fingerprint": "dup:a047bfe0",
@@ -3413,7 +3500,8 @@
           "start_col": 21,
           "end_col": 85
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:9508d382",
@@ -3437,7 +3525,8 @@
           "start_col": 62,
           "end_col": 28
         }
-      ]
+      ],
+      "plannedBatch": "css"
     },
     {
       "fingerprint": "dup:6e60f8d2",
@@ -3461,7 +3550,8 @@
           "start_col": 4,
           "end_col": 83
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:3f96ddf5",
@@ -3485,7 +3575,8 @@
           "start_col": 7,
           "end_col": 63
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:c3eb6da8",
@@ -3509,7 +3600,8 @@
           "start_col": 0,
           "end_col": 75
         }
-      ]
+      ],
+      "plannedBatch": "domain-helpers"
     },
     {
       "fingerprint": "dup:adba87eb",
@@ -3533,7 +3625,8 @@
           "start_col": 15,
           "end_col": 67
         }
-      ]
+      ],
+      "plannedBatch": "activity-contracts"
     },
     {
       "fingerprint": "dup:4b5f1dc4",
@@ -3557,7 +3650,115 @@
           "start_col": 6,
           "end_col": 22
         }
-      ]
+      ],
+      "plannedBatch": "qa-producers"
     }
-  ]
+  ],
+  "separateScopePlan": {
+    "ownerDirection": "Getrennten Lösungsumfang vorbereiten (empfohlen)",
+    "confirmedDate": "2026-10-24",
+    "implementationAuthorized": false,
+    "importantLimit": "The 94 overlapping clone groups are not 94 independent refactors. Many normalize distinct declarative schemas or literal lookup data; inspect semantics before introducing an abstraction.",
+    "classificationCounts": {
+      "http-body": 8,
+      "css": 51,
+      "qa-producers": 11,
+      "editor-resolvers": 3,
+      "activity-contracts": 14,
+      "domain-helpers": 7
+    },
+    "batches": [
+      {
+        "id": "qa-producers",
+        "groups": 11,
+        "risk": "low to moderate; fixtures and measurement rulers still affect gate truth",
+        "approach": "Separate owned fixture data from executable orchestration where useful; reuse an existing browser fixture helper for capture MIME/containment code. Consolidate metric readers only where comparison direction and names remain explicit. Do not rewrite declarations merely to change their token fingerprint.",
+        "preservation": [
+          "Byte-identical fixture inputs, corpus digest, all metric names/directions and thresholds.",
+          "Same evidence files, stylesheet/producer hashes and strict page-error assertions."
+        ],
+        "verification": [
+          "Real baseline/current CSS and context preservation producers.",
+          "Context budget evaluator negative fixtures; capture containment and browser smoke tests."
+        ]
+      },
+      {
+        "id": "domain-helpers",
+        "groups": 7,
+        "risk": "medium; normalization, provider identity, binary decoding and Git/resource handling have different contracts",
+        "approach": "Locate existing owning helpers first. Move only proven-equivalent normalization/decoding code into its owning dependency layer; retain domain-specific state transitions and error mappings. Compare original and candidate outputs on boundary and hostile inputs before reuse.",
+        "preservation": [
+          "Provider fingerprints, path semantics, binary-frame rejection, response payloads and resource cleanup.",
+          "All 173 retained serial protocols keep their ordering, limits and cancellation."
+        ],
+        "verification": [
+          "Affected complete provider, voice, Git and knowledge suites.",
+          "Retrieval quality/faithfulness, architecture and negative boundaries."
+        ]
+      },
+      {
+        "id": "http-body",
+        "groups": 8,
+        "risk": "high; inbound resource and error boundary",
+        "existingOwner": "packages/keiko-server/src/bounded-request-body.ts",
+        "approach": "Review adapters to the existing bounded reader; preserve each route cap, local error type/status mapping, draining and cancellation behavior. No second body-reader subsystem.",
+        "preservation": [
+          "Empty body, exact cap, cap plus one byte, multipart chunk boundaries and invalid JSON.",
+          "Rejected input never resumes privileged processing; error responses and body-free diagnostics retain their contract."
+        ],
+        "verification": [
+          "Complete bounded-request-body tests plus a per-route compatibility matrix.",
+          "Malformed/oversized/aborted/erroring stream tests, activity-log inventory and error-observability gates."
+        ]
+      },
+      {
+        "id": "editor-resolvers",
+        "groups": 3,
+        "risk": "medium to high; user editor state and asynchronous query ownership",
+        "approach": "Reuse the existing wire-position/result projection for definition/reference/type-definition resolvers while leaving capability, document ownership and cancellation checks explicit.",
+        "preservation": [
+          "Current root/document/version, locations, stale-result rejection and empty-result behavior.",
+          "Manual editing, focus, dirty-buffer protection and existing localized native controls."
+        ],
+        "verification": [
+          "Complete affected editor resolver/component suites and original five-journey Editor smoke.",
+          "UI coverage, UI typecheck/lint and original release-evidence freshness gates."
+        ]
+      },
+      {
+        "id": "css",
+        "groups": 51,
+        "risk": "high; shared declaration values do not prove cascade equivalence",
+        "approach": "Map intentional product/reference mirrors to an existing canonical design-system source. Consolidate only with the same stylesheet order, selector specificity, media rules and complete token values. Avoid artificial selector changes that only break a clone fingerprint.",
+        "preservation": [
+          "Light/dark, contrast, pointer/keyboard, reduced-motion, loading/selection/hover/focus states.",
+          "CSS custom properties, pseudo-elements, Monaco inline/vendor interactions and layout geometry."
+        ],
+        "verification": [
+          "Extend the original baseline/current Chromium comparison for every moved selector/state.",
+          "Design-system SVG pixel/axe and interaction proof; UI coverage and full affected browser smoke."
+        ]
+      },
+      {
+        "id": "activity-contracts",
+        "groups": 14,
+        "risk": "high; declarative data and source-owned redaction contracts",
+        "approach": "Distinguish repeated schema syntax from distinct contracts. Reuse only existing canonical field sets where exact schema semantics agree; preserve per-operation enums, maxima, proof IDs and lifecycle meaning. Generated files are never edited by hand.",
+        "preservation": [
+          "Canonical operation/schema digests and all body-free field classifications/limits.",
+          "Source-owned operation discovery, fail-closed static extraction and redaction."
+        ],
+        "verification": [
+          "Regenerate the existing operation catalog, then run the complete activity-log implementation inventory.",
+          "Compare canonical schemas/digests before and after; run package/architecture/negative and diagnostics tests."
+        ]
+      }
+    ],
+    "delivery": [
+      "Prepare each batch as a small independently reviewable change after explicit implementation selection.",
+      "Run the unchanged Fallow 3.34.0 semantic/100-token/10-line/zero-issue gate after each batch; retain the first failure and its evidence.",
+      "No saved baseline growth, blanket suppression, lowered threshold or direct dev push.",
+      "Current Sonar PR remains blocked until the existing required gates genuinely pass; a plan is not permission to publish a red change."
+    ]
+  }
 }

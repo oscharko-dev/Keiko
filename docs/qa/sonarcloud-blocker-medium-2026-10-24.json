@@ -5382,7 +5382,8 @@
         ],
         "passedTests": 101,
         "testFiles": 4
-      }
+      },
+      "fallowOwnerDirection": "Separate low-risk follow-up scope selected by owner on 2026-10-24; planning only, no broad clone refactor or gate exception authorized."
     }
   },
   "lowerSeverityTriage": [
