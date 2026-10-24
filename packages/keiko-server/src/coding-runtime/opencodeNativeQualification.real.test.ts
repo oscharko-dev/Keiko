@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
+import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
@@ -1183,7 +1184,7 @@ describe("pinned native OpenCode project checks (T10, #3901)", () => {
           "./bin/npm test 2>&1",
           "PASS=1 ./bin/npm test",
         ];
-        const admitted: (string | undefined)[] = [];
+        const admitted: (VerificationKind | undefined)[] = [];
         for (const line of lines) {
           const before = run.facade.decisions.length;
           await scriptedTurn(run, shell(line));

@@ -903,8 +903,9 @@ describe("OpenCode V2 slash commands", () => {
 // #3897 review: the runtime pages its session list (50 rows by default). The session-tree proof
 // read only the first page, so a later child could never be proven the run's.
 describe("OpenCode V2 session list", () => {
+  type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   function pagedFetch(pages: readonly Readonly<Record<string, unknown>>[]): {
-    readonly fetch: ReturnType<typeof vi.fn>;
+    readonly fetch: FetchStub;
     readonly urls: string[];
   } {
     const urls: string[] = [];
@@ -921,7 +922,7 @@ describe("OpenCode V2 session list", () => {
   }
   const rows = (from: number, count: number): readonly Readonly<Record<string, unknown>>[] =>
     Array.from({ length: count }, (_, index) => ({ id: `ses_${String(from + index)}` }));
-  const client = (fetch: ReturnType<typeof vi.fn>): ReturnType<typeof createOpenCodeV2HttpClient> =>
+  const client = (fetch: FetchStub): ReturnType<typeof createOpenCodeV2HttpClient> =>
     createOpenCodeV2HttpClient({
       endpoint: "http://127.0.0.1:1984/",
       password: "test-only",
@@ -942,16 +943,16 @@ describe("OpenCode V2 session list", () => {
   });
 
   it("stops at a full last page without a next cursor", async () => {
-    const { fetch } = pagedFetch([{ data: rows(0, 100), cursor: {} }]);
+    const { fetch, urls } = pagedFetch([{ data: rows(0, 100), cursor: {} }]);
     await expect(client(fetch).sessions()).resolves.toHaveLength(100);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(urls).toHaveLength(1);
   });
 
   it("refuses a repeated cursor and a list beyond its bound", async () => {
     const repeated = pagedFetch([{ data: rows(0, 100), cursor: { next: "same" } }]);
     await expect(client(repeated.fetch).sessions()).rejects.toThrow("opencode-v2-cursor-invalid");
     let page = 0;
-    const endless = vi.fn((): Promise<Response> => {
+    const endless = vi.fn<FetchStub>((): Promise<Response> => {
       page += 1;
       return Promise.resolve(
         new Response(

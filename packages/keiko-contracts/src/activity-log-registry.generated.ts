@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "eb821a160b9ca9b5958f8d45817b222155914f2f0ab69675d1c49e9ffec68f10" as const;
+  "4ab975bbe99101e9ef3140b3ae659c5e515820445b951c7e404101ab077f5468" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10890,6 +10890,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "coding-runtime.native-question.routed",
           "coding-runtime.native-session-tree.observed",
           "coding-runtime.native-turn.interrupted",
+          "coding-runtime.session-continuity",
           "coding-runtime.sidecar-session.bound",
         ],
         end: [],
@@ -10910,6 +10911,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-runtime.session-continuity",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.sidecar-session.bound",
           mode: "correlation",
         },
@@ -10919,6 +10924,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "coding-runtime.native-question.routed",
         "coding-runtime.native-session-tree.observed",
         "coding-runtime.native-turn.interrupted",
+        "coding-runtime.session-continuity",
         "coding-runtime.sidecar-session.bound",
       ],
       replayReferences: [],
@@ -11040,6 +11046,117 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.native-turn.interrupted.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.session-continuity",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "action",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "ageMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "boundary",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "databaseBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "entryCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "messageCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "prunedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "sourceTaskDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "taskDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.session-continuity.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -43853,6 +43970,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.run.started": "tools-workflows",
     "coding-runtime.run.verification-continuation": "tools-workflows",
     "coding-runtime.safe-activity": "tools-workflows",
+    "coding-runtime.session-continuity": "tools-workflows",
     "coding-runtime.sidecar-session.bound": "tools-workflows",
     "coding-runtime.skill-discovery": "tools-workflows",
     "coding-runtime.task-replacement": "tools-workflows",
