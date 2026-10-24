@@ -181,6 +181,10 @@ static int keiko_job_xml_string(int descriptor, const char *value) {
   return write_exact(descriptor, "</string>", 9);
 }
 
+/* The job runs the app's own runtime, which the app's responsiveness depends on: launchd's
+ * Background class throttles CPU and I/O for the whole job (Darwin priority band 4), so the
+ * root could not even start within its startup grant on a busy machine. Interactive applies
+ * the same resource limits as an app, that is none. */
 static int keiko_job_plist(const char *path, const char *label,
                              const char *executable, const char *socket_path) {
   const char prefix[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -189,7 +193,7 @@ static int keiko_job_plist(const char *path, const char *label,
     "<plist version=\"1.0\"><dict><key>Label</key>";
   const char arguments[] = "<key>ProgramArguments</key><array>";
   const char suffix[] = "</array><key>RunAtLoad</key><true/>"
-    "<key>KeepAlive</key><false/><key>ProcessType</key><string>Background</string>"
+    "<key>KeepAlive</key><false/><key>ProcessType</key><string>Interactive</string>"
     "<key>ExitTimeOut</key><integer>5</integer></dict></plist>";
   int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (descriptor < 0) return 0;

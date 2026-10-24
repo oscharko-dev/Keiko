@@ -244,6 +244,84 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
   throw new Error("native fixture did not reach the selected owned version");
 }
 
+// Darwin's background band (MAXPRI_THROTTLE). A root launchd places there is throttled in CPU and
+// I/O, so on a busy machine it cannot even load its modules within the startup grant.
+const DARWIN_BACKGROUND_PRIORITY = 4;
+
+function schedulingPriority(pid) {
+  try {
+    const value = execFileSync("/bin/ps", ["-o", "pri=", "-p", String(pid)], {
+      encoding: "utf8",
+      env: {},
+    });
+    return Number(value.trim());
+  } catch {
+    return undefined;
+  }
+}
+
+async function readinessFailure(launchId, rootPid, timing, lastObservation) {
+  const startupPath = join(stateDir, `fixture-startup-${launchId}.json`);
+  const startup = await readFile(startupPath, "utf8").then(JSON.parse, () => undefined);
+  let rootAlive = true;
+  try {
+    process.kill(rootPid, 0);
+  } catch {
+    rootAlive = false;
+  }
+  console.error(
+    JSON.stringify({
+      classification: "native-fixture-readiness-failure",
+      ...timing,
+      lastObservation,
+      rootAlive,
+      rootPriority: rootAlive ? schedulingPriority(rootPid) : undefined,
+      // Root milestones relative to the owner's started response (negative: before it).
+      rootStartup:
+        startup === undefined
+          ? undefined
+          : Object.fromEntries(
+              Object.entries(startup).map(([stage, at]) => [stage, at - timing.startedAtEpochMs]),
+            ),
+      startupFailures: (await readdir(stateDir)).filter((name) =>
+        /^fixture-failure-[a-f0-9]{32}\.json$/u.test(name),
+      ).length,
+    }),
+  );
+}
+
+/** One readiness observation of the root: its own pid on `/state`, or why not yet. */
+async function observeRoot(rootPid) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/state`, {
+      signal: AbortSignal.timeout(500),
+    });
+    const ready = response.ok && (await response.json()).pid === rootPid;
+    return { ready, observation: ready ? undefined : `http-${response.status}` };
+  } catch (error) {
+    // The actual root must consume and prove its metadata port before ownership commits.
+    return { ready: false, observation: error?.cause?.code ?? error?.name ?? "unknown" };
+  }
+}
+
+async function awaitRootReady(rootPid, deadline) {
+  let last = { ready: false, observation: undefined };
+  while (!last.ready && performance.now() < deadline) {
+    last = await observeRoot(rootPid);
+    if (!last.ready) await delay(20);
+  }
+  return last;
+}
+
+/** Darwin only: the app root must not run in the throttled background band. */
+function assertForegroundRoot(rootPid) {
+  if (process.platform !== "darwin") return;
+  assert(
+    schedulingPriority(rootPid) > DARWIN_BACKGROUND_PRIORITY,
+    "the app root runs in Darwin's background band",
+  );
+}
+
 async function initialStart(launcher, helper, hash) {
   const launchId = randomBytes(16).toString("hex");
   knownLaunchIds.add(launchId);
@@ -251,6 +329,7 @@ async function initialStart(launcher, helper, hash) {
     env: {},
     stdio: ["ignore", "pipe", "inherit", "pipe", "pipe"],
   });
+  const spawnedAt = performance.now();
   ownerExited = new Promise((resolve) =>
     initialOwner.once("exit", (code, signal) => resolve({ code, signal })),
   );
@@ -284,6 +363,8 @@ async function initialStart(launcher, helper, hash) {
     ),
   );
   const started = await appResponse(reader);
+  const startedAt = performance.now();
+  const startedAtEpochMs = Date.now();
   assert.equal(started.kind, 4);
   writeExclusivePidFile(
     join(stateDir, "ui.pid"),
@@ -293,20 +374,21 @@ async function initialStart(launcher, helper, hash) {
     true,
   );
   // Observe the complete startup grant already admitted by the native owner.
-  const readyDeadline = performance.now() + INITIAL_START_TIMEOUT_MS;
-  let ready = false;
-  while (!ready && performance.now() < readyDeadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/state`, {
-        signal: AbortSignal.timeout(500),
-      });
-      ready = response.ok && (await response.json()).pid === started.payload.readUInt32LE(0);
-    } catch {
-      // The actual root must consume and prove its metadata port before ownership commits.
-    }
-    if (!ready) await delay(20);
-  }
-  assert(ready);
+  const rootPid = started.payload.readUInt32LE(0);
+  const root = await awaitRootReady(rootPid, performance.now() + INITIAL_START_TIMEOUT_MS);
+  if (!root.ready)
+    await readinessFailure(
+      launchId,
+      rootPid,
+      {
+        spawnToStartedMs: Math.round(startedAt - spawnedAt),
+        observationMs: Math.round(performance.now() - startedAt),
+        startedAtEpochMs,
+      },
+      root.observation,
+    );
+  assert(root.ready);
+  assertForegroundRoot(rootPid);
   initialOwner.stdio[3].write(commitPacket(launchId));
   assert.equal((await appResponse(reader)).kind, 5);
   initialOwner.stdio[3].end();
