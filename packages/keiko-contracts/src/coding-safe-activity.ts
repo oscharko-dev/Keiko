@@ -342,7 +342,7 @@ function checkPlan(
   const steps = validatePlanSteps(value.steps, path, errors);
   const truncated = typeof value.truncated === "boolean";
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
-  if (planHasTruncatedStep(value) && value.truncated !== true) {
+  if (hasTruncatedActivityMember(value, "steps") && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated steps`);
   }
   return [revision, anchor, updated, steps, truncated].every(Boolean);
@@ -402,15 +402,18 @@ function validatePlanStep(
   return text && state && truncated;
 }
 
-function planHasTruncatedStep(value: Record<string, unknown>): boolean {
-  if (!Array.isArray(value.steps)) return false;
-  const entries: unknown = value.steps;
+function hasTruncatedActivityMember(
+  value: Record<string, unknown>,
+  key: "steps" | "segments" | "messages",
+): boolean {
+  if (!Array.isArray(value[key])) return false;
+  const entries: unknown = value[key];
   if (!Array.isArray(entries)) return false;
   const count = entries.length;
   for (let index = 0; index < count; index += 1) {
     if (!(index in entries)) continue;
-    const step: unknown = entries[index];
-    if (isRecord(step) && step.truncated === true) return true;
+    const member: unknown = entries[index];
+    if (isRecord(member) && member.truncated === true) return true;
   }
   return false;
 }
@@ -458,7 +461,7 @@ function checkTurn(
   const tools = validateTools(value.tools, path, ids.tools, errors);
   const truncated = typeof value.truncated === "boolean";
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
-  if (turnHasTruncatedMessage(value) && value.truncated !== true) {
+  if (hasTruncatedActivityMember(value, "messages") && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated messages`);
   }
   return turn && messages && tools && truncated;
@@ -534,7 +537,7 @@ function checkMessage(
   const reasoning = !("reasoning" in value) || validateReasoning(value, path, errors);
   const truncated = typeof value.truncated === "boolean";
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
-  if (messageHasTruncatedSegment(value) && value.truncated !== true) {
+  if (hasTruncatedActivityMember(value, "segments") && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
   }
   return [message, role, occurred, segments, reasoning, truncated].every(Boolean);
@@ -650,32 +653,6 @@ function validateTools(
     admitted = validateTool(member, memberPath, ids, errors) && admitted;
   }
   return admitted;
-}
-
-function messageHasTruncatedSegment(value: Record<string, unknown>): boolean {
-  if (!Array.isArray(value.segments)) return false;
-  const entries: unknown = value.segments;
-  if (!Array.isArray(entries)) return false;
-  const count = entries.length;
-  for (let index = 0; index < count; index += 1) {
-    if (!(index in entries)) continue;
-    const segment: unknown = entries[index];
-    if (isRecord(segment) && segment.truncated === true) return true;
-  }
-  return false;
-}
-
-function turnHasTruncatedMessage(value: Record<string, unknown>): boolean {
-  if (!Array.isArray(value.messages)) return false;
-  const entries: unknown = value.messages;
-  if (!Array.isArray(entries)) return false;
-  const count = entries.length;
-  for (let index = 0; index < count; index += 1) {
-    if (!(index in entries)) continue;
-    const message: unknown = entries[index];
-    if (isRecord(message) && message.truncated === true) return true;
-  }
-  return false;
 }
 
 function validateTool(

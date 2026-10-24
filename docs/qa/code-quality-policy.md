@@ -1308,6 +1308,24 @@ Raw carrier/registration parameters, shared readers/writers and final DTO author
 
 A validator explicitly declaring `anti-slop/no-known-value-widening` may additionally account for a direct captured-unknown scalar predicate argument. The root must be the actual unknown-input Identifier predicate, and the direct const capture must originate from its already qualified raw helper's standard unknown-valued dictionary. Private same-source predicate reference closure is required; typed erasure, unchecked raw-return roots and unsupported references remain unadapted. These supplemental call slots require current semantic qualification and confer no new helper-parameter, return or writer authority. Legacy raw-helper facts and rule activation stay unchanged.
 
+The captured traversal may follow the exact private, same-source, synchronous optional wrapper
+`value === undefined || guard(value)` with two required identifier parameters and its actual
+private unknown-input predicate argument. Canonical binding, export/reference/write closure,
+cycles, budgets and source currentness remain checked. Mutable wrapper bindings remain unsupported.
+This supplemental graph emits captured argument slots only, and only current qualified semantics
+can adapt them; legacy raw facts and scope activation remain independent.
+
+The existing `client-diagnostic-ingress-route-validator` record declares known-value rechecks for
+this validated ingress. Its current eligibility has nine legacy unknown-input slots, four legacy
+direct predicate-argument slots, and six captured restoration count/size argument slots. Only the
+six captured arguments correspond to current native known-value findings; eligibility alone does
+not remove a finding. The same two proof owners and five selectors preserve source/public identity,
+refuse malformed restoration counts and sizes, and prove HTTP admission plus registered body-free
+persistence. Coherent over-ceiling count cases detect a held emitted count-guard bypass at both the
+public predicate and the actual HTTP route; the existing numeric-string size case detects a size
+bypass. No additional wrapper/helper parameter, dictionary, typeof, return or writer grant follows.
+The declaration does not activate the repository-wide known-value migration scope.
+
 ### Code Task acceptance raw dictionary declarations
 
 The three existing Code Task acceptance public-parser responsibilities may additionally declare

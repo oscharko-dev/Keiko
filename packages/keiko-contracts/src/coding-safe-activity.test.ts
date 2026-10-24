@@ -15,6 +15,8 @@ import {
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
+  type CodingSafeActivityMessage,
+  type CodingSafeActivityTurn,
   type CodingSafeActivityPlan,
 } from "./coding-safe-activity.js";
 
@@ -584,6 +586,47 @@ describe("C2 owning activity member admissions", () => {
     const result = validateCodingSafeActivityFeed({ ...availableFeed(), turns: entries });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors).toHaveLength(1);
+  });
+});
+
+function truncationObservationParent(
+  surface: string,
+  turn: CodingSafeActivityTurn,
+  message: CodingSafeActivityMessage,
+): { parent: Record<string, unknown>; healthy: unknown } {
+  if (surface === "steps") return { parent: { ...plan() }, healthy: plan().steps };
+  if (surface === "segments") return { parent: { ...message }, healthy: message.segments };
+  return { parent: { ...turn }, healthy: turn.messages };
+}
+
+describe("safe-activity nested truncation observations", () => {
+  it.each([
+    { surface: "steps", path: "safeActivityFeed.plan", member: "steps" },
+    { surface: "segments", path: "safeActivityFeed.turns[0].messages[0]", member: "segments" },
+    { surface: "messages", path: "safeActivityFeed.turns[0]", member: "messages" },
+  ])("retains the second truncation-scan observation for $surface", ({ surface, path, member }) => {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected available fixture");
+    const turn = feed.turns[0];
+    const message = turn?.messages[0];
+    if (turn === undefined || message === undefined) throw new TypeError("expected nested fixture");
+    const { parent, healthy } = truncationObservationParent(surface, turn, message);
+    let reads = 0;
+    Object.defineProperty(parent, surface, {
+      enumerable: true,
+      get: (): unknown => (++reads === 3 ? [{ truncated: true }] : healthy),
+    });
+    const value: unknown =
+      surface === "steps"
+        ? { ...feed, plan: parent }
+        : surface === "segments"
+          ? { ...feed, turns: [{ ...turn, messages: [parent] }] }
+          : { ...feed, turns: [parent] };
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: [`${path}.truncated must reflect truncated ${member}`],
+    });
+    expect(reads).toBe(3);
   });
 });
 

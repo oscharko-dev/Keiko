@@ -1819,6 +1819,81 @@ describe("captured unknown predicate arguments (#3918)", () => {
   );
 });
 
+describe("optional callback captured unknown predicates (#3918)", () => {
+  async function optionalFixture(variant = "optional-capture", options = {}) {
+    const own = createRawHelperEnforcementFixture(variant);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), options);
+    own.identity = own.resolver.resolveExport(own.record.input).identities[0];
+    return own;
+  }
+
+  it("adds only captured arguments through the exact optional edge and preserves legacy slots", async () => {
+    const own = await optionalFixture();
+    const source = readFileSync(join(own.root, own.identity.producer.path), "utf8");
+    const legacy = own.resolver.rawCheckingSlots(own.identity, 0);
+    const slots = own.resolver.rawCheckingSlots(own.identity, 0, true);
+    expect(
+      slots
+        .filter((slot) => slot.capturedUnknownPredicate)
+        .map(({ start, end, origin }) => [source.slice(start, end), origin]),
+    ).toEqual([
+      ["first", ["first"]],
+      ["second", ["second"]],
+    ]);
+    expect(slots.filter((slot) => !slot.capturedUnknownPredicate)).toEqual(legacy);
+    expect(own.resolver.rawCheckingSlots(own.identity, 0, false)).toEqual(legacy);
+    expect(legacy.every((slot) => !slot.capturedUnknownPredicate)).toBe(true);
+  });
+
+  it.each([
+    "wrong-value",
+    "altered-body",
+    "exported",
+    "escape",
+    "reference",
+    "write",
+    "shadow",
+    "shadow-undefined",
+    "extra-argument",
+    "optional-call",
+    "default",
+    "predicate-write",
+    "wrapper-export-alias",
+    "wrapper-export-default",
+  ])("withholds supplemental authority from %s", async (variant) => {
+    const own = await optionalFixture(`optional-capture-${variant}`);
+    const legacy = own.resolver.rawCheckingSlots(own.identity, 0);
+    expect(own.resolver.rawCheckingSlots(own.identity, 0, true)).toEqual(legacy);
+  });
+
+  it("retains cycle refusal on a newly reachable callback", async () => {
+    const own = await optionalFixture("optional-capture-cycle");
+    expect(() => own.resolver.rawCheckingSlots(own.identity, 0, true)).toThrow(
+      "unsupported-raw-helper-cycle",
+    );
+  });
+
+  it("bounds supplemental states with the configured alias budget", async () => {
+    const own = await optionalFixture("optional-capture", { aliases: 4 });
+    expect(() => own.resolver.rawCheckingSlots(own.identity, 0, true)).toThrow(
+      "symbol-alias-budget",
+    );
+  });
+
+  it("keeps supplemental cache facts immutable and rejects changed source", async () => {
+    const own = await optionalFixture();
+    const slots = own.resolver.rawCheckingSlots(own.identity, 0, true);
+    const slot = slots.find((entry) => entry.capturedUnknownPredicate);
+    expect(slot).toBeDefined();
+    slot.origin.push("untrusted");
+    expect(own.resolver.rawCheckingSlots(own.identity, 0, true)).not.toEqual(slots);
+    const path = own.identity.producer.path;
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n// changed source\n");
+    expect(() => own.resolver.rawCheckingSlots(own.identity, 0, true)).toThrow();
+  });
+});
+
 describe("dictionary exact-member before controls (#3918)", () => {
   it.each(["direct", "unicode"])(
     "binds only exact %s dictionary members",

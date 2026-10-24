@@ -19,6 +19,7 @@ export const SEMANTIC_DUPLICATION_CONFIG = {
     minLines: 10,
     minOccurrences: 2,
     ignoreImports: true,
+    normalization: { ignoreStringValues: false },
   },
 };
 

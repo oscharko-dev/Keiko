@@ -2587,6 +2587,7 @@ function referenceCall(node) {
 }
 
 function permittedHelperReference(state, node) {
+  if (state.incoming.some((edge) => edge.callbackReference === node)) return true;
   const call = referenceCall(node);
   if (call) return state.incoming.some((edge) => edge.call === call);
   let outer = node;
@@ -2636,7 +2637,8 @@ function qualifiedRawStates(root, states, roots = new Set([root.key])) {
 
 function rawStateHasUnsupportedUse(state) {
   return (
-    (state.collective && writtenSymbol(state.context, state.nodes, state.parameterSymbol)) ||
+    ((state.collective || state.capturedUnknownTraversal) &&
+      writtenSymbol(state.context, state.nodes, state.parameterSymbol)) ||
     state.nodes.some(
       (node) => helperReference(state, node) && !permittedHelperReference(state, node),
     )
@@ -2864,7 +2866,175 @@ function capturedPredicateCall(state, call) {
   );
   if (candidate?.callable.parameters[candidate.index].type?.kind !== ts.SyntaxKind.UnknownKeyword)
     return null;
+  candidate.capturedUnknownTraversal = true;
   return { candidate, call, state, argument, origin };
+}
+
+function optionalRequiredParameter(parameter) {
+  return (
+    parameter &&
+    ts.isIdentifier(parameter.name) &&
+    !parameter.questionToken &&
+    !parameter.initializer &&
+    !parameter.dotDotDotToken
+  );
+}
+
+function optionalParameterReference(state, node, parameter) {
+  return (
+    ts.isIdentifier(node) &&
+    state.context.checker.getSymbolAtLocation(node) ===
+      state.context.checker.getSymbolAtLocation(parameter.name)
+  );
+}
+
+function optionalUndefinedReference(state, node) {
+  if (!ts.isIdentifier(node) || node.text !== "undefined") return false;
+  const symbol = state.context.checker.getSymbolAtLocation(node);
+  return (
+    Boolean(symbol) &&
+    !symbol.declarations?.length &&
+    state.context.checker.getTypeAtLocation(node).flags === ts.TypeFlags.Undefined
+  );
+}
+
+function optionalAbsentComparison(state, node, parameter) {
+  return (
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+    optionalParameterReference(state, node.left, parameter) &&
+    optionalUndefinedReference(state, node.right)
+  );
+}
+
+function optionalWrapperReturn(state, callable) {
+  if (!ts.isBlock(callable.body) || callable.body.statements.length !== 1) return null;
+  const returned = callable.body.statements[0];
+  if (!ts.isReturnStatement(returned) || !returned.expression) return null;
+  const expression = rawParentheses(returned.expression);
+  if (
+    !ts.isBinaryExpression(expression) ||
+    expression.operatorToken.kind !== ts.SyntaxKind.BarBarToken
+  )
+    return null;
+  const absent = rawParentheses(expression.left);
+  if (!optionalAbsentComparison(state, absent, callable.parameters[0])) return null;
+  return rawParentheses(expression.right);
+}
+
+function optionalWrapperBody(state, callable) {
+  const forwarded = optionalWrapperReturn(state, callable);
+  return (
+    forwarded &&
+    ts.isCallExpression(forwarded) &&
+    !forwarded.questionDotToken &&
+    !forwarded.typeArguments?.length &&
+    forwarded.arguments.length === 1 &&
+    optionalParameterReference(state, forwarded.expression, callable.parameters[1]) &&
+    optionalParameterReference(state, forwarded.arguments[0], callable.parameters[0])
+  );
+}
+
+function optionalExportExpression(state, symbol) {
+  if (symbol.flags & ts.SymbolFlags.Alias) symbol = state.context.checker.getAliasedSymbol(symbol);
+  const declaration = symbol.valueDeclaration;
+  return declaration && ts.isExportAssignment(declaration)
+    ? declaration.expression
+    : declaration?.name;
+}
+
+function optionalExportedCallable(state, target) {
+  const module = state.context.checker.getSymbolAtLocation(state.source);
+  if (!module) return true;
+  return state.context.checker.getExportsOfModule(module).some((symbol) => {
+    const expression = optionalExportExpression(state, symbol);
+    const exported =
+      expression && localRawCallable(state.compiler, state.context, state.source, expression);
+    return exported && sameProducer(exported.identity, target.identity);
+  });
+}
+
+function optionalPrivateCallable(state, expression) {
+  if (!ts.isIdentifier(expression)) return null;
+  const target = localRawCallable(state.compiler, state.context, state.source, expression);
+  const symbol = state.context.checker.getSymbolAtLocation(expression);
+  if (!target || exportedDeclaration(target.declaration) || !symbol) return null;
+  if (optionalExportedCallable(state, target)) return null;
+  const declarationSymbol = state.context.checker.getSymbolAtLocation(target.declaration.name);
+  return [symbol, declarationSymbol].some(
+    (entry) => entry && writtenSymbol(state.context, state.nodes, entry),
+  )
+    ? null
+    : target;
+}
+
+function optionalSynchronousCallable(callable, arity) {
+  return (
+    callable.parameters.length === arity &&
+    callable.parameters.every(optionalRequiredParameter) &&
+    !callable.typeParameters?.length &&
+    !callable.asteriskToken &&
+    !(ts.getCombinedModifierFlags(callable) & ts.ModifierFlags.Async)
+  );
+}
+
+function optionalRawWrapper(state, call) {
+  if (call.questionDotToken || call.typeArguments?.length || call.arguments.length !== 2)
+    return null;
+  const target = optionalPrivateCallable(state, call.expression);
+  if (!target) return null;
+  const callable = target.callable;
+  if (!optionalSynchronousCallable(callable, 2)) return null;
+  return optionalWrapperBody(state, callable) ? target : null;
+}
+
+function optionalRawPredicate(state, expression) {
+  const target = optionalPrivateCallable(state, expression);
+  if (!target) return null;
+  const callable = target.callable;
+  if (
+    !optionalSynchronousCallable(callable, 1) ||
+    callable.parameters[0].type?.kind !== ts.SyntaxKind.UnknownKeyword
+  )
+    return null;
+  const signature = state.context.checker.getSignatureFromDeclaration(callable);
+  return signature && typedIdentifierPredicate(state.context, callable, signature) ? target : null;
+}
+
+function optionalRawCallEdges(state, states, queue) {
+  for (const call of stateCalls(state)) {
+    if (!optionalRawWrapper(state, call)) continue;
+    const target = optionalRawPredicate(state, call.arguments[1]);
+    if (!target) continue;
+    const edge = rawEdgeCandidate(state, target, 0, call.arguments[0]);
+    if (!edge) continue;
+    const { candidate, origin } = edge;
+    if (!states.has(candidate.key)) {
+      states.set(candidate.key, candidate);
+      queue.push(candidate);
+    }
+    states.get(candidate.key).incoming.push({
+      state: state.key,
+      call,
+      origin,
+      callbackReference: call.arguments[1],
+    });
+  }
+}
+
+function capturedRawStates(root) {
+  const ownedRoot = { ...root, incoming: [] };
+  const states = new Map([[root.key, ownedRoot]]);
+  const queue = [ownedRoot];
+  for (const state of queue) {
+    if (states.size > state.compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    state.capturedUnknownTraversal = true;
+    rawCallEdges(state, states, queue);
+    optionalRawCallEdges(state, states, queue);
+  }
+  assertRawAcyclic(states);
+  return { states, qualified: qualifiedRawStates(ownedRoot, states) };
 }
 
 function capturedUnknownPredicateSlots(root, states, qualified) {
@@ -2895,6 +3065,12 @@ function capturedUnknownPredicateSlots(root, states, qualified) {
           capturedUnknownPredicate: true,
         })),
   );
+}
+
+function capturedOptionalUnknownSlots(root) {
+  if (!capturedPredicateRoot(root)) return [];
+  const captured = capturedRawStates(root);
+  return capturedUnknownPredicateSlots(root, captured.states, captured.qualified);
 }
 
 function rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates = false) {
@@ -2934,8 +3110,7 @@ function rawCheckingSlots(compiler, identity, index, capturedUnknownPredicates =
       ...rawPredicateSlots(state, states, qualified),
     );
   }
-  if (capturedUnknownPredicates)
-    slots.push(...capturedUnknownPredicateSlots(root, states, qualified));
+  if (capturedUnknownPredicates) slots.push(...capturedOptionalUnknownSlots(root));
   compiler.assertCurrent();
   return slots;
 }
@@ -3144,17 +3319,21 @@ function rawReaderCondition(state, expression) {
   );
 }
 
-function rawReaderTarget(state, target) {
+function defaultLibraryPropertyTarget(state, target, receiver, member) {
   return (
-    target.name.text === "hasOwn" &&
+    target.name.text === member &&
     ts.isIdentifier(target.expression) &&
-    target.expression.text === "Object" &&
+    target.expression.text === receiver &&
     defaultLibrarySymbol(state.context, expressionSymbol(state.compiler, state.context, target)) &&
     defaultLibrarySymbol(
       state.context,
       state.context.checker.getSymbolAtLocation(target.expression),
     )
   );
+}
+
+function rawReaderTarget(state, target) {
+  return defaultLibraryPropertyTarget(state, target, "Object", "hasOwn");
 }
 
 function rawReaderExpression(state, expression) {
@@ -3258,16 +3437,7 @@ function observationSignature(state) {
 }
 
 function observationTarget(state, target) {
-  return (
-    target.name.text === "get" &&
-    ts.isIdentifier(target.expression) &&
-    target.expression.text === "Reflect" &&
-    defaultLibrarySymbol(state.context, expressionSymbol(state.compiler, state.context, target)) &&
-    defaultLibrarySymbol(
-      state.context,
-      state.context.checker.getSymbolAtLocation(target.expression),
-    )
-  );
+  return defaultLibraryPropertyTarget(state, target, "Reflect", "get");
 }
 
 function observationCall(state, call) {
@@ -4395,11 +4565,16 @@ function markerKey(state, read, write) {
   );
 }
 
+function markerFlowCallables(state, flow) {
+  const reader = flow && markerCallable(state, flow.read, 1);
+  const writer = flow && markerCallable(state, flow.write, 2);
+  return { reader, writer };
+}
+
 function markerPairFacts(compiler, identity) {
   const state = { ...declarationCallable(compiler, identity), identity, compiler };
   const flow = markerCopyFlow(state);
-  const reader = flow && markerCallable(state, flow.read, 1);
-  const writer = flow && markerCallable(state, flow.write, 2);
+  const { reader, writer } = markerFlowCallables(state, flow);
   const read = reader && markerRead(reader);
   const write = writer && markerWrite(writer);
   if (
@@ -4578,8 +4753,7 @@ function registrationTransportKey(state, read, write) {
 function registrationTransportFacts(compiler, identity) {
   const state = { ...declarationCallable(compiler, identity), identity, compiler };
   const flow = registrationTransportFlow(state);
-  const reader = flow && markerCallable(state, flow.read, 1);
-  const writer = flow && markerCallable(state, flow.write, 2);
+  const { reader, writer } = markerFlowCallables(state, flow);
   const read = reader && registrationTransportRead(reader);
   const write = writer && registrationTransportWrite(writer);
   if (!read || !write || !registrationTransportKey(state, read, write))

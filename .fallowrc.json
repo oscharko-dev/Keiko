@@ -4,6 +4,9 @@
     "minTokens": 100,
     "minLines": 10,
     "minOccurrences": 2,
-    "ignoreImports": true
+    "ignoreImports": true,
+    "normalization": {
+      "ignoreStringValues": false
+    }
   }
 }

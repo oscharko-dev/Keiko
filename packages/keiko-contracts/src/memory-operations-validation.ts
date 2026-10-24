@@ -71,6 +71,7 @@ type MemoryArchiveFields = Omit<MemoryArchive, "memoryId" | "reviewerId"> & {
   readonly memoryId: string;
   readonly reviewerId: string;
 };
+type MemoryPinUnpinOrArchiveFields = MemoryPinOrMemoryUnpinFields | MemoryArchiveFields;
 type MemoryForgetFields = Omit<MemoryForget, "memoryId" | "reviewerId"> & {
   readonly memoryId: string;
   readonly reviewerId: string;
@@ -244,6 +245,17 @@ export function validateMemoryRejection(input: unknown): MemoryValidation<Memory
   return { ok: true, value: fields as MemoryRejection };
 }
 
+function validateExistingMemoryActionHeader(
+  input: Record<string, unknown>,
+  noun: "update" | "pin" | "unpin" | "archive" | "forget",
+  errors: string[],
+): boolean {
+  let valid = validateSchemaVersionLiteral(input, errors);
+  valid = validateMemoryIdString(`${noun}.memoryId`, input.memoryId, errors) && valid;
+  valid = validateMemoryIdString(`${noun}.reviewerId`, input.reviewerId, errors) && valid;
+  return valid;
+}
+
 // ─── Update ───────────────────────────────────────────────────────────────────
 const UPDATE_OPTIONAL_FIELDS = [
   "bodyPatch",
@@ -312,10 +324,7 @@ function admitMemoryUpdate(
   input: Record<string, unknown>,
   errors: string[],
 ): input is Record<string, unknown> & MemoryUpdateFields {
-  let valid = true;
-  valid = validateSchemaVersionLiteral(input, errors) && valid;
-  valid = validateMemoryIdString("update.memoryId", input.memoryId, errors) && valid;
-  valid = validateMemoryIdString("update.reviewerId", input.reviewerId, errors) && valid;
+  let valid = validateExistingMemoryActionHeader(input, "update", errors);
   if (!isFiniteNonNegativeNumber(input.updatedAt)) {
     errors.push("update.updatedAt must be a finite non-negative number");
     valid = false;
@@ -396,14 +405,11 @@ export function validateMemorySupersession(input: unknown): MemoryValidation<Mem
 // ─── Pin / unpin / archive ────────────────────────────────────────────────────
 function admitMemoryPinOrMemoryUnpin(
   input: Record<string, unknown>,
-  noun: "pin" | "unpin",
-  timestampField: "pinnedAt" | "unpinnedAt",
+  noun: "pin" | "unpin" | "archive",
+  timestampField: "pinnedAt" | "unpinnedAt" | "archivedAt",
   errors: string[],
-): input is Record<string, unknown> & MemoryPinOrMemoryUnpinFields {
-  let valid = true;
-  valid = validateSchemaVersionLiteral(input, errors) && valid;
-  valid = validateMemoryIdString(`${noun}.memoryId`, input.memoryId, errors) && valid;
-  valid = validateMemoryIdString(`${noun}.reviewerId`, input.reviewerId, errors) && valid;
+): input is Record<string, unknown> & MemoryPinUnpinOrArchiveFields {
+  let valid = validateExistingMemoryActionHeader(input, noun, errors);
   if (!isFiniteNonNegativeNumber(input[timestampField])) {
     errors.push(`${noun}.${timestampField} must be a finite non-negative number`);
     valid = false;
@@ -426,20 +432,25 @@ function validatePinOrUnpinShape(
   input: unknown,
 ): MemoryValidation<MemoryUnpin>;
 function validatePinOrUnpinShape(
-  noun: "pin" | "unpin",
-  timestampField: "pinnedAt" | "unpinnedAt",
+  noun: "archive",
+  timestampField: "archivedAt",
   input: unknown,
-): MemoryValidation<MemoryPin | MemoryUnpin> {
+): MemoryValidation<MemoryArchive>;
+function validatePinOrUnpinShape(
+  noun: "pin" | "unpin" | "archive",
+  timestampField: "pinnedAt" | "unpinnedAt" | "archivedAt",
+  input: unknown,
+): MemoryValidation<MemoryPin | MemoryUnpin | MemoryArchive> {
   if (!isRecord(input)) {
     return { ok: false, errors: [`${noun} must be an object`] };
   }
   const errors: string[] = [];
   if (!admitMemoryPinOrMemoryUnpin(input, noun, timestampField, errors))
     return { ok: false, errors };
-  const fields: MemoryPinOrMemoryUnpinFields = input;
+  const fields: MemoryPinUnpinOrArchiveFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
   // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
-  return { ok: true, value: fields as MemoryPin | MemoryUnpin };
+  return { ok: true, value: fields as MemoryPin | MemoryUnpin | MemoryArchive };
 }
 
 export function validateMemoryPin(input: unknown): MemoryValidation<MemoryPin> {
@@ -450,35 +461,8 @@ export function validateMemoryUnpin(input: unknown): MemoryValidation<MemoryUnpi
   return validatePinOrUnpinShape("unpin", "unpinnedAt", input);
 }
 
-function admitMemoryArchive(
-  input: Record<string, unknown>,
-  errors: string[],
-): input is Record<string, unknown> & MemoryArchiveFields {
-  let valid = true;
-  valid = validateSchemaVersionLiteral(input, errors) && valid;
-  valid = validateMemoryIdString("archive.memoryId", input.memoryId, errors) && valid;
-  valid = validateMemoryIdString("archive.reviewerId", input.reviewerId, errors) && valid;
-  if (!isFiniteNonNegativeNumber(input.archivedAt)) {
-    errors.push("archive.archivedAt must be a finite non-negative number");
-    valid = false;
-  }
-  if (input.reason !== undefined && !isSafeText(input.reason, MEMORY_REASON_MAX_CHARS)) {
-    errors.push("archive.reason must be a bounded control-free string when set");
-    valid = false;
-  }
-  return valid;
-}
-
 export function validateMemoryArchive(input: unknown): MemoryValidation<MemoryArchive> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["archive must be an object"] };
-  }
-  const errors: string[] = [];
-  if (!admitMemoryArchive(input, errors)) return { ok: false, errors };
-  const fields: MemoryArchiveFields = input;
-  // Only phantom ID brands remain; every non-brand field was concretely admitted above.
-  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
-  return { ok: true, value: fields as MemoryArchive };
+  return validatePinOrUnpinShape("archive", "archivedAt", input);
 }
 
 // ─── Forget ───────────────────────────────────────────────────────────────────
@@ -489,10 +473,7 @@ function admitMemoryForget(
   input: Record<string, unknown>,
   errors: string[],
 ): input is Record<string, unknown> & MemoryForgetFields {
-  let valid = true;
-  valid = validateSchemaVersionLiteral(input, errors) && valid;
-  valid = validateMemoryIdString("forget.memoryId", input.memoryId, errors) && valid;
-  valid = validateMemoryIdString("forget.reviewerId", input.reviewerId, errors) && valid;
+  let valid = validateExistingMemoryActionHeader(input, "forget", errors);
   if (!isFiniteNonNegativeNumber(input.forgottenAt)) {
     errors.push("forget.forgottenAt must be a finite non-negative number");
     valid = false;

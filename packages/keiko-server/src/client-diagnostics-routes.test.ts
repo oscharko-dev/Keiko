@@ -1,3 +1,4 @@
+import { CLIENT_CODING_RUN_RESTORE_COUNT_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import {
@@ -1555,6 +1556,24 @@ describe("POST /api/diagnostics/client", () => {
 
     const outcome = await handleClientDiagnosticIngest(context(body));
     expect(outcome.status).toBe(400);
+    expect(
+      sink.events.find((candidate) => candidate.op === "client.coding-run.restored"),
+    ).toBeUndefined();
+
+    const overCeiling = JSON.stringify({
+      message: "Keiko Coding Workbench restored a settled run's conversation.",
+      clientTs: CLIENT_TS,
+      codingRunRestore: {
+        timelineCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX + 1,
+        transcriptCount: 0,
+        cutCount: 0,
+        turnCount: 1,
+        feedBytes: 1,
+        transcriptChars: 0,
+        historyTruncated: false,
+      },
+    });
+    expect((await handleClientDiagnosticIngest(context(overCeiling))).status).toBe(400);
     expect(
       sink.events.find((candidate) => candidate.op === "client.coding-run.restored"),
     ).toBeUndefined();

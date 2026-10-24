@@ -40,7 +40,11 @@ workflow, validator, package command, or protected context.
   analysis remains outside this command. The repository command reads native audit attribution
   against the immutable comparison commit and fails on any introduced group, even when Fallow
   returns a warning with exit zero. Inherited findings are context, not a stored exemption; a new
-  copy added to an existing group must fail. Analyzer failures and invalid reports fail closed.
+  copy added to an existing matching group must fail. String values remain significant under the
+  closed `duplicates.normalization.ignoreStringValues: false` setting; native semantic identifier
+  and numeric normalization remain unchanged. This avoids conflating unrelated literal tables,
+  while accepting that copies differing in string values can be missed. The policy adds no path,
+  fingerprint or baseline exemption. Analyzer failures and invalid reports fail closed.
 - The checksum-pinned Gitleaks binary rejects secrets anywhere in the pull-request commit range and
   emits fully redacted diagnostics.
 - Strict TypeScript, ESLint, formatting, architecture, contract, coverage, package, security,

@@ -2487,6 +2487,13 @@ it("diagnostic ingress responsibility refuses malformed root and restoration fie
     { ...validRequest(), message: 0 },
     { ...validRequest(), clientTs: "not-an-instant" },
     { ...validRequest(), codingRunRestore: { ...restoration, timelineCount: -1 } },
+    {
+      ...validRequest(),
+      codingRunRestore: {
+        ...restoration,
+        timelineCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX + 1,
+      },
+    },
     { ...validRequest(), codingRunRestore: { ...restoration, feedBytes: "50000" } },
     { ...validRequest(), codingRunRestore: { ...restoration, historyTruncated: undefined } },
     { ...validRequest(), codingRunRestore: { ...restoration, privatePath: "not-admitted" } },

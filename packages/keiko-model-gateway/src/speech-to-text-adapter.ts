@@ -17,7 +17,8 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
+import { apiKeyHeaderValue } from "./config.js";
+import { speechProviderUrl } from "./speech-provider-url.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -308,25 +309,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function joinOpenAiCompatibleUrl(endpoint: string): string {
-  const trimmed = trimTrailingSlash(endpoint);
-  return `${trimmed}/audio/transcriptions`;
-}
-
-function joinAzureDeploymentUrl(endpoint: string, modelId: string, apiVersion: string): string {
-  const trimmed = trimTrailingSlash(endpoint);
-  return `${trimmed}/openai/deployments/${encodeURIComponent(
-    modelId,
-  )}/audio/transcriptions?api-version=${encodeURIComponent(apiVersion)}`;
-}
-
-function joinUrl(request: SpeechToTextRequest): string {
-  if (request.endpointStyle === "azure-openai-deployment") {
-    return joinAzureDeploymentUrl(request.endpoint, request.modelId, request.apiVersion ?? "");
-  }
-  return joinOpenAiCompatibleUrl(request.endpoint);
-}
-
 function headerName(name: string | undefined): string {
   if (name === undefined || name.trim().length === 0) {
     return "authorization";
@@ -487,7 +469,7 @@ function buildRequest(request: SpeechToTextRequest): BuiltRequest {
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   logDispatch(request, appliedTimeoutMs);
   return {
-    url: joinUrl(request),
+    url: speechProviderUrl(request, "transcriptions"),
     headers,
     body,
     signal,

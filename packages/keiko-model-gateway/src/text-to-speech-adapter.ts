@@ -20,7 +20,8 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
+import { apiKeyHeaderValue } from "./config.js";
+import { speechProviderUrl } from "./speech-provider-url.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -357,25 +358,6 @@ const OUTBOUND_TTS_KINDS: Record<OutboundHttpEgressErrorCode, TextToSpeechErrorK
   TLS_CA_FAILURE: "tls-ca-failure",
 };
 
-function joinOpenAiCompatibleUrl(endpoint: string): string {
-  const trimmed = trimTrailingSlash(endpoint);
-  return `${trimmed}/audio/speech`;
-}
-
-function joinAzureDeploymentUrl(endpoint: string, modelId: string, apiVersion: string): string {
-  const trimmed = trimTrailingSlash(endpoint);
-  return `${trimmed}/openai/deployments/${encodeURIComponent(
-    modelId,
-  )}/audio/speech?api-version=${encodeURIComponent(apiVersion)}`;
-}
-
-function joinUrl(request: TextToSpeechRequest): string {
-  if (request.endpointStyle === "azure-openai-deployment") {
-    return joinAzureDeploymentUrl(request.endpoint, request.modelId, request.apiVersion ?? "");
-  }
-  return joinOpenAiCompatibleUrl(request.endpoint);
-}
-
 function headerName(name: string | undefined): string {
   if (name === undefined || name.trim().length === 0) {
     return "authorization";
@@ -448,7 +430,7 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   logDispatch(request, appliedTimeoutMs);
   return {
-    url: joinUrl(request),
+    url: speechProviderUrl(request, "speech"),
     headers,
     body,
     signal,

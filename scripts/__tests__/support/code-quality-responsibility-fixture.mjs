@@ -465,6 +465,7 @@ function directRawHelperSource() {
 }
 
 function rawHelperSource(variant) {
+  if (variant.startsWith("optional-capture")) return optionalCapturedRawSource(variant);
   const source = directRawHelperSource();
   const variants = {
     wrapper: () => rawWrapperSource(),
@@ -567,6 +568,88 @@ function capturedRawSource(variant = "raw") {
         "export function consume(input: unknown): Record<string, unknown> { return validate(input); }",
       );
   return source;
+}
+
+function optionalCapturedRawSource(variant) {
+  const source = [
+    "interface CheckedCounts { first: number; second: number }",
+    "interface CheckedReport { payload?: CheckedCounts }",
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null; }',
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function optional(value: unknown, guard: (candidate: unknown) => boolean): boolean { return value === undefined || guard(value); }",
+    "function fields(input: Record<string, unknown>): boolean { const { first, second } = input; return finite(first) && finite(second); }",
+    "function nested(input: unknown): input is CheckedCounts { return record(input) && fields(input); }",
+    "export function validate(input: unknown): input is CheckedReport { return record(input) && optional(input.payload, nested); }",
+    'export function consume(input: unknown): number { if (!validate(input)) throw new TypeError("invalid"); return 0; }',
+    "function unrelatedGuard(input: unknown): boolean { return input !== null; }",
+    "const unrelatedOptional = optional(1, unrelatedGuard); void unrelatedOptional;",
+    "",
+  ].join("\n");
+  return optionalCapturedVariant(source, variant);
+}
+
+const OPTIONAL_CAPTURE_REPLACEMENTS = {
+  "optional-capture-wrong-value": ["guard(value)", "guard(undefined)"],
+  "optional-capture-altered-body": [
+    "value === undefined || guard(value)",
+    "value !== undefined && guard(value)",
+  ],
+  "optional-capture-wrapper-export-alias": [
+    "const unrelatedOptional",
+    "export { optional as exportedOptional }; const unrelatedOptional",
+  ],
+  "optional-capture-wrapper-export-default": [
+    "const unrelatedOptional",
+    "export default optional; const unrelatedOptional",
+  ],
+  "optional-capture-exported": ["function nested(", "export function nested("],
+  "optional-capture-escape": [
+    "const unrelatedOptional",
+    "const escaped = [nested]; void escaped; const unrelatedOptional",
+  ],
+  "optional-capture-reference": ["const unrelatedOptional", "void nested; const unrelatedOptional"],
+  "optional-capture-predicate-write": [
+    'return typeof input === "number"',
+    'input = 42; return typeof input === "number"',
+  ],
+  "optional-capture-write": [
+    "return record(input) && fields(input);",
+    "input = { first: 1, second: 2 }; return record(input) && fields(input);",
+  ],
+  "optional-capture-shadow": [
+    "return record(input) && optional(input.payload, nested);",
+    "const nested = (value: unknown): boolean => value !== null; return record(input) && optional(input.payload, nested);",
+  ],
+  "optional-capture-shadow-undefined": [
+    "interface CheckedCounts",
+    "const undefined = 42; interface CheckedCounts",
+  ],
+  "optional-capture-extra-argument": [
+    "optional(input.payload, nested)",
+    "optional(input.payload, nested, true)",
+  ],
+  "optional-capture-optional-call": [
+    "optional(input.payload, nested)",
+    "optional?.(input.payload, nested)",
+  ],
+  "optional-capture-default": [
+    "guard: (candidate: unknown) => boolean",
+    "guard: (candidate: unknown) => boolean = finite",
+  ],
+  "optional-capture-cycle": [
+    "record(input) && fields(input)",
+    "record(input) && optional(input.payload, nested) && fields(input)",
+  ],
+};
+
+function optionalCapturedVariant(source, variant) {
+  const replacement = OPTIONAL_CAPTURE_REPLACEMENTS[variant];
+  if (variant === "optional-capture-extra-argument")
+    source = source.replace(
+      "=> boolean): boolean { return value",
+      "=> boolean, extra?: boolean): boolean { return value",
+    );
+  return replacement ? source.replace(...replacement) : source;
 }
 
 function rawPropertySource() {

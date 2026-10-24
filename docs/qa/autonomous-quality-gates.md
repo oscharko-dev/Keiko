@@ -15,6 +15,10 @@ paths.
 - Sonar new-code ratings: maintainability `A`, reliability `A`, and security `A`.
 - Sonar security hotspots reviewed: `100%` on new code and overall.
 - Semantic clone groups introduced by the diff: `0` at `>= 100` tokens and `>= 10` lines.
+  The exact semantic configuration preserves string literal values, retains native identifier and
+  numeric normalization, requires two occurrences, and ignores imports. Distinct string values can
+  distinguish unrelated data tables; copies differing in those values may consequently be missed.
+  No path exclusion, ignored clone, stored baseline or acknowledgement makes a finding pass.
 - Secrets introduced anywhere in the pull-request commit range: `0`.
 - TypeScript and lint: strict, no `any`, explicit returns, and `0` warnings.
 - Complexity and function size: cyclomatic complexity `<= 10` and `<= 50` non-comment lines per

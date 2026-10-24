@@ -428,6 +428,48 @@ describe("actual native Fallow new-only attribution", () => {
     });
   }, 120_000);
 
+  it("separates distinct string tables while retaining semantic copy rejection", () => {
+    temporary((root) => {
+      mkdirSync(join(root, ".fixture-hooks"));
+      writeFileSync(join(root, "empty-git-config"), "");
+      writeFileSync(join(root, "package.json"), '{"name":"literal-fixture","private":true}');
+      writeFileSync(join(root, ".gitignore"), "node_modules/\n.fallow/\n");
+      fixtureGit(root, ["init"]);
+      const table = (name, domain) =>
+        `export const ${name} = new Map([\n${Array.from(
+          { length: 30 },
+          (_, index) => `  ["${domain}-key-${index}", "${domain}-value-${index}"],`,
+        ).join("\n")}\n]);\n`;
+      writeFileSync(join(root, "first.js"), table("mimeTypes", "mime"));
+      const base = commit(root);
+      mkdirSync(join(root, "node_modules"));
+      symlinkSync(
+        join(REPO_ROOT, "node_modules/fallow"),
+        join(root, "node_modules/fallow"),
+        "junction",
+      );
+      writeFileSync(join(root, "second.js"), table("journeyPhases", "journey"));
+      const different = commit(root);
+      expect(nativeGate(root, base).exit).toBe(0);
+      writeFileSync(join(root, "second.js"), table("copiedMimeTypes", "mime"));
+      commit(root);
+      const literalCopy = nativeGate(root, different);
+      expect(literalCopy.exit).toBe(1);
+      expect(literalCopy.diagnostic).toMatch(/FAIL — [1-9]\d* introduced clone groups/u);
+      rmSync(join(root, "second.js"));
+      writeFileSync(join(root, "algorithm.js"), clone("firstAlgorithm"));
+      const algorithmBase = commit(root);
+      const renamed = clone("secondAlgorithm")
+        .replaceAll("total", "aggregate")
+        .replace("1000", "2000");
+      writeFileSync(join(root, "renamed.js"), renamed);
+      commit(root);
+      const algorithmCopy = nativeGate(root, algorithmBase);
+      expect(algorithmCopy.exit).toBe(1);
+      expect(algorithmCopy.diagnostic).toMatch(/FAIL — [1-9]\d* introduced clone groups/u);
+    });
+  }, 120_000);
+
   it("leaves a foreign repository index untouched under hostile ambient Git variables", () => {
     temporary((root) =>
       temporary((foreign) => {

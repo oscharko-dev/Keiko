@@ -996,6 +996,117 @@ describe("operation validators", () => {
     ).toBe(false);
   });
 
+  it("preserves existing-memory header read order before update fields", () => {
+    const reads: string[] = [];
+    const getter =
+      (field: string, value: unknown): (() => unknown) =>
+      () => {
+        reads.push(field);
+        return value;
+      };
+    const updateInput: Record<string, unknown> = {};
+    Object.defineProperties(updateInput, {
+      schemaVersion: { get: getter("schemaVersion", "1") },
+      memoryId: { get: getter("memoryId", "mem-1") },
+      reviewerId: { get: getter("reviewerId", "rev-1") },
+      updatedAt: { get: getter("updatedAt", 0) },
+      bodyPatch: { get: getter("bodyPatch", "updated body") },
+      payloadPatch: { get: getter("payloadPatch", undefined) },
+      tagsPatch: { get: getter("tagsPatch", undefined) },
+      validityPatch: { get: getter("validityPatch", undefined) },
+      sensitivityPatch: { get: getter("sensitivityPatch", undefined) },
+      retentionHintPatch: { get: getter("retentionHintPatch", undefined) },
+      reviewerNote: { get: getter("reviewerNote", undefined) },
+    });
+    const update = validateMemoryUpdate(updateInput);
+    expect(update.ok).toBe(true);
+    if (update.ok) expect(update.value).toBe(updateInput);
+    expect(reads).toEqual([
+      "schemaVersion",
+      "memoryId",
+      "reviewerId",
+      "updatedAt",
+      "bodyPatch",
+      "bodyPatch",
+      "payloadPatch",
+      "tagsPatch",
+      "validityPatch",
+      "sensitivityPatch",
+      "retentionHintPatch",
+      "bodyPatch",
+      "payloadPatch",
+      "tagsPatch",
+      "validityPatch",
+      "sensitivityPatch",
+      "retentionHintPatch",
+      "reviewerNote",
+    ]);
+  });
+
+  it("preserves existing-memory header read order before forget fields", () => {
+    const reads: string[] = [];
+    const getter =
+      (field: string, value: unknown): (() => unknown) =>
+      () => {
+        reads.push(field);
+        return value;
+      };
+    const forgetInput: Record<string, unknown> = {};
+    Object.defineProperties(forgetInput, {
+      schemaVersion: { get: getter("schemaVersion", "1") },
+      memoryId: { get: getter("memoryId", "mem-1") },
+      reviewerId: { get: getter("reviewerId", "rev-1") },
+      forgottenAt: { get: getter("forgottenAt", 0) },
+      reason: { get: getter("reason", "user-request") },
+      userAcknowledgedDestructive: { get: getter("userAcknowledgedDestructive", true) },
+    });
+    const forget = validateMemoryForget(forgetInput);
+    expect(forget.ok).toBe(true);
+    if (forget.ok) expect(forget.value).toBe(forgetInput);
+    expect(reads).toEqual([
+      "schemaVersion",
+      "memoryId",
+      "reviewerId",
+      "forgottenAt",
+      "reason",
+      "reason",
+      "userAcknowledgedDestructive",
+    ]);
+  });
+
+  it("keeps existing-memory action header errors operation-specific and ordered", () => {
+    const update = validateMemoryUpdate({
+      schemaVersion: "2",
+      memoryId: "../bad",
+      reviewerId: " ",
+      updatedAt: 0,
+      bodyPatch: "updated body",
+    });
+    expect(update.ok).toBe(false);
+    if (update.ok) throw new Error("Expected malformed update header to fail");
+    expect(update.errors).toEqual([
+      'schemaVersion must be the literal "1"',
+      "update.memoryId contains a forbidden path fragment",
+      "update.reviewerId must be a non-empty string",
+    ]);
+
+    const forget = validateMemoryForget({
+      schemaVersion: "2",
+      memoryId: "../bad",
+      reviewerId: " ",
+      forgottenAt: 0,
+      reason: "user-request",
+      userAcknowledgedDestructive: true,
+    });
+    expect(forget.ok).toBe(false);
+    if (forget.ok) throw new Error("Expected malformed forget header to fail");
+    expect(forget.errors).toEqual([
+      'schemaVersion must be the literal "1"',
+      "forget.memoryId contains a forbidden path fragment",
+      "forget.reviewerId must be a non-empty string",
+    ]);
+  });
+
   it("validateMemorySupersession rejects same old/new IDs and missing reason", () => {
     const happy = {
       schemaVersion: MEMORY_SCHEMA_VERSION,
@@ -1012,6 +1123,36 @@ describe("operation validators", () => {
     );
     expect(validateMemorySupersession({ ...happy, edgeKind: "related" }).ok).toBe(false);
   });
+
+  function observedMemoryStateAction(
+    timestampField: "pinnedAt" | "unpinnedAt" | "archivedAt",
+    reads: string[],
+  ): Record<string, unknown> {
+    const input: Record<string, unknown> = {};
+    const getter =
+      (field: string, value: unknown): (() => unknown) =>
+      () => {
+        reads.push(field);
+        return value;
+      };
+    Object.defineProperty(input, "schemaVersion", { get: getter("schemaVersion", "1") });
+    Object.defineProperty(input, "memoryId", { get: getter("memoryId", "mem-1") });
+    Object.defineProperty(input, "reviewerId", { get: getter("reviewerId", "rev-1") });
+    Object.defineProperty(input, timestampField, { get: getter(timestampField, 0) });
+    Object.defineProperty(input, "reason", { get: getter("reason", "reviewed") });
+    return input;
+  }
+
+  function expectMemoryStateActionReadOrder(reads: string[], timestampField: string): void {
+    expect(reads).toEqual([
+      "schemaVersion",
+      "memoryId",
+      "reviewerId",
+      timestampField,
+      "reason",
+      "reason",
+    ]);
+  }
 
   it("validateMemoryPin and validateMemoryUnpin accept happy envelopes", () => {
     expect(
@@ -1041,6 +1182,71 @@ describe("operation validators", () => {
         archivedAt: 0,
       }).ok,
     ).toBe(true);
+  });
+
+  it("keeps pin, unpin, and archive validation errors eager and ordered", () => {
+    const invalidAction = (timestampField: string): Record<string, unknown> => ({
+      schemaVersion: "2",
+      memoryId: "../bad",
+      reviewerId: " ",
+      [timestampField]: Number.NaN,
+      reason: "\u0000bad",
+    });
+    const pin = validateMemoryPin(invalidAction("pinnedAt"));
+    expect(pin.ok).toBe(false);
+    if (pin.ok) throw new Error("Expected malformed pin to fail");
+    expect(pin.errors).toEqual([
+      'schemaVersion must be the literal "1"',
+      "pin.memoryId contains a forbidden path fragment",
+      "pin.reviewerId must be a non-empty string",
+      "pin.pinnedAt must be a finite non-negative number",
+      "pin.reason must be a bounded control-free string when set",
+    ]);
+
+    const unpin = validateMemoryUnpin(invalidAction("unpinnedAt"));
+    expect(unpin.ok).toBe(false);
+    if (unpin.ok) throw new Error("Expected malformed unpin to fail");
+    expect(unpin.errors).toEqual([
+      'schemaVersion must be the literal "1"',
+      "unpin.memoryId contains a forbidden path fragment",
+      "unpin.reviewerId must be a non-empty string",
+      "unpin.unpinnedAt must be a finite non-negative number",
+      "unpin.reason must be a bounded control-free string when set",
+    ]);
+
+    const archive = validateMemoryArchive(invalidAction("archivedAt"));
+    expect(archive.ok).toBe(false);
+    if (archive.ok) throw new Error("Expected malformed archive to fail");
+    expect(archive.errors).toEqual([
+      'schemaVersion must be the literal "1"',
+      "archive.memoryId contains a forbidden path fragment",
+      "archive.reviewerId must be a non-empty string",
+      "archive.archivedAt must be a finite non-negative number",
+      "archive.reason must be a bounded control-free string when set",
+    ]);
+  });
+
+  it("preserves getter order, reason read count, and input identity for all three actions", () => {
+    const reads: string[] = [];
+    const pinInput = observedMemoryStateAction("pinnedAt", reads);
+    const pin = validateMemoryPin(pinInput);
+    expect(pin.ok).toBe(true);
+    if (pin.ok) expect(pin.value).toBe(pinInput);
+    expectMemoryStateActionReadOrder(reads, "pinnedAt");
+
+    reads.length = 0;
+    const unpinInput = observedMemoryStateAction("unpinnedAt", reads);
+    const unpin = validateMemoryUnpin(unpinInput);
+    expect(unpin.ok).toBe(true);
+    if (unpin.ok) expect(unpin.value).toBe(unpinInput);
+    expectMemoryStateActionReadOrder(reads, "unpinnedAt");
+
+    reads.length = 0;
+    const archiveInput = observedMemoryStateAction("archivedAt", reads);
+    const archive = validateMemoryArchive(archiveInput);
+    expect(archive.ok).toBe(true);
+    if (archive.ok) expect(archive.value).toBe(archiveInput);
+    expectMemoryStateActionReadOrder(reads, "archivedAt");
   });
 
   it("validateMemoryForget requires the destructive acknowledgement to be true", () => {

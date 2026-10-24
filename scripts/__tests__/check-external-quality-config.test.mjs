@@ -81,6 +81,10 @@ describe("external quality integration configuration", () => {
       { minLines: 11 },
       { mode: "mild" },
       { ignoreImports: false },
+      { normalization: { ignoreStringValues: true } },
+      { normalization: undefined },
+      { normalization: {} },
+      { normalization: null },
     ]) {
       const config = JSON.parse(sources.fallowConfig);
       Object.assign(config.duplicates, change);

@@ -326,6 +326,91 @@ describe("requestSpeechToText", () => {
     expect(body).toContain("\r\n\r\nKeiko, Repository\r\n");
   });
 
+  it.each([
+    {
+      modelId: "model /?#",
+      apiVersion: "v1 &next=1",
+      encodedModel: "model%20%2F%3F%23",
+      encodedVersion: "v1%20%26next%3D1",
+    },
+    { modelId: "model%name", apiVersion: "", encodedModel: "model%25name", encodedVersion: "" },
+    { modelId: "model", apiVersion: undefined, encodedModel: "model", encodedVersion: "" },
+  ])(
+    "encodes Azure speech routing components independently ($modelId)",
+    async ({ modelId, apiVersion, encodedModel, encodedVersion }) => {
+      let seenUrl = "";
+      const outcome = await requestSpeechToText({
+        endpoint: "https://voice.example.invalid/base//",
+        endpointStyle: "azure-openai-deployment",
+        ...(apiVersion === undefined ? {} : { apiVersion }),
+        apiKey: SECRET_API_KEY,
+        modelId,
+        audio: AUDIO,
+        mimeType: "audio/wav",
+        fetchImpl: mockFetch((url) => {
+          seenUrl = url;
+          return ok({ text: "encoded route" });
+        }),
+      });
+      expect(outcome.ok).toBe(true);
+      expect(seenUrl).toBe(
+        `https://voice.example.invalid/base//openai/deployments/${encodedModel}/audio/transcriptions?api-version=${encodedVersion}`,
+      );
+    },
+  );
+
+  it("does not inspect apiVersion for OpenAI-compatible speech routing", async () => {
+    let seenUrl = "";
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      get apiVersion(): string {
+        throw new Error("OpenAI routing must not inspect the Azure version");
+      },
+      apiKey: SECRET_API_KEY,
+      modelId: "model",
+      audio: AUDIO,
+      mimeType: "audio/wav",
+      fetchImpl: mockFetch((url) => {
+        seenUrl = url;
+        return ok({ text: "encoded route" });
+      }),
+    });
+    expect(outcome.ok).toBe(true);
+    expect(seenUrl).toBe(`${ENDPOINT}/audio/transcriptions`);
+  });
+
+  it("reads Azure routing fields in their existing order before egress", async () => {
+    const reads: string[] = [];
+    let routingReads: string[] = [];
+    const outcome = await requestSpeechToText({
+      get endpointStyle(): "azure-openai-deployment" {
+        reads.push("style");
+        return "azure-openai-deployment";
+      },
+      get endpoint(): string {
+        reads.push("endpoint");
+        return ENDPOINT;
+      },
+      get modelId(): string {
+        reads.push("model");
+        return "model";
+      },
+      get apiVersion(): string {
+        reads.push("version");
+        return "version";
+      },
+      apiKey: SECRET_API_KEY,
+      audio: AUDIO,
+      mimeType: "audio/wav",
+      fetchImpl: mockFetch(() => {
+        routingReads = reads.slice(-4);
+        return ok({ text: "ordered route" });
+      }),
+    });
+    expect(outcome.ok).toBe(true);
+    expect(routingReads).toEqual(["style", "endpoint", "model", "version"]);
+  });
+
   it("supports Azure OpenAI deployment endpoints with a separate api-version", async () => {
     let seenUrl = "";
     let seenHeader: string | null = null;
