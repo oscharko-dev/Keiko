@@ -157,8 +157,7 @@ export function portableRegenerationOptions(args) {
 
 function pinnedNpm(deps) {
   const npmCli = deps.npmCli;
-  if (!npmCli?.endsWith("npm-cli.js"))
-    throw new TypeError("run the portable producer through npm");
+  if (!npmCli?.endsWith("npm-cli.js")) throw new TypeError("run the portable producer through npm");
   const npmVersion = deps.run(process.execPath, [npmCli, "--version"], { encoding: "utf8" }).trim();
   if (deps.nodeVersion !== "v24.18.0" || npmVersion !== "11.16.0")
     throw new TypeError("portable catalog producer requires Node 24.18.0 and npm 11.16.0");
