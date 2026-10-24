@@ -123,7 +123,12 @@ export async function admitNativeChildren(
   signal: AbortSignal | undefined,
 ): Promise<readonly string[]> {
   const owned: string[] = [];
-  let sessions: readonly SessionRecord[] | undefined;
+  // Read once, and only when a candidate is still to be proven and the cache can take it.
+  const unproven = candidates.some(
+    (candidate) => candidate !== run.sessionId && !run.children.has(candidate),
+  );
+  const sessions =
+    unproven && run.children.size < NATIVE_CHILD_SESSION_MAX ? await client.sessions(signal) : [];
   for (const candidate of candidates) {
     if (candidate === run.sessionId) continue;
     if (run.children.has(candidate)) {
@@ -131,7 +136,6 @@ export async function admitNativeChildren(
       continue;
     }
     if (run.children.size >= NATIVE_CHILD_SESSION_MAX) continue;
-    sessions ??= await client.sessions(signal);
     if (!nativeSessionDescendsFromRun(sessions, candidate, run.sessionId, run.workspaceRoot))
       continue;
     run.children.add(candidate);
@@ -245,10 +249,10 @@ async function fanOutStep(
     return fanOut.inactiveReads >= INACTIVE_READS_TO_SETTLE;
   }
   fanOut.inactiveReads = 0;
-  for (const child of activity.activeChildren.filter((id) => !fanOut.interrupted.has(id))) {
-    await client.interrupt(child, signal);
-    fanOut.interrupted.add(child);
-  }
+  // The children are independent sessions: their interrupts go out together, in order.
+  const pending = activity.activeChildren.filter((id) => !fanOut.interrupted.has(id));
+  await Promise.all(pending.map((child) => client.interrupt(child, signal)));
+  for (const child of pending) fanOut.interrupted.add(child);
   if (activity.primaryActive && fanOut.primaryIdleSeen) {
     await client.interrupt(run.sessionId, signal);
     fanOut.primaryIdleSeen = false;

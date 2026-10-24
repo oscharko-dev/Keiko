@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "221aefc06c7e390f1b9861c745103004c4bfef4256106fae7f96f06d78f0b7b9",
+    "catalogDigest": "71ac8076f960a48b9d3ad3da411010f2a4ccd7d70e0c3f56954f688514754488",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8378,7 +8378,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:33",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:307"
+          "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:311"
         ]
       },
       {
