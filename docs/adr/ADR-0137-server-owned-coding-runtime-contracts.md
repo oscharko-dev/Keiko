@@ -1109,14 +1109,100 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   per-item admission and its plugin API has no late `config` hook, so the native launch profile
   sets `OPENCODE_DISABLE_PROJECT_CONFIG=true` for every tool profile: nothing under the workspace
   is a configuration layer, runs as a plugin, or selects a provider, model, credential or
-  permission. The restriction is explicit and documented: project `opencode.json`, `.opencode/`
-  agents, commands, skills and plugins, nested `AGENTS.md` discovery, `.claude/` and `.agents/`
-  do not load until #3903 admits individual items through the existing workspace trust and
-  authority admission (an accepted plugin must then stay inside the live Authority Envelope and
-  must not be able to replace the governing `keiko.native-policy` hook). The workspace-root
-  `AGENTS.md` still reaches the model as Keiko's own bounded, nonce-framed, untrusted initial
-  context (ADR-0137 D1). Keiko's generated plugins load from the private discovery directory,
-  which the switch does not touch.
+  permission. The workspace-root `AGENTS.md` still reaches the model as Keiko's own bounded,
+  nonce-framed, untrusted initial context (ADR-0137 D1). Keiko's generated plugins load from the
+  private discovery directory, which the switch does not touch. The restriction stands for what
+  is executable or authoritative: the project `opencode.json`, every plugin, nested and walk-up
+  `AGENTS.md` discovery, `.claude/` and MCP configuration do not load. Plugins and
+  `opencode.json` stay refused until an operator admission exists that keeps an accepted plugin
+  inside the live Authority Envelope and unable to replace the governing `keiko.native-policy`
+  hook.
+- **Markdown-only repository items are admitted one by one as sanitized copies (#3903).** The
+  native profile (only; the mapped profiles keep their behaviour) reads the workspace's custom
+  agents (`.opencode/agents/*.md`, `.opencode/agent/*.md`), custom commands
+  (`.opencode/commands/*.md`, `.opencode/command/*.md`) and skills
+  (`.opencode/skills/<name>/SKILL.md`, `.opencode/skill/<name>/SKILL.md`,
+  `.agents/skills/<name>/SKILL.md`) and writes a re-rendered copy of each admitted one into the
+  run's private discovery directory, the configuration directory the producer reads beside Keiko's
+  generated plugins: `agents/<name>.md`, `commands/<name>.md`, `skills/<name>/SKILL.md`. The copies
+  are written before the first launch (exclusive create, mode 0600, inside the directory the
+  Seatbelt profile already protects from every descendant); the producer loads them when the
+  location is first used. `codingRuntimeRepositoryItems.ts` owns the reading and the evidence,
+  `codingRuntimeRepositoryItemSanitizer.ts` the pure validation.
+  - **One reader.** Every file is read through the secure workspace read helper the repository
+    instructions use (never a second file reader), and the directories through the same helper's
+    native listing, only while the run's own workspace is still the active one (checked around
+    every call; a switch admits nothing). Bounds: 16 agents, 32 commands and 16 skills, 32 / 48 /
+    32 candidates considered, 512 directory entries, 32 KiB per file and 256 KiB for the copies together,
+    descriptions of 256 (agent), 200 (command, the `/` menu contract) and 512 (skill) characters,
+    and a 20 second deadline joined with the run's own cancellation. A name must match
+    `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` within 48 characters, is the file or directory name, and may not
+    be a built-in agent, command or skill (`build`, `plan`, `general`, `explore`, `compaction`,
+    `title`, `summary`, `init`, `review`, `opencode`, `report`, `default`, `all`), nor start with
+    `keiko`; a file of such a name would replace the built-in. Hidden entries, symbolic links,
+    loose files beside skill directories, nested directories and a repeated name (the plural
+    directory wins) are not admitted.
+  - **Nothing of the original frontmatter is forwarded.** The frontmatter is parsed by a closed
+    subset of YAML (top-level `key: scalar`, quoted and block scalars, indented continuation), a
+    per-kind allowlist is read by typed readers, and the copy's frontmatter is rendered anew:
+    agents keep `description`, `mode` (`subagent` or `primary`; absent is admitted as `subagent`,
+    because Keiko offers no selector for a custom primary agent) and bounded numeric `temperature`
+    (at most 2) and `top_p` (at most 1); commands keep `description`, `agent` and `subagent` (its
+    deprecated alias `subtask` is accepted); skills keep `name` (the directory name; a different
+    one is refused) and a required `description`. `model`, `permission(s)`, `tools`, `provider`,
+    `mcp`, `plugin(s)`, `disabled`, `request` and every other key are dropped and only counted. A
+    shape the parser does not understand (a quoted key, a duplicate key, a flow collection, an
+    anchor, a tag) is refused, never guessed at. Control, bidirectional and zero-width characters
+    anywhere in the file are refused. The body is untrusted prose (a system prompt, a template, a
+    skill) that grants no authority, like the workspace `AGENTS.md`.
+  - **Command templates.** A command may name only an agent admitted as a subagent in the same
+    pass. The producer's command code switches the session onto a named primary agent (control
+    below), behind Keiko's record of the session's agent, so a command could take a Plan session
+    off its read-only agent; a subagent instead runs the command in a child session under that
+    agent, and `subagent: true` runs it in a child session under the session's own agent (Plan
+    stays Plan). A template that contains a bang-backtick block, or can form one at a placeholder
+    boundary (`!` before `$ARGUMENTS` or `$1`, a placeholder before a backtick or another
+    placeholder), is refused: the producer runs every such block in the project directory outside
+    the permission hook. `$ARGUMENTS`, `$1`.. and `@path` text are inert (the `@path` stays text;
+    nothing is read for it) and are admitted. The same producer behaviour makes the argument text
+    of any command dangerous, built-ins included, because it substitutes the text into the
+    template and then expands the blocks, so `OpenCodeV2HttpClient.command` refuses a text that
+    contains a bang-backtick marker before any byte is sent (`not-submitted`).
+  - **Proven against the staged 2.1.4 executable**
+    (`opencodeNativeRepositoryItems.real.test.ts`, under the real native Seatbelt wrapper with the
+    production launch profile): the admitted commands, agents and skill list; the hostile agent
+    (model, permission, tools, MCP and plugin keys) lists with no model route and exactly the
+    rules a plain agent has, while the same file copied unsanitized registers `evil-provider/evil-model`
+    and an extra rule (control); a file named `build.md` does not replace the default agent; the
+    skill's sibling script is never copied and its shell-looking text stays literal; a hostile
+    project (plugin canary, provider override) neither runs nor moves the model route; the
+    shell-substituting template, copied unsanitized, writes its canary with the policy hook never
+    asked (control); a command naming a primary agent moves the session onto it (control); a
+    `subagent: true` command under Plan keeps Plan; and the policy hook is asked for the `skill`
+    action.
+  - **Authority.** An admitted agent has the producer's default rules for a plain agent (allow by
+    default, `.env` reads ask, `browser` denied) plus whatever `keiko.native-policy` decides for
+    every action by mode: no key that could widen it survives. It is not Plan: like the built-in
+    `general`, a custom subagent can edit where the mode allows, and unlike `general` it can
+    launch subagents of its own and ask questions; the session tree is bounded (64 children) and
+    the envelope's tool budget still counts every call. A skill's base directory is the private
+    discovery directory, so relative resources named in a skill resolve there and do not exist;
+    the model reads them from the workspace by their path with the governed read tool.
+  - **Not admitted, with the reason.** `.claude/skills`: `.claude` is a tool-state path of the
+    always-on deny list (it can hold settings and credentials) and the helper refuses it, so the
+    list stays unwidened until the security owner decides on a narrower exception. Skill sibling
+    files, nested agent and command names (`team/reviewer`), `mode: all`, the producer's `steps`,
+    `hidden`, `color` and `request` keys, global directories (the private `HOME` is empty), remote
+    skill indexes and MCP stay out.
+  - **Operator switch and evidence.** `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` is on by default;
+    `true` keeps it, and `false` or any other value disables it (an unrecognised value fails
+    closed to off). Each native launch records one body-free
+    `coding-runtime.repository-items.admitted` line under the run's correlation id: `disabled`,
+    `unavailable` (no secure read, no listing, a workspace switch), `empty`, `completed` or
+    `failed` (cancelled, deadline, write failure, exception, at `warn` with the closed error kind
+    and the dist-anchored frames), the admitted and refused counts per kind, the closed refusal
+    reasons present, directory failures, the stripped authority-bearing and other key counts, the
+    copies' byte total and a SHA-256 over them, never a name, a path or a body.
 - **The server-owned binding rides the highest layer.** The profile also passes the single
   provider, model, `default_agent`, `update`/`share` switches and the mode-independent permission
   floor as `OPENCODE_CONFIG_CONTENT`, a secret-free subset of the private file that holds only
@@ -1264,7 +1350,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   contract-valid (at most 64, duplicate-free, descriptions the contract refuses dropped from their
   entry); absent `commands` means the run offers none. A new task, which has no runtime to list
   yet, shows the pinned built-ins (`CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES`); the original-runtime
-  proof fails if the producer lists anything else. Evidence is body-free: the
+  proof fails if the producer lists anything else. A native run's own listing also carries the
+  workspace's admitted custom commands ("Markdown-only repository items", #3903); they reach the
+  `/` menu only after the runtime lists them. Evidence is body-free: the
   `coding-runtime.prompt-inputs.settled` line names a built-in command (`init`, `review`) and any other
   only by the SHA-256 of its name (`command`, `commandDigest`) with the UTF-8 size of the text after
   it (`commandArgumentBytes`) and the closed refusal reasons `commands-unsupported`,

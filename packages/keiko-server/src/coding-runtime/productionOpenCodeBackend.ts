@@ -46,6 +46,8 @@ import {
   type CodingSafeActivityProjection,
   type CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
+import { createCodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
 import {
@@ -157,6 +159,13 @@ export interface ProductionOpenCodeBackendInput {
   readonly fetch?: typeof globalThis.fetch | undefined;
   /** The host environment the native profile inherits its allowlisted names from (#3897). */
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  /**
+   * The runtime host's secure workspace read port, which the native profile reads the workspace's
+   * custom agents, commands and skills through (#3903). Absent, a native run admits none and says so.
+   */
+  readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
+  /** The operator's `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` decision; absent keeps the default, on. */
+  readonly repositoryItemsEnabled?: boolean | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
@@ -334,6 +343,7 @@ function composeOpenCodeRun(
   return createOpenCodeRuntimeComposition({
     toolProfile,
     ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
+    ...(toolProfile === "native" ? { repositoryItems: repositoryItemsFor(input, run) } : {}),
     portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
@@ -370,6 +380,19 @@ function composeOpenCodeRun(
     // #3873: one submitted task's whole agent loop is bounded by the run's own envelope duration,
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
+  });
+}
+
+// The run's own repository items (#3903), read only while its workspace is still the active one.
+function repositoryItemsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): ReturnType<typeof createCodingRuntimeRepositoryItemsPort> {
+  return createCodingRuntimeRepositoryItemsPort({
+    enabled: input.repositoryItemsEnabled !== false,
+    source: input.secureWorkspaceTextRead,
+    isRunWorkspace: run.workspaceIsCurrent,
+    activityLog: input.activityLog ?? processServerLogSink(),
   });
 }
 

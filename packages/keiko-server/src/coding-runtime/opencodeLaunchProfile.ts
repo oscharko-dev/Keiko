@@ -156,7 +156,10 @@ export function buildOpenCodeLaunchProfile(
       // imports a plugin's top-level code before any permission is evaluated, and merges a
       // project `providers` entry above Keiko's private file. Every profile therefore keeps the
       // whole layer off. The native profile still reads the workspace-root AGENTS.md, which Keiko
-      // attaches to the first message through its own bounded loader.
+      // attaches to the first message through its own bounded loader, and admits the Markdown-only
+      // items (custom agents, commands and skills) one by one as sanitized copies in this run's
+      // private discovery directory (`codingRuntimeRepositoryItems.ts`), which this switch does
+      // not touch.
       OPENCODE_DISABLE_PROJECT_CONFIG: "true",
       ...(input.toolProfile === "native"
         ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }

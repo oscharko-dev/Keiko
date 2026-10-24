@@ -166,6 +166,7 @@ import {
   openCodePlanDirectory,
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import {
   createGeneratedOpenCodeV2Plugins,
   createOpenCodeRuntimeAdapter,
@@ -328,6 +329,12 @@ export interface OpenCodeRuntimeCompositionInput {
    * toolchains the way it does standalone. Absent keeps the empty environment.
    */
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  /**
+   * Admits the workspace's custom agents, commands and skills as sanitized copies in the run's
+   * private discovery directory (#3903). Native profile only: the mapped profiles ignore it, and
+   * absent leaves the discovery directory exactly as Keiko generated it.
+   */
+  readonly repositoryItems?: CodingRuntimeRepositoryItemsPort | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -1309,6 +1316,7 @@ async function materializePrepare(
   if (!profile.ok) throw new Error("profile-invalid");
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
+  await admitRepositoryItems(input, request, runRoot);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
@@ -1337,6 +1345,22 @@ async function materializePrepare(
     throw new Error("host-preparation-invalid");
   persistPreparedRun(runs, request, runRoot, password, configDigest, program);
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
+}
+
+// The copies join the discovery directory before the first launch, so the config digest stays the
+// digest of Keiko's own generated document; the admission line carries the copies' own. The port
+// never rejects: a run starts without the repository's items rather than failing because of them.
+async function admitRepositoryItems(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<void> {
+  if (input.toolProfile !== "native") return;
+  await input.repositoryItems?.admitForRun({
+    runId: request.runId,
+    discoveryRoot: openCodeConfigDirectory(runRoot),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
 }
 
 function persistPreparedRun(

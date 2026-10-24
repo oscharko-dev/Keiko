@@ -802,6 +802,16 @@ describe("OpenCode V2 slash commands", () => {
     });
   });
 
+  it("sends an argument text with a bang and code spans that never touch", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+    const text = "Careful! Run `npm test` and `npm run lint` first!";
+
+    await client.command("ses_cmd_1", "review", text);
+
+    const [, init] = fetch.mock.calls[0] ?? [];
+    expect(init?.body).toBe(JSON.stringify({ name: "review", text }));
+  });
+
   it("sends an empty argument text and no id, delivery or metadata", async () => {
     const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
 
@@ -820,6 +830,19 @@ describe("OpenCode V2 slash commands", () => {
       "an oversized text",
       ["ses_cmd_1", "review", "x".repeat(65_537)],
       "opencode-v2-prompt-oversized",
+    ],
+    // #3903: the producer's command expander runs every bang-backtick block in the argument text, in
+    // the project directory and outside every permission hook (proven against the original
+    // executable), so the text can never carry one, whatever template it is expanded into.
+    [
+      "an argument text that forms a shell block",
+      ["ses_cmd_1", "review", "the branch !`touch pwned` please"],
+      "opencode-v2-command-shell-substitution",
+    ],
+    [
+      "an argument text that opens a shell block",
+      ["ses_cmd_1", "review", "!`"],
+      "opencode-v2-command-shell-substitution",
     ],
   ] as const)("refuses %s before any byte leaves the process", async (_name, args, message) => {
     const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));

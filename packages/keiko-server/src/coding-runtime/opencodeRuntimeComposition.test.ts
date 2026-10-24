@@ -89,6 +89,7 @@ import {
   type SecureWorkspaceTextReadProcess,
 } from "./secureWorkspaceTextReadProcess.js";
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
+import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
   catalogRuntimeFixture,
@@ -609,6 +610,8 @@ interface StartBridgeControl {
     readonly pipe: PassThrough;
   };
   readonly activityLog?: ServerLogSink;
+  /** The repository items admission the composition is handed (#3903). */
+  readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
   readonly startTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly onRelease?: (runId: string) => void;
@@ -752,6 +755,12 @@ function optionalActivityLog(control: StartBridgeControl | undefined): {
   readonly activityLog?: ServerLogSink;
 } {
   return control?.activityLog === undefined ? {} : { activityLog: control.activityLog };
+}
+
+function optionalRepositoryItems(control: StartBridgeControl | undefined): {
+  readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
+} {
+  return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
 }
 
 function optionalToolResultCorrelation(control: StartBridgeControl | undefined): {
@@ -1138,6 +1147,7 @@ async function startBridgeFixture(
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
     ...optionalActivityLog(control),
+    ...optionalRepositoryItems(control),
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
     ...optionalSpawnGuard(control),
@@ -3246,6 +3256,75 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // #3903: the native profile admits the workspace's Markdown agents, commands and skills into the
+  // run's private discovery directory, after Keiko's own generated document is there and before the
+  // first launch; the mapped profiles never reach the admission.
+  describe("repository items admission", () => {
+    interface AdmissionCall {
+      readonly runId: string;
+      readonly discoveryRoot: string;
+      readonly generatedConfigPresent: boolean;
+    }
+
+    function recordingPort(order: string[]): {
+      readonly port: CodingRuntimeRepositoryItemsPort;
+      readonly calls: AdmissionCall[];
+    } {
+      const calls: AdmissionCall[] = [];
+      return {
+        calls,
+        port: {
+          admitForRun: (request): Promise<void> => {
+            order.push("admit");
+            calls.push({
+              runId: request.runId,
+              discoveryRoot: request.discoveryRoot,
+              generatedConfigPresent: existsSync(join(request.discoveryRoot, "opencode.json")),
+            });
+            return Promise.resolve();
+          },
+        },
+      };
+    }
+
+    it("admits once per native launch, into the discovery directory, before the child is spawned", async () => {
+      const order: string[] = [];
+      const { port, calls } = recordingPort(order);
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "supervised-coding",
+        readToolProfile: () => "native",
+        repositoryItems: port,
+        onSpawn: () => order.push("spawn"),
+      });
+      try {
+        expect(calls).toHaveLength(1);
+        const [call] = calls;
+        expect(call?.runId).toBe(FIXTURE_RUN_ID);
+        expect(call?.discoveryRoot.endsWith(join(FIXTURE_RUN_ID, "config", "opencode"))).toBe(true);
+        expect(call?.generatedConfigPresent).toBe(true);
+        expect(order).toEqual(["admit", "spawn"]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "never reaches the admission on the mapped %s profile",
+      async (profile) => {
+        const { port, calls } = recordingPort([]);
+        const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+          readToolProfile: () => profile,
+          repositoryItems: port,
+        });
+        try {
+          expect(calls).toHaveLength(0);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
   });
 
   const SOURCE = { messageID: "msg_assistant_1", id: "call_read_1" } as const;

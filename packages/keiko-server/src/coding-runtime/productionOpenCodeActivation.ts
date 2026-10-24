@@ -23,6 +23,10 @@ import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
+  configuredCodingRuntimeRepositoryItemsEnabled,
+  KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV,
+} from "./codingRuntimeRepositoryItems.js";
+import {
   discoverDevLaneOpenCode,
   discoverNpmLaneOpenCode,
   type DevLaneName,
@@ -205,6 +209,12 @@ function activatedPorts(
       portable,
       runtimeStateRoot: input.runtimeStateDir,
       processEnv: input.env,
+      // #3903: the native profile admits the workspace's Markdown agents, commands and skills as
+      // sanitized copies, read through this same helper.
+      secureWorkspaceTextRead,
+      repositoryItemsEnabled: configuredCodingRuntimeRepositoryItemsEnabled(
+        input.env[KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV],
+      ),
       gatewayUrl: endpoints.gatewayUrl,
       resolveGatewayRunMetadata:
         input.resolveGatewayRunMetadata ??

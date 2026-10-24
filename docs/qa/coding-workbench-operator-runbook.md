@@ -165,6 +165,30 @@ content. The helper's content ceiling of 65,536 bytes is pinned in its wire prot
 binary: a larger `AGENTS.md` is refused as `too-large` (at `warn`, the run proceeds) until the
 helper protocol gains a bounded window, so keep the file under 64 KiB for it to reach the model.
 
+## Repository agents, commands and skills
+
+On the native profile a run admits the workspace's Markdown-only items as sanitized copies in its
+private discovery directory (ADR-0137 D10, #3903): custom agents from `.opencode/agents` and
+`.opencode/agent`, custom commands from `.opencode/commands` and `.opencode/command`, and skills
+from `.opencode/skills`, `.opencode/skill` and `.agents/skills` (`<name>/SKILL.md` only). Each file
+is read through the secure read helper while the run's own workspace is the active one, its
+frontmatter is validated against a closed allowlist and rendered anew (`model`, permissions, tools,
+MCP and plugin keys never survive), and the copy is written before the runtime starts. The
+project's `opencode.json`, plugins, nested discovery and `.claude/` (including `.claude/skills`)
+stay unloaded. A command whose template contains a shell-substitution block is refused. Limits: 16
+agents, 32 commands and 16 skills of at most 32 KiB each; names lowercase with hyphens and not a
+built-in (`build`, `plan`, `general`, `explore`, `init`, `review`, `opencode`, `report`, ...).
+
+It is on by default. An operator sets `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED=false` before starting
+the server to disable it; any value other than `true` disables it. Each native run records one
+body-free `coding-runtime.repository-items.admitted` line (`disabled`, `unavailable`, `empty`,
+`completed` or `failed`, with admitted and refused counts per kind, the closed refusal reasons, the
+stripped-key counts and a digest of the copies, never a name or a body). To see why an item did not
+appear, read its `refusalReasons`: `invalid-name`, `reserved-name`, `duplicate-name`,
+`frontmatter-malformed`, `frontmatter-unsupported`, `value-invalid`, `description-missing`,
+`body-empty`, `unsafe-characters`, `oversize`, `template-shell-substitution`, `agent-not-admitted`,
+`name-mismatch`, `not-regular-file`, `unreadable`, `directory-unreadable` or `limit-exceeded`.
+
 ## Review Commands
 
 Run focused closeout checks:

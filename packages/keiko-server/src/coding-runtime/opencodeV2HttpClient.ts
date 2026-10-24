@@ -7,6 +7,7 @@ import {
   type CodingWorkbenchPromptDelivery,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
+import { SHELL_BLOCK_MARKER } from "./codingRuntimeRepositoryItemSanitizer.js";
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
@@ -501,6 +502,11 @@ function preparedCommand(
   try {
     if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES)
       throw new Error("opencode-v2-prompt-oversized");
+    // The producer expands every bang-backtick block of the template AFTER substituting the text
+    // into it, runs it in the project directory and consults no permission hook (#3903, proven
+    // against the original executable), so the text can never carry one.
+    if (text.includes(SHELL_BLOCK_MARKER))
+      throw new Error("opencode-v2-command-shell-substitution");
     const { files } = promptInputFields(inputs);
     return {
       path: `/api/session/${safeSessionId(sessionId)}/command`,

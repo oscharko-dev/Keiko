@@ -4,10 +4,16 @@ import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { openCodeCatalogAliasFor } from "../tool-catalog/catalogToolFacadeBridge.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import * as composition from "./opencodeRuntimeComposition.js";
+import type {
+  SecureWorkspaceNativeFileIO,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -591,6 +597,124 @@ describe("production OpenCode backend composition", () => {
       }
     },
   );
+
+  // #3903: the native composition is handed the repository items admission, bound to the host's
+  // secure read and to this run's own workspace identity; the mapped profiles are handed none.
+  describe("repository items admission", () => {
+    function agentSource(): {
+      readonly source: SecureWorkspaceTextReadPort;
+      readonly readText: ReturnType<typeof vi.fn<SecureWorkspaceTextReadPort["readText"]>>;
+    } {
+      const readText = vi.fn<SecureWorkspaceTextReadPort["readText"]>(() =>
+        Promise.resolve({ ok: true, text: "---\ndescription: d\n---\nPrompt\n" }),
+      );
+      const list = vi.fn<SecureWorkspaceNativeFileIO["list"]>(({ relativePath }) =>
+        Promise.resolve(
+          relativePath === ".opencode/agents"
+            ? {
+                ok: true,
+                entries: [{ name: "helper.md", type: "file" }],
+                info: { type: "directory", size: 0, mtimeMs: 0 },
+              }
+            : { ok: false, reason: "not-found" },
+        ),
+      );
+      const unused = (): never => {
+        throw new Error("unused");
+      };
+      return {
+        readText,
+        source: { readText, nativeFileIO: { list, readBytes: unused, stat: unused } },
+      };
+    }
+
+    function nativeRun(
+      root: string,
+      extra: Partial<ProductionOpenCodeBackendInput>,
+      current: () => boolean = (): boolean => true,
+    ): composition.OpenCodeRuntimeCompositionInput["repositoryItems"] {
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      const request = runInput(root);
+      createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        ...extra,
+      }).createRun({ ...request, workspaceIsCurrent: current });
+      return compose.mock.calls.at(-1)?.[0].repositoryItems;
+    }
+
+    it("reads through the host's secure read and writes the sanitized copy", async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+      try {
+        const { source, readText } = agentSource();
+        const port = nativeRun(root, { secureWorkspaceTextRead: source });
+        const discovery = join(root, "discovery");
+        mkdirSync(discovery);
+
+        await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+
+        expect(readText).toHaveBeenCalledTimes(1);
+        expect(readFileSync(join(discovery, "agents", "helper.md"), "utf8")).toBe(
+          '---\ndescription: "d"\nmode: subagent\n---\nPrompt\n',
+        );
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    });
+
+    it("reads nothing once the run's workspace is no longer the active one", async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+      try {
+        const { source, readText } = agentSource();
+        const port = nativeRun(root, { secureWorkspaceTextRead: source }, () => false);
+        const discovery = join(root, "discovery");
+        mkdirSync(discovery);
+
+        await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+
+        expect(readText).not.toHaveBeenCalled();
+        expect(existsSync(join(discovery, "agents"))).toBe(false);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    });
+
+    it("honours the operator's switch and an unqualified host without reading", async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+      try {
+        const { source, readText } = agentSource();
+        const off = nativeRun(root, {
+          secureWorkspaceTextRead: source,
+          repositoryItemsEnabled: false,
+        });
+        const missing = nativeRun(root, {});
+        const discovery = join(root, "discovery");
+        mkdirSync(discovery);
+
+        await off?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+        await missing?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+
+        expect(readText).not.toHaveBeenCalled();
+        expect(existsSync(join(discovery, "agents"))).toBe(false);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    });
+
+    it("hands the mapped profiles no admission at all", () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+      try {
+        const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+        createProductionOpenCodeBackend({
+          ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+          secureWorkspaceTextRead: agentSource().source,
+        }).createRun(runInput(root));
+        expect(compose.mock.calls.at(-1)?.[0].repositoryItems).toBeUndefined();
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    });
+  });
 
   it("binds the mode-derived egress into the policy digest so a different mode cannot replay it", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-digest-")));

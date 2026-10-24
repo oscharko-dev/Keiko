@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6158669e2c66bd85db8da360588820ea0cbeef904a93162e79e961a30911827f" as const;
+  "14ede30d1cd86890dcad82c634ef2315b532f935c68d5ebe25ededfe3a728be4" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 357,
-  completeClassCount: 357,
+  supportedClassCount: 358,
+  completeClassCount: 358,
   completeness: "complete",
   classes: [
     {
@@ -9814,6 +9814,160 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.repository-instructions.context.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-repository-items",
+      requirementContract: "coding-runtime-repository-items",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.repository-items.admitted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.repository-items.admitted",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.repository-items.admitted"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.repository-items.admitted",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "admittedByteCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "agentAdmittedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "agentRefusedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "commandAdmittedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "commandRefusedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "contentSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "directoryFailureCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "refusalReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "skillAdmittedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "skillRefusedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "strippedAuthorityKeyCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "strippedOtherKeyCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.repository-items.admitted.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -43661,6 +43815,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.readiness.failed": "tools-workflows",
     "coding-runtime.readiness.phase": "tools-workflows",
     "coding-runtime.repository-instructions.context": "tools-workflows",
+    "coding-runtime.repository-items.admitted": "tools-workflows",
     "coding-runtime.repository-rerank": "tools-workflows",
     "coding-runtime.revert.applied": "tools-workflows",
     "coding-runtime.revert.dispatch-failed": "tools-workflows",
