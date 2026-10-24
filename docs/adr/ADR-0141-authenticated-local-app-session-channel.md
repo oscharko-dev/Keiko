@@ -565,6 +565,17 @@ offers no commands. The read consumes no revision and no request id. An unpaired
 single `{ session: "unpaired" }` projection before run resolution, independent of the run and of the
 listing, and the general snapshot carries none of it.
 
+## Pending-message channel (ADR-0137 D10, S07)
+
+The messages the operator sent into a running turn that the runtime has not handed to the model yet
+ride the authenticated channel as well: `GET /runs/:runId/inbox` answers the paired operator with each
+message's id, delivery (`steer` or `queue`) and the operator's own one-line preview, bounded and
+duplicate-free by the contract, in the order the model will receive them, and nothing for a run that
+is not running or whose profile takes no delivery. The read consumes no revision and no request id;
+the withdrawal or promotion of a message is the revision-bound `POST /runs/:runId/inbox` behind the
+mutation funnel. An unpaired read returns the single `{ session: "unpaired" }` projection before run
+resolution, independent of the run and of the inbox, and the general snapshot carries none of it.
+
 ## Consequences
 
 - W1.5 can enforce this authority on the content-bearing routes and migrate the runtime-question

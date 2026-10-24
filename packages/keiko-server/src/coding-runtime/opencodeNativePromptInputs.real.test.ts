@@ -15,6 +15,7 @@ import {
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import { createOpenCodeInboxRunPort } from "./opencodeInbox.js";
 import {
   commandDisplayText,
   createOpenCodeCommandPresentation,
@@ -41,6 +42,7 @@ import {
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2Command,
   type OpenCodeV2HttpClient,
+  type OpenCodeV2InboxEntry,
 } from "./opencodeV2HttpClient.js";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 
@@ -343,7 +345,7 @@ interface Run {
   readonly events: string[];
   /** A raw request, for the refusals the Keiko client would not even send. */
   raw(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "DELETE" | "PATCH",
     path: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }>;
@@ -385,7 +387,11 @@ async function withRun(
         headers: { Authorization: authorization, "Content-Type": "application/json" },
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
       });
-      return { status: response.status, body: (await response.json()) as unknown };
+      const text = await response.text();
+      return {
+        status: response.status,
+        body: text.length === 0 ? null : (JSON.parse(text) as unknown),
+      };
     };
     await body({
       fixture,
@@ -1453,6 +1459,361 @@ describe("pinned native OpenCode commands and first-prompt references through Ke
         const modelSaw = lastUserContent(run.gateway.requests[0]);
         expect(modelSaw).toContain("You are a code reviewer");
         expect(modelSaw).toContain(NOTES_CANARY);
+      });
+    },
+    120_000,
+  );
+});
+
+/**
+ * Keiko's own pending-message path over the real session (S07): the delivery ledger that mints the
+ * native message id, and the inbox port that lists, withdraws and promotes through the producer's
+ * `session.inbox.*` operations. Both are composed over ONE ready run, exactly as the composition
+ * wires them.
+ */
+interface PendingPath {
+  readonly deliver: (
+    requestId: string,
+    text: string,
+    delivery: "queue" | "steer",
+  ) => Promise<boolean>;
+  readonly inbox: ReturnType<typeof createOpenCodeInboxRunPort>;
+  readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+}
+
+function pendingPath(run: Run): PendingPath {
+  const sink = createBufferedServerLogSink();
+  const runtimeAdapter = { turnInFlight: (): boolean => true };
+  const promptRun: PromptInputsRun = {
+    runId: RUN_ID,
+    workspaceRoot: run.fixture.workspace,
+    sessionId: run.sessionId,
+    client: run.client,
+    runtimeAdapter,
+    ready: true,
+  };
+  const prompts = createOpenCodePromptInputsRunPort({
+    readyRun: (): PromptInputsRun => promptRun,
+    capabilities: openCodePromptInputs("native"),
+    activityLog: sink,
+    recordPostFailure: (): void => undefined,
+  });
+  const inbox = createOpenCodeInboxRunPort({
+    readyRun: () => ({
+      runId: RUN_ID,
+      sessionId: run.sessionId,
+      client: run.client,
+      runtimeAdapter,
+    }),
+    capabilities: openCodePromptInputs("native"),
+    activityLog: sink,
+    nativeInput: prompts.nativeInput,
+    withdrawNativeInput: prompts.withdrawNativeInput,
+  });
+  return {
+    inbox,
+    sink,
+    deliver: (requestId, text, delivery): Promise<boolean> => {
+      const admitted = prompts.admitPromptInputs(RUN_ID, { delivery, requestId });
+      if (!admitted.ok) throw new Error("fixture-delivery-refused");
+      return prompts.deliverPrompt(RUN_ID, text, admitted.inputs);
+    },
+  };
+}
+
+/** Every model request's text, in arrival order: what the model ever saw. */
+function modelSaw(run: Run): string {
+  return JSON.stringify(run.gateway.requests.map((request) => conversation(request)));
+}
+
+describe("pinned native OpenCode pending messages", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  // The producer facts the inbox port relies on, pinned as the producer answers them.
+  it.skipIf(skip)(
+    "lists pending inputs in arrival order with their delivery, answers a withdrawal of one it no longer holds with 204 and refuses to change one with 409",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const [queued, steered] = ["msg_16b08469d001", "msg_16b08469d002"].map(
+          (prefix) => `${prefix}DaT0xxHG2PAKe6`,
+        ) as [string, string];
+        await run.client.prompt(run.sessionId, "Queued", undefined, undefined, {
+          delivery: "queue",
+          id: queued,
+        });
+        await run.client.prompt(run.sessionId, "Steered", undefined, undefined, {
+          delivery: "steer",
+          id: steered,
+        });
+
+        await expect(run.client.inbox(run.sessionId)).resolves.toEqual([
+          { id: queued, kind: "user", delivery: "queue" },
+          { id: steered, kind: "user", delivery: "steer" },
+        ]);
+        // The producer's wire shape is what the client's reduction reads.
+        const wire = await run.raw("GET", `/api/session/${run.sessionId}/inbox`);
+        expect(wire.status).toBe(200);
+        expect(object(wire.body)?.data).toMatchObject([
+          { id: queued, type: "user", delivery: "queue", payload: { text: "Queued" } },
+          { id: steered, type: "user", delivery: "steer", payload: { text: "Steered" } },
+        ]);
+
+        const unknown = `/api/session/${run.sessionId}/inbox/msg_16b08469d0ffDaT0xxHG2PAKe6`;
+        await expect(run.raw("DELETE", unknown)).resolves.toEqual({ status: 204, body: null });
+        const unchanged = await run.raw("PATCH", unknown, { delivery: "steer" });
+        expect(unchanged.status).toBe(409);
+        expect(object(unchanged.body)?._tag).toBe("ConflictError");
+
+        run.gateway.release();
+        await settled(run);
+        // Once the turn took them, a withdrawal is still 204 and a change is still a conflict.
+        await expect(run.client.inbox(run.sessionId)).resolves.toEqual([]);
+        await expect(
+          run.raw("DELETE", `/api/session/${run.sessionId}/inbox/${steered}`),
+        ).resolves.toEqual({ status: 204, body: null });
+        const late = await run.raw("PATCH", `/api/session/${run.sessionId}/inbox/${steered}`, {
+          delivery: "steer",
+        });
+        expect(late.status).toBe(409);
+        // The delivered input is in the newest history, which is the proof the port reads.
+        expect(await run.client.recentMessageIds(run.sessionId)).toContain(steered);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "withdraws a queued message that is listed, and the model never receives it",
+    async () => {
+      await withRun(["tool-held", "text", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = pendingPath(run);
+        await expect(path.deliver("req-1", "Queued withdrawn", "queue")).resolves.toBe(true);
+        await expect(path.deliver("req-2", "Queued kept", "queue")).resolves.toBe(true);
+        await expect(path.deliver("req-3", "Steered kept", "steer")).resolves.toBe(true);
+
+        const listed = await path.inbox.listInbox(RUN_ID);
+
+        // Steered first, as the model will receive them, then the queued ones in arrival order.
+        expect(listed?.map(({ delivery, preview }) => [delivery, preview])).toEqual([
+          ["steer", "Steered kept"],
+          ["queue", "Queued withdrawn"],
+          ["queue", "Queued kept"],
+        ]);
+        const withdrawn = listed?.find((item) => item.preview === "Queued withdrawn");
+        if (withdrawn === undefined) throw new Error("expected the queued message to be listed");
+
+        await expect(
+          path.inbox.actOnInbox(RUN_ID, { action: "cancel", itemId: withdrawn.itemId }),
+        ).resolves.toEqual({ ok: true, outcome: "cancelled" });
+        await expect(path.inbox.listInbox(RUN_ID)).resolves.toHaveLength(2);
+        await expect(
+          path.inbox.actOnInbox(RUN_ID, { action: "cancel", itemId: withdrawn.itemId }),
+        ).resolves.toEqual({ ok: true, outcome: "already-cancelled" });
+
+        run.gateway.release();
+        await settled(run);
+
+        // The withdrawn message never became a message of the session, nor did the model see it.
+        expect(await userMessagesWith(run, "Queued withdrawn")).toHaveLength(0);
+        expect(modelSaw(run)).not.toContain("Queued withdrawn");
+        expect(modelSaw(run)).toContain("Steered kept");
+        expect(modelSaw(run)).toContain("Queued kept");
+        expect(lastUserContent(run.gateway.requests[1])).toContain("Steered kept");
+        expect(count(run.events, "session.inbox.cancelled")).toBe(1);
+        expect(count(run.events, "session.execution.started")).toBe(1);
+        expect(JSON.stringify(path.sink.events)).not.toMatch(/Queued|Steered|msg_/u);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "promotes a queued message, and the model receives it at the running turn's next step instead of after its answer",
+    async () => {
+      await withRun(["tool-held", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = pendingPath(run);
+        await expect(path.deliver("req-1", "Promoted message", "queue")).resolves.toBe(true);
+        const [pending] = (await path.inbox.listInbox(RUN_ID)) ?? [];
+        if (pending === undefined) throw new Error("expected the queued message to be listed");
+        expect(pending.delivery).toBe("queue");
+
+        await expect(
+          path.inbox.actOnInbox(RUN_ID, { action: "promote", itemId: pending.itemId }),
+        ).resolves.toEqual({ ok: true, outcome: "promoted" });
+        await expect(path.inbox.listInbox(RUN_ID)).resolves.toMatchObject([
+          { itemId: pending.itemId, delivery: "steer", preview: "Promoted message" },
+        ]);
+
+        run.gateway.release();
+        await settled(run);
+
+        // Two model calls, not three: the message joined the step after the tool call, where an
+        // unpromoted queued message waits for the turn's final answer.
+        expect(run.gateway.requests).toHaveLength(2);
+        expect(
+          conversation(run.gateway.requests[1]).map((message) => message.role),
+          "the promoted message reached the step that carries the tool result",
+        ).toEqual(["user", "assistant", "tool", "user"]);
+        expect(lastUserContent(run.gateway.requests[1])).toContain("Promoted message");
+        expect(count(run.events, "session.inbox.delivery.changed")).toBe(1);
+        expect(count(run.events, "session.execution.started")).toBe(1);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "answers a withdrawal or promotion of a message the turn already took as delivered, not as a failure",
+    async () => {
+      await withRun(["tool-held", "text-held", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = pendingPath(run);
+        await expect(path.deliver("req-1", "Steered message", "steer")).resolves.toBe(true);
+        const [pending] = (await path.inbox.listInbox(RUN_ID)) ?? [];
+        if (pending === undefined) throw new Error("expected the steered message to be listed");
+
+        // The running turn takes it with its next model request, which stays held: the turn is
+        // still running when the operator acts on a message it has already read.
+        run.gateway.release();
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(2);
+        expect(lastUserContent(run.gateway.requests[1])).toContain("Steered message");
+
+        await expect(
+          path.inbox.actOnInbox(RUN_ID, { action: "cancel", itemId: pending.itemId }),
+        ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+        await expect(
+          path.inbox.actOnInbox(RUN_ID, { action: "promote", itemId: pending.itemId }),
+        ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+        await expect(path.inbox.listInbox(RUN_ID)).resolves.toEqual([]);
+
+        run.gateway.release();
+        await settled(run);
+        expect(await userMessagesWith(run, "Steered message")).toEqual([pending.itemId]);
+        const outcomes = path.sink.events
+          .filter((event) => (event as { op?: string }).op === "coding-runtime.inbox.action")
+          .map((event) => (event as { extra?: { outcome?: string } }).extra?.outcome);
+        expect(outcomes).toEqual(["listed", "already-delivered", "already-delivered", "listed"]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "does not claim a withdrawal when the turn takes the message between the read and the withdrawal",
+    async () => {
+      await withRun(["tool-held", "text-held", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = pendingPath(run);
+        await expect(path.deliver("req-1", "Steered message", "steer")).resolves.toBe(true);
+        const [pending] = (await path.inbox.listInbox(RUN_ID)) ?? [];
+        if (pending === undefined) throw new Error("expected the steered message to be listed");
+        // The operator's click read the inbox while the message was pending...
+        const stale = await run.client.inbox(run.sessionId);
+        expect(stale.map((entry) => entry.id)).toEqual([pending.itemId]);
+
+        // ...and the turn took it before the withdrawal arrived. Keiko's port reads the inbox
+        // itself first; here the first read is replayed from before the turn took the message.
+        run.gateway.release();
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(2);
+        let replayed = false;
+        const racing = createOpenCodeInboxRunPort({
+          readyRun: () => ({
+            runId: RUN_ID,
+            sessionId: run.sessionId,
+            client: {
+              ...run.client,
+              inbox: (sessionId, signal): Promise<readonly OpenCodeV2InboxEntry[]> => {
+                if (replayed) return run.client.inbox(sessionId, signal);
+                replayed = true;
+                return Promise.resolve(stale);
+              },
+            },
+            runtimeAdapter: { turnInFlight: (): boolean => true },
+          }),
+          capabilities: openCodePromptInputs("native"),
+          activityLog: undefined,
+          nativeInput: () => ({ preview: "Steered message", withdrawn: false }),
+          withdrawNativeInput: (): void => undefined,
+        });
+
+        // The producer answers the withdrawal of a message it already took with 204, as if it had
+        // removed it; only the history proves the message was delivered.
+        await expect(
+          racing.actOnInbox(RUN_ID, { action: "cancel", itemId: pending.itemId }),
+        ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+
+        run.gateway.release();
+        await settled(run);
+        expect(await userMessagesWith(run, "Steered message")).toEqual([pending.itemId]);
+      });
+    },
+    120_000,
+  );
+
+  // The reason Keiko withdraws pending messages when it interrupts a turn: the producer keeps them
+  // through an interrupt and hands them to the model with the next prompt.
+  it.skipIf(skip)(
+    "control: a pending message survives an interrupt and reaches the next prompt's turn",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = pendingPath(run);
+        await expect(path.deliver("req-1", "Leaking message", "steer")).resolves.toBe(true);
+
+        await run.client.interrupt(run.sessionId);
+        await expect
+          .poll(() => count(run.events, "session.execution.interrupted"), { timeout: 30_000 })
+          .toBe(1);
+        run.gateway.release();
+        await expect(run.client.inbox(run.sessionId)).resolves.toHaveLength(1);
+
+        await run.client.prompt(run.sessionId, "Fresh prompt");
+        await settled(run);
+
+        expect(modelSaw(run)).toContain("Leaking message");
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "withdraws what is pending when Keiko interrupts the turn, so the next prompt's turn never sees it",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const path = pendingPath(run);
+        await expect(path.deliver("req-1", "Leaking steered", "steer")).resolves.toBe(true);
+        await expect(path.deliver("req-2", "Leaking queued", "queue")).resolves.toBe(true);
+
+        await run.client.interrupt(run.sessionId);
+        await expect
+          .poll(() => count(run.events, "session.execution.interrupted"), { timeout: 30_000 })
+          .toBe(1);
+        await path.inbox.withdrawPendingInbox(RUN_ID, "corr-0123456789");
+        run.gateway.release();
+        await expect(run.client.inbox(run.sessionId)).resolves.toEqual([]);
+
+        await run.client.prompt(run.sessionId, "Fresh prompt");
+        await settled(run);
+
+        expect(modelSaw(run)).not.toMatch(/Leaking/u);
+        expect(modelSaw(run)).toContain("Fresh prompt");
+        expect(count(run.events, "session.inbox.cancelled")).toBe(2);
+        const [line] = path.sink.events
+          .filter((event) => (event as { op?: string }).op === "coding-runtime.inbox.action")
+          .map((event) => (event as { extra?: Record<string, unknown> }).extra);
+        expect(line).toMatchObject({ action: "withdraw", outcome: "withdrawn", itemCount: 2 });
+        expect(JSON.stringify(path.sink.events)).not.toMatch(/Leaking|msg_/u);
       });
     },
     120_000,

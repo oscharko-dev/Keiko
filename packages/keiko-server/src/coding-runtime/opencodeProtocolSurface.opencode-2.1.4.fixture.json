@@ -61,7 +61,10 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": ["asc", "desc"]
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ]
                 },
                 {
                   "type": "null"
@@ -97,7 +100,9 @@
                     },
                     {
                       "type": "string",
-                      "enum": ["null"]
+                      "enum": [
+                        "null"
+                      ]
                     }
                   ]
                 },
@@ -115,7 +120,10 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": ["true", "false"]
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
                 },
                 {
                   "type": "null"
@@ -237,7 +245,9 @@
                       "$ref": "#/components/schemas/Session.Info"
                     }
                   },
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -387,7 +397,9 @@
                       "additionalProperties": false
                     }
                   },
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -447,7 +459,10 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": ["asc", "desc"]
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ]
                 },
                 {
                   "type": "null"
@@ -581,7 +596,9 @@
                       "$ref": "#/components/schemas/Session.Inbox.User"
                     }
                   },
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -692,7 +709,9 @@
                     ]
                   }
                 },
-                "required": ["text"],
+                "required": [
+                  "text"
+                ],
                 "additionalProperties": false
               }
             }
@@ -719,7 +738,10 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": ["true", "false"]
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
                 },
                 {
                   "type": "null"
@@ -837,7 +859,9 @@
                     "$ref": "#/components/schemas/Agent.ID"
                   }
                 },
-                "required": ["agent"],
+                "required": [
+                  "agent"
+                ],
                 "additionalProperties": false
               }
             }
@@ -918,7 +942,9 @@
                       }
                     }
                   },
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -997,7 +1023,9 @@
                       "$ref": "#/components/schemas/Session.Revert"
                     }
                   },
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1079,7 +1107,9 @@
                     ]
                   }
                 },
-                "required": ["messageID"],
+                "required": [
+                  "messageID"
+                ],
                 "additionalProperties": false
               }
             }
@@ -1271,7 +1301,10 @@
                       }
                     }
                   },
-                  "required": ["location", "data"],
+                  "required": [
+                    "location",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1388,7 +1421,9 @@
                     ]
                   }
                 },
-                "required": ["decision"],
+                "required": [
+                  "decision"
+                ],
                 "additionalProperties": false
               }
             }
@@ -1449,7 +1484,10 @@
                       }
                     }
                   },
-                  "required": ["location", "data"],
+                  "required": [
+                    "location",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1537,7 +1575,10 @@
                       }
                     }
                   },
-                  "required": ["location", "data"],
+                  "required": [
+                    "location",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1777,7 +1818,10 @@
                       "$ref": "#/components/schemas/V2EventEncoded"
                     }
                   },
-                  "required": ["event", "data"],
+                  "required": [
+                    "event",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1856,7 +1900,10 @@
                       }
                     }
                   },
-                  "required": ["location", "data"],
+                  "required": [
+                    "location",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1995,7 +2042,10 @@
                     ]
                   }
                 },
-                "required": ["name", "text"],
+                "required": [
+                  "name",
+                  "text"
+                ],
                 "additionalProperties": false
               }
             }
@@ -2028,7 +2078,9 @@
                       "$ref": "#/components/schemas/Session.Info"
                     }
                   },
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -2141,6 +2193,203 @@
           }
         }
       }
+    },
+    "/api/session/{sessionID}/inbox": {
+      "get": {
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Session.Inbox.Info"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/session/{sessionID}/inbox/{inboxID}": {
+      "delete": {
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.ID"
+            },
+            "required": true
+          },
+          {
+            "name": "inboxID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.Message.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "204": {},
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.ID"
+            },
+            "required": true
+          },
+          {
+            "name": "inboxID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.Message.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "204": {},
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "delivery": {
+                    "$ref": "#/components/schemas/Session.Inbox.Delivery"
+                  }
+                },
+                "required": [
+                  "delivery"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -2168,7 +2417,9 @@
                 "type": "string"
               }
             },
-            "required": ["tmp"],
+            "required": [
+              "tmp"
+            ],
             "additionalProperties": false
           },
           "capabilities": {
@@ -2195,7 +2446,12 @@
             ]
           }
         },
-        "required": ["version", "pid", "urls", "paths"],
+        "required": [
+          "version",
+          "pid",
+          "urls",
+          "paths"
+        ],
         "additionalProperties": false
       },
       "InvalidRequestErrorEncoded": {
@@ -2203,7 +2459,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["InvalidRequestError"]
+            "enum": [
+              "InvalidRequestError"
+            ]
           },
           "message": {
             "type": "string"
@@ -2229,7 +2487,10 @@
             ]
           }
         },
-        "required": ["_tag", "message"],
+        "required": [
+          "_tag",
+          "message"
+        ],
         "additionalProperties": false
       },
       "UnauthorizedErrorEncoded": {
@@ -2237,13 +2498,18 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["UnauthorizedError"]
+            "enum": [
+              "UnauthorizedError"
+            ]
           },
           "message": {
             "type": "string"
           }
         },
-        "required": ["_tag", "message"],
+        "required": [
+          "_tag",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.ID": {
@@ -2298,7 +2564,10 @@
             "additionalProperties": false
           }
         },
-        "required": ["data", "cursor"],
+        "required": [
+          "data",
+          "cursor"
+        ],
         "additionalProperties": false
       },
       "InvalidCursorErrorEncoded": {
@@ -2306,13 +2575,18 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["InvalidCursorError"]
+            "enum": [
+              "InvalidCursorError"
+            ]
           },
           "message": {
             "type": "string"
           }
         },
-        "required": ["_tag", "message"],
+        "required": [
+          "_tag",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.Info": {
@@ -2334,7 +2608,10 @@
                 "$ref": "#/components/schemas/Session.ForkBoundary"
               }
             },
-            "required": ["sessionID", "boundary"],
+            "required": [
+              "sessionID",
+              "boundary"
+            ],
             "additionalProperties": false
           },
           "projectID": {
@@ -2354,7 +2631,11 @@
           },
           "outcome": {
             "type": "string",
-            "enum": ["succeeded", "failed", "interrupted"]
+            "enum": [
+              "succeeded",
+              "failed",
+              "interrupted"
+            ]
           },
           "time": {
             "type": "object",
@@ -2375,7 +2656,10 @@
                 "type": "number"
               }
             },
-            "required": ["created", "updated"],
+            "required": [
+              "created",
+              "updated"
+            ],
             "additionalProperties": false
           },
           "title": {
@@ -2397,7 +2681,14 @@
             "$ref": "#/components/schemas/Location.PublicRef"
           }
         },
-        "required": ["id", "projectID", "cost", "tokens", "time", "location"],
+        "required": [
+          "id",
+          "projectID",
+          "cost",
+          "tokens",
+          "time",
+          "location"
+        ],
         "additionalProperties": false
       },
       "SessionNotFoundErrorEncoded": {
@@ -2405,7 +2696,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["SessionNotFoundError"]
+            "enum": [
+              "SessionNotFoundError"
+            ]
           },
           "sessionID": {
             "type": "string"
@@ -2414,7 +2707,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "sessionID", "message"],
+        "required": [
+          "_tag",
+          "sessionID",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Agent.ID": {
@@ -2433,7 +2730,10 @@
             "type": "string"
           }
         },
-        "required": ["id", "providerID"],
+        "required": [
+          "id",
+          "providerID"
+        ],
         "additionalProperties": false
       },
       "Location.PublicRef": {
@@ -2443,7 +2743,9 @@
             "$ref": "#/components/schemas/AbsolutePath"
           }
         },
-        "required": ["directory"],
+        "required": [
+          "directory"
+        ],
         "additionalProperties": false
       },
       "Session.Metadata": {
@@ -2460,10 +2762,14 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["running"]
+            "enum": [
+              "running"
+            ]
           }
         },
-        "required": ["type"],
+        "required": [
+          "type"
+        ],
         "additionalProperties": false
       },
       "SessionMessagesResponse": {
@@ -2502,7 +2808,10 @@
             "additionalProperties": false
           }
         },
-        "required": ["data", "cursor"],
+        "required": [
+          "data",
+          "cursor"
+        ],
         "additionalProperties": false
       },
       "UnknownErrorEncoded": {
@@ -2510,7 +2819,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["UnknownError"]
+            "enum": [
+              "UnknownError"
+            ]
           },
           "message": {
             "type": "string"
@@ -2526,7 +2837,10 @@
             ]
           }
         },
-        "required": ["_tag", "message"],
+        "required": [
+          "_tag",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.Inbox.User": {
@@ -2545,12 +2859,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["user"]
+            "enum": [
+              "user"
+            ]
           },
           "payload": {
             "$ref": "#/components/schemas/Session.Inbox.UserPayload"
@@ -2559,7 +2877,14 @@
             "$ref": "#/components/schemas/Session.Inbox.Delivery"
           }
         },
-        "required": ["id", "sessionID", "time", "type", "payload", "delivery"],
+        "required": [
+          "id",
+          "sessionID",
+          "time",
+          "type",
+          "payload",
+          "delivery"
+        ],
         "additionalProperties": false
       },
       "LocationNotFoundErrorEncoded": {
@@ -2567,7 +2892,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["LocationNotFoundError"]
+            "enum": [
+              "LocationNotFoundError"
+            ]
           },
           "location": {
             "$ref": "#/components/schemas/Location.PublicRef"
@@ -2576,7 +2903,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "location", "message"],
+        "required": [
+          "_tag",
+          "location",
+          "message"
+        ],
         "additionalProperties": false
       },
       "ConflictErrorEncoded": {
@@ -2584,7 +2915,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["ConflictError"]
+            "enum": [
+              "ConflictError"
+            ]
           },
           "message": {
             "type": "string"
@@ -2600,7 +2933,10 @@
             ]
           }
         },
-        "required": ["_tag", "message"],
+        "required": [
+          "_tag",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.Message.ID": {
@@ -2620,7 +2956,9 @@
             "$ref": "#/components/schemas/Prompt.Mention"
           }
         },
-        "required": ["uri"],
+        "required": [
+          "uri"
+        ],
         "additionalProperties": false
       },
       "Prompt.AgentAttachment": {
@@ -2633,7 +2971,9 @@
             "$ref": "#/components/schemas/Prompt.Mention"
           }
         },
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "additionalProperties": false
       },
       "PromptInput.SkillAttachment": {
@@ -2646,12 +2986,17 @@
             "$ref": "#/components/schemas/Prompt.Mention"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "Session.Inbox.Delivery": {
         "type": "string",
-        "enum": ["steer", "queue"]
+        "enum": [
+          "steer",
+          "queue"
+        ]
       },
       "SessionInterruptResponse": {
         "type": "object",
@@ -2660,7 +3005,9 @@
             "type": "boolean"
           }
         },
-        "required": ["interrupted"],
+        "required": [
+          "interrupted"
+        ],
         "additionalProperties": false
       },
       "FileDiff.Info": {
@@ -2682,10 +3029,20 @@
           },
           "status": {
             "type": "string",
-            "enum": ["added", "deleted", "modified"]
+            "enum": [
+              "added",
+              "deleted",
+              "modified"
+            ]
           }
         },
-        "required": ["file", "patch", "additions", "deletions", "status"],
+        "required": [
+          "file",
+          "patch",
+          "additions",
+          "deletions",
+          "status"
+        ],
         "additionalProperties": false
       },
       "MessageNotFoundErrorEncoded": {
@@ -2693,7 +3050,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["MessageNotFoundError"]
+            "enum": [
+              "MessageNotFoundError"
+            ]
           },
           "sessionID": {
             "type": "string"
@@ -2705,7 +3064,12 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "sessionID", "messageID", "message"],
+        "required": [
+          "_tag",
+          "sessionID",
+          "messageID",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.Revert": {
@@ -2727,7 +3091,9 @@
             }
           }
         },
-        "required": ["messageID"],
+        "required": [
+          "messageID"
+        ],
         "additionalProperties": false
       },
       "SessionBusyErrorEncoded": {
@@ -2735,7 +3101,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["SessionBusyError"]
+            "enum": [
+              "SessionBusyError"
+            ]
           },
           "sessionID": {
             "type": "string"
@@ -2744,7 +3112,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "sessionID", "message"],
+        "required": [
+          "_tag",
+          "sessionID",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Permission.Request": {
@@ -2781,7 +3153,12 @@
             "type": "string"
           }
         },
-        "required": ["id", "sessionID", "action", "resources"],
+        "required": [
+          "id",
+          "sessionID",
+          "action",
+          "resources"
+        ],
         "additionalProperties": false
       },
       "Permission.ID": {
@@ -2793,7 +3170,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["PermissionNotFoundError"]
+            "enum": [
+              "PermissionNotFoundError"
+            ]
           },
           "requestID": {
             "type": "string"
@@ -2802,12 +3181,20 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "requestID", "message"],
+        "required": [
+          "_tag",
+          "requestID",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Permission.Reply": {
         "type": "string",
-        "enum": ["once", "always", "reject"]
+        "enum": [
+          "once",
+          "always",
+          "reject"
+        ]
       },
       "Plugin.Info": {
         "type": "object",
@@ -2825,7 +3212,11 @@
             "$ref": "#/components/schemas/Plugin.State"
           }
         },
-        "required": ["source", "features", "state"],
+        "required": [
+          "source",
+          "features",
+          "state"
+        ],
         "additionalProperties": false
       },
       "Form.Info": {
@@ -2847,7 +3238,12 @@
             "$ref": "#/components/schemas/Form.Fields"
           }
         },
-        "required": ["id", "sessionID", "title", "fields"],
+        "required": [
+          "id",
+          "sessionID",
+          "title",
+          "fields"
+        ],
         "additionalProperties": false
       },
       "Form.ID": {
@@ -2859,7 +3255,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["FormInvalidAnswerError"]
+            "enum": [
+              "FormInvalidAnswerError"
+            ]
           },
           "id": {
             "type": "string"
@@ -2868,7 +3266,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "id", "message"],
+        "required": [
+          "_tag",
+          "id",
+          "message"
+        ],
         "additionalProperties": false
       },
       "FormNotFoundErrorEncoded": {
@@ -2876,7 +3278,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["FormNotFoundError"]
+            "enum": [
+              "FormNotFoundError"
+            ]
           },
           "id": {
             "type": "string"
@@ -2885,7 +3289,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "id", "message"],
+        "required": [
+          "_tag",
+          "id",
+          "message"
+        ],
         "additionalProperties": false
       },
       "FormAlreadySettledErrorEncoded": {
@@ -2893,7 +3301,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["FormAlreadySettledError"]
+            "enum": [
+              "FormAlreadySettledError"
+            ]
           },
           "id": {
             "type": "string"
@@ -2902,7 +3312,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "id", "message"],
+        "required": [
+          "_tag",
+          "id",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Form.Reply": {
@@ -2912,7 +3326,9 @@
             "$ref": "#/components/schemas/Form.Answer"
           }
         },
-        "required": ["answer"],
+        "required": [
+          "answer"
+        ],
         "additionalProperties": false
       },
       "V2EventEncoded": {
@@ -2926,7 +3342,9 @@
             "type": "string"
           }
         },
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "additionalProperties": false
       },
       "CommandNotFoundErrorEncoded": {
@@ -2934,7 +3352,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["CommandNotFoundError"]
+            "enum": [
+              "CommandNotFoundError"
+            ]
           },
           "command": {
             "type": "string"
@@ -2943,7 +3363,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "command", "message"],
+        "required": [
+          "_tag",
+          "command",
+          "message"
+        ],
         "additionalProperties": false
       },
       "CommandExecutionErrorEncoded": {
@@ -2951,7 +3375,9 @@
         "properties": {
           "_tag": {
             "type": "string",
-            "enum": ["CommandExecutionError"]
+            "enum": [
+              "CommandExecutionError"
+            ]
           },
           "command": {
             "type": "string"
@@ -2960,7 +3386,11 @@
             "type": "string"
           }
         },
-        "required": ["_tag", "command", "message"],
+        "required": [
+          "_tag",
+          "command",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.ForkBoundary": {
@@ -2970,13 +3400,18 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["before"]
+                "enum": [
+                  "before"
+                ]
               },
               "messageID": {
                 "$ref": "#/components/schemas/Session.Message.ID"
               }
             },
-            "required": ["type", "messageID"],
+            "required": [
+              "type",
+              "messageID"
+            ],
             "additionalProperties": false
           },
           {
@@ -2984,13 +3419,18 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["through"]
+                "enum": [
+                  "through"
+                ]
               },
               "messageID": {
                 "$ref": "#/components/schemas/Session.Message.ID"
               }
             },
-            "required": ["type", "messageID"],
+            "required": [
+              "type",
+              "messageID"
+            ],
             "additionalProperties": false
           }
         ]
@@ -3020,11 +3460,19 @@
                 "type": "number"
               }
             },
-            "required": ["read", "write"],
+            "required": [
+              "read",
+              "write"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["input", "output", "reasoning", "cache"],
+        "required": [
+          "input",
+          "output",
+          "reasoning",
+          "cache"
+        ],
         "additionalProperties": false
       },
       "Provider.ID": {
@@ -3043,7 +3491,11 @@
             "$ref": "#/components/schemas/Permission.Effect"
           }
         },
-        "required": ["action", "resource", "effect"],
+        "required": [
+          "action",
+          "resource",
+          "effect"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Info": {
@@ -3111,7 +3563,9 @@
             "type": "object"
           }
         },
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
       "Prompt.Mention": {
@@ -3127,7 +3581,11 @@
             "type": "string"
           }
         },
-        "required": ["start", "end", "text"],
+        "required": [
+          "start",
+          "end",
+          "text"
+        ],
         "additionalProperties": false
       },
       "Skill.ID": {
@@ -3143,7 +3601,9 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["tool"]
+                "enum": [
+                  "tool"
+                ]
               },
               "messageID": {
                 "type": "string"
@@ -3152,7 +3612,11 @@
                 "type": "string"
               }
             },
-            "required": ["type", "messageID", "id"],
+            "required": [
+              "type",
+              "messageID",
+              "id"
+            ],
             "additionalProperties": false
           }
         ]
@@ -3164,10 +3628,14 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["builtin"]
+                "enum": [
+                  "builtin"
+                ]
               }
             },
-            "required": ["type"],
+            "required": [
+              "type"
+            ],
             "additionalProperties": false
           },
           {
@@ -3175,7 +3643,9 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["package"]
+                "enum": [
+                  "package"
+                ]
               },
               "target": {
                 "type": "string"
@@ -3185,14 +3655,21 @@
               },
               "outdated": {
                 "type": "boolean",
-                "enum": [true]
+                "enum": [
+                  true
+                ]
               },
               "updating": {
                 "type": "boolean",
-                "enum": [true]
+                "enum": [
+                  true
+                ]
               }
             },
-            "required": ["type", "target"],
+            "required": [
+              "type",
+              "target"
+            ],
             "additionalProperties": false
           },
           {
@@ -3200,13 +3677,18 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["local"]
+                "enum": [
+                  "local"
+                ]
               },
               "path": {
                 "type": "string"
               }
             },
-            "required": ["type", "path"],
+            "required": [
+              "type",
+              "path"
+            ],
             "additionalProperties": false
           },
           {
@@ -3214,10 +3696,14 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["sdk"]
+                "enum": [
+                  "sdk"
+                ]
               }
             },
-            "required": ["type"],
+            "required": [
+              "type"
+            ],
             "additionalProperties": false
           }
         ]
@@ -3227,15 +3713,21 @@
         "properties": {
           "server": {
             "type": "boolean",
-            "enum": [true]
+            "enum": [
+              true
+            ]
           },
           "tui": {
             "type": "boolean",
-            "enum": [true]
+            "enum": [
+              true
+            ]
           },
           "rpc": {
             "type": "boolean",
-            "enum": [true]
+            "enum": [
+              true
+            ]
           }
         },
         "additionalProperties": false
@@ -3247,10 +3739,14 @@
             "properties": {
               "status": {
                 "type": "string",
-                "enum": ["active"]
+                "enum": [
+                  "active"
+                ]
               }
             },
-            "required": ["status"],
+            "required": [
+              "status"
+            ],
             "additionalProperties": false
           },
           {
@@ -3258,7 +3754,9 @@
             "properties": {
               "status": {
                 "type": "string",
-                "enum": ["failed"]
+                "enum": [
+                  "failed"
+                ]
               },
               "error": {
                 "type": "string"
@@ -3267,7 +3765,10 @@
                 "type": "string"
               }
             },
-            "required": ["status", "error"],
+            "required": [
+              "status",
+              "error"
+            ],
             "additionalProperties": false
           }
         ]
@@ -3295,7 +3796,11 @@
       },
       "Permission.Effect": {
         "type": "string",
-        "enum": ["allow", "deny", "ask"]
+        "enum": [
+          "allow",
+          "deny",
+          "ask"
+        ]
       },
       "Session.Message.AgentSelected": {
         "type": "object",
@@ -3313,12 +3818,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["agent-switched"]
+            "enum": [
+              "agent-switched"
+            ]
           },
           "agent": {
             "$ref": "#/components/schemas/Agent.ID"
@@ -3327,7 +3836,12 @@
             "$ref": "#/components/schemas/Agent.ID"
           }
         },
-        "required": ["id", "time", "type", "agent"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "agent"
+        ],
         "additionalProperties": false
       },
       "Session.Message.ModelSelected": {
@@ -3346,12 +3860,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["model-switched"]
+            "enum": [
+              "model-switched"
+            ]
           },
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
@@ -3360,7 +3878,12 @@
             "$ref": "#/components/schemas/Model.Ref"
           }
         },
-        "required": ["id", "time", "type", "model"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "model"
+        ],
         "additionalProperties": false
       },
       "Session.Message.LocationSwitched": {
@@ -3379,12 +3902,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["location-switched"]
+            "enum": [
+              "location-switched"
+            ]
           },
           "projectID": {
             "$ref": "#/components/schemas/Project.ID"
@@ -3410,7 +3937,9 @@
                     "$ref": "#/components/schemas/RelativePath"
                   }
                 },
-                "required": ["location"],
+                "required": [
+                  "location"
+                ],
                 "additionalProperties": false
               },
               {
@@ -3419,7 +3948,12 @@
             ]
           }
         },
-        "required": ["id", "time", "type", "location"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "location"
+        ],
         "additionalProperties": false
       },
       "Session.Message.User": {
@@ -3438,7 +3972,9 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "text": {
@@ -3464,10 +4000,17 @@
           },
           "type": {
             "type": "string",
-            "enum": ["user"]
+            "enum": [
+              "user"
+            ]
           }
         },
-        "required": ["id", "time", "text", "type"],
+        "required": [
+          "id",
+          "time",
+          "text",
+          "type"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Synthetic": {
@@ -3486,7 +4029,9 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "text": {
@@ -3494,10 +4039,17 @@
           },
           "type": {
             "type": "string",
-            "enum": ["synthetic"]
+            "enum": [
+              "synthetic"
+            ]
           }
         },
-        "required": ["id", "time", "text", "type"],
+        "required": [
+          "id",
+          "time",
+          "text",
+          "type"
+        ],
         "additionalProperties": false
       },
       "Session.Message.System": {
@@ -3516,18 +4068,27 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["system"]
+            "enum": [
+              "system"
+            ]
           },
           "text": {
             "type": "string"
           }
         },
-        "required": ["id", "time", "type", "text"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "text"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Skill": {
@@ -3546,12 +4107,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["skill"]
+            "enum": [
+              "skill"
+            ]
           },
           "skill": {
             "$ref": "#/components/schemas/Skill.ID"
@@ -3563,7 +4128,14 @@
             "type": "string"
           }
         },
-        "required": ["id", "time", "type", "skill", "name", "text"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "skill",
+          "name",
+          "text"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Shell": {
@@ -3585,12 +4157,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["shell"]
+            "enum": [
+              "shell"
+            ]
           },
           "shellID": {
             "$ref": "#/components/schemas/Shell.ID"
@@ -3600,7 +4176,12 @@
           },
           "status": {
             "type": "string",
-            "enum": ["running", "exited", "timeout", "killed"]
+            "enum": [
+              "running",
+              "exited",
+              "timeout",
+              "killed"
+            ]
           },
           "exit": {
             "anyOf": [
@@ -3609,7 +4190,11 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           },
@@ -3631,11 +4216,23 @@
                 "type": "boolean"
               }
             },
-            "required": ["output", "cursor", "size", "truncated"],
+            "required": [
+              "output",
+              "cursor",
+              "size",
+              "truncated"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["id", "time", "type", "shellID", "command", "status"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "shellID",
+          "command",
+          "status"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Assistant": {
@@ -3660,12 +4257,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["assistant"]
+            "enum": [
+              "assistant"
+            ]
           },
           "agent": {
             "$ref": "#/components/schemas/Agent.ID"
@@ -3709,7 +4310,14 @@
           },
           "finish": {
             "type": "string",
-            "enum": ["stop", "length", "tool-calls", "content-filter", "error", "unknown"]
+            "enum": [
+              "stop",
+              "length",
+              "tool-calls",
+              "content-filter",
+              "error",
+              "unknown"
+            ]
           },
           "rawFinish": {
             "type": "string"
@@ -3730,7 +4338,14 @@
             "$ref": "#/components/schemas/Session.Message.Assistant.Retry"
           }
         },
-        "required": ["id", "time", "type", "agent", "model", "content"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "agent",
+          "model",
+          "content"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Compaction": {
@@ -3762,22 +4377,35 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "type": {
             "type": "string",
-            "enum": ["idle"]
+            "enum": [
+              "idle"
+            ]
           },
           "outcome": {
             "type": "string",
-            "enum": ["succeeded", "failed", "interrupted"]
+            "enum": [
+              "succeeded",
+              "failed",
+              "interrupted"
+            ]
           },
           "error": {
             "$ref": "#/components/schemas/Session.StructuredError"
           }
         },
-        "required": ["id", "time", "type", "outcome"],
+        "required": [
+          "id",
+          "time",
+          "type",
+          "outcome"
+        ],
         "additionalProperties": false
       },
       "Prompt.FileAttachment": {
@@ -3799,7 +4427,11 @@
             "$ref": "#/components/schemas/Prompt.Mention"
           }
         },
-        "required": ["data", "mime", "source"],
+        "required": [
+          "data",
+          "mime",
+          "source"
+        ],
         "additionalProperties": false
       },
       "Prompt.SkillAttachment": {
@@ -3818,7 +4450,10 @@
             "$ref": "#/components/schemas/Prompt.Mention"
           }
         },
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "additionalProperties": false
       },
       "Form.Field": {
@@ -3855,7 +4490,11 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           },
@@ -3882,7 +4521,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["text"]
+            "enum": [
+              "text"
+            ]
           },
           "text": {
             "type": "string"
@@ -3891,7 +4532,10 @@
             "$ref": "#/components/schemas/Session.Message.Native"
           }
         },
-        "required": ["type", "text"],
+        "required": [
+          "type",
+          "text"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Assistant.Reasoning": {
@@ -3899,7 +4543,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["reasoning"]
+            "enum": [
+              "reasoning"
+            ]
           },
           "text": {
             "type": "string"
@@ -3917,11 +4563,16 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["type", "text"],
+        "required": [
+          "type",
+          "text"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Assistant.Tool": {
@@ -3929,7 +4580,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["tool"]
+            "enum": [
+              "tool"
+            ]
           },
           "id": {
             "type": "string"
@@ -3972,11 +4625,19 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["type", "id", "name", "state", "time"],
+        "required": [
+          "type",
+          "id",
+          "name",
+          "state",
+          "time"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Native_3": {
@@ -4003,7 +4664,9 @@
                 "type": "string"
               }
             },
-            "required": ["body"],
+            "required": [
+              "body"
+            ],
             "additionalProperties": false
           },
           "retryAfterMs": {
@@ -4011,7 +4674,10 @@
             "minimum": 0
           }
         },
-        "required": ["type", "message"],
+        "required": [
+          "type",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Assistant.Retry": {
@@ -4028,7 +4694,11 @@
             "$ref": "#/components/schemas/Session.StructuredError"
           }
         },
-        "required": ["attempt", "at", "error"],
+        "required": [
+          "attempt",
+          "at",
+          "error"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Compaction.Running": {
@@ -4036,7 +4706,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["compaction"]
+            "enum": [
+              "compaction"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/Session.Message.ID"
@@ -4051,19 +4723,33 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "status": {
             "type": "string",
-            "enum": ["running"]
+            "enum": [
+              "running"
+            ]
           },
           "reason": {
             "type": "string",
-            "enum": ["auto", "manual"]
+            "enum": [
+              "auto",
+              "manual"
+            ]
           }
         },
-        "required": ["type", "id", "time", "status", "reason", "summary"],
+        "required": [
+          "type",
+          "id",
+          "time",
+          "status",
+          "reason",
+          "summary"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Compaction.Completed": {
@@ -4071,7 +4757,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["compaction"]
+            "enum": [
+              "compaction"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/Session.Message.ID"
@@ -4086,16 +4774,23 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "status": {
             "type": "string",
-            "enum": ["completed"]
+            "enum": [
+              "completed"
+            ]
           },
           "reason": {
             "type": "string",
-            "enum": ["auto", "manual"]
+            "enum": [
+              "auto",
+              "manual"
+            ]
           },
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
@@ -4110,7 +4805,14 @@
             "$ref": "#/components/schemas/TokenUsage.Info"
           }
         },
-        "required": ["type", "id", "time", "status", "reason", "summary"],
+        "required": [
+          "type",
+          "id",
+          "time",
+          "status",
+          "reason",
+          "summary"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Compaction.Failed": {
@@ -4118,7 +4820,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["compaction"]
+            "enum": [
+              "compaction"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/Session.Message.ID"
@@ -4133,16 +4837,23 @@
                 "type": "number"
               }
             },
-            "required": ["created"],
+            "required": [
+              "created"
+            ],
             "additionalProperties": false
           },
           "status": {
             "type": "string",
-            "enum": ["failed"]
+            "enum": [
+              "failed"
+            ]
           },
           "reason": {
             "type": "string",
-            "enum": ["auto", "manual"]
+            "enum": [
+              "auto",
+              "manual"
+            ]
           },
           "error": {
             "$ref": "#/components/schemas/Session.StructuredError"
@@ -4154,7 +4865,14 @@
             "$ref": "#/components/schemas/TokenUsage.Info"
           }
         },
-        "required": ["type", "id", "time", "status", "reason", "error"],
+        "required": [
+          "type",
+          "id",
+          "time",
+          "status",
+          "reason",
+          "error"
+        ],
         "additionalProperties": false
       },
       "Prompt.Base64": {
@@ -4168,10 +4886,14 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["inline"]
+                "enum": [
+                  "inline"
+                ]
               }
             },
-            "required": ["type"],
+            "required": [
+              "type"
+            ],
             "additionalProperties": false
           },
           {
@@ -4179,13 +4901,18 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["uri"]
+                "enum": [
+                  "uri"
+                ]
               },
               "uri": {
                 "type": "string"
               }
             },
-            "required": ["type", "uri"],
+            "required": [
+              "type",
+              "uri"
+            ],
             "additionalProperties": false
           }
         ]
@@ -4213,11 +4940,18 @@
           },
           "type": {
             "type": "string",
-            "enum": ["string"]
+            "enum": [
+              "string"
+            ]
           },
           "format": {
             "type": "string",
-            "enum": ["email", "uri", "date", "date-time"]
+            "enum": [
+              "email",
+              "uri",
+              "date",
+              "date-time"
+            ]
           },
           "minLength": {
             "type": "integer",
@@ -4246,7 +4980,10 @@
             "type": "boolean"
           }
         },
-        "required": ["key", "type"],
+        "required": [
+          "key",
+          "type"
+        ],
         "additionalProperties": false
       },
       "Form.NumberField": {
@@ -4272,7 +5009,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["number"]
+            "enum": [
+              "number"
+            ]
           },
           "minimum": {
             "anyOf": [
@@ -4281,7 +5020,11 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           },
@@ -4292,7 +5035,11 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           },
@@ -4303,12 +5050,19 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           }
         },
-        "required": ["key", "type"],
+        "required": [
+          "key",
+          "type"
+        ],
         "additionalProperties": false
       },
       "Form.IntegerField": {
@@ -4334,7 +5088,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["integer"]
+            "enum": [
+              "integer"
+            ]
           },
           "minimum": {
             "anyOf": [
@@ -4343,7 +5099,11 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           },
@@ -4354,7 +5114,11 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           },
@@ -4365,12 +5129,19 @@
               },
               {
                 "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
               }
             ]
           }
         },
-        "required": ["key", "type"],
+        "required": [
+          "key",
+          "type"
+        ],
         "additionalProperties": false
       },
       "Form.BooleanField": {
@@ -4396,13 +5167,18 @@
           },
           "type": {
             "type": "string",
-            "enum": ["boolean"]
+            "enum": [
+              "boolean"
+            ]
           },
           "default": {
             "type": "boolean"
           }
         },
-        "required": ["key", "type"],
+        "required": [
+          "key",
+          "type"
+        ],
         "additionalProperties": false
       },
       "Form.MultiselectField": {
@@ -4428,7 +5204,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["multiselect"]
+            "enum": [
+              "multiselect"
+            ]
           },
           "options": {
             "type": "array",
@@ -4454,7 +5232,11 @@
             }
           }
         },
-        "required": ["key", "type", "options"],
+        "required": [
+          "key",
+          "type",
+          "options"
+        ],
         "additionalProperties": false
       },
       "Form.ExternalField": {
@@ -4465,7 +5247,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["external"]
+            "enum": [
+              "external"
+            ]
           },
           "url": {
             "type": "string"
@@ -4474,7 +5258,11 @@
             "type": "string"
           }
         },
-        "required": ["key", "type", "url"],
+        "required": [
+          "key",
+          "type",
+          "url"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Native": {
@@ -4491,13 +5279,18 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["streaming"]
+            "enum": [
+              "streaming"
+            ]
           },
           "input": {
             "type": "string"
           }
         },
-        "required": ["status", "input"],
+        "required": [
+          "status",
+          "input"
+        ],
         "additionalProperties": false
       },
       "Session.Message.ToolState.Running": {
@@ -4505,7 +5298,9 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["running"]
+            "enum": [
+              "running"
+            ]
           },
           "input": {
             "type": "object"
@@ -4514,7 +5309,11 @@
             "type": "object"
           }
         },
-        "required": ["status", "input", "metadata"],
+        "required": [
+          "status",
+          "input",
+          "metadata"
+        ],
         "additionalProperties": false
       },
       "Session.Message.ToolState.Completed": {
@@ -4522,7 +5321,9 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["completed"]
+            "enum": [
+              "completed"
+            ]
           },
           "input": {
             "type": "object"
@@ -4543,7 +5344,11 @@
             "type": "object"
           }
         },
-        "required": ["status", "input", "content"],
+        "required": [
+          "status",
+          "input",
+          "content"
+        ],
         "additionalProperties": false
       },
       "Session.Message.ToolState.Error": {
@@ -4551,7 +5356,9 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["error"]
+            "enum": [
+              "error"
+            ]
           },
           "input": {
             "type": "object"
@@ -4575,7 +5382,11 @@
             "type": "object"
           }
         },
-        "required": ["status", "input", "error"],
+        "required": [
+          "status",
+          "input",
+          "error"
+        ],
         "additionalProperties": false
       },
       "Session.Message.Native_4": {
@@ -4589,7 +5400,10 @@
           },
           "op": {
             "type": "string",
-            "enum": ["eq", "neq"]
+            "enum": [
+              "eq",
+              "neq"
+            ]
           },
           "value": {
             "anyOf": [
@@ -4603,7 +5417,11 @@
                   },
                   {
                     "type": "string",
-                    "enum": ["Infinity", "-Infinity", "NaN"]
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
                   }
                 ]
               },
@@ -4613,7 +5431,11 @@
             ]
           }
         },
-        "required": ["key", "op", "value"],
+        "required": [
+          "key",
+          "op",
+          "value"
+        ],
         "additionalProperties": false
       },
       "Form.Option": {
@@ -4626,7 +5448,10 @@
             "type": "string"
           }
         },
-        "required": ["value", "label"],
+        "required": [
+          "value",
+          "label"
+        ],
         "additionalProperties": false
       },
       "Tool.Content": {
@@ -4644,13 +5469,18 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["text"]
+            "enum": [
+              "text"
+            ]
           },
           "text": {
             "type": "string"
           }
         },
-        "required": ["type", "text"],
+        "required": [
+          "type",
+          "text"
+        ],
         "additionalProperties": false
       },
       "Tool.FileContent": {
@@ -4658,7 +5488,9 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["file"]
+            "enum": [
+              "file"
+            ]
           },
           "uri": {
             "type": "string"
@@ -4677,7 +5509,198 @@
             ]
           }
         },
-        "required": ["type", "uri", "mime"],
+        "required": [
+          "type",
+          "uri",
+          "mime"
+        ],
+        "additionalProperties": false
+      },
+      "Session.Inbox.Info": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Session.Inbox.User"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Inbox.Synthetic"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Inbox.Compaction"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Inbox.Move"
+          }
+        ]
+      },
+      "Session.Inbox.Synthetic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Session.Message.ID"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "created"
+            ],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "synthetic"
+            ]
+          },
+          "payload": {
+            "$ref": "#/components/schemas/Session.Inbox.SyntheticPayload"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/Session.Inbox.Delivery"
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "time",
+          "type",
+          "payload",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "Session.Inbox.Compaction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Session.Message.ID"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "created"
+            ],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "compaction"
+            ]
+          },
+          "payload": {
+            "$ref": "#/components/schemas/Session.Inbox.CompactionPayload"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/Session.Inbox.Delivery"
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "time",
+          "type",
+          "payload",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "Session.Inbox.Move": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Session.Message.ID"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "created"
+            ],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "move"
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/Session.Inbox.Delivery"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/Session.Inbox.MovePayload"
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "time",
+          "type",
+          "delivery",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "Session.Inbox.SyntheticPayload": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "Session.Inbox.CompactionPayload": {
+        "not": {
+          "type": "null"
+        }
+      },
+      "Session.Inbox.MovePayload": {
+        "type": "object",
+        "properties": {
+          "projectID": {
+            "$ref": "#/components/schemas/Project.ID"
+          },
+          "subpath": {
+            "$ref": "#/components/schemas/RelativePath"
+          },
+          "location": {
+            "$ref": "#/components/schemas/Location.PublicRef"
+          }
+        },
+        "required": [
+          "projectID",
+          "location"
+        ],
         "additionalProperties": false
       }
     }

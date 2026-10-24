@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "befab2dc60463a4b680bdc5d38192de9eb1c0ea965a40a72487156219e8671ec" as const;
+  "0870bdbc66fada55c6507a86dbaf86dbbd7d061f94ada3e450f0a23c8ead89b9" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 358,
-  completeClassCount: 358,
+  supportedClassCount: 359,
+  completeClassCount: 359,
   completeness: "complete",
   classes: [
     {
@@ -8284,6 +8284,80 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "coding-runtime-inbox-dispatch",
+      requirementContract: "coding-runtime-inbox-dispatch",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.inbox.dispatch-failed"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.inbox.dispatch-failed",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.inbox.dispatch-failed",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "operation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.inbox.dispatch-failed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "coding-runtime-initial-turn-dispatch",
       requirementContract: "coding-runtime-initial-turn-dispatch",
       productSurfaces: ["keiko-server"],
@@ -9145,7 +9219,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.commands.listed", "coding-runtime.prompt-inputs.settled"],
+        state: [
+          "coding-runtime.commands.listed",
+          "coding-runtime.inbox.action",
+          "coding-runtime.prompt-inputs.settled",
+        ],
         end: [],
         failure: [],
         loss: [],
@@ -9156,12 +9234,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-runtime.inbox.action",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.prompt-inputs.settled",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.commands.listed", "coding-runtime.prompt-inputs.settled"],
+      resourceSignals: [
+        "coding-runtime.commands.listed",
+        "coding-runtime.inbox.action",
+        "coding-runtime.prompt-inputs.settled",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -9222,6 +9308,73 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.commands.listed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.inbox.action",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "action",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "ignoredCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "itemCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.inbox.action.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -43974,6 +44127,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.history": "tools-workflows",
     "coding-runtime.history-projection": "tools-workflows",
     "coding-runtime.history.export": "tools-workflows",
+    "coding-runtime.inbox.action": "tools-workflows",
+    "coding-runtime.inbox.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.initialization-transport": "tools-workflows",

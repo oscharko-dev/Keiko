@@ -20,6 +20,7 @@ function mutations(): RuntimeMutationActions {
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
     revert: vi.fn(() => Promise.resolve()),
+    inboxAction: vi.fn(() => Promise.resolve()),
     revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }

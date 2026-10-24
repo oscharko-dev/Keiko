@@ -1312,6 +1312,23 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.revert.restore.confirmAction": "Confirm restore",
   "codingWorkbench.revert.cancel": "Cancel",
   "codingWorkbench.revert.busy": "Applying…",
+  "codingWorkbench.inbox.region": "Messages waiting for this task",
+  "codingWorkbench.inbox.summary": "{count} messages are waiting for the running task.",
+  "codingWorkbench.inbox.summary.one": "1 message is waiting for the running task.",
+  "codingWorkbench.inbox.delivery.steer": "Send now",
+  "codingWorkbench.inbox.delivery.steer.help": "It joins the running task at its next step.",
+  "codingWorkbench.inbox.delivery.queue": "Queued",
+  "codingWorkbench.inbox.delivery.queue.help":
+    "It is delivered after the running task's current work.",
+  "codingWorkbench.inbox.emptyPreview": "Message without text",
+  "codingWorkbench.inbox.sendNow": "Send now",
+  "codingWorkbench.inbox.sendNow.item": "Send now: {text}",
+  "codingWorkbench.inbox.cancel": "Cancel",
+  "codingWorkbench.inbox.cancel.item": "Cancel message: {text}",
+  "codingWorkbench.inbox.busy": "Applying…",
+  "codingWorkbench.inbox.error":
+    "The waiting messages could not be read. They may still reach the running task.",
+  "codingWorkbench.inbox.retry": "Retry",
 } as const;
 
 export type CodingWorkbenchMessageKey = keyof typeof EN_CODING_WORKBENCH_MESSAGES;

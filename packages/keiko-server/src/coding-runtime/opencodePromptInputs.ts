@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep, basename } from "node:path";
 
 import {
+  CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS,
   isCodingWorkbenchPromptReferencePath,
   type CodingWorkbenchPromptDelivery,
   type CodingWorkbenchPromptReference,
   type CodingWorkbenchRuntimePromptInputs,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   activityLogErrorKindOr,
   activityLogEvent,
@@ -481,6 +483,14 @@ export interface OpenCodePromptInputsRunPort {
     text: string,
     inputs: AdmittedPromptInputs,
   ) => Promise<boolean>;
+  /**
+   * The message Keiko delivered into this run under that native id, or `undefined` when the id was
+   * never minted for the run (or has been forgotten for lack of room): the proof that a pending
+   * message is one of the operator's own. Nothing the producer holds can be named into it.
+   */
+  readonly nativeInput: (runId: string, messageId: string) => MintedNativeInput | undefined;
+  /** Records that Keiko withdrew the message, so a repeated action on it says so truthfully. */
+  readonly withdrawNativeInput: (runId: string, messageId: string) => void;
 }
 
 export interface OpenCodePromptInputsRunPortDeps {
@@ -584,8 +594,40 @@ export const OPENCODE_NATIVE_INPUT_LEDGER_MAX = 32;
 interface NativeInputEntry {
   readonly messageId: string;
   readonly fingerprint: string;
+  /**
+   * The operator's own text as a one-line preview, for the Workbench's list of messages still
+   * waiting for the turn (`opencodeInbox.ts`). Bounded and flattened at the moment the id is
+   * minted; the entry never holds the message itself, its files or anything the producer returns.
+   */
+  readonly preview: string;
   /** The producer's receipt was read; the entry stays only for a commit the dispatcher refused. */
   acknowledged: boolean;
+  /** Keiko withdrew the message from the producer's inbox itself: it never reaches the model. */
+  withdrawn: boolean;
+}
+
+/** What Keiko knows of a message it delivered into a run, found by the id the producer holds it under. */
+export interface MintedNativeInput {
+  readonly preview: string;
+  readonly withdrawn: boolean;
+}
+
+/**
+ * The operator's text as a one-line preview of at most the contract's bound: invisible and
+ * text-reordering code points and control characters removed, every run of whitespace one space, and
+ * a longer text cut at a code point boundary and ended with an ellipsis. What the Workbench's pending
+ * list shows is exactly what the contract's display-text validation accepts.
+ */
+export function nativeInputPreview(text: string): string {
+  const flat = stripUnsafeFormatChars(text).replace(/\s+/gu, " ").trim();
+  const max = CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS;
+  if (flat.length <= max) return flat;
+  let kept = "";
+  for (const character of flat) {
+    if (kept.length + character.length > max - 1) break;
+    kept += character;
+  }
+  return `${kept.trimEnd()}\u2026`;
 }
 
 /** The operator requests of one run whose native message id is retained, oldest first. */
@@ -636,7 +678,13 @@ function bindNativeInput(
   }
   makeRoom(ledger);
   const messageId = mint();
-  ledger.set(requestId, { messageId, fingerprint, acknowledged: false });
+  ledger.set(requestId, {
+    messageId,
+    fingerprint,
+    preview: nativeInputPreview(text),
+    acknowledged: false,
+    withdrawn: false,
+  });
   return { kind: "bound", messageId };
 }
 
@@ -710,6 +758,39 @@ async function sendDelivery(context: DeliveryContext, attempt: DeliveryAttempt):
   return run.ready;
 }
 
+function findNativeInput(
+  ledger: NativeInputLedger,
+  messageId: string,
+): NativeInputEntry | undefined {
+  for (const entry of ledger.values()) {
+    if (entry.messageId === messageId) return entry;
+  }
+  return undefined;
+}
+
+/** The read and the withdrawal the Workbench's pending list needs from the ledger. */
+function nativeInputAccess(
+  deps: OpenCodePromptInputsRunPortDeps,
+  ledgerOf: (run: PromptInputsRun) => NativeInputLedger,
+): Pick<OpenCodePromptInputsRunPort, "nativeInput" | "withdrawNativeInput"> {
+  const entryOf = (runId: string, messageId: string): NativeInputEntry | undefined => {
+    const run = deps.readyRun(runId);
+    return run === undefined ? undefined : findNativeInput(ledgerOf(run), messageId);
+  };
+  return {
+    nativeInput: (runId, messageId): MintedNativeInput | undefined => {
+      const entry = entryOf(runId, messageId);
+      return entry === undefined
+        ? undefined
+        : { preview: entry.preview, withdrawn: entry.withdrawn };
+    },
+    withdrawNativeInput: (runId, messageId): void => {
+      const entry = entryOf(runId, messageId);
+      if (entry !== undefined) entry.withdrawn = true;
+    },
+  };
+}
+
 export function createOpenCodePromptInputsRunPort(
   deps: OpenCodePromptInputsRunPortDeps,
 ): OpenCodePromptInputsRunPort {
@@ -727,6 +808,7 @@ export function createOpenCodePromptInputsRunPort(
   const context: DeliveryContext = { deps, ledgerOf };
   return {
     promptInputs: deps.capabilities,
+    ...nativeInputAccess(deps, ledgerOf),
     admitPromptInputs: (runId, request): PromptInputsAdmission => {
       const admission = admitForRun(deps.readyRun(runId), deps.capabilities, request);
       if (!admission.ok) {

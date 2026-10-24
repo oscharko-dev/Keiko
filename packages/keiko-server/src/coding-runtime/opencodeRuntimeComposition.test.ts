@@ -252,6 +252,30 @@ interface OpenCodeRuntimeComposition {
       | undefined;
     readonly admitCommand?:
       ((runId: string, inputs: AdmittedPromptInputs) => Promise<PromptInputsAdmission>) | undefined;
+    /** The messages sent into the running turn that the runtime has not taken yet (S07). */
+    readonly listInbox?:
+      | ((
+          runId: string,
+          correlationId?: string,
+        ) => Promise<
+          | readonly {
+              readonly itemId: string;
+              readonly delivery: "queue" | "steer";
+              readonly preview: string;
+            }[]
+          | undefined
+        >)
+      | undefined;
+    readonly actOnInbox?:
+      | ((
+          runId: string,
+          input: { readonly action: "cancel" | "promote"; readonly itemId: string },
+          correlationId?: string,
+        ) => Promise<
+          | { readonly ok: true; readonly outcome: string }
+          | { readonly ok: false; readonly reason: string }
+        >)
+      | undefined;
     readonly selectableAgents?: readonly ("build" | "plan")[] | undefined;
     readonly abortTask: (runId: string) => Promise<boolean>;
     /** Undo and restore of the newest turn; offered by the native profile only (B3, S04). */
@@ -506,6 +530,53 @@ function storedTurnPrompt(
   return Promise.resolve(v2Envelope(receipt));
 }
 
+/**
+ * The producer's session inbox, derived from the delivered prompts the fixture stored: every
+ * prompt that carried a `delivery` is pending until the test withdraws it (`DELETE`) or marks it
+ * delivered, and a `PATCH` changes its delivery, as the pinned producer does (204 for each).
+ */
+function inboxResponse(
+  inbox: NonNullable<NonNullable<StartBridgeControl["runControl"]>["inbox"]>,
+  promptBodies: readonly string[],
+  path: string,
+  init: RequestInit | undefined,
+): Response {
+  const method = init?.method ?? "GET";
+  const scripted = inbox.respond?.();
+  if (scripted !== undefined) return scripted;
+  inbox.requests.push({
+    method,
+    path,
+    ...(typeof init?.body === "string" ? { body: init.body } : {}),
+  });
+  const entryId = path.split("/")[5] ?? "";
+  if (method === "DELETE") {
+    inbox.withdrawn.add(entryId);
+    return new Response(null, { status: 204 });
+  }
+  if (method === "PATCH") {
+    inbox.promoted.add(entryId);
+    return new Response(null, { status: 204 });
+  }
+  const pending = promptBodies.flatMap((body) => {
+    const parsed = JSON.parse(body) as { id?: string; delivery?: "queue" | "steer"; text: string };
+    const id = parsed.id;
+    if (id === undefined || parsed.delivery === undefined) return [];
+    if (inbox.withdrawn.has(id) || inbox.delivered.has(id)) return [];
+    return [
+      {
+        id,
+        sessionID: "ses_tool",
+        time: { created: 1 },
+        type: "user",
+        payload: { text: parsed.text },
+        delivery: inbox.promoted.has(id) ? "steer" : parsed.delivery,
+      },
+    ];
+  });
+  return v2Envelope([...inbox.runtimeOwned, ...pending]);
+}
+
 function v2Envelope(value: unknown): Response {
   return v2Json({ data: value });
 }
@@ -670,6 +741,24 @@ interface StartBridgeControl {
       listingResponse?: (() => Response) | undefined;
       /** What `POST .../command` answers; the runtime's 204 by default. */
       commandResponse?: (() => Response) | undefined;
+    };
+    /** The session inbox routes of a native run (S07): listing, withdrawal and delivery change. */
+    readonly inbox?: {
+      readonly requests: {
+        readonly method: string;
+        readonly path: string;
+        readonly body?: string;
+      }[];
+      /** Entries the runtime queued on its own; listed first, never the operator's. */
+      readonly runtimeOwned: unknown[];
+      /** Ids a `DELETE` withdrew. */
+      readonly withdrawn: Set<string>;
+      /** Ids a `PATCH` changed to `steer`. */
+      readonly promoted: Set<string>;
+      /** Ids the running turn already took: no longer pending. */
+      readonly delivered: Set<string>;
+      /** Answers every inbox request with this instead, when the producer should fail. */
+      respond?: (() => Response) | undefined;
     };
     /** The session diff and revert routes of a native run (B3, S04). */
     readonly revert?: {
@@ -1170,6 +1259,14 @@ async function startBridgeFixture(
         return control.historyResponseFactory(init?.signal ?? undefined);
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
+    if (
+      path.startsWith("/api/session/ses_tool/inbox") &&
+      control?.runControl?.inbox !== undefined
+    ) {
+      return Promise.resolve(
+        inboxResponse(control.runControl.inbox, control.runControl.promptBodies, path, init),
+      );
+    }
     if (path === "/api/command" || path.endsWith("/command")) {
       const commands = control?.runControl?.commands;
       commands?.requests.push({
@@ -1519,7 +1616,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "c08462194087e6f64c159e68dbbd4bc2f8ce11c7d1d8547fbbd6d0c2b3e466ef",
+      "6a5345a5ecbed013c3ce8e03cf7a2ca86157fe041e5b0ab2c645017d5c7befd5",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -7167,6 +7264,304 @@ describe("turn revert on the run port (B3, S04)", () => {
       expect(revert.requests.map(({ path }) => path)).not.toContain(
         "/api/session/ses_tool/revert/stage",
       );
+    } finally {
+      await fixture.stop();
+    }
+  });
+});
+
+// S07 (ADR-0137 D10): the messages sent into the running turn that the runtime has not taken yet.
+describe("pending messages on the run port (S07)", () => {
+  const facadeStub: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+  const SECRET = "PRIVATE-OPERATOR-TEXT";
+
+  async function inboxFixture(profile: "native" | "direct" | "code-mode" = "native"): Promise<{
+    readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+    readonly port: OpenCodeRuntimeComposition["runPort"];
+    readonly promptBodies: string[];
+    readonly inbox: NonNullable<NonNullable<StartBridgeControl["runControl"]>["inbox"]>;
+    readonly runControl: NonNullable<StartBridgeControl["runControl"]>;
+    /** The session history the fixture answers; a test completes the turn by replacing `value`. */
+    readonly history: { value: readonly Readonly<Record<string, unknown>>[] };
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+  }> {
+    const workspace = realpathSync(tempDir("keiko-inbox-workspace-"));
+    const promptBodies: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const inbox = {
+      requests: [],
+      runtimeOwned: [],
+      withdrawn: new Set<string>(),
+      promoted: new Set<string>(),
+      delivered: new Set<string>(),
+    };
+    const history = { value: completedTurnHistory().slice(0, 1) };
+    const runControl = {
+      promptBodies,
+      abortSessions: [],
+      statusResponses: [{}, { ses_tool: { type: "busy" } }] as unknown[],
+      inbox,
+    };
+    const fixture = await startBridgeFixture(facadeStub, undefined, {
+      activityLog,
+      workspaceRoot: workspace,
+      readToolProfile: () => profile,
+      runControl,
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.value.slice().reverse())),
+    });
+    return {
+      fixture,
+      port: fixture.runtime.runPort,
+      promptBodies,
+      inbox,
+      runControl,
+      history,
+      activityLog,
+    };
+  }
+
+  /**
+   * Interrupts the turn in flight the way the settlement tests do: the runtime has been asked to stop,
+   * and the turn ends once its history shows it complete and the session reports quiet.
+   */
+  async function interrupt(
+    fixtureState: Awaited<ReturnType<typeof inboxFixture>>,
+  ): Promise<boolean> {
+    const { port, runControl, history } = fixtureState;
+    const terminal = port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(5_000));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const aborting = port.abortTask(FIXTURE_RUN_ID);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    history.value = completedTurnHistory();
+    runControl.statusResponses.push({});
+    const stopped = await aborting;
+    await terminal;
+    return stopped;
+  }
+
+  async function deliver(
+    port: OpenCodeRuntimeComposition["runPort"],
+    requestId: string,
+    text: string,
+    delivery: "queue" | "steer",
+  ): Promise<void> {
+    const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery, requestId });
+    if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+    await expect(port.deliverPrompt?.(FIXTURE_RUN_ID, text, admitted.inputs)).resolves.toBe(true);
+  }
+
+  const idOf = (body: string | undefined): string =>
+    (JSON.parse(body ?? "{}") as { id?: string }).id ?? "";
+
+  const inboxLines = (log: ReturnType<typeof createBufferedServerLogSink>): unknown[] =>
+    log.events
+      .filter((event) => event.op === "coding-runtime.inbox.action")
+      .map((event) => {
+        const { completeness: _completeness, loss: _loss, ...extra } = event.extra ?? {};
+        return extra;
+      });
+
+  it("lists the delivered messages with the operator's own preview, steered before queued", async () => {
+    const { fixture, port, promptBodies, inbox, activityLog } = await inboxFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      await deliver(port, "req-queued", `  ${SECRET}\n  later  `, "queue");
+      await deliver(port, "req-steered", "use the new logger", "steer");
+      // The runtime queued something of its own: it is not the operator's and is never listed.
+      inbox.runtimeOwned.push({
+        id: "msg_runtime_owned",
+        sessionID: "ses_tool",
+        time: { created: 1 },
+        type: "synthetic",
+        payload: { text: "RUNTIME-OWNED-TEXT" },
+        delivery: "steer",
+      });
+
+      const items = await port.listInbox?.(FIXTURE_RUN_ID, "corr-0123456789");
+
+      expect(items).toEqual([
+        { itemId: idOf(promptBodies[2]), delivery: "steer", preview: "use the new logger" },
+        { itemId: idOf(promptBodies[1]), delivery: "queue", preview: `${SECRET} later` },
+      ]);
+      expect(inbox.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /api/session/ses_tool/inbox",
+      ]);
+      expect(inboxLines(activityLog)).toEqual([
+        {
+          runId: FIXTURE_RUN_ID,
+          action: "list",
+          outcome: "listed",
+          itemCount: 2,
+          ignoredCount: 1,
+        },
+      ]);
+      expect(JSON.stringify(activityLog.events)).not.toMatch(
+        /PRIVATE-OPERATOR-TEXT|RUNTIME-OWNED-TEXT|use the new logger|msg_/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("offers nothing while no turn is in flight and on a profile that takes no delivery", async () => {
+    const idle = await inboxFixture();
+    const mapped = await inboxFixture("direct");
+    try {
+      await expect(idle.port.listInbox?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+      await expect(mapped.port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      await expect(mapped.port.listInbox?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+
+      expect(idle.inbox.requests).toEqual([]);
+      expect(mapped.inbox.requests).toEqual([]);
+      expect(inboxLines(idle.activityLog)).toEqual([
+        { runId: FIXTURE_RUN_ID, action: "list", outcome: "turn-not-running" },
+      ]);
+      expect(inboxLines(mapped.activityLog)).toEqual([
+        { runId: FIXTURE_RUN_ID, action: "list", outcome: "unsupported" },
+      ]);
+    } finally {
+      await idle.fixture.stop();
+      await mapped.fixture.stop();
+    }
+  });
+
+  it("withdraws a queued message from the runtime, and lists and withdraws it no more", async () => {
+    const { fixture, port, promptBodies, inbox, activityLog } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "first queued", "queue");
+      await deliver(port, "req-2", "second queued", "queue");
+      const [first, second] = [idOf(promptBodies[1]), idOf(promptBodies[2])];
+
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "cancel", itemId: first }, "corr-0123456789"),
+      ).resolves.toEqual({ ok: true, outcome: "cancelled" });
+
+      expect(inbox.withdrawn).toEqual(new Set([first]));
+      expect((await port.listInbox?.(FIXTURE_RUN_ID))?.map((item) => item.itemId)).toEqual([
+        second,
+      ]);
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "cancel", itemId: first }),
+      ).resolves.toEqual({ ok: true, outcome: "already-cancelled" });
+      expect(inbox.requests.filter(({ method }) => method === "DELETE")).toHaveLength(1);
+      expect(inboxLines(activityLog)).toMatchObject([
+        { action: "cancel", outcome: "cancelled" },
+        { action: "list", outcome: "listed", itemCount: 1 },
+        { action: "cancel", outcome: "already-cancelled" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("promotes a queued message with the closed steer body and lists it as sent now", async () => {
+    const { fixture, port, promptBodies, inbox } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "queued", "queue");
+      const queued = idOf(promptBodies[1]);
+
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "promote", itemId: queued }),
+      ).resolves.toEqual({ ok: true, outcome: "promoted" });
+
+      const patch = inbox.requests.find(({ method }) => method === "PATCH");
+      expect(patch).toEqual({
+        method: "PATCH",
+        path: `/api/session/ses_tool/inbox/${queued}`,
+        body: JSON.stringify({ delivery: "steer" }),
+      });
+      await expect(port.listInbox?.(FIXTURE_RUN_ID)).resolves.toEqual([
+        { itemId: queued, delivery: "steer", preview: "queued" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("says a message the turn already took was delivered and changes nothing", async () => {
+    const { fixture, port, promptBodies, inbox } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "steered", "steer");
+      const steered = idOf(promptBodies[1]);
+      inbox.delivered.add(steered);
+
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "cancel", itemId: steered }),
+      ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "promote", itemId: steered }),
+      ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+
+      expect(inbox.requests.map(({ method }) => method)).toEqual(["GET", "GET"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses an id Keiko did not mint for the run, even one the runtime itself lists", async () => {
+    const { fixture, port, inbox } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      inbox.runtimeOwned.push({
+        id: "msg_runtime_owned",
+        sessionID: "ses_tool",
+        time: { created: 1 },
+        type: "user",
+        payload: { text: "typed in another client" },
+        delivery: "queue",
+      });
+
+      for (const action of ["cancel", "promote"] as const) {
+        await expect(
+          port.actOnInbox?.(FIXTURE_RUN_ID, { action, itemId: "msg_runtime_owned" }),
+        ).resolves.toEqual({ ok: false, reason: "unknown-item" });
+      }
+
+      expect(inbox.requests).toEqual([]);
+      expect(inbox.withdrawn.size).toBe(0);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("withdraws every pending message when the turn is interrupted, so none leaks into the next turn", async () => {
+    const state = await inboxFixture();
+    const { fixture, port, promptBodies, inbox, runControl, activityLog } = state;
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "queued one", "queue");
+      await deliver(port, "req-2", "steered two", "steer");
+      const pending = [idOf(promptBodies[1]), idOf(promptBodies[2])];
+
+      await expect(interrupt(state)).resolves.toBe(true);
+
+      expect(runControl.abortSessions).toEqual(["ses_tool"]);
+      expect(inbox.withdrawn).toEqual(new Set(pending));
+      expect(inboxLines(activityLog)).toEqual([
+        { runId: FIXTURE_RUN_ID, action: "withdraw", outcome: "withdrawn", itemCount: 2 },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("settles an interrupt whose withdrawal failed: the failure is evidence, not a failed stop", async () => {
+    const state = await inboxFixture();
+    const { fixture, port, promptBodies, inbox, activityLog } = state;
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "queued one", "queue");
+      inbox.respond = (): Response => new Response("", { status: 503 });
+
+      await expect(interrupt(state)).resolves.toBe(true);
+
+      expect(promptBodies).toHaveLength(2);
+      expect(inboxLines(activityLog)).toMatchObject([{ action: "withdraw", outcome: "failed" }]);
     } finally {
       await fixture.stop();
     }

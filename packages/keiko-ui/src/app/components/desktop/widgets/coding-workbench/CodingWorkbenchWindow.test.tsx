@@ -84,6 +84,8 @@ const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 // B3 (S04): the undo channel has a hook of its own; every suite stays hermetic through it.
 const revertHookMock = vi.hoisted(() => vi.fn());
+// S07: so does the list of messages waiting for the running turn.
+const inboxHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const repositoryBranchHookMock = vi.hoisted(() =>
@@ -220,6 +222,10 @@ vi.mock("@/lib/useCodingWorkbenchRevert", () => ({
   useCodingWorkbenchRevert: revertHookMock,
 }));
 
+vi.mock("@/lib/useCodingWorkbenchInbox", () => ({
+  useCodingWorkbenchInbox: inboxHookMock,
+}));
+
 vi.mock("@/lib/useCodingWorkbenchCommands", () => ({
   useCodingWorkbenchCommands: commandsHookMock,
 }));
@@ -297,6 +303,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
     revert: vi.fn(() => Promise.resolve()),
+    inboxAction: vi.fn(() => Promise.resolve()),
     revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
@@ -539,6 +546,7 @@ beforeEach(() => {
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
   revertHookMock.mockReset().mockReturnValue({ revert: null });
+  inboxHookMock.mockReset().mockReturnValue({ status: "idle", items: [], retry: vi.fn() });
   // The commands listing is read only for a paused run the `/` menu asked about.
   commandsHookMock
     .mockReset()
@@ -5917,6 +5925,176 @@ describe("turn revert (B3, S04)", () => {
       expect(screen.getByRole("region", { name: "Letzter Durchgang" })).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Letzten Durchgang rückgängig machen" }),
+      ).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+});
+
+// S07 (ADR-0137 D10): the messages the operator sent into the running turn that the runtime has not
+// taken yet are listed above the composer, with Cancel and Send now.
+describe("messages waiting for the running turn (S07)", () => {
+  const STEERED = {
+    itemId: "msg_16b08469d001DaT0xxHG2PAKe6",
+    delivery: "steer",
+    preview: "Use the new logger",
+  } as const;
+  const QUEUED = {
+    itemId: "msg_16b08469d002DaT0xxHG2PAKe6",
+    delivery: "queue",
+    preview: "Then update the docs",
+  } as const;
+
+  function runningState(
+    state: CodingWorkbenchRuntimeStateName = "running",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        value: snapshot({ state, runId: "run-1", revision: 4 }),
+        error: null,
+      },
+    });
+  }
+
+  function waiting(items: readonly (typeof STEERED | typeof QUEUED)[]): void {
+    inboxHookMock.mockReturnValue({ status: "ready", items, retry: vi.fn() });
+  }
+
+  it("reads the inbox of the live run with its revision and the signal that the turn took a message", () => {
+    renderWorkbench(runningState());
+
+    expect(inboxHookMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      live: true,
+      revision: 4,
+      deliveredSignal: null,
+    });
+    expect(screen.queryByRole("region", { name: "Messages waiting for this task" })).toBeNull();
+  });
+
+  it("counts the messages of the conversation the feed holds as the delivered signal", () => {
+    const feed = activityFeed();
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new Error("expected a turn");
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: {
+        ...feed,
+        turns: [
+          {
+            ...turn,
+            messages: [
+              ...turn.messages,
+              { ...turn.messages[0]!, messageId: "message-2", role: "user" },
+              { ...turn.messages[0]!, messageId: "message-3", role: "user" },
+            ],
+          },
+        ],
+      },
+    });
+
+    renderWorkbench(runningState());
+
+    expect(inboxHookMock).toHaveBeenCalledWith(expect.objectContaining({ deliveredSignal: 2 }));
+  });
+
+  it.each(["paused", "succeeded", "failed", "cancelled", "awaiting-approval"] as const)(
+    "tells the hook a %s run is not running: a turn that is not running holds no waiting message",
+    (state) => {
+      renderWorkbench(runningState(state));
+
+      expect(inboxHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", live: false }),
+      );
+    },
+  );
+
+  it("lists the waiting messages above the composer with their delivery", () => {
+    waiting([STEERED, QUEUED]);
+    renderWorkbench(runningState());
+
+    const region = screen.getByRole("region", { name: "Messages waiting for this task" });
+    const rows = within(region).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Use the new logger");
+    expect(rows[1]).toHaveTextContent("Queued");
+    expect(
+      region.compareDocumentPosition(screen.getByRole("textbox")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("cancels a waiting message through the window's one mutation queue", async () => {
+    const user = userEvent.setup();
+    waiting([STEERED, QUEUED]);
+    const liveActions = renderWorkbench(runningState());
+
+    await user.click(screen.getByRole("button", { name: "Cancel message: Then update the docs" }));
+
+    expect(liveActions.inboxAction).toHaveBeenCalledExactlyOnceWith("cancel", QUEUED.itemId);
+  });
+
+  it("changes a queued message to Send now through the same queue", async () => {
+    const user = userEvent.setup();
+    waiting([STEERED, QUEUED]);
+    const liveActions = renderWorkbench(runningState());
+
+    await user.click(screen.getByRole("button", { name: "Send now: Then update the docs" }));
+
+    expect(liveActions.inboxAction).toHaveBeenCalledExactlyOnceWith("promote", QUEUED.itemId);
+  });
+
+  it("holds the controls while a runtime mutation is in flight", () => {
+    waiting([QUEUED]);
+    renderWorkbench(
+      liveState({
+        ...runningState(),
+        mutation: { status: "pending", kind: "inbox", requestId: "request-1", error: null },
+      }),
+    );
+
+    const region = screen.getByRole("region", { name: "Messages waiting for this task" });
+    for (const button of within(region).getAllByRole("button")) expect(button).toBeDisabled();
+  });
+
+  it("offers a retry when the list could not be read", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    inboxHookMock.mockReturnValue({ status: "error", items: [], retry });
+    renderWorkbench(runningState());
+
+    const region = screen.getByRole("region", { name: "Messages waiting for this task" });
+    expect(within(region).getByRole("alert")).toHaveTextContent(
+      "The waiting messages could not be read.",
+    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("labels the list in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      waiting([STEERED, QUEUED]);
+      runtimeHookMock.mockReturnValue({ state: runningState(), actions: actions() });
+      render(
+        <I18nProvider>
+          <CodingWorkbenchWindow selectedRoot="/repo" />
+        </I18nProvider>,
+      );
+      expect(
+        screen.getByRole("region", { name: "Nachrichten, die auf diese Aufgabe warten" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Nachricht abbrechen: Use the new logger" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Jetzt senden: Then update the docs" }),
       ).toBeInTheDocument();
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);

@@ -158,8 +158,10 @@ import {
 } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
+import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
+import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
   useCodingWorkbenchRunWorkspace,
@@ -1904,6 +1906,14 @@ function WorkbenchColumns({
             }}
           />
         </div>
+        <CodingWorkbenchInboxPanel
+          runId={runId}
+          running={state.run.value?.state === "running"}
+          revision={state.run.value?.revision}
+          deliveredSignal={deliveredMessageSignal(activity.feed)}
+          busy={state.mutation.status === "pending"}
+          onAction={(action, itemId): void => void actions.inboxAction(action, itemId)}
+        />
         {taskComposer}
       </div>
     </div>

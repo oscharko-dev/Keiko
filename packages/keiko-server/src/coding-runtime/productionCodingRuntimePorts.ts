@@ -8,7 +8,17 @@ import type {
   PromptInputsAdmission,
   PromptInputsRequest,
 } from "./opencodePromptInputs.js";
-import type { CodingRuntimeRevertResult, CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
+import type {
+  CodingRuntimeInboxActionInput,
+  CodingRuntimeInboxItems,
+  CodingRuntimeInboxRefusal,
+  CodingRuntimeInboxResult,
+} from "./codingRuntimeInbox.js";
+import type {
+  CodingRuntimeRevertRefusal,
+  CodingRuntimeRevertResult,
+  CodingRuntimeRevertState,
+} from "./codingRuntimeRevert.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager, CodingRuntimeStartResult } from "./codingRuntimeManager.js";
 import type { CodingRuntimeMutationIdleOutcome } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
@@ -25,6 +35,7 @@ import {
 import { getServerLogger } from "../observability/index.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type {
+  CodingRuntimeInboxActionRequest,
   CodingRuntimeRevertRequest,
   CodingRuntimeTaskDeliveryResult,
   CodingRuntimeTaskDispatchResult,
@@ -228,6 +239,21 @@ export interface ProductionRuntimeTurnPort {
     | undefined;
   readonly revertState?:
     ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
+  /**
+   * The messages the operator sent into the running turn that the runtime has not handed to the
+   * model yet, and the withdrawal or promotion of one (S07, ADR-0137 D10). Absent for a port that
+   * takes no delivery; the dispatcher then refuses an action as the request's own fault.
+   */
+  readonly listInbox?:
+    | ((runId: string, correlationId?: string) => Promise<CodingRuntimeInboxItems | undefined>)
+    | undefined;
+  readonly actOnInbox?:
+    | ((
+        runId: string,
+        input: CodingRuntimeInboxActionInput,
+        correlationId?: string,
+      ) => Promise<CodingRuntimeInboxResult>)
+    | undefined;
 }
 
 export interface ProductionRuntimeRunRecord {
@@ -566,6 +592,9 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
     ...(runPort.revertTurn === undefined || runPort.revertState === undefined
       ? {}
       : { revertTurn: runPort.revertTurn, revertState: runPort.revertState }),
+    ...(runPort.listInbox === undefined || runPort.actOnInbox === undefined
+      ? {}
+      : { listInbox: runPort.listInbox, actOnInbox: runPort.actOnInbox }),
   };
 }
 
@@ -676,6 +705,9 @@ export function createProductionRuntimeTaskDispatcher(
     revert: (request) => revertRuntimeTask(runs, request, diagnostics),
     revertState: (runId) =>
       runs.get(runId)?.turnPort.revertState?.(runId) ?? Promise.resolve(undefined),
+    inbox: (runId, correlationId) =>
+      runs.get(runId)?.turnPort.listInbox?.(runId, correlationId) ?? Promise.resolve(undefined),
+    inboxAction: (request) => inboxRuntimeAction(runs, request, diagnostics),
   };
 }
 
@@ -1112,29 +1144,34 @@ function replacementErrorKind(error: unknown): ActivityLogErrorKind {
   return "internal";
 }
 
+type ReservedRefusal = "failed" | "not-admitted" | "run-unavailable" | "unsupported";
+
 /**
- * Admits one undo or restore like any other operator operation: the live authority is revalidated
- * (`runtimeAuthorityLive`, which a paused run passes — sticky pause holds the runtime, not the
+ * Admits one operator operation on a live run like any other: the live authority is revalidated
+ * (`runtimeAuthorityLive`, which a paused run passes -- sticky pause holds the runtime, not the
  * human), the revision is consumed once, and the request id is single-use. The turn port does the
- * work and records its own body-free evidence.
+ * work and records its own body-free evidence; `start` names the port's operation, or `undefined`
+ * when the port does not offer it, and `refuse` words a refusal in the operation's own vocabulary.
  */
-async function revertRuntimeTask(
+async function performReservedOperation<Result extends { readonly ok: boolean }>(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
-  request: CodingRuntimeRevertRequest,
+  request: CodingRuntimeRunOperation & { readonly correlationId?: string | undefined },
   diagnostics: ServerDiagnosticSink | undefined,
-): Promise<CodingRuntimeRevertResult> {
+  start: (record: ProductionRuntimeRunRecord) => (() => Promise<Result>) | undefined,
+  refuse: (reason: ReservedRefusal) => Result,
+): Promise<Result> {
   const record = runs.get(request.runId);
-  const revertTurn = record?.turnPort.revertTurn;
-  if (record === undefined) return { ok: false, reason: "run-unavailable" };
-  if (revertTurn === undefined) return { ok: false, reason: "unsupported" };
-  if (record.controller.signal.aborted) return { ok: false, reason: "run-unavailable" };
+  if (record === undefined) return refuse("run-unavailable");
+  const perform = start(record);
+  if (perform === undefined) return refuse("unsupported");
+  if (record.controller.signal.aborted) return refuse("run-unavailable");
   const reservation = record.operationGuard.reserve(request);
-  if (reservation === undefined) return { ok: false, reason: "not-admitted" };
+  if (reservation === undefined) return refuse("not-admitted");
   try {
-    const result = await revertTurn(request.runId, request.action, request.correlationId);
+    const result = await perform();
     if (result.ok && reservation.commit()) return result;
     reservation.release();
-    return result.ok ? { ok: false, reason: "not-admitted" } : result;
+    return result.ok ? refuse("not-admitted") : result;
   } catch (error) {
     reservation.release();
     recordRuntimeDispatchFailure(
@@ -1144,8 +1181,74 @@ async function revertRuntimeTask(
       error,
       request.correlationId,
     );
-    return { ok: false, reason: "revert-failed" };
+    return refuse("failed");
   }
+}
+
+const REVERT_RESERVED_REFUSALS = {
+  failed: "revert-failed",
+  "not-admitted": "not-admitted",
+  "run-unavailable": "run-unavailable",
+  unsupported: "unsupported",
+} as const satisfies Record<ReservedRefusal, CodingRuntimeRevertRefusal>;
+
+function revertRuntimeTask(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeRevertRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeRevertResult> {
+  return performReservedOperation(
+    runs,
+    request,
+    diagnostics,
+    (record): (() => Promise<CodingRuntimeRevertResult>) | undefined => {
+      const revertTurn = record.turnPort.revertTurn;
+      if (revertTurn === undefined) return undefined;
+      return (): Promise<CodingRuntimeRevertResult> =>
+        revertTurn(request.runId, request.action, request.correlationId);
+    },
+    (reason): CodingRuntimeRevertResult => ({
+      ok: false,
+      reason: REVERT_RESERVED_REFUSALS[reason],
+    }),
+  );
+}
+
+const INBOX_RESERVED_REFUSALS = {
+  failed: "inbox-failed",
+  "not-admitted": "not-admitted",
+  "run-unavailable": "run-unavailable",
+  unsupported: "unsupported",
+} as const satisfies Record<ReservedRefusal, CodingRuntimeInboxRefusal>;
+
+/**
+ * Withdraws or promotes one pending message (S07, ADR-0137 D10) under the same admission as an
+ * undo. The run port proves the message is one the operator delivered into this turn.
+ */
+function inboxRuntimeAction(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeInboxActionRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeInboxResult> {
+  return performReservedOperation(
+    runs,
+    request,
+    diagnostics,
+    (record): (() => Promise<CodingRuntimeInboxResult>) | undefined => {
+      const act = record.turnPort.actOnInbox;
+      if (act === undefined) return undefined;
+      return (): Promise<CodingRuntimeInboxResult> =>
+        act(
+          request.runId,
+          { action: request.action, itemId: request.itemId },
+          request.correlationId,
+        );
+    },
+    (reason): CodingRuntimeInboxResult => ({
+      ok: false,
+      reason: INBOX_RESERVED_REFUSALS[reason],
+    }),
+  );
 }
 
 async function abortRuntimeTask(

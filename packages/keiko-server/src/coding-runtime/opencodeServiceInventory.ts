@@ -434,12 +434,6 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten([
     ["experimental.session.export"],
   ),
   refused("not-yet-implemented", 3904, ["S05"], ["experimental.session.import"]),
-  refused(
-    "not-yet-implemented",
-    3904,
-    ["S07"],
-    ["session.inbox.list", "session.inbox.cancel", "session.inbox.update"],
-  ),
   refused("not-yet-implemented", 3904, ["S08"], ["session.compact", "session.context"]),
   refused("not-yet-implemented", 3901, ["T11"], ["session.shell"]),
   refused(

@@ -594,6 +594,151 @@ export function validateCodingWorkbenchRuntimeRevertChannelPayload(
   return result(value, errors);
 }
 
+/**
+ * The actions on a message Keiko delivered into a running turn and the runtime has not handed to the
+ * model yet (S07, ADR-0137 D10): `cancel` withdraws it, `promote` changes a queued message to `steer`
+ * so it joins the turn at its next step (Send now). Closed, so the browser can name nothing else.
+ */
+export type CodingWorkbenchRuntimeInboxAction = "cancel" | "promote";
+
+export const CODING_WORKBENCH_RUNTIME_INBOX_ACTIONS: readonly CodingWorkbenchRuntimeInboxAction[] =
+  Object.freeze(["cancel", "promote"] as const);
+
+export function isCodingWorkbenchRuntimeInboxAction(
+  value: unknown,
+): value is CodingWorkbenchRuntimeInboxAction {
+  return isOneOf(value, CODING_WORKBENCH_RUNTIME_INBOX_ACTIONS);
+}
+
+/** At most this many pending messages ride one listing: the most a run retains (ADR-0137 D10). */
+export const CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX = 32;
+/** The operator's own text as a one-line preview; longer text ends in an ellipsis. */
+export const CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS = 200;
+const CODING_WORKBENCH_RUNTIME_INBOX_ITEM_ID = /^msg_[A-Za-z0-9_-]{1,251}$/u;
+
+/**
+ * Transport shape of a pending message's id (the runtime's own message id, which Keiko minted when it
+ * delivered the message). Whether the id names a message of THIS run's turn that is still pending is
+ * the server's decision; the browser only hands back an id it was listed.
+ */
+export function isCodingWorkbenchRuntimeInboxItemId(value: unknown): value is string {
+  return typeof value === "string" && CODING_WORKBENCH_RUNTIME_INBOX_ITEM_ID.test(value);
+}
+
+/** Body of `POST /runs/:runId/inbox`: the usual revision-bound envelope, the action and the item. */
+export interface CodingWorkbenchRuntimeInboxRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly action: CodingWorkbenchRuntimeInboxAction;
+  readonly itemId: string;
+}
+
+export function parseCodingWorkbenchRuntimeInboxRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeInboxRequest> {
+  if (!isRecord(value)) return invalid("inbox request must be an object");
+  const errors = exactKeys(
+    value,
+    ["requestId", "expectedRevision", "action", "itemId"],
+    "inboxRequest",
+  );
+  validateRequestId(value.requestId, errors);
+  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
+    errors.push("expectedRevision must be a non-negative safe integer");
+  }
+  if (!isCodingWorkbenchRuntimeInboxAction(value.action)) errors.push("action is invalid");
+  if (!isCodingWorkbenchRuntimeInboxItemId(value.itemId)) errors.push("itemId is invalid");
+  return result(value, errors);
+}
+
+/**
+ * One message Keiko delivered into the running turn that is still waiting: how it will be delivered
+ * and the operator's own text as a one-line preview (control and invisible characters removed,
+ * whitespace collapsed, at most `CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS`). Nothing the
+ * runtime holds about the message beside its id and delivery ever rides this projection.
+ */
+export interface CodingWorkbenchRuntimeInboxItem {
+  readonly itemId: string;
+  readonly delivery: CodingWorkbenchPromptDelivery;
+  readonly preview: string;
+}
+
+/** Session facet of the inbox channel: the status of the presented cookie only (ADR-0141). */
+export const CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeInboxSession =
+  (typeof CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES)[number];
+
+/**
+ * `GET /runs/:runId/inbox`: the pending messages of the turn that is running, in the order the
+ * runtime will hand them to the model (every `steer` message, then every `queue` message, each in
+ * the order it was delivered). Absent `items` means the run offers none (a mapped profile, a run
+ * whose turn is not in flight, a listing the runtime could not give); present and empty means
+ * nothing is waiting. An unpaired caller receives the constant `{ session: "unpaired" }` regardless
+ * of the run, so the route is not an existence oracle.
+ */
+export interface CodingWorkbenchRuntimeInboxChannelPayload {
+  readonly session: CodingWorkbenchRuntimeInboxSession;
+  readonly items?: readonly CodingWorkbenchRuntimeInboxItem[] | undefined;
+}
+
+export function unpairedCodingWorkbenchRuntimeInboxChannelPayload(): CodingWorkbenchRuntimeInboxChannelPayload {
+  return { session: "unpaired" };
+}
+
+function inboxItemErrors(entry: unknown, index: number, seen: Set<string>): string[] {
+  const path = `items[${String(index)}]`;
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, ["itemId", "delivery", "preview"], path);
+  if (!isCodingWorkbenchRuntimeInboxItemId(entry.itemId)) {
+    errors.push(`${path}.itemId is invalid`);
+  } else if (seen.has(entry.itemId)) {
+    errors.push(`${path}.itemId repeats an earlier item`);
+  } else {
+    seen.add(entry.itemId);
+  }
+  if (!isCodingWorkbenchPromptDelivery(entry.delivery)) errors.push(`${path}.delivery is invalid`);
+  if (
+    !validateUntrustedDisplayText(entry.preview, CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS, {
+      minChars: 0,
+    })
+  ) {
+    errors.push(`${path}.preview must be bounded display text`);
+  }
+  return errors;
+}
+
+function inboxListErrors(items: unknown): string[] {
+  if (!Array.isArray(items)) return ["inboxChannelPayload.items must be an array"];
+  const errors: string[] = [];
+  if (items.length > CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX) {
+    errors.push(
+      `items must hold at most ${String(CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX)} entries`,
+    );
+  }
+  const seen = new Set<string>();
+  items.forEach((entry: unknown, index) => {
+    errors.push(...inboxItemErrors(entry, index, seen));
+  });
+  return errors;
+}
+
+/** Exact keys, a valid session facet, a bounded duplicate-free listing, none when unpaired. */
+export function validateCodingWorkbenchRuntimeInboxChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeInboxChannelPayload> {
+  if (!isRecord(value)) return invalid("inbox channel payload must be an object");
+  const errors = exactKeys(value, ["session", "items"], "inboxChannelPayload");
+  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES)) {
+    errors.push("inboxChannelPayload.session is invalid");
+  }
+  if (value.session === "unpaired" && value.items !== undefined) {
+    errors.push("inboxChannelPayload.items must be absent when the session is unpaired");
+  }
+  if (value.items !== undefined) errors.push(...inboxListErrors(value.items));
+  return result(value, errors);
+}
+
 /** The retry route has the same fresh, transient intent shape as start. */
 export type CodingWorkbenchRuntimeRetryRequest = CodingWorkbenchRuntimeStartRequest;
 

@@ -12,7 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
+  CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS,
+  validateCodingWorkbenchRuntimeInboxChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { activityLogEventWillBeRejected } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -32,6 +36,7 @@ import {
   OPENCODE_PROMPT_FILES_MAX_BYTES,
   OPENCODE_PROMPT_RUN_FILES_MAX_BYTES,
   createOpenCodePromptInputsRunPort,
+  nativeInputPreview,
   openCodePromptInputs,
   recordPromptInputs,
   resolvePromptReferences,
@@ -1034,5 +1039,138 @@ describe("the run port that admits and delivers prompt inputs", () => {
       }
       expect(JSON.stringify(h.sink.events)).not.toMatch(/also this|another text|msg_minted/u);
     });
+
+    describe("the operator's own text kept for the list of pending messages", () => {
+      it("finds a delivered message by its native id and shows it as a one-line preview", async () => {
+        const h = harness();
+        await admitDelivery(h, "req-1", "  Use the\n\tnew   logger  ")();
+        await admitDelivery(h, "req-2", "Second message")();
+
+        expect(h.port.nativeInput("run-1", "msg_minted_1")).toEqual({
+          preview: "Use the new logger",
+          withdrawn: false,
+        });
+        expect(h.port.nativeInput("run-1", "msg_minted_2")).toEqual({
+          preview: "Second message",
+          withdrawn: false,
+        });
+      });
+
+      it("knows nothing of an id it did not mint for the run, another run's id or a missing run", async () => {
+        const h = harness();
+        await admitDelivery(h, "req-1")();
+
+        expect(h.port.nativeInput("run-1", "msg_from_the_runtime")).toBeUndefined();
+        expect(h.port.nativeInput("run-1", "")).toBeUndefined();
+        expect(h.port.nativeInput("run-2", "msg_minted_1")).toBeUndefined();
+        expect(
+          harness({ missing: true }).port.nativeInput("run-1", "msg_minted_1"),
+        ).toBeUndefined();
+      });
+
+      it("keeps the first preview when the same request is retried with the same message", async () => {
+        const h = harness();
+        h.promptFailures.push(LOST);
+        await admitDelivery(h, "req-1", "Same words")();
+        await admitDelivery(h, "req-1", "Same words")();
+
+        expect(h.port.nativeInput("run-1", "msg_minted_1")).toEqual({
+          preview: "Same words",
+          withdrawn: false,
+        });
+        expect(h.port.nativeInput("run-1", "msg_minted_2")).toBeUndefined();
+      });
+
+      it("keeps nothing for a message the producer itself refused: its id is forgotten", async () => {
+        const h = harness();
+        h.promptFailures.push(new OpenCodeV2HttpStatusError(400));
+        await admitDelivery(h, "req-1", "Refused words")();
+
+        expect(h.port.nativeInput("run-1", "msg_minted_1")).toBeUndefined();
+      });
+
+      it("records a withdrawal on the message, and on no other, and ignores an unknown id", async () => {
+        const h = harness();
+        await admitDelivery(h, "req-1")();
+        await admitDelivery(h, "req-2")();
+
+        h.port.withdrawNativeInput("run-1", "msg_minted_1");
+        h.port.withdrawNativeInput("run-1", "msg_unknown");
+        h.port.withdrawNativeInput("run-2", "msg_minted_2");
+
+        expect(h.port.nativeInput("run-1", "msg_minted_1")).toMatchObject({ withdrawn: true });
+        expect(h.port.nativeInput("run-1", "msg_minted_2")).toMatchObject({ withdrawn: false });
+      });
+
+      it("forgets the preview with the id once the ledger is full", async () => {
+        const h = harness();
+        for (let index = 0; index <= OPENCODE_NATIVE_INPUT_LEDGER_MAX; index += 1) {
+          await admitDelivery(h, `req-${String(index)}`)();
+        }
+
+        expect(h.port.nativeInput("run-1", "msg_minted_1")).toBeUndefined();
+        expect(
+          h.port.nativeInput("run-1", `msg_minted_${String(OPENCODE_NATIVE_INPUT_LEDGER_MAX + 1)}`),
+        ).toBeDefined();
+      });
+    });
+  });
+});
+
+describe("the one-line preview of a delivered message", () => {
+  const limit = CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS;
+  const accepted = (preview: string): boolean =>
+    validateCodingWorkbenchRuntimeInboxChannelPayload({
+      session: "active",
+      items: [{ itemId: "msg_a", delivery: "queue", preview }],
+    }).ok;
+
+  it("collapses every run of whitespace and trims the ends", () => {
+    expect(nativeInputPreview("  first\r\n\tsecond \u00a0 third\n")).toBe("first second third");
+    expect(nativeInputPreview("")).toBe("");
+    expect(nativeInputPreview(" \n\t ")).toBe("");
+  });
+
+  it("removes invisible and text-reordering code points and control characters", () => {
+    const hostile = "safe\u202egnp.exe\u200b\u2066hidden\u0000\u0007 text\u2028next\ufeff";
+
+    const preview = nativeInputPreview(hostile);
+
+    expect(preview).toBe("safegnp.exehidden textnext");
+    expect(accepted(preview)).toBe(true);
+  });
+
+  it("keeps a text of exactly the bound whole and cuts a longer one with an ellipsis within it", () => {
+    const exact = "a".repeat(limit);
+    const longer = `${"word ".repeat(limit)}tail`;
+
+    expect(nativeInputPreview(exact)).toBe(exact);
+    const cut = nativeInputPreview(longer);
+    expect(cut.length).toBeLessThanOrEqual(limit);
+    expect(cut.endsWith("\u2026")).toBe(true);
+    expect(cut).not.toContain("tail");
+    expect(accepted(cut)).toBe(true);
+  });
+
+  it("never splits a surrogate pair at the cut", () => {
+    const emoji = "\u{1F600}";
+    const cut = nativeInputPreview(emoji.repeat(limit));
+
+    expect(cut.length).toBeLessThanOrEqual(limit);
+    expect(cut.endsWith("\u2026")).toBe(true);
+    expect(cut.slice(0, -1).replaceAll(emoji, "")).toBe("");
+    expect(accepted(cut)).toBe(true);
+  });
+
+  it("is always something the contract's display validation accepts", () => {
+    for (const text of [
+      "plain",
+      "ünïcode 名前",
+      "a\u200db",
+      "tabs\tand\nlines",
+      "x".repeat(5000),
+    ]) {
+      expect(accepted(nativeInputPreview(text)), text.slice(0, 20)).toBe(true);
+    }
   });
 });

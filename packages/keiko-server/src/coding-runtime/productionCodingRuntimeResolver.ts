@@ -1174,6 +1174,11 @@ export function bindExplicitSkillTurns(
     ...(turnPort.revertTurn === undefined || turnPort.revertState === undefined
       ? {}
       : { revertTurn: turnPort.revertTurn, revertState: turnPort.revertState }),
+    // Reading or withdrawing a pending message starts and settles no turn, so the explicit-skill
+    // request of the turn in flight is neither replaced nor cleared by it.
+    ...(turnPort.listInbox === undefined || turnPort.actOnInbox === undefined
+      ? {}
+      : { listInbox: turnPort.listInbox, actOnInbox: turnPort.actOnInbox }),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       try {
         return await turnPort.waitForTerminal(runId, signal);

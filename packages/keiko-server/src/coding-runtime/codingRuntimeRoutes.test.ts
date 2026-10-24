@@ -38,6 +38,8 @@ import {
   handleCodingRuntimeDescriptionDraft,
   handleCodingRuntimeEvents,
   handleCodingRuntimeFollowUp,
+  handleCodingRuntimeInbox,
+  handleCodingRuntimeInboxAction,
   handleCodingRuntimePause,
   handleCodingRuntimeQuestionAnswer,
   handleCodingRuntimeQuestionList,
@@ -195,6 +197,20 @@ function runtime(
           ? [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review" }]
           : undefined,
       ),
+    submitInboxAction: (_runId: string, body: unknown, correlationId?: string) => {
+      calls.push(body);
+      correlationIds.push(correlationId);
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
+    },
+    listInbox: (runId: string) =>
+      Promise.resolve(
+        runId === "run-1"
+          ? [
+              { itemId: "msg_item_1", delivery: "steer", preview: "Use the new logger" },
+              { itemId: "msg_item_2", delivery: "queue", preview: "Then update the docs" },
+            ]
+          : undefined,
+      ),
     answerQuestion: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
       correlationIds.push(correlationId);
@@ -284,6 +300,7 @@ describe("coding runtime routes", () => {
     expect(patterns.some((pattern) => pattern.endsWith("/questions/reject"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/follow-up"))).toBe(true);
     expect(patterns.filter((pattern) => pattern.endsWith("/revert"))).toHaveLength(2);
+    expect(patterns.filter((pattern) => pattern.endsWith("/inbox"))).toHaveLength(2);
     expect(patterns.some((pattern) => pattern.endsWith("/pause"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/resume"))).toBe(true);
     // #2387: the research revoke mutation shares the same guarded runtime group.
@@ -312,6 +329,8 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/revert",
         "GET /api/coding-workbench/runtime/runs/:runId/revert",
         "GET /api/coding-workbench/runtime/runs/:runId/commands",
+        "POST /api/coding-workbench/runtime/runs/:runId/inbox",
+        "GET /api/coding-workbench/runtime/runs/:runId/inbox",
         "POST /api/coding-workbench/runtime/runs/:runId/research/revoke",
         "POST /api/coding-workbench/runtime/runs/:runId/questions",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/answer",
@@ -335,6 +354,7 @@ describe("coding runtime routes", () => {
       handleCodingRuntimeResearchRevoke,
       handleCodingRuntimeFollowUp,
       handleCodingRuntimeRevert,
+      handleCodingRuntimeInboxAction,
       handleCodingRuntimeQuestionAnswer,
       handleCodingRuntimeQuestionReject,
       handleCodingRuntimeQuestionList,
@@ -400,6 +420,7 @@ describe("coding runtime routes", () => {
     const handlers = [
       handleCodingRuntimeFollowUp,
       handleCodingRuntimeRevert,
+      handleCodingRuntimeInboxAction,
       handleCodingRuntimeQuestionAnswer,
       handleCodingRuntimeQuestionReject,
       handleCodingRuntimeQuestionList,
@@ -1046,6 +1067,200 @@ describe("coding runtime routes", () => {
       ).resolves.toMatchObject({ status: 404 });
       await expect(
         handleCodingRuntimeCommands(
+          context("", { runId: "run-1" }, runPath, session.cookie),
+          runtime({
+            codingAppSessionChannel: session.channel,
+            codingRuntimeOrchestrator: undefined,
+          }),
+        ),
+      ).resolves.toMatchObject({ status: 503 });
+    });
+  });
+
+  // S07 (ADR-0137 D10): the messages sent into the running turn that the runtime has not taken yet.
+  describe("pending messages of the running turn", () => {
+    const runPath = "/api/coding-workbench/runtime/runs/run-1/inbox";
+    const body = {
+      requestId: "req-1",
+      expectedRevision: 2,
+      action: "cancel",
+      itemId: "msg_item_1",
+    };
+
+    it("passes the action body and the request's correlation id to the orchestrator untouched", async () => {
+      const session = pairedAppSession();
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+
+      await expect(
+        handleCodingRuntimeInboxAction(
+          context(
+            JSON.stringify(body),
+            { runId: "run-1" },
+            runPath,
+            session.cookie,
+            "inbox-correlation-id-1",
+          ),
+          deps,
+        ),
+      ).resolves.toEqual({ status: 200, body: snapshot });
+
+      const calls = deps as unknown as {
+        __calls: unknown[];
+        __correlationIds: (string | undefined)[];
+      };
+      expect(calls.__calls).toEqual([body]);
+      expect(calls.__correlationIds).toEqual(["inbox-correlation-id-1"]);
+    });
+
+    it("logs one body-free refusal naming the inbox operation when the orchestrator refuses", async () => {
+      const session = pairedAppSession();
+      const records: unknown[] = [];
+      const deps = runtime({
+        codingAppSessionChannel: session.channel,
+        activityLog: { write: (event: unknown) => void records.push(event) },
+      });
+      (
+        deps.codingRuntimeOrchestrator as unknown as { submitInboxAction: unknown }
+      ).submitInboxAction = () =>
+        Promise.resolve({ ok: false as const, failureCode: "invalid-intent" as const });
+
+      const refused = await handleCodingRuntimeInboxAction(
+        context(
+          JSON.stringify(body),
+          { runId: "run-1" },
+          runPath,
+          session.cookie,
+          "inbox-correlation-id-2",
+        ),
+        deps,
+      );
+
+      expect(refused).toMatchObject({ status: 400 });
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          op: "coding-runtime.operation.refused",
+          correlationId: "inbox-correlation-id-2",
+          errorKind: "invalid-request",
+          extra: { operation: "inbox", reason: "invalid-intent", runId: "run-1" },
+        },
+      ]);
+      expect(JSON.stringify(records)).not.toContain("msg_item_1");
+    });
+
+    it("conceals the run from a caller without an app session, reaching no orchestrator method", async () => {
+      const { channel } = pairedAppSession();
+      const spy = spyingRuntime(channel);
+
+      const denied = await handleCodingRuntimeInboxAction(
+        context(JSON.stringify(body), { runId: "run-1" }, runPath),
+        spy.deps,
+      );
+
+      expect(denied).toMatchObject({ status: 404 });
+      expect(spy.invoked).toEqual([]);
+    });
+
+    it("caps an action body at 64KB", async () => {
+      const session = pairedAppSession();
+      const spy = spyingRuntime(session.channel);
+
+      await expect(
+        handleCodingRuntimeInboxAction(
+          context(
+            JSON.stringify({ ...body, padding: "x".repeat(64 * 1024 + 1) }),
+            { runId: "run-1" },
+            runPath,
+            session.cookie,
+          ),
+          spy.deps,
+        ),
+      ).resolves.toMatchObject({ status: 413 });
+      expect(spy.invoked).toEqual([]);
+    });
+
+    it("shows the paired operator the pending messages with their delivery and preview, and nothing else", async () => {
+      const session = pairedAppSession();
+
+      await expect(
+        handleCodingRuntimeInbox(
+          context("", { runId: "run-1" }, runPath, session.cookie),
+          runtime({ codingAppSessionChannel: session.channel }),
+        ),
+      ).resolves.toEqual({
+        status: 200,
+        body: {
+          session: "active",
+          items: [
+            { itemId: "msg_item_1", delivery: "steer", preview: "Use the new logger" },
+            { itemId: "msg_item_2", delivery: "queue", preview: "Then update the docs" },
+          ],
+        },
+      });
+    });
+
+    it("threads the request correlation to the listing and reads no body", async () => {
+      const session = pairedAppSession();
+      const seen: (string | undefined)[] = [];
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      (deps.codingRuntimeOrchestrator as unknown as { listInbox: unknown }).listInbox = (
+        _runId: string,
+        correlationId?: string,
+      ) => {
+        seen.push(correlationId);
+        return Promise.resolve([]);
+      };
+
+      await expect(
+        handleCodingRuntimeInbox(
+          context("", { runId: "run-1" }, runPath, session.cookie, "inbox-correlation-id-3"),
+          deps,
+        ),
+      ).resolves.toEqual({ status: 200, body: { session: "active", items: [] } });
+
+      expect(seen).toEqual(["inbox-correlation-id-3"]);
+    });
+
+    it("reports no inbox for a run whose runtime offers none", async () => {
+      const session = pairedAppSession();
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      (deps.codingRuntimeOrchestrator as unknown as { listInbox: unknown }).listInbox = () =>
+        Promise.resolve(undefined);
+
+      await expect(
+        handleCodingRuntimeInbox(context("", { runId: "run-1" }, runPath, session.cookie), deps),
+      ).resolves.toEqual({ status: 200, body: { session: "active" } });
+    });
+
+    it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
+      const { channel } = pairedAppSession();
+      const spy = spyingRuntime(channel);
+      const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+        [{ runId: "run-1" }, spy.deps],
+        [{ runId: "run-9" }, spy.deps],
+        [{}, spy.deps],
+        [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
+      ];
+      for (const [params, deps] of cases) {
+        await expect(handleCodingRuntimeInbox(context("", params), deps)).resolves.toEqual({
+          status: 200,
+          body: { session: "unpaired" },
+        });
+      }
+      expect(spy.invoked).toEqual([]);
+    });
+
+    it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
+      const session = pairedAppSession();
+
+      await expect(
+        handleCodingRuntimeInbox(
+          context("", { runId: "run-9" }, runPath, session.cookie),
+          runtime({ codingAppSessionChannel: session.channel }),
+        ),
+      ).resolves.toMatchObject({ status: 404 });
+      await expect(
+        handleCodingRuntimeInbox(
           context("", { runId: "run-1" }, runPath, session.cookie),
           runtime({
             codingAppSessionChannel: session.channel,
@@ -1923,6 +2138,11 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
     },
     listCommands: () => {
       invoked.push("listCommands");
+      return Promise.resolve(undefined);
+    },
+    submitInboxAction: settle("submitInboxAction"),
+    listInbox: () => {
+      invoked.push("listInbox");
       return Promise.resolve(undefined);
     },
     answerQuestion: settle("answerQuestion"),

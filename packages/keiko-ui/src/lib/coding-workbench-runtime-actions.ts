@@ -12,6 +12,7 @@ import type {
 import type {
   CodingWorkbenchCommandRequest,
   CodingWorkbenchRuntimeForkRequest,
+  CodingWorkbenchRuntimeInboxAction,
   CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
@@ -69,6 +70,11 @@ export interface CodingWorkbenchRuntimeActions {
   ) => Promise<void>;
   /** Undo the run's newest turn or restore an undo (B3, S04). */
   readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
+  /** Withdraw a message waiting for the running turn, or change a queued one to Send now (S07). */
+  readonly inboxAction: (
+    action: CodingWorkbenchRuntimeInboxAction,
+    itemId: string,
+  ) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
@@ -99,6 +105,7 @@ function createCodingWorkbenchRuntimeActions({
     decideApproval,
     pause,
     resume,
+    inboxAction,
     retry,
     revert,
     revokeResearchGrant,
@@ -133,6 +140,7 @@ function createCodingWorkbenchRuntimeActions({
     resume,
     submitFollowUp,
     revert,
+    inboxAction,
     revokeResearchGrant,
   };
 }
@@ -155,6 +163,7 @@ export function useCodingWorkbenchRuntimeActions(
     decideApproval,
     pause,
     resume,
+    inboxAction,
     retry,
     revert,
     revokeResearchGrant,
@@ -184,6 +193,7 @@ export function useCodingWorkbenchRuntimeActions(
           resume,
           retry,
           revert,
+          inboxAction,
           revokeResearchGrant,
           start,
           stop,
@@ -195,6 +205,7 @@ export function useCodingWorkbenchRuntimeActions(
       acknowledgeRecovery,
       decideApproval,
       dispatch,
+      inboxAction,
       pause,
       prepareCodexSetup,
       profileSequence,

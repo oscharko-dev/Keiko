@@ -964,3 +964,210 @@ describe("OpenCode V2 session list", () => {
     await expect(client(endless).sessions()).rejects.toThrow("opencode-v2-sessions-oversized");
   });
 });
+
+describe("OpenCode V2 session inbox", () => {
+  const AUTHORIZATION = `Basic ${Buffer.from("opencode:test-only", "utf8").toString("base64")}`;
+  const SESSION = "ses_inbox_1";
+  const FIRST = "msg_16b08469d001DaT0xxHG2PAKe6";
+  const SECOND = "msg_16b08469d002DaT0xxHG2PAKe6";
+
+  function clientWith(respond: () => Response): {
+    readonly client: ReturnType<typeof createOpenCodeV2HttpClient>;
+    readonly fetch: ReturnType<typeof vi.fn<typeof globalThis.fetch>>;
+  } {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(respond()));
+    return {
+      client: createOpenCodeV2HttpClient({
+        endpoint: "http://127.0.0.1:1984/",
+        password: "test-only",
+        fetch,
+      }),
+      fetch,
+    };
+  }
+
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const entry = (id: string, type: string, delivery: string, extra = {}): unknown => ({
+    id,
+    sessionID: SESSION,
+    time: { created: 1 },
+    type,
+    delivery,
+    payload: { text: "PAYLOAD-TEXT-THAT-MUST-NOT-BE-COPIED" },
+    ...extra,
+  });
+
+  it("lists the closed fields of every entry and never copies the payload", async () => {
+    const { client, fetch } = clientWith(() =>
+      json({
+        data: [
+          entry(FIRST, "user", "queue"),
+          entry(SECOND, "user", "steer"),
+          entry("msg_synthetic", "synthetic", "steer"),
+          entry("msg_compaction", "compaction", "queue"),
+          entry("msg_move", "move", "queue"),
+        ],
+      }),
+    );
+
+    const listed = await client.inbox(SESSION);
+
+    expect(listed).toEqual([
+      { id: FIRST, kind: "user", delivery: "queue" },
+      { id: SECOND, kind: "user", delivery: "steer" },
+      { id: "msg_synthetic", kind: "other", delivery: "steer" },
+      { id: "msg_compaction", kind: "other", delivery: "queue" },
+      { id: "msg_move", kind: "other", delivery: "queue" },
+    ]);
+    expect(JSON.stringify(listed)).not.toContain("PAYLOAD-TEXT");
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toEqual(new URL(`http://127.0.0.1:1984/api/session/${SESSION}/inbox`));
+    expect(init).toMatchObject({ method: "GET", redirect: "manual" });
+    expect(init?.headers).toMatchObject({ Authorization: AUTHORIZATION });
+    expect(init?.body).toBeUndefined();
+  });
+
+  it("drops an entry of another session, with a bad id or with an unknown delivery", async () => {
+    const { client } = clientWith(() =>
+      json({
+        data: [
+          entry(FIRST, "user", "queue"),
+          entry(SECOND, "user", "queue", { sessionID: "ses_other" }),
+          entry("not-a-message-id", "user", "queue"),
+          entry("msg_a b", "user", "queue"),
+          entry("msg_later", "user", "later"),
+          entry("msg_no_type", "user", "steer", { type: undefined }),
+          { sessionID: SESSION, delivery: "steer", type: "user" },
+        ],
+      }),
+    );
+
+    await expect(client.inbox(SESSION)).resolves.toEqual([
+      { id: FIRST, kind: "user", delivery: "queue" },
+      { id: "msg_no_type", kind: "other", delivery: "steer" },
+    ]);
+  });
+
+  it.each([
+    ["a non-array payload", { data: {} }],
+    ["no data", {}],
+    ["a non-object entry", { data: ["msg_x"] }],
+    ["more entries than the client reads", { data: Array.from({ length: 257 }, () => ({})) }],
+  ])("rejects a listing with %s", async (_name, body) => {
+    const { client } = clientWith(() => json(body));
+
+    await expect(client.inbox(SESSION)).rejects.toThrow("opencode-v2-envelope-invalid");
+  });
+
+  it("surfaces the runtime's refusal of the listing instead of an empty list", async () => {
+    const { client } = clientWith(() => json({ _tag: "SessionNotFoundError" }, 404));
+
+    await expect(client.inbox(SESSION)).rejects.toMatchObject({
+      name: "OpenCodeV2HttpStatusError",
+      status: 404,
+    });
+  });
+
+  it("refuses a session id that is not a session id before any byte is sent", async () => {
+    const { client, fetch } = clientWith(() => json({ data: [] }));
+
+    await expect(client.inbox("../session")).rejects.toThrow("opencode-v2-session-invalid");
+    await expect(client.cancelInboxEntry("../session", FIRST)).rejects.toThrow(
+      "opencode-v2-session-invalid",
+    );
+    await expect(client.promoteInboxEntry("../session", FIRST)).rejects.toThrow(
+      "opencode-v2-session-invalid",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("withdraws one entry with a DELETE that carries no body, and reads the empty 204 answer", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+
+    await expect(client.cancelInboxEntry(SESSION, FIRST)).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toEqual(new URL(`http://127.0.0.1:1984/api/session/${SESSION}/inbox/${FIRST}`));
+    expect(init).toMatchObject({ method: "DELETE", redirect: "manual" });
+    expect(init?.body).toBeUndefined();
+    expect(init?.headers).toMatchObject({ Authorization: AUTHORIZATION });
+  });
+
+  it("promotes one entry with a PATCH that names only the steer delivery", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+
+    await expect(client.promoteInboxEntry(SESSION, FIRST)).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toEqual(new URL(`http://127.0.0.1:1984/api/session/${SESSION}/inbox/${FIRST}`));
+    expect(init).toMatchObject({ method: "PATCH", redirect: "manual" });
+    expect(init?.body).toBe(JSON.stringify({ delivery: "steer" }));
+    expect(init?.headers).toMatchObject({
+      Authorization: AUTHORIZATION,
+      "Content-Type": "application/json",
+    });
+  });
+
+  it("refuses an entry id that is not a message id before any byte is sent", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+
+    for (const id of ["", "ses_abc", "msg_../x", "msg_a b", "msg_", `msg_${"a".repeat(252)}`]) {
+      await expect(client.cancelInboxEntry(SESSION, id), id).rejects.toThrow(
+        "opencode-v2-message-invalid",
+      );
+      await expect(client.promoteInboxEntry(SESSION, id), id).rejects.toThrow(
+        "opencode-v2-message-invalid",
+      );
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the runtime's conflict and its unknown session as the status, not as success", async () => {
+    const conflict = clientWith(() => json({ _tag: "ConflictError" }, 409));
+    const missing = clientWith(() => json({ _tag: "SessionNotFoundError" }, 404));
+
+    const refused: unknown = await conflict.client
+      .promoteInboxEntry(SESSION, FIRST)
+      .catch((error: unknown) => error);
+    const absent: unknown = await missing.client
+      .cancelInboxEntry(SESSION, FIRST)
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({ name: "OpenCodeV2HttpStatusError", status: 409 });
+    expect(absent).toMatchObject({ name: "OpenCodeV2HttpStatusError", status: 404 });
+  });
+
+  it("reads the ids of the newest page of messages and nothing else of them", async () => {
+    const { client, fetch } = clientWith(() =>
+      json({
+        data: [
+          { id: SECOND, type: "user", text: "MESSAGE-TEXT-THAT-MUST-NOT-BE-COPIED" },
+          { id: "not-a-message-id" },
+          { id: FIRST },
+          { type: "user" },
+        ],
+      }),
+    );
+
+    const ids = await client.recentMessageIds(SESSION);
+
+    expect(ids).toEqual([SECOND, FIRST]);
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toEqual(
+      new URL(`http://127.0.0.1:1984/api/session/${SESSION}/message?limit=100&order=desc`),
+    );
+    expect(init).toMatchObject({ method: "GET", redirect: "manual" });
+  });
+
+  it("surfaces a failed message read instead of an empty page", async () => {
+    const { client } = clientWith(() => json({ _tag: "SessionNotFoundError" }, 404));
+
+    await expect(client.recentMessageIds(SESSION)).rejects.toMatchObject({ status: 404 });
+  });
+});

@@ -10,7 +10,10 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
-import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchRuntimeInboxAction,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
@@ -29,6 +32,7 @@ import {
   createRecoveryAcknowledgementMutation,
   createResearchRevokeMutation,
   createRetryMutation,
+  createInboxMutation,
   createRevertMutation,
   createRunBoundMutation,
   createStartMutation,
@@ -85,6 +89,10 @@ export interface RuntimeMutationActions {
     inputs?: CodingWorkbenchFollowUpInputs,
   ) => Promise<void>;
   readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
+  readonly inboxAction: (
+    action: CodingWorkbenchRuntimeInboxAction,
+    itemId: string,
+  ) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
@@ -522,6 +530,11 @@ export function useCodingWorkbenchRuntimeMutations(
       enqueueMutation("revert", (current) => createRevertMutation(action, current)),
     [enqueueMutation],
   );
+  const inboxAction = useCallback(
+    (action: CodingWorkbenchRuntimeInboxAction, itemId: string): Promise<void> =>
+      enqueueMutation("inbox", (current) => createInboxMutation(action, itemId, current)),
+    [enqueueMutation],
+  );
   const revokeResearchGrant = useCallback(
     (grant: CodingWorkbenchRuntimeResearchGrant): Promise<void> =>
       enqueueMutation("research-revoke", (current) => createResearchRevokeMutation(current, grant)),
@@ -538,6 +551,7 @@ export function useCodingWorkbenchRuntimeMutations(
     resume,
     submitFollowUp,
     revert,
+    inboxAction,
     revokeResearchGrant,
   };
 }

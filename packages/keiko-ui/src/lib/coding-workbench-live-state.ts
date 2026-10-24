@@ -114,6 +114,7 @@ export type CodingWorkbenchMutationKind =
   | "resume"
   | "follow-up"
   | "revert"
+  | "inbox"
   | "research-revoke";
 
 export interface CodingWorkbenchMutationState {

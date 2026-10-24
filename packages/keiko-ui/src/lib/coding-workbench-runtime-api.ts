@@ -27,11 +27,14 @@ import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@osc
 import { validateCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
   validateCodingWorkbenchRuntimeCommandsChannelPayload,
+  validateCodingWorkbenchRuntimeInboxChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeRevertChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchRuntimeCommandsChannelPayload,
+  type CodingWorkbenchRuntimeInboxChannelPayload,
+  type CodingWorkbenchRuntimeInboxRequest,
   type CodingWorkbenchRuntimeRevertChannelPayload,
   type CodingWorkbenchRuntimeRevertRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -162,6 +165,13 @@ function commandsChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeCommandsChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeCommandsChannelPayload);
+}
+
+function inboxChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeInboxChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeInboxChannelPayload);
 }
 
 export interface CodingWorkbenchDescriptionDraftResult {
@@ -447,6 +457,35 @@ export function fetchCodingWorkbenchRuntimeCommands(
     runPath(runId, "/commands"),
     { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
     { validator: commandsChannelValidator },
+  );
+}
+
+/**
+ * Withdraw a message waiting for the running turn, or change a queued one to Send now (S07, ADR-0137
+ * D10). Bound to the observed revision like a follow-up; the server proves the message is one the
+ * operator delivered into this turn and answers one the runtime already took as delivered.
+ */
+export function submitCodingWorkbenchRuntimeInboxAction(
+  runId: string,
+  input: CodingWorkbenchRuntimeInboxRequest,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/inbox"), input);
+}
+
+/**
+ * Reads the messages still waiting for the running turn over the authenticated app-session channel:
+ * the id, the delivery and the operator's own one-line preview, in the order the model receives
+ * them. Absent `items` means the run offers none; an unpaired window receives the constant
+ * `{ session: "unpaired" }` projection instead of an error.
+ */
+export function fetchCodingWorkbenchRuntimeInbox(
+  runId: string,
+  init?: { readonly signal?: AbortSignal | undefined },
+): Promise<CodingWorkbenchRuntimeInboxChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/inbox"),
+    { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
+    { validator: inboxChannelValidator },
   );
 }
 

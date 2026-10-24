@@ -117,6 +117,7 @@ import {
   type AdmittedPromptInputs,
   type OpenCodePromptInputsRunPort,
 } from "./opencodePromptInputs.js";
+import { createOpenCodeInboxRunPort, type OpenCodeInboxRunPort } from "./opencodeInbox.js";
 import {
   commandDisplayText,
   createOpenCodeCommandPresentation,
@@ -576,6 +577,13 @@ export interface OpenCodeRunPort {
   readonly listCommands?: OpenCodeCommandsRunPort["listCommands"] | undefined;
   readonly admitCommand?: OpenCodeCommandsRunPort["admitCommand"] | undefined;
   /**
+   * The messages an operator sent into the running turn that the runtime has not handed to the model
+   * yet (`opencodeInbox.ts`): the listing, and the withdrawal or promotion of one. Only a profile
+   * that takes a delivery offers them; an interrupt withdraws what is still pending.
+   */
+  readonly listInbox?: OpenCodeInboxRunPort["listInbox"] | undefined;
+  readonly actOnInbox?: OpenCodeInboxRunPort["actOnInbox"] | undefined;
+  /**
    * The primary agents this composition's tool profile can honour (`openCodeSelectableAgents`):
    * `plan` exists only on the native profile. A request for another agent is refused here.
    */
@@ -811,21 +819,18 @@ function createRunPort(
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
-  const abortTask = createAbortTask(readyRun, activityLog);
+  const { ports: deliveryPorts, withdrawPendingInbox } = createDeliveryPorts(
+    readyRun,
+    promptInputs,
+    diagnostics,
+    activityLog,
+  );
+  const abortTask = createAbortTask(readyRun, activityLog, withdrawPendingInbox);
   return {
     submitTask: createSubmitTask(readyRun, diagnostics, activityLog, selectableAgents),
     selectableAgents,
     ...createOpenCodeCommandsRunPort({ readyRun, capabilities: promptInputs, activityLog }),
-    ...createOpenCodePromptInputsRunPort({
-      readyRun,
-      capabilities: promptInputs,
-      activityLog,
-      recordPostFailure: (runId, error): void => {
-        // The message was not accepted; the turn it was meant to join is untouched and keeps running.
-        const run = readyRun(runId);
-        if (run !== undefined) recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
-      },
-    }),
+    ...deliveryPorts,
     abortTask,
     ...(snapshots ? createOpenCodeRevertRunPort({ readyRun, abortTask, activityLog }) : {}),
     waitForTerminal: async (runId, signal): Promise<OpenCodeTurnOutcome> => {
@@ -841,6 +846,44 @@ function createRunPort(
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
     ...createQuestionRunPort(readyRun, diagnostics, activityLog),
   };
+}
+
+/**
+ * The messages an operator sends into a running turn: their admission and delivery
+ * (`opencodePromptInputs.ts`) and the list the Workbench shows of the ones the runtime has not taken
+ * yet (`opencodeInbox.ts`), both over the one delivery ledger. The interrupt's withdrawal of what is
+ * still pending is returned separately: it belongs to the abort, not to the run port's surface.
+ */
+function createDeliveryPorts(
+  readyRun: ReadyRunLookup,
+  promptInputs: OpenCodePromptInputsRunPort["promptInputs"],
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): {
+  readonly ports: Pick<
+    OpenCodeRunPort,
+    "promptInputs" | "admitPromptInputs" | "deliverPrompt" | "listInbox" | "actOnInbox"
+  >;
+  readonly withdrawPendingInbox: OpenCodeInboxRunPort["withdrawPendingInbox"];
+} {
+  const { nativeInput, withdrawNativeInput, ...prompts } = createOpenCodePromptInputsRunPort({
+    readyRun,
+    capabilities: promptInputs,
+    activityLog,
+    recordPostFailure: (runId, error): void => {
+      // The message was not accepted; the turn it was meant to join is untouched and keeps running.
+      const run = readyRun(runId);
+      if (run !== undefined) recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+    },
+  });
+  const { withdrawPendingInbox, ...inbox } = createOpenCodeInboxRunPort({
+    readyRun,
+    capabilities: promptInputs,
+    activityLog,
+    nativeInput,
+    withdrawNativeInput,
+  });
+  return { ports: { ...prompts, ...inbox }, withdrawPendingInbox };
 }
 
 function createSubmitTask(
@@ -1176,6 +1219,7 @@ async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
 function createAbortTask(
   readyRun: ReadyRunLookup,
   activityLog: ServerLogSink | undefined,
+  withdrawPendingInbox: OpenCodeInboxRunPort["withdrawPendingInbox"],
 ): OpenCodeRunPort["abortTask"] {
   return async (runId): Promise<boolean> => {
     const run = readyRun(runId);
@@ -1191,6 +1235,13 @@ function createAbortTask(
       });
       if (stopped.settled) {
         await run.runtimeAdapter.waitForTerminal(AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS));
+        // The runtime keeps the messages it had not taken through an interrupt and would hand them
+        // to the model with the next prompt, a turn the operator never meant them for.
+        await withdrawPendingInbox(
+          runId,
+          undefined,
+          AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
+        );
       } else {
         run.runtimeAdapter.cancelTurn();
       }

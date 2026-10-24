@@ -97,6 +97,21 @@ const MAX_COMMANDS = 256;
 const COMMAND_DESCRIPTION_MAX_CHARS = 1_024;
 
 /**
+ * One entry of a session's inbox (`Session.Inbox.Info` of the pinned 2.1.4 schema), reduced to the
+ * three fields Keiko reads: the input's own message id, whether it is an operator message (`user`,
+ * the only kind Keiko delivers) or something else the runtime queued itself, and how it will be
+ * delivered. The payload (the text, the attachments, the metadata) is never copied.
+ */
+export interface OpenCodeV2InboxEntry {
+  readonly id: string;
+  readonly kind: "user" | "other";
+  readonly delivery: CodingWorkbenchPromptDelivery;
+}
+
+/** The most entries one inbox listing may hold before the client refuses it. */
+const MAX_INBOX_ENTRIES = 256;
+
+/**
  * The prompt was refused before any byte left: a bound or a shape the client itself checks. Nothing
  * reached the producer, so nothing can be accepted there.
  */
@@ -212,6 +227,30 @@ export interface OpenCodeV2HttpClient {
     signal?: AbortSignal,
     inputs?: Pick<OpenCodeV2PromptInputs, "files">,
   ): Promise<void>;
+  /**
+   * The ids of the session's newest messages, newest first (`GET /api/session/{sessionID}/message`,
+   * one page, `order=desc`). Ids only: no text, part or metadata is copied. The proof, right after
+   * an inbox change, that a message did or did not reach the model.
+   */
+  recentMessageIds(sessionId: string, signal?: AbortSignal): Promise<readonly string[]>;
+  /**
+   * The inputs the session has accepted but not yet handed to the model (`GET
+   * /api/session/{sessionID}/inbox`, operation `session.inbox.list`), in the producer's order. An
+   * entry that is not about this session, whose id is not a message id, or whose delivery is not
+   * `steer` or `queue` is dropped; the payload is never read.
+   */
+  inbox(sessionId: string, signal?: AbortSignal): Promise<readonly OpenCodeV2InboxEntry[]>;
+  /**
+   * Withdraws a pending input before the model sees it (`DELETE
+   * /api/session/{sessionID}/inbox/{inboxID}`, operation `session.inbox.cancel`).
+   */
+  cancelInboxEntry(sessionId: string, inboxId: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Changes a pending input to `steer`, so it joins the running turn at its next step (`PATCH
+   * /api/session/{sessionID}/inbox/{inboxID}`, operation `session.inbox.update`). The runtime answers
+   * 409 for an input it no longer holds as it was.
+   */
+  promoteInboxEntry(sessionId: string, inboxId: string, signal?: AbortSignal): Promise<void>;
   interrupt(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
    * Copies a session's messages into a new session of the same location (`POST
@@ -405,6 +444,30 @@ function commandEntries(
     if (!isCodingWorkbenchCommandName(name)) return [];
     const description = commandDescription(entry.description);
     return [description === undefined ? { name } : { name, description }];
+  });
+}
+
+/** Only well-formed message ids survive; the rest of a message row is never read. */
+function messageIds(rows: readonly Readonly<Record<string, unknown>>[]): readonly string[] {
+  return rows.flatMap((row): readonly string[] =>
+    typeof row.id === "string" && MESSAGE_ID.test(row.id) ? [row.id] : [],
+  );
+}
+
+/**
+ * The closed fields of every inbox entry that is about the asked session and well formed; the rest of
+ * an entry, its payload above all, is never copied. A listing past the bound is refused whole.
+ */
+function inboxEntries(
+  sessionId: string,
+  entries: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2InboxEntry[] {
+  if (entries.length > MAX_INBOX_ENTRIES) throw new Error("opencode-v2-envelope-invalid");
+  return entries.flatMap((entry): readonly OpenCodeV2InboxEntry[] => {
+    const { id, delivery } = entry;
+    if (entry.sessionID !== sessionId || typeof id !== "string" || !MESSAGE_ID.test(id)) return [];
+    if (!isCodingWorkbenchPromptDelivery(delivery)) return [];
+    return [{ id, kind: entry.type === "user" ? "user" : "other", delivery }];
   });
 }
 
@@ -643,7 +706,7 @@ function safeFormId(value: string): string {
 }
 
 type V2Request = (
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "DELETE" | "PATCH",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
@@ -796,7 +859,7 @@ export function createOpenCodeV2HttpClient(
   const credentials = `opencode:${options.password}`;
   const authorization = `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`;
   async function request(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "DELETE" | "PATCH",
     path: string,
     body?: unknown,
     signal?: AbortSignal,
@@ -846,6 +909,40 @@ export function createOpenCodeV2HttpClient(
     command: async (sessionId, name, text, signal, inputs): Promise<void> => {
       const prepared = preparedCommand(sessionId, name, text, inputs);
       await request("POST", prepared.path, prepared.body, signal);
+    },
+    recentMessageIds: async (sessionId, signal) =>
+      messageIds(
+        arrayEnvelope(
+          await request(
+            "GET",
+            `/api/session/${safeSessionId(sessionId)}/message?limit=${String(MESSAGE_PAGE_SIZE)}&order=desc`,
+            undefined,
+            signal,
+          ),
+        ),
+      ),
+    inbox: async (sessionId, signal) =>
+      inboxEntries(
+        sessionId,
+        arrayEnvelope(
+          await request("GET", `/api/session/${safeSessionId(sessionId)}/inbox`, undefined, signal),
+        ),
+      ),
+    cancelInboxEntry: async (sessionId, inboxId, signal): Promise<void> => {
+      await request(
+        "DELETE",
+        `/api/session/${safeSessionId(sessionId)}/inbox/${safeMessageId(inboxId)}`,
+        undefined,
+        signal,
+      );
+    },
+    promoteInboxEntry: async (sessionId, inboxId, signal): Promise<void> => {
+      await request(
+        "PATCH",
+        `/api/session/${safeSessionId(sessionId)}/inbox/${safeMessageId(inboxId)}`,
+        { delivery: "steer" },
+        signal,
+      );
     },
     interrupt: async (sessionId, signal): Promise<void> => {
       await request("POST", `/api/session/${safeSessionId(sessionId)}/interrupt`, {}, signal);

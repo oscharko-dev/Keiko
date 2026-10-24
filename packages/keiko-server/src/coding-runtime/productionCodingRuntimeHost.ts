@@ -4,10 +4,12 @@ import type {
   CodingWorkbenchCommandRequest,
   CodingWorkbenchPromptDelivery,
   CodingWorkbenchPromptReference,
+  CodingWorkbenchRuntimeInboxAction,
   CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import type { CodingRuntimeHost } from "./codingRuntimeControlPlane.js";
+import type { CodingRuntimeInboxItems, CodingRuntimeInboxResult } from "./codingRuntimeInbox.js";
 import type { CodingRuntimeRevertResult, CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 
 export type CodingRuntimeTaskOutcome = "cancelled" | "failed" | "succeeded";
@@ -69,6 +71,15 @@ export interface CodingRuntimeRevertRequest extends CodingRuntimeRunOperation {
   readonly correlationId?: string | undefined;
 }
 
+/** One withdrawal or promotion of a pending message, admitted like any other operator operation. */
+export interface CodingRuntimeInboxActionRequest extends CodingRuntimeRunOperation {
+  readonly action: CodingWorkbenchRuntimeInboxAction;
+  /** The runtime's id of the pending message; the run port proves it is the operator's own. */
+  readonly itemId: string;
+  /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
+  readonly correlationId?: string | undefined;
+}
+
 export interface CodingRuntimeTaskDispatcher {
   readonly dispatch: (
     request: CodingRuntimeTaskDispatchRequest,
@@ -106,6 +117,21 @@ export interface CodingRuntimeTaskDispatcher {
   /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
   readonly revertState?:
     ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
+  /**
+   * The messages the operator sent into the running turn that the runtime has not handed to the
+   * model yet, or `undefined` when the run offers none (S07). Never rejects; the run port records
+   * one body-free line for each listing.
+   */
+  readonly inbox?:
+    | ((runId: string, correlationId?: string) => Promise<CodingRuntimeInboxItems | undefined>)
+    | undefined;
+  /**
+   * Withdraws or promotes one pending message. Admitted like a revert: the live authority is
+   * revalidated, the revision is consumed once and the request id is single-use. Absent for a
+   * runtime that takes no delivery, which then refuses it as the request's own fault. Never rejects.
+   */
+  readonly inboxAction?:
+    ((request: CodingRuntimeInboxActionRequest) => Promise<CodingRuntimeInboxResult>) | undefined;
 }
 
 export interface QualifiedProductionCodingRuntime extends Omit<

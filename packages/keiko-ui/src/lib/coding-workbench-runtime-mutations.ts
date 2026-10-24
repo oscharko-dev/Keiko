@@ -13,6 +13,7 @@ import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/run
 import type {
   CodingWorkbenchCommandRequest,
   CodingWorkbenchRuntimeForkRequest,
+  CodingWorkbenchRuntimeInboxAction,
   CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
@@ -28,6 +29,7 @@ import {
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
   submitCodingWorkbenchRuntimeFollowUp,
+  submitCodingWorkbenchRuntimeInboxAction,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
 import {
@@ -323,6 +325,38 @@ export function createRevertMutation(
         requestId: id,
         expectedRevision: snapshot.revision,
         action,
+      }),
+  };
+}
+
+/**
+ * Withdraws a message waiting for the running turn, or changes a queued one to Send now (S07):
+ * bound to the observed revision like a follow-up, and only against a run whose turn is running.
+ * A paused run has no turn to hold a message; the server refuses everything else, and this keeps
+ * the browser from sending a request it knows cannot be admitted.
+ */
+export function createInboxMutation(
+  action: CodingWorkbenchRuntimeInboxAction,
+  itemId: string,
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  if (!runId || snapshot?.state !== "running")
+    throw codingWorkbenchRuntimeActionError(
+      "A waiting message can only be changed while the task's turn is running.",
+    );
+  const id = newCodingWorkbenchRuntimeRequestId();
+  return {
+    requestId: id,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      submitCodingWorkbenchRuntimeInboxAction(runId, {
+        requestId: id,
+        expectedRevision: snapshot.revision,
+        action,
+        itemId,
       }),
   };
 }

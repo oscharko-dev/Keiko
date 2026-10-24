@@ -77,6 +77,7 @@ import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
+import type { CodingRuntimeInboxItems } from "./codingRuntimeInbox.js";
 import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 import {
   auxiliaryEventFacts,
@@ -2082,6 +2083,20 @@ export class CodingRuntimeOrchestrator {
 
   revertState(runId: string): Promise<CodingRuntimeRevertState | undefined> {
     return this.operations.revertState(runId);
+  }
+
+  /** Withdraws or promotes a pending message; see `CodingRuntimeOperationCoordinator.submitInboxAction`. */
+  submitInboxAction(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.submitInboxAction(runId, input, correlationId);
+  }
+
+  /** The messages still waiting for the running turn; see `CodingRuntimeOperationCoordinator`. */
+  listInbox(runId: string, correlationId?: string): Promise<CodingRuntimeInboxItems | undefined> {
+    return this.operations.listInbox(runId, correlationId);
   }
 
   /** The slash commands the run's runtime lists right now; see `CodingRuntimeOperationCoordinator`. */

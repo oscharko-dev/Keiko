@@ -12,6 +12,9 @@ import {
   CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS,
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
+  CODING_WORKBENCH_RUNTIME_INBOX_ACTIONS,
+  CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX,
+  CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
@@ -20,10 +23,13 @@ import {
   isCodingWorkbenchCommandName,
   isCodingWorkbenchPromptDelivery,
   isCodingWorkbenchPromptReferencePath,
+  isCodingWorkbenchRuntimeInboxAction,
+  isCodingWorkbenchRuntimeInboxItemId,
   parseCodingWorkbenchCommandRequest,
   parseCodingWorkbenchPromptReferences,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeFollowUpRequest,
+  parseCodingWorkbenchRuntimeInboxRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
@@ -33,7 +39,9 @@ import {
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
   unpairedCodingWorkbenchRuntimeCommandsChannelPayload,
+  unpairedCodingWorkbenchRuntimeInboxChannelPayload,
   validateCodingWorkbenchRuntimeCommandsChannelPayload,
+  validateCodingWorkbenchRuntimeInboxChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeSseEvent,
@@ -2019,6 +2027,119 @@ describe("Coding Workbench slash commands and first-prompt references", () => {
     ]) {
       expect(
         validateCodingWorkbenchRuntimeCommandsChannelPayload(payload).ok,
+        JSON.stringify(payload).slice(0, 80),
+      ).toBe(false);
+    }
+  });
+});
+
+describe("Coding Workbench pending messages of a running turn", () => {
+  const ITEM_ID = "msg_16b08469d001DaT0xxHG2PAKe6";
+  const request = {
+    requestId: "req-inbox-1",
+    expectedRevision: 7,
+    action: "cancel",
+    itemId: ITEM_ID,
+  };
+
+  it("names exactly two closed actions", () => {
+    expect([...CODING_WORKBENCH_RUNTIME_INBOX_ACTIONS]).toEqual(["cancel", "promote"]);
+    expect(isCodingWorkbenchRuntimeInboxAction("promote")).toBe(true);
+    for (const action of ["steer", "queue", "CANCEL", "", null, 1]) {
+      expect(isCodingWorkbenchRuntimeInboxAction(action), String(action)).toBe(false);
+    }
+  });
+
+  it("accepts only a runtime message id as an item id", () => {
+    expect(isCodingWorkbenchRuntimeInboxItemId(ITEM_ID)).toBe(true);
+    for (const id of [
+      "",
+      "msg_",
+      "ses_abc",
+      "msg_a b",
+      "msg_../x",
+      `msg_${"a".repeat(252)}`,
+      "MSG_abc",
+      null,
+      7,
+    ]) {
+      expect(isCodingWorkbenchRuntimeInboxItemId(id), String(id)).toBe(false);
+    }
+  });
+
+  it("parses the revision-bound action request with its exact keys", () => {
+    expect(parseCodingWorkbenchRuntimeInboxRequest(request)).toEqual({ ok: true, value: request });
+    expect(parseCodingWorkbenchRuntimeInboxRequest({ ...request, action: "promote" }).ok).toBe(
+      true,
+    );
+    for (const body of [
+      null,
+      [],
+      {},
+      { ...request, action: "steer" },
+      { ...request, itemId: "ses_x" },
+      { ...request, expectedRevision: -1 },
+      { ...request, expectedRevision: 1.5 },
+      { ...request, requestId: "bad id" },
+      { ...request, delivery: "steer" },
+      { requestId: request.requestId, expectedRevision: 1, action: "cancel" },
+    ]) {
+      expect(parseCodingWorkbenchRuntimeInboxRequest(body).ok, JSON.stringify(body)).toBe(false);
+    }
+  });
+
+  it("validates the inbox channel as a bounded, duplicate-free listing of previews", () => {
+    const items = [
+      { itemId: ITEM_ID, delivery: "steer", preview: "Use the new logger" },
+      { itemId: "msg_16b08469d002DaT0xxHG2PAKe6", delivery: "queue", preview: "" },
+    ];
+    expect(validateCodingWorkbenchRuntimeInboxChannelPayload({ session: "active", items })).toEqual(
+      { ok: true, value: { session: "active", items } },
+    );
+    expect(
+      validateCodingWorkbenchRuntimeInboxChannelPayload({ session: "active", items: [] }).ok,
+    ).toBe(true);
+    expect(validateCodingWorkbenchRuntimeInboxChannelPayload({ session: "active" }).ok).toBe(true);
+    expect(unpairedCodingWorkbenchRuntimeInboxChannelPayload()).toEqual({ session: "unpaired" });
+    expect(
+      validateCodingWorkbenchRuntimeInboxChannelPayload(
+        unpairedCodingWorkbenchRuntimeInboxChannelPayload(),
+      ).ok,
+    ).toBe(true);
+    const tooMany = Array.from(
+      { length: CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX + 1 },
+      (_, index) => ({
+        itemId: `msg_item${String(index)}`,
+        delivery: "queue",
+        preview: "x",
+      }),
+    );
+    const [first] = items;
+    for (const payload of [
+      null,
+      [],
+      { session: "other" },
+      { session: "active", items: "all" },
+      { session: "active", items: [null] },
+      { session: "active", items: [{ ...first, delivery: "later" }] },
+      { session: "active", items: [{ ...first, itemId: "ses_x" }] },
+      { session: "active", items: [{ ...first, text: "the full message" }] },
+      { session: "active", items: [{ itemId: ITEM_ID, delivery: "steer" }] },
+      { session: "active", items: [first, first] },
+      {
+        session: "active",
+        items: [
+          { ...first, preview: "p".repeat(CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS + 1) },
+        ],
+      },
+      // A bidirectional override in a preview is the reordering a display surface must never see.
+      { session: "active", items: [{ ...first, preview: "safe \u202Egnp.exe" }] },
+      { session: "active", items: tooMany },
+      { session: "unpaired", items },
+      { session: "active", items, extra: true },
+    ]) {
+      expect(
+        validateCodingWorkbenchRuntimeInboxChannelPayload(payload).ok,
         JSON.stringify(payload).slice(0, 80),
       ).toBe(false);
     }

@@ -7,8 +7,10 @@ import {
   isCodingWorkbenchAgent,
   isCodingWorkbenchRuntimeRevertAction,
   parseCodingWorkbenchRuntimeFollowUpRequest,
+  parseCodingWorkbenchRuntimeInboxRequest,
   type CodingWorkbenchCommand,
   type CodingWorkbenchRuntimeFollowUpRequest,
+  type CodingWorkbenchRuntimeInboxRequest,
   type CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
@@ -20,6 +22,11 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  inboxRefusalFailureCode,
+  type CodingRuntimeInboxItems,
+  type CodingRuntimeInboxResult,
+} from "./codingRuntimeInbox.js";
 import {
   revertRefusalFailureCode,
   type CodingRuntimeRevertResult,
@@ -134,6 +141,17 @@ const CODING_RUNTIME_REVERT_DISPATCH_FAILED_OPERATION = defineActivityLogOperati
   },
   failureClasses: ["coding-runtime-revert-dispatch"],
   proofIds: ["coding-runtime.revert.dispatch-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_INBOX_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.inbox.dispatch-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: { type: "string", dataClass: "closed-enum", required: true, values: ["inbox"] },
+  },
+  failureClasses: ["coding-runtime-inbox-dispatch"],
+  proofIds: ["coding-runtime.inbox.dispatch-failed.emitted-line"],
 });
 
 const CODING_RUNTIME_QUESTION_LIST_FAILED_OPERATION = defineActivityLogOperation({
@@ -299,6 +317,7 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
 ]);
 
 const REVERT_KEYS = ["requestId", "expectedRevision", "action"] as const;
+const INBOX_KEYS = ["requestId", "expectedRevision", "action", "itemId"] as const;
 
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();
@@ -545,6 +564,93 @@ export class CodingRuntimeOperationCoordinator {
       });
       return { ok: false, reason: "revert-failed" };
     }
+  }
+
+  /**
+   * Withdraws or promotes one message the operator sent into the running turn and the runtime has
+   * not handed to the model yet (S07, ADR-0137 D10). Admitted while the run is running -- a paused
+   * run has no turn to hold a message -- under the usual revision and one-use request id. The
+   * action changes only the runtime's inbox: no turn starts, settles or is replaced.
+   */
+  public submitInboxAction(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.deps.serial(async () => {
+      const operation = this.prepare(runId, input, INBOX_KEYS);
+      const request = admittedInboxRequest(operation, input);
+      if (
+        !operation.ok ||
+        request === undefined ||
+        this.deps.taskDispatcher.inboxAction === undefined
+      ) {
+        if (operation.ok) operation.reservation.release();
+        return failure(
+          !operation.ok && operation.reason === "replay-cap-exhausted"
+            ? "replay-cap-exhausted"
+            : "invalid-intent",
+        );
+      }
+      return this.applyInboxAction(runId, operation, request, correlationId);
+    });
+  }
+
+  private async applyInboxAction(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    request: CodingWorkbenchRuntimeInboxRequest,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const result = await this.dispatchInboxAction(runId, operation, request, correlationId);
+    if (!result.ok) {
+      operation.reservation.release();
+      return failure(inboxRefusalFailureCode(result.reason));
+    }
+    operation.reservation.commit();
+    return this.deps.advanceRevision(operation.current);
+  }
+
+  private async dispatchInboxAction(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    request: CodingWorkbenchRuntimeInboxRequest,
+    correlationId?: string,
+  ): Promise<CodingRuntimeInboxResult> {
+    try {
+      return (
+        (await this.deps.taskDispatcher.inboxAction?.({
+          ...operationRequest(runId, operation),
+          action: request.action,
+          itemId: request.itemId,
+          ...(correlationId === undefined ? {} : { correlationId }),
+        })) ?? { ok: false, reason: "unsupported" }
+      );
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        runId,
+        correlationId,
+        operation: "inbox",
+        error,
+      });
+      return { ok: false, reason: "inbox-failed" };
+    }
+  }
+
+  /**
+   * The messages the operator sent into the running turn that the runtime has not handed to the
+   * model yet, or `undefined` when the run is not running or offers none. Reads only: it consumes
+   * no revision and no request id.
+   */
+  public listInbox(
+    runId: string,
+    correlationId?: string,
+  ): Promise<CodingRuntimeInboxItems | undefined> {
+    const current = this.deps.current();
+    if (current?.runId !== runId || current.state !== "running") {
+      return Promise.resolve(undefined);
+    }
+    return this.deps.taskDispatcher.inbox?.(runId, correlationId) ?? Promise.resolve(undefined);
   }
 
   /**
@@ -1077,6 +1183,7 @@ interface RuntimeOperationTransportFailure {
     | "answer"
     | "reject"
     | "revert"
+    | "inbox"
     | "initial-turn-dispatch"
     | "initial-turn-stop";
   readonly error: unknown;
@@ -1113,6 +1220,11 @@ function runtimeOperationTransportEvent(input: RuntimeOperationTransportFailure)
       });
     case "revert":
       return activityLogEvent(CODING_RUNTIME_REVERT_DISPATCH_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+    case "inbox":
+      return activityLogEvent(CODING_RUNTIME_INBOX_DISPATCH_FAILED_OPERATION, envelope, {
         ...details,
         operation: input.operation,
       });
@@ -1199,6 +1311,19 @@ function admittedRevertAction(
   if (!operation.ok || !FOLLOW_UP_STATES.has(operation.current.state)) return undefined;
   const action = operation.value.action;
   return isCodingWorkbenchRuntimeRevertAction(action) ? action : undefined;
+}
+
+/**
+ * The inbox request when the whole operation is admissible, otherwise `undefined`: the contract
+ * validated its shape, and only a run whose turn is running has a message to withdraw or promote.
+ */
+function admittedInboxRequest(
+  operation: PreparedRuntimeOperation,
+  input: unknown,
+): CodingWorkbenchRuntimeInboxRequest | undefined {
+  if (!operation.ok || operation.current.state !== "running") return undefined;
+  const parsed = parseCodingWorkbenchRuntimeInboxRequest(input);
+  return parsed.ok ? parsed.value : undefined;
 }
 
 /** The admissible part of a follow-up that the dispatchers read; the contract validated its shape. */

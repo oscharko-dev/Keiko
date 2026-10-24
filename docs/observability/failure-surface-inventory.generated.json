@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "befab2dc60463a4b680bdc5d38192de9eb1c0ea965a40a72487156219e8671ec"
+    "catalogDigest": "0870bdbc66fada55c6507a86dbaf86dbbd7d061f94ada3e450f0a23c8ead89b9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 570,
-    "proofCount": 583,
-    "resolvedProofCount": 583,
-    "failureClassCount": 358,
+    "operationCount": 572,
+    "proofCount": 585,
+    "resolvedProofCount": 585,
+    "failureClassCount": 359,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -331,6 +331,8 @@
         "coding-runtime.history",
         "coding-runtime.history-projection",
         "coding-runtime.history.export",
+        "coding-runtime.inbox.action",
+        "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
         "coding-runtime.initialization-transport",
@@ -831,6 +833,7 @@
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
     "coding-runtime-revert": ["tools-workflows.rejection"],
     "coding-runtime-revert-dispatch": ["tools-workflows.dependency-failure"],
+    "coding-runtime-inbox-dispatch": ["tools-workflows.dependency-failure"],
     "coding-runtime-git-metadata-unproven": ["tools-workflows.dependency-failure"],
     "coding-runtime-ripgrep-unavailable": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-settlement": ["tools-workflows.rejection"],
@@ -1447,6 +1450,12 @@
     "coding-runtime.history.export.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingHistoryRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingTaskExport.test.ts"
+    ],
+    "coding-runtime.inbox.action.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeInbox.test.ts"
+    ],
+    "coding-runtime.inbox.dispatch-failed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
     "coding-runtime.initial-turn.dispatch-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"

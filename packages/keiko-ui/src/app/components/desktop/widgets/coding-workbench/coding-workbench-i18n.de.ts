@@ -1354,4 +1354,22 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.revert.restore.confirmAction": "Wiederherstellung bestätigen",
   "codingWorkbench.revert.cancel": "Abbrechen",
   "codingWorkbench.revert.busy": "Wird angewendet…",
+  "codingWorkbench.inbox.region": "Nachrichten, die auf diese Aufgabe warten",
+  "codingWorkbench.inbox.summary": "{count} Nachrichten warten auf die laufende Aufgabe.",
+  "codingWorkbench.inbox.summary.one": "1 Nachricht wartet auf die laufende Aufgabe.",
+  "codingWorkbench.inbox.delivery.steer": "Jetzt senden",
+  "codingWorkbench.inbox.delivery.steer.help":
+    "Sie erreicht die laufende Aufgabe in ihrem nächsten Schritt.",
+  "codingWorkbench.inbox.delivery.queue": "Eingereiht",
+  "codingWorkbench.inbox.delivery.queue.help":
+    "Sie wird nach der aktuellen Arbeit der laufenden Aufgabe zugestellt.",
+  "codingWorkbench.inbox.emptyPreview": "Nachricht ohne Text",
+  "codingWorkbench.inbox.sendNow": "Jetzt senden",
+  "codingWorkbench.inbox.sendNow.item": "Jetzt senden: {text}",
+  "codingWorkbench.inbox.cancel": "Abbrechen",
+  "codingWorkbench.inbox.cancel.item": "Nachricht abbrechen: {text}",
+  "codingWorkbench.inbox.busy": "Wird angewendet…",
+  "codingWorkbench.inbox.error":
+    "Die wartenden Nachrichten konnten nicht gelesen werden. Sie können die laufende Aufgabe trotzdem noch erreichen.",
+  "codingWorkbench.inbox.retry": "Erneut versuchen",
 } satisfies CodingWorkbenchMessageCatalog;

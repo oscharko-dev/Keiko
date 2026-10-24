@@ -1848,3 +1848,280 @@ describe("CodingRuntimeOperationCoordinator turn revert", () => {
     });
   });
 });
+
+describe("CodingRuntimeOperationCoordinator pending messages (S07)", () => {
+  type InboxAction = NonNullable<CodingRuntimeTaskDispatcher["inboxAction"]>;
+  const ITEM = "msg_16b08469d001DaT0xxHG2PAKe6";
+
+  function inboxBody(
+    action: unknown = "cancel",
+    requestId = "req-inbox-1",
+    expectedRevision = 3,
+    itemId: unknown = ITEM,
+  ): Record<string, unknown> {
+    return { requestId, expectedRevision, action, itemId };
+  }
+
+  const done = (): Awaited<ReturnType<InboxAction>> => ({ ok: true, outcome: "cancelled" });
+
+  function withInbox(inboxAction: InboxAction): CodingRuntimeTaskDispatcher {
+    return dispatcher({ inboxAction: vi.fn(inboxAction) });
+  }
+
+  it("dispatches the admitted revision, the action, the item and the request's correlation id", async () => {
+    const taskDispatcher = withInbox(() => Promise.resolve(done()));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(
+      subject.submitInboxAction("run-1", inboxBody("promote"), "corr-inbox-0001"),
+    ).resolves.toEqual({ ok: true, snapshot: publicSnapshot() });
+
+    expect(taskDispatcher.inboxAction).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: "req-inbox-1",
+      expectedRevision: 3,
+      action: "promote",
+      itemId: ITEM,
+      correlationId: "corr-inbox-0001",
+    });
+  });
+
+  it("advances the revision once for an admitted action, so the next one is admitted", async () => {
+    const advanceRevision = vi.fn((): CodingRuntimeOrchestratorResult => ({
+      ok: true,
+      snapshot: publicSnapshot(),
+    }));
+    const subject = coordinator({
+      taskDispatcher: withInbox(() => Promise.resolve(done())),
+      advanceRevision,
+    });
+
+    await subject.submitInboxAction("run-1", inboxBody());
+
+    expect(advanceRevision).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "starting",
+    "ready",
+    "paused",
+    "awaiting-approval",
+    "stopping",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "recovery-required",
+  ] as const)(
+    "refuses an action on a run that is %s: it has no turn to hold a message",
+    async (state) => {
+      const taskDispatcher = withInbox(() => Promise.resolve(done()));
+      const subject = coordinator({
+        taskDispatcher,
+        current: () => ({ ...runningSnapshot(), state }),
+      });
+
+      await expect(subject.submitInboxAction("run-1", inboxBody())).resolves.toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      expect(taskDispatcher.inboxAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["an unknown action", inboxBody("steer")],
+    ["a missing action", { requestId: "req-1", expectedRevision: 3, itemId: ITEM }],
+    ["a missing item", { requestId: "req-1", expectedRevision: 3, action: "cancel" }],
+    ["an item that is not a message id", inboxBody("cancel", "req-1", 3, "ses_abc")],
+    ["an item with a path in it", inboxBody("cancel", "req-1", 3, "msg_../x")],
+    ["an extra key", { ...inboxBody(), delivery: "steer" }],
+    ["a stale revision", inboxBody("cancel", "req-1", 2)],
+    ["a future revision", inboxBody("cancel", "req-1", 4)],
+    ["an unsafe request id", inboxBody("cancel", "../req")],
+    ["a non-object body", "cancel"],
+  ])("refuses %s without dispatching", async (_name, body) => {
+    const taskDispatcher = withInbox(() => Promise.resolve(done()));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitInboxAction("run-1", body)).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.inboxAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses another run's id and a runtime that offers no inbox", async () => {
+    await expect(
+      coordinator({ taskDispatcher: dispatcher() }).submitInboxAction("run-1", inboxBody()),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+
+    const taskDispatcher = withInbox(() => Promise.resolve(done()));
+    await expect(
+      coordinator({ taskDispatcher }).submitInboxAction("run-2", inboxBody()),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(taskDispatcher.inboxAction).not.toHaveBeenCalled();
+  });
+
+  it("dispatches each request id once and fails closed on its replay", async () => {
+    const taskDispatcher = withInbox(() => Promise.resolve(done()));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitInboxAction("run-1", inboxBody())).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(subject.submitInboxAction("run-1", inboxBody())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(taskDispatcher.inboxAction).toHaveBeenCalledOnce();
+  });
+
+  it.each(["already-cancelled", "already-delivered", "cancelled", "promoted"] as const)(
+    "answers the outcome %s as success: a message the runtime already took is not an error",
+    async (outcome) => {
+      const subject = coordinator({
+        taskDispatcher: withInbox(() => Promise.resolve({ ok: true, outcome })),
+      });
+
+      await expect(subject.submitInboxAction("run-1", inboxBody())).resolves.toEqual({
+        ok: true,
+        snapshot: publicSnapshot(),
+      });
+    },
+  );
+
+  it.each([
+    ["turn-not-running", "invalid-intent"],
+    ["unknown-item", "invalid-intent"],
+    ["unsupported", "invalid-intent"],
+    ["not-admitted", "authority-resolution-failed"],
+    ["inbox-failed", "runtime-failed"],
+    ["run-unavailable", "runtime-failed"],
+  ] as const)("answers the refusal %s as %s and releases the request id", async (reason, code) => {
+    let answer: Awaited<ReturnType<InboxAction>> = { ok: false, reason };
+    const taskDispatcher = withInbox(() => Promise.resolve(answer));
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitInboxAction("run-1", inboxBody())).resolves.toEqual({
+      ok: false,
+      failureCode: code,
+    });
+
+    // The refusal released the reservation: the same request id is admitted once it can succeed.
+    answer = done();
+    await expect(subject.submitInboxAction("run-1", inboxBody())).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("starts, replaces and settles no turn", async () => {
+    const settleTask = vi.fn();
+    const taskDispatcher = dispatcher({ inboxAction: vi.fn(() => Promise.resolve(done())) });
+    const subject = coordinator({ settleTask, taskDispatcher });
+
+    await subject.submitInboxAction("run-1", inboxBody());
+
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(taskDispatcher.replace).not.toHaveBeenCalled();
+    expect(taskDispatcher.abort).not.toHaveBeenCalled();
+    expect(settleTask).not.toHaveBeenCalled();
+  });
+
+  it("logs a throwing dispatcher as structured evidence and answers a runtime failure", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const taskDispatcher = withInbox(() => Promise.reject(new Error("inbox backend offline")));
+    const subject = coordinator({ taskDispatcher, activityLog });
+
+    await expect(
+      subject.submitInboxAction("run-1", inboxBody(), "corr-inbox-0001"),
+    ).resolves.toEqual({ ok: false, failureCode: "runtime-failed" });
+
+    expect(activityLog.events).toMatchObject([
+      {
+        level: "warn",
+        op: "coding-runtime.inbox.dispatch-failed",
+        correlationId: "corr-inbox-0001",
+        errorKind: "internal",
+        extra: { runId: "run-1", operation: "inbox" },
+      },
+    ]);
+    expect(Array.isArray(activityLog.events[0]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(activityLog.events)).not.toContain("inbox backend offline");
+    expect(JSON.stringify(activityLog.events)).not.toContain(ITEM);
+  });
+
+  it("proves coding-runtime.inbox.dispatch-failed through the registered formatter", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const subject = coordinator({
+      taskDispatcher: withInbox(() => Promise.reject(new Error("inbox backend offline"))),
+      activityLog,
+    });
+    await subject.submitInboxAction("run-1", inboxBody());
+    const [failure] = activityLog.events;
+    if (failure === undefined) throw new Error("expected inbox.dispatch-failed line");
+
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.inbox.dispatch-failed.emitted-line",
+        formatActivityLogProofLine(failure),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "inbox" });
+  });
+
+  describe("listing", () => {
+    const items = [{ itemId: ITEM, delivery: "queue", preview: "Later" }] as const;
+
+    it("reads the dispatcher's items for a running run only", async () => {
+      const inbox = vi.fn(() => Promise.resolve(items));
+      const running = coordinator({ taskDispatcher: dispatcher({ inbox }) });
+
+      await expect(running.listInbox("run-1", "corr-0123456789")).resolves.toEqual(items);
+      expect(inbox).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+
+      for (const settled of [
+        "paused",
+        "succeeded",
+        "awaiting-approval",
+        "recovery-required",
+      ] as const) {
+        const subject = coordinator({
+          taskDispatcher: dispatcher({ inbox }),
+          current: () => ({ ...runningSnapshot(), state: settled }),
+        });
+        await expect(subject.listInbox("run-1")).resolves.toBeUndefined();
+      }
+      expect(inbox).toHaveBeenCalledOnce();
+    });
+
+    it("is absent for another run's id, for no run and for a runtime that offers none", async () => {
+      const inbox = vi.fn(() => Promise.resolve(items));
+      await expect(
+        coordinator({ taskDispatcher: dispatcher({ inbox }) }).listInbox("run-2"),
+      ).resolves.toBeUndefined();
+      await expect(
+        coordinator({
+          taskDispatcher: dispatcher({ inbox }),
+          current: () => undefined,
+        }).listInbox("run-1"),
+      ).resolves.toBeUndefined();
+      expect(inbox).not.toHaveBeenCalled();
+      await expect(coordinator({}).listInbox("run-1")).resolves.toBeUndefined();
+    });
+
+    it("reads without consuming a revision or a request id", async () => {
+      const advanceRevision = vi.fn((): CodingRuntimeOrchestratorResult => ({
+        ok: true,
+        snapshot: publicSnapshot(),
+      }));
+      const subject = coordinator({
+        taskDispatcher: dispatcher({ inbox: () => Promise.resolve(items) }),
+        advanceRevision,
+      });
+
+      await subject.listInbox("run-1");
+      await subject.listInbox("run-1");
+
+      expect(advanceRevision).not.toHaveBeenCalled();
+    });
+  });
+});

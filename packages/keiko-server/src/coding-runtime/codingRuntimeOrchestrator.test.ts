@@ -3027,6 +3027,49 @@ describe("CodingRuntimeOrchestrator", () => {
       await expect(f.orchestrator.listCommands("run-9")).resolves.toBeUndefined();
     });
 
+    it("lists the pending messages of the live run through its dispatcher and of no other", async () => {
+      const f = fixture();
+      const items = [{ itemId: "msg_item_1", delivery: "steer", preview: "Use the new logger" }];
+      const inbox = vi.fn(() => Promise.resolve(items));
+      Object.assign(f.taskDispatcher, { inbox });
+      await f.orchestrator.start(start);
+
+      await expect(f.orchestrator.listInbox("run-1", "corr-0123456789")).resolves.toEqual(items);
+      expect(inbox).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+      await expect(f.orchestrator.listInbox("run-9")).resolves.toBeUndefined();
+    });
+
+    it("withdraws a pending message at the observed revision, advances it once and refuses the replay", async () => {
+      const f = fixture();
+      const inboxAction = vi.fn(() => Promise.resolve({ ok: true as const, outcome: "cancelled" }));
+      Object.assign(f.taskDispatcher, { inboxAction });
+      await f.orchestrator.start(start);
+      const body = {
+        requestId: "inbox-1",
+        expectedRevision: 4,
+        action: "cancel",
+        itemId: "msg_item_1",
+      };
+
+      const withdrawn = await f.orchestrator.submitInboxAction("run-1", body, "corr-0123456789");
+
+      expect(successfulSnapshot(withdrawn).revision).toBe(5);
+      expect(inboxAction).toHaveBeenCalledExactlyOnceWith({
+        runId: "run-1",
+        requestId: "inbox-1",
+        expectedRevision: 4,
+        action: "cancel",
+        itemId: "msg_item_1",
+        correlationId: "corr-0123456789",
+      });
+      await expect(f.orchestrator.submitInboxAction("run-1", body)).resolves.toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      expect(inboxAction).toHaveBeenCalledOnce();
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledOnce();
+    });
+
     it("hands a follow-up's command to the dispatch and omits the key when none was named", async () => {
       const f = fixture();
       await f.orchestrator.start(start);

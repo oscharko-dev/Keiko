@@ -2505,3 +2505,210 @@ describe("turn revert admission (B3, S04)", () => {
     expect(offered.revertState).toBe(revertState);
   });
 });
+
+describe("pending message admission (S07)", () => {
+  type ActOnInbox = NonNullable<ProductionRuntimeRunRecord["turnPort"]["actOnInbox"]>;
+  type ListInbox = NonNullable<ProductionRuntimeRunRecord["turnPort"]["listInbox"]>;
+
+  const CANCELLED = { ok: true, outcome: "cancelled" } as const;
+  const ITEM = "msg_16b08469d001DaT0xxHG2PAKe6";
+
+  function inboxRecord(
+    runId: string,
+    port: { readonly actOnInbox?: ActOnInbox; readonly listInbox?: ListInbox },
+    live: () => boolean = () => true,
+  ): ProductionRuntimeRunRecord {
+    return {
+      controller: new AbortController(),
+      operationGuard: createProductionRuntimeOperationGuard(runId, live),
+      turnPort: {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        ...port,
+      },
+    };
+  }
+
+  function inboxRequest(
+    runId: string,
+    requestId: string,
+    expectedRevision: number,
+    action: "cancel" | "promote" = "cancel",
+  ) {
+    return {
+      runId,
+      requestId,
+      expectedRevision,
+      action,
+      itemId: ITEM,
+      correlationId: "corr-inbox-0001",
+    };
+  }
+
+  it("hands the action, the item and the request's correlation id to the run's turn port", async () => {
+    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(CANCELLED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-i", inboxRecord("run-i", { actOnInbox })]]),
+    );
+
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual(
+      CANCELLED,
+    );
+
+    expect(actOnInbox).toHaveBeenCalledExactlyOnceWith(
+      "run-i",
+      { action: "cancel", itemId: ITEM },
+      "corr-inbox-0001",
+    );
+  });
+
+  it("revalidates the live authority first: an expired envelope changes nothing", async () => {
+    let live = false;
+    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(CANCELLED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-i", inboxRecord("run-i", { actOnInbox }, () => live)]]),
+    );
+
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "not-admitted",
+    });
+    expect(actOnInbox).not.toHaveBeenCalled();
+
+    // Refused before the reservation committed: the same request id is admitted once authority is live.
+    live = true;
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual(
+      CANCELLED,
+    );
+  });
+
+  it("consumes the revision and the request id once", async () => {
+    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(CANCELLED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-i", inboxRecord("run-i", { actOnInbox })]]),
+    );
+
+    await dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4));
+
+    for (const replay of [
+      inboxRequest("run-i", "req-1", 5),
+      inboxRequest("run-i", "req-2", 4),
+      inboxRequest("run-i", "req-3", 3),
+    ]) {
+      await expect(dispatcher.inboxAction?.(replay)).resolves.toEqual({
+        ok: false,
+        reason: "not-admitted",
+      });
+    }
+    await expect(
+      dispatcher.inboxAction?.(inboxRequest("run-i", "req-4", 5, "promote")),
+    ).resolves.toEqual(CANCELLED);
+    expect(actOnInbox).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an unknown run, a stopped run and a runtime that holds no inbox", async () => {
+    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(CANCELLED));
+    const stopped = inboxRecord("run-stopped", { actOnInbox });
+    stopped.controller.abort();
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        ["run-stopped", stopped],
+        ["run-codex", inboxRecord("run-codex", {})],
+      ]),
+    );
+
+    await expect(
+      dispatcher.inboxAction?.(inboxRequest("run-missing", "req-1", 4)),
+    ).resolves.toEqual({ ok: false, reason: "run-unavailable" });
+    await expect(
+      dispatcher.inboxAction?.(inboxRequest("run-stopped", "req-1", 4)),
+    ).resolves.toEqual({ ok: false, reason: "run-unavailable" });
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-codex", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+    expect(actOnInbox).not.toHaveBeenCalled();
+  });
+
+  it("releases the reservation when the port refuses, so the same revision can be retried", async () => {
+    let answer: Awaited<ReturnType<ActOnInbox>> = { ok: false, reason: "unknown-item" };
+    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(answer));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-i", inboxRecord("run-i", { actOnInbox })]]),
+    );
+
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "unknown-item",
+    });
+
+    answer = CANCELLED;
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual(
+      CANCELLED,
+    );
+  });
+
+  it("answers a throwing port with a body-free diagnostic and frees the reservation", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.reject(new Error("private failure text")));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-i", inboxRecord("run-i", { actOnInbox })]]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual({
+      ok: false,
+      reason: "inbox-failed",
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.task-dispatch",
+        code: "stage=dispatch:reason=exception",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("private failure text");
+    actOnInbox.mockImplementation(() => Promise.resolve(CANCELLED));
+    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual(
+      CANCELLED,
+    );
+  });
+
+  it("lists through the run's port and reports none for an unknown run or a port without an inbox", async () => {
+    const items = [{ itemId: ITEM, delivery: "queue", preview: "Later" }] as const;
+    const listInbox = vi.fn<ListInbox>(() => Promise.resolve(items));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        ["run-i", inboxRecord("run-i", { listInbox })],
+        ["run-codex", inboxRecord("run-codex", {})],
+      ]),
+    );
+
+    await expect(dispatcher.inbox?.("run-i", "corr-inbox-0001")).resolves.toEqual(items);
+    await expect(dispatcher.inbox?.("run-codex")).resolves.toBeUndefined();
+    await expect(dispatcher.inbox?.("run-missing")).resolves.toBeUndefined();
+    expect(listInbox).toHaveBeenCalledExactlyOnceWith("run-i", "corr-inbox-0001");
+  });
+
+  it("exposes the inbox on the OpenCode turn port only when the run port offers both operations", () => {
+    const base: OpenCodeRunPort = {
+      submitTask: () => Promise.resolve(true),
+      abortTask: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve(true),
+      listQuestions: () => Promise.resolve([]),
+      answerQuestion: () => Promise.resolve(false),
+      rejectQuestion: () => Promise.resolve(false),
+      replyPermission: () => Promise.resolve(false),
+    };
+    const actOnInbox: NonNullable<OpenCodeRunPort["actOnInbox"]> = () => Promise.resolve(CANCELLED);
+    const listInbox: NonNullable<OpenCodeRunPort["listInbox"]> = () => Promise.resolve(undefined);
+
+    expect(createOpenCodeRuntimeTurnPort(base).actOnInbox).toBeUndefined();
+    expect(createOpenCodeRuntimeTurnPort(base).listInbox).toBeUndefined();
+    expect(createOpenCodeRuntimeTurnPort({ ...base, actOnInbox }).actOnInbox).toBeUndefined();
+    const offered = createOpenCodeRuntimeTurnPort({ ...base, actOnInbox, listInbox });
+    expect(offered.actOnInbox).toBe(actOnInbox);
+    expect(offered.listInbox).toBe(listInbox);
+  });
+});

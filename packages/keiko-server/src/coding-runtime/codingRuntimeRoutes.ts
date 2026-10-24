@@ -20,8 +20,10 @@ import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   unpairedCodingWorkbenchRuntimeCommandsChannelPayload,
+  unpairedCodingWorkbenchRuntimeInboxChannelPayload,
   unpairedCodingWorkbenchRuntimeRevertChannelPayload,
   type CodingWorkbenchRuntimeCommandsChannelPayload,
+  type CodingWorkbenchRuntimeInboxChannelPayload,
   type CodingWorkbenchRuntimeRevertChannelPayload,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
@@ -69,6 +71,7 @@ const RUNTIME_MUTATION_OPERATIONS = [
   "research-revoke",
   "follow-up",
   "revert",
+  "inbox",
   "answer",
   "reject",
 ] as const;
@@ -700,6 +703,53 @@ export function handleCodingRuntimeRevert(
 }
 
 /**
+ * Withdraws or promotes a message the operator sent into the running turn and the runtime has not
+ * handed to the model yet (S07, ADR-0137 D10). The orchestrator's operation coordinator admits it
+ * exactly like an undo: revision and one-use request id, a running run, the live authority guard in
+ * the dispatcher. It changes only the runtime's own inbox, for a message the operator delivered
+ * themselves; the run port proves that and answers one the runtime already took as delivered.
+ */
+export function handleCodingRuntimeInboxAction(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "inbox", (runtime, body, correlationId) =>
+        runtime.submitInboxAction(runId, body, correlationId),
+      );
+}
+
+/**
+ * The messages the operator sent into the running turn that the runtime has not handed to the model
+ * yet: the id, the delivery and the operator's own one-line preview, in the order the model will
+ * receive them. Absent `items` means the run offers none (a mapped profile, a run whose turn is not
+ * running, a listing the runtime could not give). Reading consumes no revision and no request id. An
+ * unpaired caller receives the one constant payload before any run resolution, so this read is never
+ * an existence oracle (ADR-0141 D6).
+ */
+export async function handleCodingRuntimeInbox(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeInboxChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const items = await required.orchestrator.listInbox(runId, ctx.correlationId);
+  const payload: CodingWorkbenchRuntimeInboxChannelPayload = {
+    session: "active",
+    ...(items === undefined ? {} : { items }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
  * The counts behind the undo control: what the newest turn changed, or what a staged undo
  * restored. Counts only, never a path. An unpaired caller receives the one constant payload before
  * any run resolution (ADR-0141 D6), so this read is never an existence oracle.
@@ -1111,6 +1161,16 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/commands",
     handler: handleCodingRuntimeCommands,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/inbox",
+    handler: handleCodingRuntimeInboxAction,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/inbox",
+    handler: handleCodingRuntimeInbox,
   },
   {
     method: "POST",

@@ -1314,8 +1314,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Keiko mints the id once per request, in the producer's own ascending layout
   (`opencodeNativeMessageId.ts`: `msg_`, twelve hex digits of `milliseconds * 0x1000 + counter`,
   fourteen base-62 characters, strictly ascending within the process), and the run port retains it
-  beside a digest of the message (at most 32 per run; an acknowledged entry is forgotten before any
-  unresolved one), so a retry of the same request resends it. The client reconciles the producer's receipt against the
+  beside a digest of the message and a one-line preview of it (at most 32 per run; an acknowledged entry is
+  forgotten before any unresolved one), so a retry of the same request resends it. The client reconciles the producer's receipt against the
   id it sent. A failed post is classified by what it proves about the producer: refused before any
   byte left, or answered with a declared 4xx status, the producer holds nothing and the id is
   forgotten, unless the failing attempt itself reused an id an earlier attempt may have stored;
@@ -1374,6 +1374,41 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   the readiness read says `references`, searching the active task workspace when it belongs to the
   selected repository and otherwise the selected repository's root; a path the run's workspace does
   not hold is refused at the dispatch like any other.
+- **The messages still waiting for the running turn are listed, can be cancelled, and a queued one can
+  be sent now (S07).** The runtime keeps every accepted input in the session's inbox until it hands it
+  to the model, and the protocol surface admits its three operations (`GET
+  /api/session/{sessionID}/inbox`, `DELETE .../inbox/{inboxID}`, `PATCH .../inbox/{inboxID}` with
+  `{ delivery }`; 24 operations on 22 paths, the 2.1.4 and 2.0.10 digests re-pinned). Proven against
+  the original executable (`opencodeNativePromptInputs.real.test.ts`): the listing is in arrival order;
+  every steered message reaches the model together with the next step, in arrival order, and a queued
+  one after the turn's final answer, so a promoted message joins the next step instead; a withdrawal
+  is answered 204 whether the runtime removed the input or had already given it to the model, and a
+  change of an input it no longer holds as pending is a 409; and pending messages survive an
+  interrupt and reach the model with the next prompt. Keiko therefore shows and changes only the
+  operator's own messages: an entry is listed only when its id is one the run's delivery ledger minted
+  (the ledger keeps the operator's text as a one-line preview, at most 200 characters, control and
+  text-reordering code points removed; the runtime's payload is never read), so another client's input,
+  a synthetic one or a forged id is invisible and refused (`unknown-item`). `GET
+  /runs/:runId/inbox` is an authenticated, revision-free channel read (ADR-0141): `items` of `{ itemId,
+  delivery, preview }` in the order the model will receive them (steered first, queued after, each in
+  arrival order), absent when the run offers none, a profile takes no delivery or no turn is running;
+  an unpaired caller gets the constant projection. `POST /runs/:runId/inbox` takes `{ requestId,
+  expectedRevision, action: "cancel" | "promote", itemId }` and is admitted like an undo: a running
+  run only (a paused run has no turn to hold a message), the revision consumed once, the request id
+  single-use, the live authority revalidated by the dispatcher, no turn started, replaced or settled.
+  A message the runtime already took is the truthful success `already-delivered` and one Keiko
+  withdrew itself `already-cancelled`, never an error; a cancel is called one only after the newest
+  history shows the message was not delivered in the instant between the read and the withdrawal, and
+  a conflict on a change is believed only when the inbox no longer lists the message. The body-free
+  `coding-runtime.inbox.action` line records the run, the closed action (`list`, `cancel`, `promote`,
+  `withdraw`), the closed outcome and counts, with the error kind, frames and causes of a failure; a
+  coordinator transport failure is `coding-runtime.inbox.dispatch-failed`. Never a message, preview or
+  id. Because the runtime keeps pending messages through an interrupt, the run port's abort withdraws
+  every message Keiko delivered that is still pending once the interrupt settled (`withdraw`), so a
+  stopped or undone turn cannot hand them to the next prompt; a failed withdrawal is logged and does
+  not fail the stop. The Workbench lists the messages above the composer with Cancel and, for a queued
+  one, Send now, and refreshes on the run's revision and on the conversation gaining a message (no
+  polling); a failed read is a retryable error, never an empty list.
 - **A turn may run as one of the runtime's slash commands (C02).** The pinned 2.1.4 producer lists its
   commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
