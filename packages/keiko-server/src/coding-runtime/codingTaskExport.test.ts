@@ -25,7 +25,8 @@ import {
   type CodingTaskExportOptions,
 } from "./codingTaskExport.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import { OPENCODE_PROMPT_FILE_MAX_BYTES, resolvePromptReferences } from "./opencodePromptInputs.js";
+import { resolvePromptReferences } from "./opencodePromptInputs.js";
+import { OPENCODE_PROMPT_FILE_MAX_BYTES } from "./opencodeV2HttpClient.js";
 
 const NOW = Date.UTC(2026, 9, 24, 12, 0, 0);
 const SECRET = "provider-credential-literal-0123456789";
