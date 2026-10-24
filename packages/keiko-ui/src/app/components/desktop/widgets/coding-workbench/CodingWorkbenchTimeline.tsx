@@ -31,6 +31,7 @@ import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
+import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -889,6 +890,7 @@ function MessageContent({
         diagnosticCorrelationId={runId}
         diagnosticMessageId={message.messageId}
         trailing={truncationFor(message, t)}
+        richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
     );
   }

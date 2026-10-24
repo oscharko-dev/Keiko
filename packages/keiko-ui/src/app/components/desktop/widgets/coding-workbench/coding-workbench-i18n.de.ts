@@ -602,6 +602,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.binaryFile": "Binärdatei — kein Text-Diff verfügbar.",
   "codingWorkbench.changes.diff.previousPath": " (zuvor {path})",
   "codingWorkbench.changes.diff.elevatedReview": "Erweiterte Prüfung",
+  "codingWorkbench.richContent.math.region": "Formel",
+  "codingWorkbench.richContent.diff.region": "In der Modellantwort gezeigtes Diff",
+  "codingWorkbench.richContent.diff.unnamedFile": "Diff",
+  "codingWorkbench.richContent.diagram.title": "Diagramm-Quelltext",
+  "codingWorkbench.richContent.diagram.note":
+    "Mermaid-Diagramme werden als Quelltext angezeigt. Eine gerenderte Vorschau ist in diesem Build nicht verfügbar.",
   "codingWorkbench.activity.reasoningBoundary":
     "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, die Überlegungen des Modells. Diese Überlegungen sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
   "codingWorkbench.activity.reasoning.title": "Überlegungen des Modells",

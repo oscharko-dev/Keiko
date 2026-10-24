@@ -4,6 +4,7 @@ import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
+import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { Icons } from "../../Icons";
 import styles from "./CodingHistory.module.css";
 
@@ -101,7 +102,11 @@ export function CodingTaskTranscript({
                 : "codingWorkbench.history.agent",
             )}
           </strong>
-          <SafeMarkdownBoundary source={message.content} diagnosticMessageId={message.id} />
+          <SafeMarkdownBoundary
+            source={message.content}
+            diagnosticMessageId={message.id}
+            richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
+          />
         </article>
       ))}
     </section>

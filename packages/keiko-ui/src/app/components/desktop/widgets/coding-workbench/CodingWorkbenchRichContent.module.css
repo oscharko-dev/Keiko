@@ -1,0 +1,86 @@
+/*
+ * Rich model-answer content in the Coding Workbench timeline: math, diffs and diagram source.
+ *
+ * Component-scoped (`cmp` prefix, design tokens only, nothing added to globals.css). A rendered diff
+ * keeps the Changes panel's own `review` / `rv-*` classes, so its line, gutter and statistic styling
+ * stays in one place; only the frame around it is defined here.
+ */
+
+/* Math is MathML, so the browser typesets it and no KaTeX stylesheet or font is involved. */
+.cmpMathInline {
+  display: inline;
+  color: inherit;
+}
+
+.cmpMathDisplay {
+  display: block;
+  max-inline-size: 100%;
+  margin-block: var(--space-3);
+  overflow-x: auto;
+  text-align: center;
+}
+
+.cmpMathBlock {
+  max-inline-size: 100%;
+  margin-block: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  overflow-x: auto;
+  background: var(--surface-inset);
+  text-align: center;
+}
+
+.cmpMathBlock:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
+/* The formula as written, shown while the typesetter loads and whenever it cannot typeset it. */
+.cmpMathSource {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+/* The same bounded, keyboard-scrollable frame the Changes panel gives a file diff. */
+.cmpDiff {
+  max-block-size: 32rem;
+  max-inline-size: 100%;
+  margin-block: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: auto;
+  background: var(--surface-inset);
+}
+
+.cmpDiff:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
+.cmpDiagram {
+  max-inline-size: 100%;
+  margin: var(--space-3) 0;
+}
+
+.cmpDiagramTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+}
+
+.cmpDiagramNote {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+@media (forced-colors: active) {
+  .cmpMathBlock,
+  .cmpDiff {
+    border-color: CanvasText;
+    background: Canvas;
+  }
+}

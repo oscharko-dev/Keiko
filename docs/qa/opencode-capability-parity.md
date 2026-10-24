@@ -273,7 +273,7 @@ Native tool names are the ones the 2.1.4 producer registers [B] ([native-tools-f
 | S16 | Permission rules and prompts (`permissions`, `ask`, `--auto`) [R] [B]                                                  | The permission hook, Keiko's policy and approval lane ([native-policy][native-policy], [authority-port][authority-port])                                                                | `governed` | The only configured rule denies `external_directory`; the real decision is Keiko's per request (mode matrix, hard denials, live envelope, budgets). Asks go to the approval lane with the action's own command, paths or address on the authenticated review channel; a declined step returns to the model as the call's own result while the run continues (ADR-0124 D6). `--auto` is never used. Evidence: `coding-runtime.native-policy.decided`, `coding-runtime.approval.decided`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | S17 | Worktrees and the session working directory (`worktree`, `session_move`) [B]                                           | Managed task workspaces ([ADR-0088][adr-0088], [ADR-0089][adr-0089])                                                                                                                    | `partial`  | The task workspace root, branch constraints and source identity are server-bound in the Authority Envelope and the runtime's session location is fixed at creation. The native Code Mode `opencode_session_move` and `opencode_worktree_create` are refused (T22), so the runtime's own worktree management is not available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | S18 | Command-line and server surfaces (`run`, `serve`, `acp`, `mini`, `service`, `api`, `pair`, `stats`, `reload`, ...) [B] | `serve` only, started by the runtime host                                                                                                                                               | `disabled` | The 2.1.4 CLI lists `upgrade`, `uninstall`, `acp`, `api`, `debug`, `auth`, `mcp`, `plugin`, `models`, `stats`, `mini`, `run`, `session`, `service`, `reload`, `pair` and `serve` [B]. Keiko starts `opencode serve` on loopback with a per-run password and owns the UI; no other surface is reachable. Section 7 gives every CLI command and HTTP operation, pairing, statistics and additional client protocols included, a disposition and an owner.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| S19 | Rich rendering of model output: math, Mermaid, diff views (`opencode.latex`, `opencode.merman`, `opencode.diffs`) [B]  | The Workbench timeline and Changes panel                                                                                                                                                | `gap`      | Math notation is shown verbatim (lab finding F3, filed under #3874 in the lab record); Mermaid rendering was not assessed. Diff review is covered by Keiko's Changes panel, which refreshes when a native edit, write, patch or shell call settles. Backlog B8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| S19 | Rich rendering of model output: math, Mermaid, diff views (`opencode.latex`, `opencode.merman`, `opencode.diffs`) [B]  | Workbench timeline answers and the task transcript through the shared Markdown renderer; the Changes panel diff view                                                                    | `partial`  | Math (`$`, `\(`, `$$`, `\[` and math fences) is typeset by lazily loaded KaTeX as MathML, and diff fences use the Changes panel diff view; both wait for a closed span or fence and fall back to the source on any error. Mermaid stays labelled diagram source: its dependency tree fails the license gate (B8, Q6). Diff review of the run itself stays the Changes panel, which refreshes when a native edit, write, patch or shell call settles. Chat is unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ### 3.3 Configuration and extension surfaces
 
@@ -300,9 +300,9 @@ capability under Keiko's profile is unverified.
 | Status     | Count |
 | ---------- | ----- |
 | `governed` | 19    |
-| `partial`  | 19    |
+| `partial`  | 20    |
 | `disabled` | 6     |
-| `gap`      | 5     |
+| `gap`      | 4     |
 | Total      | 49    |
 
 ### 3.5 Real-binary qualification of 2026-10-24
@@ -437,10 +437,38 @@ The order is by developer impact, not a schedule.
   runtime's `lsp` settings under the Seatbelt profile and project diagnostics into the timeline.
   Owners: `createNativeOpenCodeV2Config` in `opencodeLaunchProfile.ts`, `seatbelt-execution-root.ts`
   (read roots), `opencodeV2History.ts`.
-- **B8. Rendering and timeline** (S19). Render `latex` and `math` code blocks and, optionally,
-  Mermaid; label `execute` and show a subagent's own work. Owners: `CodingWorkbenchTimeline.tsx`,
-  `coding-workbench-i18n.*.ts`, `opencodeV2History.ts`; component-scoped classes only, never
-  `globals.css` (AGENTS.md section 9).
+- **B8. Rendering and timeline** (S19). Math and diffs are delivered (#3906); Mermaid is not, and
+  labelling `execute` and showing a subagent's own work in the timeline remain open. Must respect:
+  the design system, including component-scoped classes instead of `globals.css` edits (AGENTS.md
+  section 9).
+  - Where: assistant answers in the Workbench timeline and the restored task transcript. A person's
+    own messages stay literal. The shared Markdown renderer (`SafeMarkdown`) gains one opt-in
+    `richContent` hook, so there is still one Markdown pipeline and no alternate timeline; Chat and
+    every other surface pass nothing and render exactly as before.
+  - Math: `$…$`, `\(…\)`, `$$…$$`, `\[…\]` and `math`, `latex`, `tex` and `katex` fences are typeset
+    by KaTeX 0.19.0 (MIT), imported on first use as its own chunk, as MathML only, so no KaTeX
+    stylesheet or font is added. Options: `trust: false`, `strict: "ignore"`, `maxExpand: 200`,
+    `maxSize: 20`, a fresh macro table per formula. A source over 4,000 characters, an empty one, a
+    TeX error and an unsupported or unknown command (`\href`, `\url`, `\includegraphics`, `\html*`)
+    all show the source as written. KaTeX's markup is parsed into an inert document and every node
+    must pass a MathML-only allowlist (no event handler, link or style attribute that loads a URL,
+    no `maction` or `annotation-xml`); the checked nodes are the ones inserted, so no
+    `dangerouslySetInnerHTML` or `innerHTML` is involved. Prices and shell variables (`$5 and $6`,
+    `$HOME`) stay prose; `\$` writes a literal dollar sign.
+  - Diffs: `diff` and `patch` fences render through the Changes panel's own `DiffFileSection` with
+    its `review` / `rv-*` classes (line classes, sign gutter, +N/−M chips, truncation notices). A diff
+    without file or hunk headers (`-old` / `+new` lines alone) gets the same rendering under the
+    name "Diff"; a fence that is not a diff, or whose headers carry no hunk, keeps its code view.
+  - Streaming: a fence is offered to the renderer only once its closing fence has arrived, and a
+    math span only once its closing delimiter has; an open fence keeps the plain streamed code view.
+    A finished answer whose last fence was never closed is rendered as complete. Typesetting and
+    diff layout are memoized on their own source, so further tokens do not repeat them.
+  - Mermaid: not rendered. The fenced source stays, under a "Diagram source" caption that says so.
+    Adding Mermaid is blocked by the repository's own supply-chain gates (Q6).
+  - Evidence: no new Activity Log operation. Typesetting that falls back on content is an expected
+    outcome, not a defect, and is silent by design; a KaTeX chunk that fails to load, or KaTeX
+    throwing on a formula, is reported once through `reportClientDiagnostic` (`kind: "other"`, error
+    class only, never the formula).
 - **B9. Native boundary on Linux and Windows** (profile). A qualified Linux boundary must enforce the
   shared sensitive exclusions for descendants and keep the gateway reachable; Windows has no native
   filesystem boundary. Owners: `backends.ts`, `productionOpenCodeToolProfile` in `deps.ts` (#3901).
@@ -488,6 +516,19 @@ The order is by developer impact, not a schedule.
 - **Q5.** ADR-0124 and the Workbench text say internet use asks below Full access, but the native
   policy refuses it at once because the kernel profile has no route outside the machine. Keep the
   immediate refusal, or ask and let the kernel profile follow the decision?
+- **Q6.** Mermaid rendering (B8). Adding Mermaid to the UI fails the repository's own gates today,
+  verified with Mermaid 11.17.2 (the newest release without `elkjs`) and KaTeX 0.19.0 added to
+  `keiko-ui`: `npm run check:workspace-supply-chain` reports `khroma@2.1.0 → <missing>` for the root
+  and for keiko-ui. `khroma` is a hard dependency of every Mermaid release; its 2.1.0 (the last
+  published version) declares no `license` field, and the SBOM gate treats an unlicensed component as
+  an offender. Mermaid 12 additionally depends on `elkjs` (EPL-2.0), which the permissive-only license
+  allowlist of the `Review dependency diff` job does not admit, and Mermaid 11.17.2 and 12.1.0 nest
+  `katex` `^0.16.47`, which `npm audit` reports under GHSA-238p-pmpm-9mq7 (fixed in 0.18.2). It would
+  add about 108 packages to the lockfile. Opening it needs an owner decision on a reviewed component
+  license decision for `khroma@2.1.0` (exact version and integrity, like the existing entries in
+  `check-workspace-supply-chain.mjs`) and on the dependency-review exclusion list, plus an
+  `overrides` entry that keeps Mermaid's nested `katex` on a fixed release. Until then Mermaid
+  fences stay labelled diagram source.
 
 ## 6. Documentation drift found while building this matrix
 
@@ -817,6 +858,13 @@ Repository files read or searched for this refresh (paths relative to the reposi
 - Real-binary evidence: `opencodeNativeProjectBoundary.real.test.ts`, `opencodeRipgrep.real.test.ts`,
   `opencodeServiceInventory.real.test.ts` (the live `/openapi.json` and `--help` tree against the
   committed inventory).
+- Rich rendering (S19): `packages/keiko-ui/src/lib/safe-markdown.ts`,
+  `packages/keiko-ui/src/lib/safe-markdown-math.ts`,
+  `packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx` and, under
+  `packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/`,
+  `CodingWorkbenchRichContent.tsx`, `codingWorkbenchMath.ts`, `CodingWorkbenchTimeline.tsx`,
+  `CodingTaskSessionBar.tsx`; `scripts/check-workspace-supply-chain.mjs` and
+  `.github/workflows/dependency-review.yml` for the Mermaid finding.
 - Workbench UI (`packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/`):
   `CodingWorkbenchAgentToggle.tsx`, `CodingWorkbenchSections.tsx`,
   `CodingWorkbenchNativeActionReview.tsx`, `CodingWorkbenchTimeline.tsx`,
