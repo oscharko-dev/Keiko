@@ -589,7 +589,11 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
         headers: { Authorization: authorization },
       });
       const data = object(await response.json())?.data;
-      return Array.isArray(data) ? data.flatMap((row: unknown) => object(row) ?? []) : [];
+      if (!Array.isArray(data)) return [];
+      return data.flatMap((row: unknown): Record<string, unknown>[] => {
+        const value = object(row);
+        return value === undefined ? [] : [value];
+      });
     };
     await body({
       fixture,
