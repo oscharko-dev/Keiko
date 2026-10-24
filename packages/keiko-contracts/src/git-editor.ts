@@ -332,9 +332,18 @@ function parserInspectionClass(error: unknown): "TypeError" | "Error" | "unknown
   }
 }
 
-function parseSafely<T>(parser: () => GitEditorParseResult<T>): GitEditorParseResult<T> {
+function parseSafely<T>(
+  input: unknown,
+  nonRecordError: "request must be an object" | "response must be an object",
+  validate: (
+    value: Readonly<Record<string, unknown>>,
+    errors: string[],
+  ) => value is Readonly<Record<string, unknown>> & T,
+): GitEditorParseResult<T> {
   try {
-    return parser();
+    if (!isRecord(input)) return { ok: false, errors: [nonRecordError] };
+    const errors: string[] = [];
+    return validate(input, errors) ? { ok: true, value: input } : { ok: false, errors };
   } catch (error: unknown) {
     return {
       ok: false,
@@ -418,18 +427,10 @@ function validateDiffRequestFields(
   return valid;
 }
 
-function parseDiffRequestUnsafe(input: unknown): GitEditorParseResult<GitEditorDiffRequest> {
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  const errors: string[] = [];
-  return validateDiffRequestFields(input, errors)
-    ? { ok: true, value: input }
-    : { ok: false, errors };
-}
-
 export function parseGitEditorDiffRequest(
   input: unknown,
 ): GitEditorParseResult<GitEditorDiffRequest> {
-  return parseSafely(() => parseDiffRequestUnsafe(input));
+  return parseSafely(input, "request must be an object", validateDiffRequestFields);
 }
 
 function validateDiffResponseShape(
@@ -536,18 +537,10 @@ function validateDiffResponseFields(
   return valid;
 }
 
-function parseDiffResponseUnsafe(input: unknown): GitEditorParseResult<GitEditorDiffResponse> {
-  if (!isRecord(input)) return { ok: false, errors: ["response must be an object"] };
-  const errors: string[] = [];
-  return validateDiffResponseFields(input, errors)
-    ? { ok: true, value: input }
-    : { ok: false, errors };
-}
-
 export function parseGitEditorDiffResponse(
   input: unknown,
 ): GitEditorParseResult<GitEditorDiffResponse> {
-  return parseSafely(() => parseDiffResponseUnsafe(input));
+  return parseSafely(input, "response must be an object", validateDiffResponseFields);
 }
 
 function validateBlameRequestFields(
@@ -576,18 +569,10 @@ function validateBlameRequestFields(
   return valid;
 }
 
-function parseBlameRequestUnsafe(input: unknown): GitEditorParseResult<GitEditorBlameRequest> {
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  const errors: string[] = [];
-  return validateBlameRequestFields(input, errors)
-    ? { ok: true, value: input }
-    : { ok: false, errors };
-}
-
 export function parseGitEditorBlameRequest(
   input: unknown,
 ): GitEditorParseResult<GitEditorBlameRequest> {
-  return parseSafely(() => parseBlameRequestUnsafe(input));
+  return parseSafely(input, "request must be an object", validateBlameRequestFields);
 }
 
 function validateBlameResponseShape(
@@ -679,16 +664,8 @@ function validateBlameResponseFields(
   return valid;
 }
 
-function parseBlameResponseUnsafe(input: unknown): GitEditorParseResult<GitEditorBlameResponse> {
-  if (!isRecord(input)) return { ok: false, errors: ["response must be an object"] };
-  const errors: string[] = [];
-  return validateBlameResponseFields(input, errors)
-    ? { ok: true, value: input }
-    : { ok: false, errors };
-}
-
 export function parseGitEditorBlameResponse(
   input: unknown,
 ): GitEditorParseResult<GitEditorBlameResponse> {
-  return parseSafely(() => parseBlameResponseUnsafe(input));
+  return parseSafely(input, "response must be an object", validateBlameResponseFields);
 }

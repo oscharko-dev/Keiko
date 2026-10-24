@@ -1219,3 +1219,100 @@ describe("Git Editor response byte consistency (#3918)", () => {
     },
   );
 });
+
+function admissionDiffRequest(): unknown {
+  return { schemaVersion: GIT_EDITOR_SCHEMA_VERSION, scope: "staged" };
+}
+
+function admissionBlameRequest(): unknown {
+  return {
+    schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+    path: "src/app.ts",
+    startLine: 1,
+    maxLines: 1,
+  };
+}
+
+const parserAdmissionOwners = [
+  {
+    name: "source diff request",
+    parse: parseGitEditorDiffRequest,
+    create: admissionDiffRequest,
+    nonRecordError: "request must be an object",
+  },
+  {
+    name: "public diff request",
+    parse: parsePublicGitEditorDiffRequest,
+    create: admissionDiffRequest,
+    nonRecordError: "request must be an object",
+  },
+  {
+    name: "source blame request",
+    parse: parseGitEditorBlameRequest,
+    create: admissionBlameRequest,
+    nonRecordError: "request must be an object",
+  },
+  {
+    name: "public blame request",
+    parse: parsePublicGitEditorBlameRequest,
+    create: admissionBlameRequest,
+    nonRecordError: "request must be an object",
+  },
+  {
+    name: "source diff response",
+    parse: parseGitEditorDiffResponse,
+    create: diffResponse,
+    nonRecordError: "response must be an object",
+  },
+  {
+    name: "public diff response",
+    parse: parsePublicGitEditorDiffResponse,
+    create: diffResponse,
+    nonRecordError: "response must be an object",
+  },
+  {
+    name: "source blame response",
+    parse: parseGitEditorBlameResponse,
+    create: blameResponse,
+    nonRecordError: "response must be an object",
+  },
+  {
+    name: "public blame response",
+    parse: parsePublicGitEditorBlameResponse,
+    create: blameResponse,
+    nonRecordError: "response must be an object",
+  },
+];
+
+describe("Git Editor parser admission (#3918)", () => {
+  it.each(parserAdmissionOwners)(
+    "$name keeps admission within the exception boundary",
+    ({ parse, create, nonRecordError }) => {
+      const input = create();
+      const result = parse(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (result.ok) expect(result.value).toBe(input);
+      for (const rejected of [null, undefined, true, 1, "fixture", []]) {
+        expect(parse(rejected)).toEqual({ ok: false, errors: [nonRecordError] });
+      }
+      const revoked = Proxy.revocable({}, {});
+      revoked.revoke();
+      expect(parse(revoked.proxy)).toEqual({
+        ok: false,
+        errors: ["payload could not be inspected: TypeError"],
+      });
+    },
+  );
+
+  it.each(parserAdmissionOwners)(
+    "$name retains fresh per-call diagnostic arrays",
+    ({ parse, create }) => {
+      const input = Object.defineProperty(create(), "schemaVersion", { value: "invalid" });
+      const first = parse(input);
+      const second = parse(input);
+      expect(first).toEqual({ ok: false, errors: ["schemaVersion invalid"] });
+      expect(second).toEqual(first);
+      if (!first.ok && !second.ok) expect(first.errors).not.toBe(second.errors);
+    },
+  );
+});
