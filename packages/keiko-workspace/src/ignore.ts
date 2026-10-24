@@ -73,6 +73,33 @@ function isDeniedUncached(relPath: string): boolean {
   return false;
 }
 
+// The one owner-approved exception to the tool-state entry `.claude` (#3903, owner decision of
+// 2026-10-24): a repository's Claude-compatible skills, `.claude/skills/<name>/SKILL.md`, the
+// directory that lists them and each skill directory's own name in that listing. It is no exception to `isDenied` itself: a caller that wants it names it
+// (the coding runtime's repository-item admission does), the grammar is exact (case included, so a
+// case variant stays denied), the skill name is a plain lowercase name that the deny list does not
+// match, and nothing else under `.claude` (settings, transcripts, worktrees, a skill's sibling
+// files) is covered.
+const CLAUDE_SKILLS_DIRECTORY = ".claude/skills";
+const CLAUDE_SKILL_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
+const CLAUDE_SKILL_NAME_MAX_CHARS = 64;
+
+/** `.claude/skills`, a skill directory listed in it, or that skill's `SKILL.md`; nothing else. */
+export function isRepositoryClaudeSkillPath(relPath: string): boolean {
+  if (relPath === CLAUDE_SKILLS_DIRECTORY) return true;
+  const parts = relPath.split("/");
+  const name = parts[2] ?? "";
+  const shaped = parts.length === 3 || (parts.length === 4 && parts[3] === "SKILL.md");
+  return (
+    shaped &&
+    parts[0] === ".claude" &&
+    parts[1] === "skills" &&
+    name.length <= CLAUDE_SKILL_NAME_MAX_CHARS &&
+    CLAUDE_SKILL_NAME.test(name) &&
+    !isDenied(name)
+  );
+}
+
 // ─── .gitignore subset ──────────────────────────────────────────────────────────
 // Supported: blank/comment lines, plain `name`, directory `dir/`, extension `*.ext`,
 // leading-"/" anchor, `**` segments, and negation `!`. Order matters; later rules win.

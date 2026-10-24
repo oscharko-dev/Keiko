@@ -280,6 +280,7 @@ describe("repository item admission", () => {
     const listed = workspace.list.mock.calls.map(([request]) => request.relativePath).sort();
     expect(listed).toEqual([
       ".agents/skills",
+      ".claude/skills",
       ".opencode/agent",
       ".opencode/agents",
       ".opencode/command",
@@ -296,8 +297,40 @@ describe("repository item admission", () => {
       ".opencode/commands/ship.md",
       ".opencode/skills/demo/SKILL.md",
     ]);
-    // .claude/ is a tool-state path the always-on deny list refuses; it is never even asked.
-    expect(listed.some((path) => path.startsWith(".claude"))).toBe(false);
+    // .claude/ is a tool-state path the always-on deny list refuses. Its skills directory alone is
+    // asked (owner decision of 2026-10-24), under the named exception; nothing else of it is.
+    expect(listed.filter((path) => path.startsWith(".claude"))).toEqual([".claude/skills"]);
+    const claudeRequests = [
+      ...workspace.list.mock.calls.map(([request]) => request),
+      ...workspace.readText.mock.calls.map(([request]) => request),
+    ].filter((request) => request.relativePath.startsWith(".claude"));
+    for (const request of claudeRequests) {
+      expect(request.relativePath).toMatch(/^\.claude\/skills(?:\/[a-z0-9-]+\/SKILL\.md)?$/u);
+      expect(request.denyListException).toBe("repository-claude-skill");
+    }
+  });
+
+  // #3903, owner decision of 2026-10-24: a repository's `.claude/skills/<name>/SKILL.md` is admitted
+  // like any other skill, after the `.opencode` and `.agents` ones; its sibling files are not.
+  it("admits a .claude skill after the other skill directories and copies its SKILL.md alone", async () => {
+    const root = discoveryRoot();
+    const workspace = fakeWorkspace({
+      ".claude/skills/audit/SKILL.md": "---\nname: audit\ndescription: Audits\n---\nAUDIT\n",
+      ".claude/skills/audit/run.sh": "#!/bin/sh\n",
+      ".claude/skills/demo/SKILL.md": "---\nname: demo\ndescription: Shadowed\n---\nSHADOWED\n",
+      ".opencode/skills/demo/SKILL.md": "---\nname: demo\ndescription: Demo\n---\nDEMO\n",
+    });
+    const { port } = portFor(workspace);
+
+    await port.admitForRun({ runId: RUN_ID, discoveryRoot: root });
+
+    const copies = written(root);
+    expect(Object.keys(copies).sort()).toEqual(["skills/audit/SKILL.md", "skills/demo/SKILL.md"]);
+    expect(copies["skills/audit/SKILL.md"]).toContain("AUDIT");
+    // The first name wins: `.opencode/skills/demo` shadows `.claude/skills/demo`.
+    expect(copies["skills/demo/SKILL.md"]).toContain("DEMO");
+    const read = workspace.readText.mock.calls.map(([request]) => request.relativePath);
+    expect(read).not.toContain(".claude/skills/audit/run.sh");
   });
 
   it("records an empty workspace without creating anything", async () => {

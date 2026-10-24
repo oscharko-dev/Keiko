@@ -174,8 +174,8 @@ from `.opencode/skills`, `.opencode/skill` and `.agents/skills` (`<name>/SKILL.m
 is read through the secure read helper while the run's own workspace is the active one, its
 frontmatter is validated against a closed allowlist and rendered anew (`model`, permissions, tools,
 MCP and plugin keys never survive), and the copy is written before the runtime starts. The
-project's `opencode.json`, plugins, nested discovery and `.claude/` (including `.claude/skills`)
-stay unloaded. A command whose template contains a shell-substitution block is refused. Limits: 16
+project's `opencode.json`, plugins, nested discovery and `.claude/` stay unloaded, except a
+skill's `.claude/skills/<name>/SKILL.md`, which is admitted like the other skill directories. A command whose template contains a shell-substitution block is refused. Limits: 16
 agents, 32 commands and 16 skills of at most 32 KiB each; names lowercase with hyphens and not a
 built-in (`build`, `plan`, `general`, `explore`, `init`, `review`, `opencode`, `report`, ...).
 

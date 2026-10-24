@@ -1242,12 +1242,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the envelope's tool budget still counts every call. A skill's base directory is the private
     discovery directory, so relative resources named in a skill resolve there and do not exist;
     the model reads them from the workspace by their path with the governed read tool.
-  - **Not admitted, with the reason.** `.claude/skills`: `.claude` is a tool-state path of the
-    always-on deny list (it can hold settings and credentials) and the helper refuses it, so the
-    list stays unwidened until the security owner decides on a narrower exception. Skill sibling
-    files, nested agent and command names (`team/reviewer`), `mode: all`, the producer's `steps`,
-    `hidden`, `color` and `request` keys, global directories (the private `HOME` is empty), remote
-    skill indexes and MCP stay out.
+  - **`.claude/skills`, by a named exception (owner decision of 2026-10-24).** `.claude` stays a
+    tool-state path of the always-on deny list (it can hold settings, transcripts and credentials).
+    The admission alone names one exception on its reads (`denyListException:
+    "repository-claude-skill"`), and `isRepositoryClaudeSkillPath` in `keiko-workspace` covers
+    exactly `.claude/skills`, a skill directory's name in that listing and its
+    `.claude/skills/<name>/SKILL.md`, case included, with a plain lowercase name the deny list does
+    not match. `isDenied` itself is unchanged, every other caller and every other path under
+    `.claude` stays denied, and the skill is sanitized like any other; it comes after the
+    `.opencode` and `.agents` skill directories, so an earlier name wins.
+  - **Not admitted, with the reason.** Everything else under `.claude`. Skill sibling files, nested
+    agent and command names (`team/reviewer`), `mode: all`, the producer's `steps`, `hidden`,
+    `color` and `request` keys, global directories (the private `HOME` is empty), remote skill
+    indexes and MCP stay out.
   - **Operator switch and evidence.** `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` is on by default;
     `true` keeps it, and `false` or any other value disables it (an unrecognised value fails
     closed to off). Each native launch records one body-free

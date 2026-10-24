@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("repository items through the production dev-lane helper", () => {
   it.skipIf(skip)(
-    "lists and admits a repository agent through the verified helper's native protocol",
+    "lists and admits a repository agent and a .claude skill through the verified helper",
     async () => {
       const discovery = discoverDevLaneOpenCode({
         env: { ...process.env, [KEIKO_CODING_RUNTIME_DEV_LANE_ENV]: "1" },
@@ -63,6 +63,20 @@ describe("repository items through the production dev-lane helper", () => {
         join(workspace, ".opencode", "agent", "reviewer.md"),
         "---\ndescription: Reviews the change.\nmode: subagent\n---\nReview the change.\n",
       );
+      // The owner-approved `.claude/skills` exception (#3903): the SKILL.md only, never the rest.
+      const claude = join(workspace, ".claude");
+      mkdirSync(join(claude, "skills", "audit"), { recursive: true });
+      mkdirSync(join(claude, "agents"), { recursive: true });
+      writeFileSync(
+        join(claude, "skills", "audit", "SKILL.md"),
+        "---\nname: audit\ndescription: Audits a change\n---\nAUDIT-SKILL-BODY\n",
+      );
+      writeFileSync(join(claude, "skills", "audit", "run.sh"), "#!/bin/sh\necho sibling\n");
+      writeFileSync(join(claude, "settings.json"), '{"permissions":{"allow":["Bash(*)"]}}\n');
+      writeFileSync(
+        join(claude, "agents", "stranger.md"),
+        "---\ndescription: Not admitted\n---\nSTRANGER\n",
+      );
       const source = createDevLaneSecureWorkspaceTextReadPort({
         binding: discovery.runtime.secureRead,
         resolveWorkspaceRoot: () => workspace,
@@ -79,10 +93,29 @@ describe("repository items through the production dev-lane helper", () => {
       const admitted = activityLog.events.find(
         (event) => event.op === "coding-runtime.repository-items.admitted",
       );
-      expect(admitted?.extra).toMatchObject({ state: "completed", agentAdmittedCount: 1 });
+      expect(admitted?.extra).toMatchObject({
+        state: "completed",
+        agentAdmittedCount: 1,
+        skillAdmittedCount: 1,
+      });
       expect(readFileSync(join(discoveryRoot, "agents", "reviewer.md"), "utf8")).toContain(
         "Review the change.",
       );
+      expect(readFileSync(join(discoveryRoot, "skills", "audit", "SKILL.md"), "utf8")).toContain(
+        "AUDIT-SKILL-BODY",
+      );
+      expect(existsSync(join(discoveryRoot, "skills", "audit", "run.sh"))).toBe(false);
+      expect(existsSync(join(discoveryRoot, "agents", "stranger.md"))).toBe(false);
+      // Outside the admission, the same skill document stays denied by the always-on list.
+      await expect(
+        source.readText({ relativePath: ".claude/skills/audit/SKILL.md" }),
+      ).resolves.toEqual({ ok: false, reason: "denied" });
+      await expect(
+        source.readText({
+          relativePath: ".claude/settings.json",
+          denyListException: "repository-claude-skill",
+        }),
+      ).resolves.toEqual({ ok: false, reason: "denied" });
     },
     60_000,
   );

@@ -75,6 +75,7 @@ export {
   DEFAULT_DENY_PATTERNS,
   isDenied,
   isIgnored,
+  isRepositoryClaudeSkillPath,
   type IgnoreMatcher,
 } from "./ignore.js";
 

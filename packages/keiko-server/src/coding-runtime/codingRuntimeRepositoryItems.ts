@@ -32,7 +32,8 @@ import type { SecureWorkspaceNativeDirEntry } from "./secureWorkspaceTextReadPro
  * copy into the run's private discovery directory, the configuration directory Keiko's own generated
  * plugins already load from. Nothing under the workspace is a configuration layer: `opencode.json`,
  * plugins, a skill's sibling files and `.claude/` (a tool-state path the always-on deny list refuses)
- * stay unadmitted.
+ * stay unadmitted, with one owner-approved exception: `.claude/skills/<name>/SKILL.md`, read through
+ * the same helper under that named exception and nothing else of `.claude`.
  *
  * The discovery layout is the one the pinned 2.1.4 producer reads from a configuration directory,
  * proven against the original executable: `agents/<name>.md`, `commands/<name>.md` and
@@ -44,7 +45,8 @@ export const KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV = "KEIKO_CODING_REPOSITOR
 const SOURCE_DIRECTORIES: Readonly<Record<RepositoryItemKind, readonly string[]>> = Object.freeze({
   agent: [".opencode/agents", ".opencode/agent"],
   command: [".opencode/commands", ".opencode/command"],
-  skill: [".opencode/skills", ".opencode/skill", ".agents/skills"],
+  // `.claude/skills` is the owner-approved deny-list exception (#3903): SKILL.md files only.
+  skill: [".opencode/skills", ".opencode/skill", ".agents/skills", ".claude/skills"],
 });
 /** Where each kind's copy lives inside the discovery directory. */
 const DESTINATION_DIRECTORY: Readonly<Record<RepositoryItemKind, string>> = Object.freeze({
@@ -375,7 +377,11 @@ async function listDirectory(
   path: string,
 ): Promise<readonly SecureWorkspaceNativeDirEntry[] | undefined> {
   throwIfStopped(scan.signal);
-  const result = await scan.io.list({ relativePath: path, signal: scan.signal });
+  const result = await scan.io.list({
+    relativePath: path,
+    signal: scan.signal,
+    denyListException: "repository-claude-skill",
+  });
   if (result.ok) return result.entries;
   switch (result.reason) {
     case "not-found":
@@ -469,7 +475,11 @@ async function admitCandidate(
     refuse(scan, kind, "limit-exceeded");
     return;
   }
-  const read = await scan.source.readText({ relativePath: candidate.path, signal: scan.signal });
+  const read = await scan.source.readText({
+    relativePath: candidate.path,
+    signal: scan.signal,
+    denyListException: "repository-claude-skill",
+  });
   if (!read.ok) {
     refuseRead(scan, kind, read.reason);
     return;
