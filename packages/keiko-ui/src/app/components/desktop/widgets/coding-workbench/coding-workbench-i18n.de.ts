@@ -613,8 +613,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.richContent.diff.region": "In der Modellantwort gezeigtes Diff",
   "codingWorkbench.richContent.diff.unnamedFile": "Diff",
   "codingWorkbench.richContent.diagram.title": "Diagramm-Quelltext",
+  "codingWorkbench.richContent.diagram.region": "Diagramm",
   "codingWorkbench.richContent.diagram.note":
-    "Mermaid-Diagramme werden als Quelltext angezeigt. Eine gerenderte Vorschau ist in diesem Build nicht verfügbar.",
+    "Das Diagramm konnte nicht gezeichnet werden. Sein Quelltext wird so gezeigt, wie er geschrieben ist.",
   "codingWorkbench.activity.reasoningBoundary":
     "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, die Überlegungen des Modells. Diese Überlegungen sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
   "codingWorkbench.activity.reasoning.title": "Überlegungen des Modells",

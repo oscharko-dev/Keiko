@@ -9,6 +9,17 @@ import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 
 const MATHML = "http://www.w3.org/1998/Math/MathML";
 
+// Mermaid needs a layout engine jsdom does not have; the module boundary is the diagram's input.
+const mermaidMock = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  render: vi.fn((_id: string, _text: string) =>
+    Promise.resolve({
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><style>.node{fill:#eee}</style><g class="node"><rect width="4" height="4"/><text>A</text></g></svg>',
+    }),
+  ),
+}));
+vi.mock("mermaid", () => ({ default: mermaidMock }));
+
 function renderAnswer(source: string, streaming = false): HTMLElement {
   return render(
     <SafeMarkdownBoundary
@@ -343,17 +354,75 @@ describe("diffs in a model answer", () => {
 });
 
 describe("Mermaid fences", () => {
-  it("shows the source under a clear diagram-source caption and renders nothing", () => {
+  async function drawn(container: HTMLElement): Promise<HTMLElement> {
+    await waitFor(() => {
+      expect(container.querySelector('[data-diagram-state="drawn"]')).not.toBeNull();
+    });
+    return container.querySelector('[data-diagram-state="drawn"]') as HTMLElement;
+  }
+
+  async function verbatim(container: HTMLElement): Promise<HTMLElement> {
+    await waitFor(() => {
+      expect(container.querySelector('[data-diagram-state="verbatim"]')).not.toBeNull();
+    });
+    return container.querySelector('[data-diagram-state="verbatim"]') as HTMLElement;
+  }
+
+  it("draws a diagram as checked SVG inside a shadow root, as a named image", async () => {
     const container = renderAnswer("```mermaid\ngraph TD\n  A-->B\n```");
-    const figure = container.querySelector("figure");
-    expect(figure).not.toBeNull();
-    expect(within(figure as HTMLElement).getByText("Diagram source")).toBeInTheDocument();
-    expect(figure?.textContent).toContain("rendered preview is not available");
-    expect(figure?.querySelector("pre")?.textContent).toContain("graph TD");
-    // Only the code view's own decorative icons; no diagram was drawn.
-    for (const svg of container.querySelectorAll("svg")) {
-      expect(svg).toHaveAttribute("aria-hidden", "true");
-    }
+    const host = await drawn(container);
+
+    expect(host).toHaveAttribute("role", "img");
+    expect(host).toHaveAccessibleName("Diagram");
+    expect(host.shadowRoot?.querySelector("svg rect")).not.toBeNull();
+    // The diagram's stylesheet lives in the shadow root, never in the page.
+    expect(container.querySelector("style")).toBeNull();
+    expect(mermaidMock.render).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^keiko-diagram-\d+$/u),
+      "graph TD\n  A-->B",
+    );
+    expect(mermaidMock.initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        securityLevel: "strict",
+        htmlLabels: false,
+        flowchart: { htmlLabels: false },
+        secure: expect.arrayContaining(["themeCSS", "themeVariables", "htmlLabels", "theme"]),
+      }),
+    );
+  });
+
+  it("shows the source under its caption when Mermaid cannot draw the diagram", async () => {
+    mermaidMock.render.mockRejectedValueOnce(new Error("Parse error on line 2"));
+    const container = renderAnswer("```mermaid\ngraph TD\n  A-->\n```");
+    const figure = await verbatim(container);
+
+    expect(within(figure).getByText("Diagram source")).toBeInTheDocument();
+    expect(figure.textContent).toContain("could not be drawn");
+    expect(figure.querySelector("pre")?.textContent).toContain("graph TD");
+  });
+
+  it.each([
+    ['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>x</div></foreignObject></svg>'],
+    ['<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><g/></svg>'],
+    [
+      '<svg xmlns="http://www.w3.org/2000/svg"><a href="https://example.invalid"><text>x</text></a></svg>',
+    ],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><use href="#x"/></svg>'],
+    [
+      '<svg xmlns="http://www.w3.org/2000/svg"><style>.n{background:url(https://example.invalid)}</style></svg>',
+    ],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:url(javascript:alert(1))"/></svg>'],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,AA=="/></svg>'],
+    ["<div>not svg</div>"],
+  ])("shows the source instead of anything beyond plain SVG: %s", async (svg) => {
+    mermaidMock.render.mockResolvedValueOnce({ svg });
+    const container = renderAnswer("```mermaid\ngraph TD\n  A-->B\n```");
+    await verbatim(container);
+
+    expect(container.querySelector('[data-diagram-state="drawn"]')).toBeNull();
+    expect(hasLiveAttribute(container)).toBe(false);
+    expect(container.querySelector("script, foreignObject, image, use")).toBeNull();
   });
 
   it("does not caption an unfinished diagram fence while it streams", () => {
@@ -417,6 +486,8 @@ describe("accessibility and localization", () => {
     await waitFor(() => {
       expect(within(container).getByRole("group", { name: "Formel" })).toBeInTheDocument();
     });
-    expect(within(container).getByText("Diagramm-Quelltext")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(container).getByRole("img", { name: "Diagramm" })).toBeInTheDocument();
+    });
   });
 });

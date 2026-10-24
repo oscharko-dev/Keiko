@@ -20,6 +20,13 @@ import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
 import { diffLabels } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
+  drawDiagram,
+  loadMermaid,
+  readLoadedMermaid,
+  type DiagramDrawing,
+  type MermaidRenderer,
+} from "./codingWorkbenchDiagram";
+import {
   loadKatex,
   mathFenceSource,
   readLoadedKatex,
@@ -32,7 +39,7 @@ import styles from "./CodingWorkbenchRichContent.module.css";
 // Rich rendering of model answers in the Workbench timeline (parity row S19). It is injected into
 // the shared Markdown renderer (`SafeMarkdownRichContent`), so there is one Markdown pipeline, the
 // diff view is the Changes panel's own `DiffFileSection`, and nothing here adds a stylesheet.
-// Every construct falls back to the unchanged code view or to the formula as written.
+// Every construct falls back to the unchanged code view, the formula or the diagram as written.
 
 const MATH_FENCES: ReadonlySet<string> = new Set(["math", "latex", "tex", "katex"]);
 const DIFF_FENCES: ReadonlySet<string> = new Set(["diff", "patch"]);
@@ -269,23 +276,121 @@ function DiffBlockView({
 }
 
 // ---------------------------------------------------------------------------
-// Diagram source
+// Diagram
 // ---------------------------------------------------------------------------
 
-// Mermaid is not rendered in this build: its dependency tree does not pass the repository's license
-// gate (`khroma` ships no license field, and Mermaid 12 adds EPL-2.0 `elkjs`), and a diagram engine
-// is not something to admit around that gate. The fenced source stays, named for what it is.
-function DiagramSourceView({ standard }: { readonly standard: ReactNode }): ReactNode {
+type MermaidState =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly mermaid: MermaidRenderer }
+  | { readonly status: "failed" };
+
+type DiagramView = DiagramDrawing | { readonly status: "pending" };
+
+function initialMermaidState(): MermaidState {
+  const mermaid = readLoadedMermaid();
+  return mermaid === undefined ? { status: "loading" } : { status: "ready", mermaid };
+}
+
+// Mermaid is a lazy chunk, loaded only once a diagram is on screen. A failed load was already
+// reported once by the loader, body-free; here it only decides what to show: the source.
+function useMermaid(): MermaidState {
+  const [state, setState] = useState<MermaidState>(initialMermaidState);
+  useEffect(() => {
+    if (state.status !== "loading") return undefined;
+    let current = true;
+    loadMermaid().then(
+      (mermaid) => {
+        if (current) setState({ status: "ready", mermaid });
+      },
+      () => {
+        if (current) setState({ status: "failed" });
+      },
+    );
+    return (): void => {
+      current = false;
+    };
+  }, [state.status]);
+  return state;
+}
+
+// Drawn once per distinct source: a streamed answer that re-renders for every new token does not
+// draw an already complete diagram again.
+function useDiagramView(text: string): DiagramView {
+  const mermaid = useMermaid();
+  const [view, setView] = useState<DiagramView>({ status: "pending" });
+  useEffect(() => {
+    if (mermaid.status === "loading") return undefined;
+    if (mermaid.status === "failed") {
+      setView({ status: "verbatim", reason: "rejected" });
+      return undefined;
+    }
+    let current = true;
+    void drawDiagram(mermaid.mermaid, text).then((drawing) => {
+      if (current) setView(drawing);
+    });
+    return (): void => {
+      current = false;
+    };
+  }, [mermaid, text]);
+  return view;
+}
+
+// The checked nodes are adopted into a shadow root (cloned, so the drawing stays reusable): the
+// diagram's own stylesheet then styles that diagram and nothing else on the page.
+function DrawnDiagram({ nodes }: { readonly nodes: readonly Node[] }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const host = ref.current;
+    if (host === null) return;
+    const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+    root.replaceChildren(...nodes.map((node) => node.cloneNode(true)));
+  }, [nodes]);
+  return (
+    <div
+      ref={ref}
+      className={styles.cmpDiagramDrawing}
+      role="img"
+      aria-label={t("codingWorkbench.richContent.diagram.region")}
+      tabIndex={0}
+      data-diagram-state="drawn"
+    />
+  );
+}
+
+// While Mermaid loads, and whenever it cannot draw the diagram, the fenced source stays, named for
+// what it is.
+function DiagramSourceView({
+  standard,
+  pending,
+}: {
+  readonly standard: ReactNode;
+  readonly pending: boolean;
+}): ReactNode {
   const t = useCodingWorkbenchTranslate();
   return (
-    <figure className={styles.cmpDiagram}>
+    <figure className={styles.cmpDiagram} data-diagram-state={pending ? "pending" : "verbatim"}>
       <figcaption>
         <p className={styles.cmpDiagramTitle}>{t("codingWorkbench.richContent.diagram.title")}</p>
-        <p className={styles.cmpDiagramNote}>{t("codingWorkbench.richContent.diagram.note")}</p>
+        {pending ? null : (
+          <p className={styles.cmpDiagramNote}>{t("codingWorkbench.richContent.diagram.note")}</p>
+        )}
       </figcaption>
       {standard}
     </figure>
   );
+}
+
+function DiagramBlockView({
+  text,
+  standard,
+}: {
+  readonly text: string;
+  readonly standard: ReactNode;
+}): ReactNode {
+  const view = useDiagramView(text);
+  if (view.status === "drawn") return <DrawnDiagram nodes={view.nodes} />;
+  return <DiagramSourceView standard={standard} pending={view.status === "pending"} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +402,7 @@ function renderRichCodeBlock(node: SafeMarkdownNode, standard: ReactNode): React
   const text = node.text ?? "";
   if (MATH_FENCES.has(language)) return <MathBlockView text={text} standard={standard} />;
   if (DIFF_FENCES.has(language)) return <DiffBlockView text={text} standard={standard} />;
-  if (language === DIAGRAM_FENCE) return <DiagramSourceView standard={standard} />;
+  if (language === DIAGRAM_FENCE) return <DiagramBlockView text={text} standard={standard} />;
   return standard;
 }
 

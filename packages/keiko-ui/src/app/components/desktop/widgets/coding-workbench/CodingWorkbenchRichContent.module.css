@@ -1,5 +1,5 @@
 /*
- * Rich model-answer content in the Coding Workbench timeline: math, diffs and diagram source.
+ * Rich model-answer content in the Coding Workbench timeline: math, diffs and diagrams.
  *
  * Component-scoped (`cmp` prefix, design tokens only, nothing added to globals.css). A rendered diff
  * keeps the Changes panel's own `review` / `rv-*` classes, so its line, gutter and statistic styling
@@ -64,6 +64,23 @@
   margin: var(--space-3) 0;
 }
 
+/* A drawn diagram: its SVG lives in a shadow root, so only the frame is styled here. */
+.cmpDiagramDrawing {
+  max-block-size: 40rem;
+  max-inline-size: 100%;
+  margin-block: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  overflow: auto;
+  background: var(--surface-inset);
+}
+
+.cmpDiagramDrawing:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
 .cmpDiagramTitle {
   margin: 0;
   color: var(--text-primary);
@@ -79,7 +96,8 @@
 
 @media (forced-colors: active) {
   .cmpMathBlock,
-  .cmpDiff {
+  .cmpDiff,
+  .cmpDiagramDrawing {
     border-color: CanvasText;
     background: Canvas;
   }

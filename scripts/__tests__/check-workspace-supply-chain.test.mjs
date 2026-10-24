@@ -235,6 +235,24 @@ describe("version-bound component license decisions", () => {
   ])("retains refusals for identity or license drift %j", (drift) => {
     expect(offendersForComponent({ ...component, ...drift })).not.toEqual([]);
   });
+  // #3906, owner decision of 2026-10-24: khroma declares no license; its own file is MIT.
+  it("accepts the reviewed undeclared khroma artifact and keeps every other missing license an offender", () => {
+    const khroma = { name: "khroma", version: "2.1.0", purl: "pkg:npm/khroma@2.1.0" };
+    expect(offendersForComponent({ ...khroma, licenses: [] })).toEqual([]);
+    expect(offendersForComponent(khroma)).toEqual([]);
+    for (const drift of [
+      { version: "2.1.1", purl: "pkg:npm/khroma@2.1.1" },
+      { name: "other", purl: "pkg:npm/other@2.1.0" },
+      { purl: undefined },
+      { licenses: [{ license: { id: "GPL-3.0-only" } }] },
+    ]) {
+      expect(offendersForComponent({ ...khroma, ...drift }), JSON.stringify(drift)).not.toEqual([]);
+    }
+    expect(
+      offendersForComponent({ name: "bowser", version: "2.14.1", purl: "pkg:npm/bowser@2.14.1" }),
+    ).not.toEqual([]);
+  });
+
   it("still chooses the existing BSD option of json-schema without a local exception", () => {
     expect(
       offendersForComponent({
@@ -284,6 +302,20 @@ describe("reviewed dependency license preflight", () => {
       }
     },
   );
+
+  it("rejects version, artifact and declaration drift for the undeclared khroma artifact", () => {
+    for (const drift of [
+      { version: "2.1.1" },
+      { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` },
+      { resolved: "https://example.invalid/khroma.tgz" },
+      { license: "MIT" },
+      { license: "GPL-3.0-only" },
+    ]) {
+      const locks = canonicalLicenseLocks();
+      Object.assign(locks[0].packages["node_modules/khroma"], drift);
+      expect(reviewedDependencyLicenseFailures(locks), JSON.stringify(drift)).not.toEqual([]);
+    }
+  });
 
   it.each(["bowser", "json-schema", "spdx-exceptions"])("rejects missing %s metadata", (name) => {
     const locks = canonicalLicenseLocks();
@@ -351,7 +383,7 @@ describe("required GitHub license exclusion preflight", () => {
     const result = runLicensePreflight(locks);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "pkg:npm/spdx-exceptions, pkg:npm/bowser, pkg:npm/json-schema",
+      "pkg:npm/spdx-exceptions, pkg:npm/bowser, pkg:npm/khroma, pkg:npm/json-schema",
     );
     expect(result.stderr).toBe("");
     locks[1].packages["node_modules/bowser"].version = "99.0.0";

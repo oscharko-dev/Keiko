@@ -65,6 +65,23 @@ const COMPONENT_LICENSE_DECISIONS = new Map([
     },
   ],
   [
+    // Mermaid's colour library (#3906, owner decision of 2026-10-24). The manifest declares no
+    // license; the artifact's own `license` file is the MIT text (SHA-256
+    // 66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49), and the pinned integrity
+    // binds that file. Only this exact artifact may stand without a declaration.
+    "pkg:npm/khroma@2.1.0",
+    {
+      name: "khroma",
+      version: "2.1.0",
+      integrity:
+        "sha512-Ls993zuzfayK269Svk9hzpeGUKob/sIgZzyHYdjQoAdQetRKpOLj+k/QQQ/6Qi0Yz65mlROrfd+Ev+1+7dz9Kw==",
+      resolved: "https://registry.npmjs.org/khroma/-/khroma-2.1.0.tgz",
+      declaredLicense: undefined,
+      licenses: ["MIT"],
+      undeclaredLicense: "MIT",
+    },
+  ],
+  [
     "pkg:npm/json-schema@0.4.0",
     {
       name: "json-schema",
@@ -124,7 +141,7 @@ function reviewedRecordMatches(path, entry, decision) {
       name: decision.name,
       version: decision.version,
       purl: `pkg:npm/${decision.name}@${decision.version}`,
-      licenses: [{ expression: entry.license }],
+      licenses: entry.license === undefined ? [] : [{ expression: entry.license }],
     }).length === 0
   );
 }
@@ -337,9 +354,10 @@ export function offendersForComponent(component) {
   const id = `${component.name}@${component.version}`;
   const licenses = Array.isArray(component.licenses) ? component.licenses : [];
   // CycloneDX entries without an explicit `licenses` array are treated as offenders — we cannot
-  // prove they are acceptable without a declaration.
+  // prove they are acceptable without a declaration — unless this exact artifact's license was
+  // reviewed from its own license file.
   if (licenses.length === 0) {
-    return [{ id, license: "<missing>" }];
+    return undeclaredLicenseReviewed(component) ? [] : [{ id, license: "<missing>" }];
   }
   const offenders = [];
   for (const entry of licenses) {
@@ -349,6 +367,15 @@ export function offendersForComponent(component) {
     }
   }
   return offenders;
+}
+
+function undeclaredLicenseReviewed(component) {
+  const decision = COMPONENT_LICENSE_DECISIONS.get(component.purl);
+  return (
+    decision?.undeclaredLicense !== undefined &&
+    decision.name === component.name &&
+    decision.version === component.version
+  );
 }
 
 function collectLicenseOffenders(sbom) {

@@ -587,8 +587,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.richContent.diff.region": "Diff shown in the model answer",
   "codingWorkbench.richContent.diff.unnamedFile": "Diff",
   "codingWorkbench.richContent.diagram.title": "Diagram source",
+  "codingWorkbench.richContent.diagram.region": "Diagram",
   "codingWorkbench.richContent.diagram.note":
-    "Mermaid diagrams are shown as source. A rendered preview is not available in this build.",
+    "The diagram could not be drawn, so its source is shown as written.",
   "codingWorkbench.activity.reasoningBoundary":
     "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
   "codingWorkbench.activity.reasoning.title": "Model reasoning",
