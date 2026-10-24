@@ -452,18 +452,9 @@ function cleanupFieldsAreValid(errors: string[], value: unknown): boolean {
   return addValidationError(errors, "cleanup.state must be complete or incomplete");
 }
 
-function contributionHeaderFieldsAreValid(
-  errors: string[],
-  value: Record<string, unknown>,
-): boolean {
+// Both acceptance evidence documents bind their claims to the same issue and source revision.
+function sourceProvenanceFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
   let valid = true;
-
-  if (ownField(value, "kind") !== CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND) {
-    valid = addValidationError(errors, `kind must be ${CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_ACCEPTANCE_SCHEMA_VERSION) {
-    valid = addValidationError(errors, "schemaVersion must be the literal 1");
-  }
   if (!isPositiveInteger(ownField(value, "epicIssue"))) {
     valid = addValidationError(errors, "epicIssue must be a positive integer");
   }
@@ -476,6 +467,21 @@ function contributionHeaderFieldsAreValid(
   if (!isCodeTaskGitTreeSha(ownField(value, "sourceTreeSha")))
     valid = addValidationError(errors, "sourceTreeSha is invalid");
   return valid;
+}
+
+function contributionHeaderFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  let valid = true;
+
+  if (ownField(value, "kind") !== CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND) {
+    valid = addValidationError(errors, `kind must be ${CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND}`);
+  }
+  if (ownField(value, "schemaVersion") !== CODE_TASK_ACCEPTANCE_SCHEMA_VERSION) {
+    valid = addValidationError(errors, "schemaVersion must be the literal 1");
+  }
+  return sourceProvenanceFieldsAreValid(errors, value) && valid;
 }
 
 function contributionSalvageFieldsAreValid(
@@ -1952,19 +1958,7 @@ function qualificationManifestHeaderFieldsAreValid(
   if (ownField(value, "schemaVersion") !== CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION) {
     valid = addValidationError(errors, "schemaVersion must be the literal 1");
   }
-  if (!isPositiveInteger(ownField(value, "epicIssue"))) {
-    valid = addValidationError(errors, "epicIssue must be a positive integer");
-  }
-  if (!isPositiveInteger(ownField(value, "childIssue"))) {
-    valid = addValidationError(errors, "childIssue must be a positive integer");
-  }
-  if (!isCodeTaskGitCommitSha(ownField(value, "sourceCommitSha"))) {
-    valid = addValidationError(errors, "sourceCommitSha is invalid");
-  }
-  if (!isCodeTaskGitTreeSha(ownField(value, "sourceTreeSha"))) {
-    valid = addValidationError(errors, "sourceTreeSha is invalid");
-  }
-  return valid;
+  return sourceProvenanceFieldsAreValid(errors, value) && valid;
 }
 
 // Split out of qualificationManifestBodyErrors to keep both functions under the repository's

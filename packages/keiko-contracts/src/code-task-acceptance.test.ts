@@ -2274,3 +2274,124 @@ it.each(["source", "public"])(
     }
   },
 );
+
+const EVIDENCE_HEADER_OBSERVATIONS = [
+  "kind",
+  "schemaVersion",
+  "epicIssue",
+  "childIssue",
+  "sourceCommitSha",
+  "sourceTreeSha",
+] as const;
+
+function observeEvidenceHeader(
+  input: CodeTaskAcceptanceContributionV1 | CodeTaskQualificationManifestV1,
+  trace: string[],
+  invalid: boolean,
+): void {
+  const malformed = {
+    kind: "other",
+    schemaVersion: 2,
+    epicIssue: 0,
+    childIssue: 0,
+    sourceCommitSha: "invalid",
+    sourceTreeSha: "invalid",
+  };
+  for (const field of EVIDENCE_HEADER_OBSERVATIONS) {
+    const healthy = input[field];
+    Object.defineProperty(input, field, {
+      enumerable: true,
+      get: (): unknown => {
+        trace.push(field);
+        return invalid ? malformed[field] : healthy;
+      },
+    });
+  }
+}
+
+describe("acceptance evidence source provenance", () => {
+  it.each([
+    ["source", "contribution"],
+    ["public", "contribution"],
+    ["source", "manifest"],
+    ["public", "manifest"],
+  ] as const)("preserves complete header observations through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./code-task-acceptance.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+    const validate =
+      kind === "contribution"
+        ? module.validateCodeTaskAcceptanceContribution
+        : module.validateCodeTaskQualificationManifest;
+    for (const invalid of [false, true]) {
+      const input = kind === "contribution" ? validContribution() : validQualificationManifest();
+      const trace: string[] = [];
+      observeEvidenceHeader(input, trace, invalid);
+      const result = validate(input);
+      expect(trace).toEqual(EVIDENCE_HEADER_OBSERVATIONS);
+      if (invalid) {
+        expect(result).toEqual({
+          ok: false,
+          errors: [
+            kind === "contribution"
+              ? "kind must be code-task-acceptance-contribution"
+              : "kind must be code-task-qualification-manifest",
+            "schemaVersion must be the literal 1",
+            "epicIssue must be a positive integer",
+            "childIssue must be a positive integer",
+            "sourceCommitSha is invalid",
+            "sourceTreeSha is invalid",
+          ],
+        });
+      } else {
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value).toBe(input);
+      }
+    }
+  });
+
+  it.each([
+    ["source", "contribution"],
+    ["public", "contribution"],
+    ["source", "manifest"],
+    ["public", "manifest"],
+  ] as const)("preserves provenance getter exceptions through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./code-task-acceptance.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+    const validate =
+      kind === "contribution"
+        ? module.validateCodeTaskAcceptanceContribution
+        : module.validateCodeTaskQualificationManifest;
+    for (const throwingField of [
+      "epicIssue",
+      "childIssue",
+      "sourceCommitSha",
+      "sourceTreeSha",
+    ] as const) {
+      const input = kind === "contribution" ? validContribution() : validQualificationManifest();
+      const trace: string[] = [];
+      const failure = new TypeError("fixture evidence source read refused");
+      for (const field of EVIDENCE_HEADER_OBSERVATIONS) {
+        const healthy = input[field];
+        Object.defineProperty(input, field, {
+          enumerable: true,
+          get: (): unknown => {
+            trace.push(field);
+            if (field === throwingField) throw failure;
+            return healthy;
+          },
+        });
+      }
+      expect(() => validate(input)).toThrow(failure);
+      expect(trace).toEqual(
+        EVIDENCE_HEADER_OBSERVATIONS.slice(
+          0,
+          EVIDENCE_HEADER_OBSERVATIONS.indexOf(throwingField) + 1,
+        ),
+      );
+    }
+  });
+});
