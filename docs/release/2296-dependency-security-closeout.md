@@ -76,8 +76,9 @@ On 2026-10-24 the required OSV scan newly matched the dev-only `fast-uri` 3.1.8 
 [GHSA-jfwm-3p3c-6hx5](https://github.com/advisories/GHSA-jfwm-3p3c-6hx5). PR #4064 moves the
 existing `fast-uri` override to the patched 3.1.9. `fallow` moves to the patched 3.35.0 by the
 owner's gate decision of the same day: the patched line makes `dupes --fail-on-issues` fail on every
-clone group, so generated files are excluded (`.fallowrc.json`) and the remaining 1,159 groups are
-frozen in a shrink-only baseline (`docs/qa/fallow/dupes-baseline.json`, enforced by
+clone group, so generated files, the translation catalogs and the failure-class contract table are
+excluded (`.fallowrc.json`) and the remaining 1,032 groups are frozen in a shrink-only baseline
+(`docs/qa/fallow/dupes-baseline.json`, enforced by
 `scripts/check-semantic-duplication.mjs`). A change fails on the clone groups it introduces, and the
 two time-boxed OSV waivers are removed.
 
