@@ -1636,7 +1636,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **A run's session tree decides when the run is over, whose questions reach the human and how a
   refused question ends a turn (PR #4064).** `opencodeNativeSessionTree.ts` owns the ancestry above
   and what hangs on it: a session that is not proven a descendant never keeps a run alive, asks its
-  human or receives an interrupt.
+  human or receives an interrupt. The proof is cached for at most 64 children; the bound is the
+  cache's, not the run's ownership, so a descendant asked about once the cache is full is still
+  proven from the session list (and proven again on its next appearance). A full cache that skipped
+  the proof let a 65th active child read as no activity and the tree as terminal (#3897 review).
   - *Liveness.* The producer keeps a subagent launched with `background: true` working after its
     parent went idle and, when it ends (completed, failed or cancelled), appends a synthetic
     message from `subagent` and runs the parent again to read it

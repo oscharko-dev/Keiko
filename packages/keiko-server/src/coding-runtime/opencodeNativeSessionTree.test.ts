@@ -168,15 +168,39 @@ describe("admitting native children", () => {
     expect(runtime.sessionReads).toBe(0);
   });
 
-  it("admits no further child once the bound is reached", async () => {
+  // #3897 review: the bound is the admission cache's, never the run's ownership. A full cache that
+  // skipped the proof let a 65th active child look like no activity, so the tree read as terminal.
+  it("caches no further child once the bound is reached, yet proves each one it is asked about", async () => {
     const proven = Array.from({ length: NATIVE_CHILD_SESSION_MAX }, (_, i) => `ses_c${String(i)}`);
-    const runtime = fakeRuntime([session("ses_late", PRIMARY)], []);
+    const runtime = fakeRuntime([session("ses_late", PRIMARY), session("ses_stranger")], []);
     const run = tree(proven);
     await expect(
-      admitNativeChildren(runtime.client, run, ["ses_late"], undefined),
-    ).resolves.toEqual([]);
+      admitNativeChildren(runtime.client, run, ["ses_late", "ses_stranger"], undefined),
+    ).resolves.toEqual(["ses_late"]);
     expect(run.children.size).toBe(NATIVE_CHILD_SESSION_MAX);
-    expect(runtime.sessionReads).toBe(0);
+    expect(run.children.has("ses_late")).toBe(false);
+    expect(runtime.sessionReads).toBe(1);
+    // Not cached, so it is proven again on its next appearance.
+    await admitNativeChildren(runtime.client, run, ["ses_late"], undefined);
+    expect(runtime.sessionReads).toBe(2);
+  });
+
+  it("keeps a full tree active and interrupts its child beyond the bound", async () => {
+    const proven = Array.from({ length: NATIVE_CHILD_SESSION_MAX }, (_, i) => `ses_c${String(i)}`);
+    const sessions = [...proven, "ses_late"].map((id) => session(id, PRIMARY));
+    const runtime = fakeRuntime(sessions, ["ses_late"]);
+    const run = tree(proven);
+    const activity = await nativeTreeActivity(runtime.client, run, undefined);
+    expect(activity).toMatchObject({ primaryActive: false, activeChildren: ["ses_late"] });
+    runtime.active = [["ses_late"], [], []];
+    const outcome = await interruptNativeTree(runtime.client, run, {
+      signal: new AbortController().signal,
+      pause: instantPause,
+      runId: "run-tree",
+      activityLog: undefined,
+    });
+    expect(runtime.interrupts).toContain("ses_late");
+    expect(outcome).toEqual({ interruptedChildren: 1, settled: true });
   });
 
   it("throws when the session list cannot be read, so nothing is admitted unproven", async () => {

@@ -14,6 +14,8 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
 import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
 import {
+  NATIVE_CHILD_SESSION_MAX,
+  admitNativeChildren,
   createNativeTreeStatusPort,
   interruptNativeTree,
   type NativeSessionTreeRun,
@@ -799,6 +801,86 @@ describe("pinned native OpenCode session tree: background subagents", () => {
           expect(await activeIds(run)).toContain(stranger.data.id);
           expect(Date.now() - started).toBeLessThan(6_000);
           expect(owners.tree.children.size).toBe(0);
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    120_000,
+  );
+});
+
+// #3897 review: the run's admission cache holds 64 children. With 64 linked sessions proven while
+// idle, a 65th child that is genuinely active must keep the tree active and receive the interrupt;
+// a full cache that skipped its proof read the tree as terminal while the child ran.
+describe("pinned native OpenCode session tree: beyond the cached bound", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  async function linkedChild(run: Run): Promise<string> {
+    const created = (await run.raw("POST", "/api/session", {
+      parentID: run.sessionId,
+      location: { directory: run.fixture.workspace },
+      agent: "build",
+    })) as { readonly data: { readonly id: string } };
+    return created.data.id;
+  }
+
+  async function fullTree(run: Run, owners: Owners): Promise<void> {
+    const idle: string[] = [];
+    for (let index = 0; index < NATIVE_CHILD_SESSION_MAX; index += 1)
+      idle.push(await linkedChild(run));
+    await admitNativeChildren(run.client, owners.tree, idle, undefined);
+    expect(owners.tree.children.size).toBe(NATIVE_CHILD_SESSION_MAX);
+  }
+
+  async function workingChild(run: Run, delayMs: number): Promise<string> {
+    const late = await linkedChild(run);
+    run.gateway.script = (context): ModelPlan =>
+      context.role === "stranger"
+        ? { kind: "delay", ms: delayMs, then: { kind: "text", text: "late child done" } }
+        : { kind: "text", text: "The parent answered." };
+    await run.raw("POST", `/api/session/${late}/prompt`, { text: "STRANGER_TASK keep working" });
+    await until(async () => ((await activeIds(run)).includes(late) ? true : undefined));
+    return late;
+  }
+
+  it.skipIf(skip)(
+    "holds the run while its 65th child works and settles once it ended",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          await fullTree(run, owners);
+          const late = await workingChild(run, 5_000);
+          const turn = startTurn(run, owners, "PARENT_TASK answer at once");
+          await expect(turn.settled).resolves.toBe(true);
+          expect(await activeIds(run)).not.toContain(late);
+          expect(owners.tree.children.has(late)).toBe(false);
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "interrupts its 65th child and settles only once the runtime reports it inactive",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          await fullTree(run, owners);
+          const late = await workingChild(run, 30_000);
+          const outcome = await interruptNativeTree(run.client, owners.tree, {
+            signal: AbortSignal.timeout(20_000),
+            pause: (signal) =>
+              signal.aborted ? Promise.resolve(false) : sleep(100).then(() => true),
+            runId: RUN_ID,
+            activityLog: owners.activityLog,
+          });
+          expect(outcome).toEqual({ interruptedChildren: 1, settled: true });
+          expect(await activeIds(run)).not.toContain(late);
         } finally {
           await owners.stop();
         }

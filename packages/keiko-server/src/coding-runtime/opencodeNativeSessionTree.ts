@@ -112,9 +112,12 @@ function nativeSessionInWorkspace(session: SessionRecord, workspaceRoot: string)
 
 /**
  * The candidates the run owns. A child proven once stays admitted (a session never changes its
- * parent); the session list is read at most once per call and only for candidates not yet proven. A
- * full cache admits no further child, and a failed read throws: the caller decides what an unproven
- * session means, because refusing an ask and keeping a run alive are different questions.
+ * parent); the session list is read at most once per call and only for candidates not yet proven.
+ * The admission cache holds at most `NATIVE_CHILD_SESSION_MAX` children; a descendant proven when it
+ * is full is still the run's, it is just proven again on its next appearance (#3897 review: a full
+ * cache that skipped the proof let a 65th active child look like no activity, so the tree read as
+ * terminal while it ran). A failed read throws: the caller decides what an unproven session means,
+ * because refusing an ask and keeping a run alive are different questions.
  */
 export async function admitNativeChildren(
   client: Pick<NativeSessionTreeClient, "sessions">,
@@ -123,22 +126,19 @@ export async function admitNativeChildren(
   signal: AbortSignal | undefined,
 ): Promise<readonly string[]> {
   const owned: string[] = [];
-  // Read once, and only when a candidate is still to be proven and the cache can take it.
   const unproven = candidates.some(
     (candidate) => candidate !== run.sessionId && !run.children.has(candidate),
   );
-  const sessions =
-    unproven && run.children.size < NATIVE_CHILD_SESSION_MAX ? await client.sessions(signal) : [];
+  const sessions = unproven ? await client.sessions(signal) : [];
   for (const candidate of candidates) {
     if (candidate === run.sessionId) continue;
     if (run.children.has(candidate)) {
       owned.push(candidate);
       continue;
     }
-    if (run.children.size >= NATIVE_CHILD_SESSION_MAX) continue;
     if (!nativeSessionDescendsFromRun(sessions, candidate, run.sessionId, run.workspaceRoot))
       continue;
-    run.children.add(candidate);
+    if (run.children.size < NATIVE_CHILD_SESSION_MAX) run.children.add(candidate);
     owned.push(candidate);
   }
   return owned;

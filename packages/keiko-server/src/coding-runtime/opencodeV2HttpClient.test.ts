@@ -899,3 +899,67 @@ describe("OpenCode V2 slash commands", () => {
     expect(execution).toMatchObject({ name: "OpenCodeV2HttpStatusError", status: 500 });
   });
 });
+
+// #3897 review: the runtime pages its session list (50 rows by default). The session-tree proof
+// read only the first page, so a later child could never be proven the run's.
+describe("OpenCode V2 session list", () => {
+  function pagedFetch(pages: readonly Readonly<Record<string, unknown>>[]): {
+    readonly fetch: ReturnType<typeof vi.fn>;
+    readonly urls: string[];
+  } {
+    const urls: string[] = [];
+    let index = 0;
+    const fetch = vi.fn((input: RequestInfo | URL): Promise<Response> => {
+      urls.push(input instanceof Request ? input.url : input.toString());
+      const page = pages[Math.min(index, pages.length - 1)];
+      index += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify(page), { headers: { "content-type": "application/json" } }),
+      );
+    });
+    return { fetch, urls };
+  }
+  const rows = (from: number, count: number): readonly Readonly<Record<string, unknown>>[] =>
+    Array.from({ length: count }, (_, index) => ({ id: `ses_${String(from + index)}` }));
+  const client = (fetch: ReturnType<typeof vi.fn>): ReturnType<typeof createOpenCodeV2HttpClient> =>
+    createOpenCodeV2HttpClient({
+      endpoint: "http://127.0.0.1:1984/",
+      password: "test-only",
+      fetch,
+    });
+
+  it("reads every page of the session list to its end", async () => {
+    const { fetch, urls } = pagedFetch([
+      { data: rows(0, 100), cursor: { next: "page-2" } },
+      { data: rows(100, 30), cursor: { next: null } },
+    ]);
+    const sessions = await client(fetch).sessions();
+    expect(sessions).toHaveLength(130);
+    expect(urls.map((url) => new URL(url).search)).toEqual([
+      "?limit=100",
+      "?limit=100&cursor=page-2",
+    ]);
+  });
+
+  it("stops at a full last page without a next cursor", async () => {
+    const { fetch } = pagedFetch([{ data: rows(0, 100), cursor: {} }]);
+    await expect(client(fetch).sessions()).resolves.toHaveLength(100);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a repeated cursor and a list beyond its bound", async () => {
+    const repeated = pagedFetch([{ data: rows(0, 100), cursor: { next: "same" } }]);
+    await expect(client(repeated.fetch).sessions()).rejects.toThrow("opencode-v2-cursor-invalid");
+    let page = 0;
+    const endless = vi.fn((): Promise<Response> => {
+      page += 1;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ data: rows(page * 100, 100), cursor: { next: `page-${String(page)}` } }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    });
+    await expect(client(endless).sessions()).rejects.toThrow("opencode-v2-sessions-oversized");
+  });
+});

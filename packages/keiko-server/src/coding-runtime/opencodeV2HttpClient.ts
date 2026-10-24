@@ -653,6 +653,50 @@ async function* openEvents(
   yield* readEventFrames(response.body);
 }
 
+// The runtime pages its session list (50 rows by default). A session-tree proof that read only the
+// first page could not see a later child, so the list is read to its end, bounded (#3897 review).
+const SESSION_PAGE_SIZE = 100;
+const MAX_SESSIONS = 2048;
+
+async function pagedSessions(
+  request: V2Request,
+  signal?: AbortSignal,
+): Promise<readonly Readonly<Record<string, unknown>>[]> {
+  const rows: Readonly<Record<string, unknown>>[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page <= MAX_SESSIONS / SESSION_PAGE_SIZE; page += 1) {
+    const query = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+    const response = await request(
+      "GET",
+      `/api/session?limit=${String(SESSION_PAGE_SIZE)}${query}`,
+      undefined,
+      signal,
+    );
+    const batch = arrayEnvelope(response);
+    if (rows.length + batch.length > MAX_SESSIONS)
+      throw new Error("opencode-v2-sessions-oversized");
+    rows.push(...batch);
+    cursor = batch.length < SESSION_PAGE_SIZE ? undefined : nextSessionsCursor(response, cursors);
+    if (cursor === undefined) return rows;
+  }
+  throw new Error("opencode-v2-sessions-oversized");
+}
+
+/** The next page's cursor, undefined at the end of the list; a repeated or oversized one throws. */
+function nextSessionsCursor(
+  response: Readonly<Record<string, unknown>>,
+  seen: Set<string>,
+): string | undefined {
+  const next = record(response.cursor)?.next;
+  if (next === undefined || next === null) return undefined;
+  if (typeof next !== "string" || next.length > 2048 || seen.has(next)) {
+    throw new Error("opencode-v2-cursor-invalid");
+  }
+  seen.add(next);
+  return next;
+}
+
 async function pagedMessages(
   request: V2Request,
   sessionId: string,
@@ -734,8 +778,7 @@ export function createOpenCodeV2HttpClient(
         ),
       );
     },
-    sessions: async (signal) =>
-      arrayEnvelope(await request("GET", "/api/session", undefined, signal)),
+    sessions: (signal) => pagedSessions(request, signal),
     messages: (sessionId, signal) => pagedMessages(request, sessionId, signal),
     prompt: async (sessionId, value, signal, display, inputs): Promise<void> => {
       const prepared = preparedPrompt(sessionId, value, display, inputs);
