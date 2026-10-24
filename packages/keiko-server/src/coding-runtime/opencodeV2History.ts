@@ -1103,6 +1103,55 @@ function conversationCapture(
 }
 
 /** A pull repeats unchanged candidates until the adapter commits its checkpoint. */
+/**
+ * The files one finished assistant step changed, as the runtime's own snapshot of the workspace
+ * names them (`snapshot.files`), and the tool calls of that step (#3901). The snapshot covers the
+ * whole workspace, so a shell command's or a child session's writes are in it as much as an edit
+ * tool's. Paths stay in memory for the verification evidence and never reach a log.
+ */
+export interface OpenCodeV2StepChange {
+  readonly messageId: string;
+  readonly files: readonly string[];
+  readonly callIds: readonly string[];
+  /** The list was longer than the bound, or held something other than a path. */
+  readonly truncated: boolean;
+}
+
+/** The most changed files of one step that are compared one by one. */
+export const OPENCODE_V2_STEP_CHANGE_FILES_MAX = 10_000;
+
+export function openCodeV2StepChanges(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2StepChange[] {
+  return messages.flatMap((message) => {
+    const change = stepChange(message);
+    return change === undefined ? [] : [change];
+  });
+}
+
+function stepChange(message: Readonly<Record<string, unknown>>): OpenCodeV2StepChange | undefined {
+  if (message.type !== "assistant" || message.finish === undefined) return undefined;
+  const files = record(message.snapshot)?.files;
+  if (typeof message.id !== "string" || !Array.isArray(files) || files.length === 0)
+    return undefined;
+  const bounded = (files as readonly unknown[]).slice(0, OPENCODE_V2_STEP_CHANGE_FILES_MAX);
+  const paths = bounded.filter((file): file is string => typeof file === "string");
+  return {
+    messageId: message.id,
+    files: paths,
+    callIds: stepCallIds(message.content),
+    truncated: files.length > bounded.length || paths.length < bounded.length,
+  };
+}
+
+function stepCallIds(content: unknown): readonly string[] {
+  if (!Array.isArray(content)) return [];
+  return (content as readonly unknown[]).flatMap((part) => {
+    const tool = record(part);
+    return tool?.type === "tool" && typeof tool.id === "string" ? [tool.id] : [];
+  });
+}
+
 export function createOpenCodeV2HistoryProjection(
   activity?: HistoryActivity,
 ): OpenCodeV2HistoryProjection {

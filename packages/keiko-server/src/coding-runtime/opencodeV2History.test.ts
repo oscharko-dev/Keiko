@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
-import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
+import {
+  createOpenCodeV2HistoryProjection,
+  OPENCODE_V2_STEP_CHANGE_FILES_MAX,
+  OpenCodeV2HistoryError,
+  openCodeV2StepChanges,
+} from "./opencodeV2History.js";
 import { createOpenCodeReconciler } from "./opencodeReconciler.js";
 import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
 import {
@@ -2560,5 +2565,54 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(JSON.stringify(toolSignals(shellHistory(completed(3))))).not.toContain(
       "PRIVATE_SHELL_OUTPUT",
     );
+  });
+});
+
+// #3901: the files a finished step changed, as the runtime's snapshot names them.
+describe("native step changes from the runtime's snapshot", () => {
+  const step = (fields: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
+    id: "msg_step",
+    type: "assistant",
+    finish: "tool-calls",
+    content: [
+      { type: "tool", id: "call_1", name: "shell" },
+      { type: "text", text: "done" },
+      { type: "tool", id: "call_2", name: "edit" },
+    ],
+    snapshot: { start: "a", end: "b", files: ["src/a.ts", "gen/new.txt"] },
+    ...fields,
+  });
+
+  it("reads the changed files and the step's tool calls of a finished assistant step", () => {
+    expect(openCodeV2StepChanges([step({})])).toEqual([
+      {
+        messageId: "msg_step",
+        files: ["src/a.ts", "gen/new.txt"],
+        callIds: ["call_1", "call_2"],
+        truncated: false,
+      },
+    ]);
+  });
+
+  it.each([
+    ["an unfinished step", { finish: undefined }],
+    ["a step that changed nothing", { snapshot: { start: "a", end: "a", files: [] } }],
+    ["a step without a snapshot", { snapshot: undefined }],
+    ["a user message", { type: "user" }],
+    ["a step without an id", { id: 7 }],
+  ])("ignores %s", (_label, fields) => {
+    expect(openCodeV2StepChanges([step(fields)])).toEqual([]);
+  });
+
+  it("bounds the list and marks it truncated when it held more or something other than a path", () => {
+    const many = Array.from(
+      { length: OPENCODE_V2_STEP_CHANGE_FILES_MAX + 1 },
+      (_, i) => `f${String(i)}`,
+    );
+    const [bounded] = openCodeV2StepChanges([step({ snapshot: { files: many } })]);
+    expect(bounded?.files).toHaveLength(OPENCODE_V2_STEP_CHANGE_FILES_MAX);
+    expect(bounded?.truncated).toBe(true);
+    const [odd] = openCodeV2StepChanges([step({ snapshot: { files: ["a.ts", 7] } })]);
+    expect(odd).toMatchObject({ files: ["a.ts"], truncated: true });
   });
 });

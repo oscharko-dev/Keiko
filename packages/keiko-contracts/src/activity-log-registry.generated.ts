@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "665edb381fdcbf86bb1ab2586b74fc0f61e0799a32787f653863c35f6693b1d1" as const;
+  "bc0897d6abc8e5a08d7bc4dfc26e07ebbb4fde64b66adefe3332be710352fccd" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8682,6 +8682,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
+          "coding-runtime.native-step.changed",
           "coding-runtime.provider-policy.bound",
         ],
         end: [],
@@ -8702,6 +8703,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-runtime.native-step.changed",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.provider-policy.bound",
           mode: "correlation",
         },
@@ -8711,6 +8716,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
+        "coding-runtime.native-step.changed",
         "coding-runtime.provider-policy.bound",
       ],
       replayReferences: [],
@@ -8881,6 +8887,66 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.native-policy.decided.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.native-step.changed",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "callCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "fileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "fileList",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "uncoveredCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.native-step.changed.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -44484,6 +44550,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.native-question.observed": "tools-workflows",
     "coding-runtime.native-question.routed": "tools-workflows",
     "coding-runtime.native-session-tree.observed": "tools-workflows",
+    "coding-runtime.native-step.changed": "tools-workflows",
     "coding-runtime.native-turn.interrupted": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",
     "coding-runtime.operator-decision": "tools-workflows",

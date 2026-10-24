@@ -28,6 +28,7 @@ import {
   recordOpenCodeTurnImage,
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
+import { openCodeV2StepChanges } from "./opencodeV2History.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
@@ -525,6 +526,35 @@ describe("pinned native OpenCode undo semantics", () => {
             "/api/session/{sessionID}/command",
           ]),
         );
+      });
+    },
+    120_000,
+  );
+
+  // #3901: the verification evidence weighs a shell step's writes through the step's own snapshot.
+  it.skipIf(skip)(
+    "names a shell step's written files on that step's snapshot, with the step's tool call",
+    async () => {
+      await withRun(async (run) => {
+        await scriptedTurn(
+          run,
+          {
+            name: "shell",
+            arguments: {
+              command: `echo shelled >> ${FIXTURE_FILE} && mkdir -p gen && echo x > gen/new.txt`,
+              description: "Write two files",
+            },
+          },
+          "Write the files.",
+        );
+        const raw = (await run.service.raw("GET", `/api/session/${run.sessionId}/message`)) as {
+          readonly data: readonly Readonly<Record<string, unknown>>[];
+        };
+        const changes = openCodeV2StepChanges(raw.data);
+        expect(changes).toHaveLength(1);
+        expect(changes[0]).toMatchObject({ truncated: false });
+        expect([...(changes[0]?.files ?? [])].sort()).toEqual(["gen/new.txt", FIXTURE_FILE]);
+        expect(changes[0]?.callIds).toHaveLength(1);
       });
     },
     120_000,

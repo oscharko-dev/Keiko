@@ -1552,7 +1552,14 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   notes in the run's private plan directory, which the policy classifies as reads, are planning,
   not an edit a check must cover. A child session's workspace edit settles on the child, whose
   history the run does not read, so it counts as the run's edit from its admission
-  (`unsettledEdit`, PR #4064 review follow-up).
+  (`unsettledEdit`, PR #4064 review follow-up). A shell command writes files no tool settlement
+  reports: the runtime's own snapshot of each finished step names every workspace file that step
+  changed (`snapshot.files`, `openCodeV2StepChanges`), so a step's changes that no native edit of
+  the same step named count as the run's edit, once per step, when the history first shows it
+  finished. A step of admitted project checks alone changed only what the checks write and counts
+  nothing. A check whose admission preceded such a change cannot prove it, because the evidence
+  binds the edit revision at admission. `coding-runtime.native-step.changed` records each weighed
+  step body-free (outcome, file, uncovered and call counts; never a path).
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

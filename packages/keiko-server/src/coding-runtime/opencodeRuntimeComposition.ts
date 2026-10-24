@@ -96,7 +96,12 @@ import {
   type OpenCodeV2HttpClient,
 } from "./opencodeV2HttpClient.js";
 import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
-import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
+import {
+  createOpenCodeV2HistoryProjection,
+  OpenCodeV2HistoryError,
+  openCodeV2StepChanges,
+  type OpenCodeV2StepChange,
+} from "./opencodeV2History.js";
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import {
   recordSessionContinuity,
@@ -713,6 +718,12 @@ interface PreparedRun {
   agentImages?: OpenCodeAgentImages | undefined;
   /** Admitted plan-note edits awaiting their settlement (`noteAdmittedEditEvidence`). */
   planNoteEdits?: Set<string> | undefined;
+  /** Workspace files each admitted native edit named, by call (`observeNativeStepChanges`). */
+  editTargetsByCall?: Map<string, readonly string[]> | undefined;
+  /** Calls the policy admitted as project checks (`observeNativeStepChanges`). */
+  verificationCalls?: Set<string> | undefined;
+  /** Assistant steps whose changed files were already weighed (`observeNativeStepChanges`). */
+  seenStepChanges?: Set<string> | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
 }
@@ -2030,11 +2041,9 @@ function readinessV2Ports(
         messages = await client.messages(fixedSessionId, signal);
         // A continued session already holds the messages of earlier runs, which Coding History has
         // and the timeline must not show again: the projection starts after them.
-        const events = history.project(
-          fixedSessionId,
-          withoutBaseline(messages, run.continuation?.baselineIds),
-          checkpoints[fixedSessionId],
-        );
+        const ownMessages = withoutBaseline(messages, run.continuation?.baselineIds);
+        const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId]);
+        observeNativeStepChanges(input, run, ownMessages);
         staged.clear();
         for (const event of events) {
           const safe = history.takeSignal(event);
@@ -3290,7 +3299,7 @@ async function settleNativePolicyOutcome(
     return { outcome: "authority-refused", authority: { reason: admission.reason } };
   noteAdmittedEditTargets(run, request);
   noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
-  noteAdmittedVerification(deps, request);
+  noteAdmittedVerification(run, deps, request);
   return { outcome, authority: { charge: admission.charge } };
 }
 
@@ -3315,11 +3324,17 @@ function nativeVerificationKind(
 
 /** An admitted verification command, so its exit status can become the run's evidence (#3901). */
 function noteAdmittedVerification(
+  run: PreparedRun,
   deps: ToolBridgeExecutionDeps,
   request: OpenCodeNativePolicyRequest,
 ): void {
   const kind = nativeVerificationKind(request);
   if (kind === undefined || request.source === undefined) return;
+  run.verificationCalls ??= new Set();
+  rememberKey(
+    run.verificationCalls,
+    openCodeNativeCallKey(request.source.messageID, request.source.id),
+  );
   deps.facade.nativeSettlement?.verificationAdmitted?.(
     { messageId: request.source.messageID, callId: request.source.id },
     kind,
@@ -3353,7 +3368,8 @@ function noteAdmittedEditEvidence(
 }
 
 function rememberPlanNoteEdit(run: PreparedRun, key: string): void {
-  const notes = (run.planNoteEdits ??= new Set());
+  run.planNoteEdits ??= new Set();
+  const notes = run.planNoteEdits;
   notes.add(key);
   if (notes.size > PLAN_NOTE_EDITS_MAX) notes.delete(notes.values().next().value ?? "");
 }
@@ -3372,10 +3388,121 @@ function planNoteSettlement(
 /** An admitted native edit's targets, so its settlement can record what the turn itself wrote. */
 function noteAdmittedEditTargets(run: PreparedRun, request: OpenCodeNativePolicyRequest): void {
   if (request.source === undefined) return;
-  noteOpenCodeEditTargets(
-    run,
-    openCodeNativeCallKey(request.source.messageID, request.source.id),
-    openCodeNativeEditFiles(request, run.workspaceRoot),
+  const key = openCodeNativeCallKey(request.source.messageID, request.source.id);
+  const files = openCodeNativeEditFiles(request, run.workspaceRoot);
+  noteOpenCodeEditTargets(run, key, files);
+  if (files.length === 0) return;
+  run.editTargetsByCall ??= new Map();
+  const targets = run.editTargetsByCall;
+  targets.delete(key);
+  targets.set(key, files);
+  if (targets.size > STEP_EVIDENCE_MAX) targets.delete(targets.keys().next().value ?? "");
+}
+
+/** The most call and step facts a run remembers for its verification evidence. */
+const STEP_EVIDENCE_MAX = 1024;
+
+function rememberKey(keys: Set<string>, key: string): void {
+  keys.delete(key);
+  keys.add(key);
+  if (keys.size > STEP_EVIDENCE_MAX) keys.delete(keys.values().next().value ?? "");
+}
+
+type NativeStepOutcome = "counted" | "covered" | "verification-only";
+
+/**
+ * The workspace files a finished native step changed, weighed against the run's verification
+ * evidence once per step (#3901). A file a native edit of the same step named is that edit's, which
+ * its own settlement already counted; anything else (a shell command's or a child session's writes)
+ * is a change no settlement reported, so it is the run's edit and a check must follow it. A step of
+ * project checks alone changed only what the checks themselves write. The step is weighed when the
+ * history shows it finished, before that read's tool settlements reach the ledger, so a check in a
+ * later step still proves it.
+ */
+function observeNativeStepChanges(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  messages: readonly Readonly<Record<string, unknown>>[],
+): void {
+  const settlement = input.toolProfile === "native" ? input.toolFacade.nativeSettlement : undefined;
+  if (settlement?.unsettledEdit === undefined) return;
+  run.seenStepChanges ??= new Set();
+  const seen = run.seenStepChanges;
+  for (const change of openCodeV2StepChanges(messages)) {
+    if (seen.has(change.messageId)) continue;
+    rememberKey(seen, change.messageId);
+    const weighed = weighStepChange(run, change);
+    if (weighed.outcome === "counted") settlement.unsettledEdit();
+    recordNativeStepChanged(input.activityLog, run.runId, change, weighed);
+  }
+}
+
+function weighStepChange(
+  run: PreparedRun,
+  change: OpenCodeV2StepChange,
+): { readonly outcome: NativeStepOutcome; readonly uncoveredCount: number } {
+  const keys = change.callIds.map((callId) => openCodeNativeCallKey(change.messageId, callId));
+  if (keys.length > 0 && keys.every((key) => run.verificationCalls?.has(key) === true))
+    return { outcome: "verification-only", uncoveredCount: 0 };
+  const covered = new Set(keys.flatMap((key) => run.editTargetsByCall?.get(key) ?? []));
+  const uncoveredCount =
+    change.files.filter((file) => !covered.has(file)).length + (change.truncated ? 1 : 0);
+  return { outcome: uncoveredCount > 0 ? "counted" : "covered", uncoveredCount };
+}
+
+const NATIVE_STEP_CHANGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-step.changed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeStepChanged",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["counted", "covered", "verification-only"],
+    },
+    fileCount: { type: "integer", dataClass: "count", required: true },
+    uncoveredCount: { type: "integer", dataClass: "count", required: true },
+    callCount: { type: "integer", dataClass: "count", required: true },
+    fileList: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "truncated"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-step.changed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+/** One body-free line per weighed step: what it changed and whether it counts as the run's edit. */
+function recordNativeStepChanged(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  change: OpenCodeV2StepChange,
+  weighed: { readonly outcome: NativeStepOutcome; readonly uncoveredCount: number },
+): void {
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_STEP_CHANGED_OPERATION,
+      { correlationId: runId },
+      {
+        runId,
+        outcome: weighed.outcome,
+        fileCount: change.files.length,
+        uncoveredCount: weighed.uncoveredCount,
+        callCount: change.callIds.length,
+        fileList: change.truncated ? "truncated" : "complete",
+      },
+    ),
   );
 }
 

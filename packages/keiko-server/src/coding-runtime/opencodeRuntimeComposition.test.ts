@@ -4146,6 +4146,122 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
     }
   });
 
+  // #3901: a shell command's (or a child's) writes reach no tool settlement; the runtime's snapshot of
+  // the finished step names them, so they become the run's edit and a check must follow them.
+  it("counts a step's unreported workspace changes as the run's edit, once per step", async () => {
+    const edits: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const nativeSettlement = createCodingToolNativeSettlementFacet(undefined, {
+      observeEditOutcome: (outcome): void => {
+        edits.push(outcome.kind);
+      },
+    });
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    let steps: readonly Record<string, unknown>[] = [];
+    const step = (
+      id: string,
+      created: number,
+      content: readonly Record<string, unknown>[],
+      files: readonly string[],
+    ): Record<string, unknown> => ({
+      id,
+      type: "assistant",
+      time: { created },
+      content,
+      finish: "tool-calls",
+      snapshot: { start: "a".repeat(40), end: "b".repeat(40), files },
+    });
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement,
+      },
+      undefined,
+      {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        historyCalls,
+        activityLog,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: () =>
+          Promise.resolve(
+            v2Envelope(
+              [{ id: "msg_user", type: "user", time: { created: 1 }, text: "Task" }, ...steps]
+                .slice()
+                .reverse(),
+            ),
+          ),
+      },
+    );
+    const ask = (
+      permission: string,
+      messageID: string,
+      callId: string,
+      resource: string,
+    ): Promise<Awaited<ReturnType<typeof fixture.runtime.toolBridge.handle>>> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission,
+          resources: [resource],
+          source: { type: "tool", messageID, id: callId },
+          configured: "ask",
+        }),
+      });
+    try {
+      const stream = streams[0];
+      if (stream === undefined) throw new Error("expected the event stream");
+      let hints = 0;
+      const reread = async (): Promise<void> => {
+        const reads = historyCalls.length;
+        hints += 1;
+        stream.enqueue(frame("session.step.ended", hints));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThan(reads);
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      expect((await ask("edit", "msg_step_edit", "call_edit", "src/a.ts")).status).toBe(200);
+      expect((await ask("shell", "msg_step_test", "call_test", "npm test")).status).toBe(200);
+      steps = [
+        step("msg_step_shell", 2, [part("call_shell", "shell", "completed")], ["gen/new.txt"]),
+        step("msg_step_edit", 3, [part("call_edit", "edit", "completed")], ["src/a.ts"]),
+        step("msg_step_test", 4, [part("call_test", "shell", "completed")], ["coverage.json"]),
+      ];
+      await reread();
+      await reread();
+      // The shell step's write is the run's edit, the native edit counts once through its own
+      // settlement, and the check step's own output is no edit; a second read changes nothing.
+      expect(edits).toEqual(["applied", "applied"]);
+      const lines = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-step.changed",
+      );
+      expect(lines.map((event) => event.extra)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ outcome: "counted", fileCount: 1, uncoveredCount: 1 }),
+          expect.objectContaining({ outcome: "covered", fileCount: 1, uncoveredCount: 0 }),
+          expect.objectContaining({ outcome: "verification-only", uncoveredCount: 0 }),
+        ]),
+      );
+      expect(lines).toHaveLength(3);
+      expect(JSON.stringify(lines)).not.toMatch(/gen\/new|src\/a\.ts|coverage/u);
+      expectActivityLogProof(
+        "coding-runtime.native-step.changed.emitted-line",
+        formatActivityLogProofLine(lines[0] ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("control: a mapped profile's calls reach the run's effort through the facade, never through its history", async () => {
     const { settled } = await runHistory("direct");
     expect(settled).toEqual([]);
