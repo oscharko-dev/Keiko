@@ -110,7 +110,10 @@ import { dirname } from "node:path";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import {
+  createCodingSafeActivityProjection,
+  type CodingSafeActivitySignal,
+} from "./codingSafeActivityProjection.js";
 import type {
   CodingRuntimeManager,
   OpenCodeLifecyclePrepareRequest,
@@ -4063,6 +4066,91 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
       ["read", "completed"],
     ]);
   });
+
+  function shellHistory(exitCode: number, finished: boolean): readonly Record<string, unknown>[] {
+    return history([
+      {
+        ...part("call_shell_evidence", "shell", finished ? "completed" : "running"),
+        state: {
+          status: finished ? "completed" : "running",
+          input: { command: "npm test" },
+          ...(finished
+            ? { content: [{ type: "text", text: "Synthetic check" }], metadata: { exit: exitCode } }
+            : {}),
+        },
+      },
+    ]);
+  }
+
+  it.each([0, 7])(
+    "projects a native shell terminal state without run-only exit evidence (%i)",
+    async (exitCode) => {
+      const projection = createCodingSafeActivityProjection({ now: () => Date.parse(RUNTIME_NOW) });
+      projection.open({
+        runId: FIXTURE_RUN_ID,
+        workspaceId: "workspace-shell-evidence",
+        authorityExpiresAt: new Date(Date.parse(RUNTIME_NOW) + 60_000).toISOString(),
+        workspaceIsCurrent: () => true,
+      });
+      const ingest = vi.fn((signal: CodingSafeActivitySignal) =>
+        projection.ingest(FIXTURE_RUN_ID, signal),
+      );
+      const nativeSettlement = createCodingToolNativeSettlementFacet(undefined);
+      const settled = vi.spyOn(nativeSettlement, "settled");
+      const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+      let finished = false;
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve(completed)), nativeSettlement },
+        undefined,
+        {
+          mode: "autonomous-delivery",
+          readToolProfile: () => "native",
+          safeActivity: {
+            arm: vi.fn(),
+            clear: vi.fn(),
+            ingest,
+            recordDrops: vi.fn(),
+            settleTool: vi.fn(),
+          },
+          onSseStart: (controller): void => {
+            streams.push(controller);
+          },
+          historyResponseFactory: () =>
+            Promise.resolve(v2Envelope(shellHistory(exitCode, finished))),
+        },
+      );
+      try {
+        const toolState = (): string | undefined => {
+          const feed = projection.currentContent()?.feed;
+          return feed?.availability === "available"
+            ? feed.turns.flatMap((turn) => turn.tools)[0]?.state
+            : undefined;
+        };
+        await vi.waitFor(() => {
+          expect(toolState()).toBe("running");
+        });
+        finished = true;
+        streams[0]?.enqueue(frame("session.step.ended", 1));
+        await vi.waitFor(() => {
+          expect(toolState()).toBe(exitCode === 0 ? "succeeded" : "failed");
+        });
+        expect(settled).toHaveBeenCalledWith(
+          expect.objectContaining({ exitCode, exitStatusCheck: "test" }),
+        );
+        const terminal = ingest.mock.calls
+          .map(([signal]) => signal)
+          .find(
+            (signal) =>
+              signal.kind === "tool" && (signal.state === "succeeded" || signal.state === "failed"),
+          );
+        expect(terminal).toBeDefined();
+        expect(terminal).not.toHaveProperty("exitCode");
+        expect(terminal).not.toHaveProperty("exitStatusCheck");
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
 
   // #3901: the plan agent's notes are planning, not an edit a check must cover, and a child
   // session's edit settles on the child, whose history the run does not read.

@@ -1828,13 +1828,24 @@ function adapterSafeActivitySink(
     safeActivitySink: {
       ingest: (signal): boolean => {
         settle?.(signal);
-        return activity?.ingest(signal) ?? true;
+        return activity?.ingest(displayActivitySignal(signal)) ?? true;
       },
       recordDrops: (count): void => {
         activity?.recordDrops(count);
       },
     },
   };
+}
+
+/** Native exit evidence is settled above, outside the closed display-signal schema. */
+function displayActivitySignal(
+  signal: CompositionSafeActivitySignal,
+): CompositionSafeActivitySignal {
+  if (signal.kind !== "tool") return signal;
+  const display = { ...signal };
+  delete display.exitCode;
+  delete display.exitStatusCheck;
+  return display;
 }
 
 /** The native tools whose completed call wrote the files its edit check named. */
