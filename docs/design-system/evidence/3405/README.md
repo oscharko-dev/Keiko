@@ -35,6 +35,12 @@ the real-BFF outage case. Two PNGs changed bytes (`10-responsive-manual-path.png
 `11-progress-state.png`); the three JSON records now bind the current message catalogs.
 The evidence freshness gate passed. This remains updater evidence, not Chat acceptance.
 
+The selected-skill handoff for governed agent runs (#4025 AC1, PR #4064) regenerated the original
+producer on 2026-10-24 with Node 24.22.0, because it changes `api.ts` and the optional message
+catalogs. All nine Chromium cases passed in 1.1 minutes, including the real-BFF outage case.
+Twelve PNGs changed bytes at unchanged dimensions; the three JSON records now bind the current
+sources. The evidence freshness gate passed. This remains updater evidence, not skill acceptance.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

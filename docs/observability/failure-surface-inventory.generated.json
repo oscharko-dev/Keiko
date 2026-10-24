@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5f6a512db05709185cf4d3902cd54cc03c324dc51cf443209530a354c010a733"
+    "catalogDigest": "5390c49025d55b86213abf02672a75545e52327d1c31e766c2164017e9b5ecfd"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 573,
-    "proofCount": 586,
-    "resolvedProofCount": 586,
+    "operationCount": 574,
+    "proofCount": 587,
+    "resolvedProofCount": 587,
     "failureClassCount": 360,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -121,6 +121,7 @@
         "request",
         "server.diagnostic.failure",
         "skills.library.operation",
+        "skills.workflow.attached",
         "sse.run-events.resume",
         "sse.stream.closed",
         "store.journey-outcomes.migration",
@@ -2600,6 +2601,9 @@
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [
       "packages/keiko-server/src/markdown-skill-routes.test.ts"
+    ],
+    "skills.workflow.attached.line": [
+      "packages/keiko-server/src/markdown-skill-workflow-admission.test.ts"
     ],
     "speech.stt.language.normalized.emitted-line": [
       "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts"

@@ -38,6 +38,8 @@ import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers
 import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "./task-workspace/workspace-root-access.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import { logMarkdownSkillOperation } from "./markdown-skill-log.js";
+import { UiStoreError } from "./store/errors.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   agentRunSessionMatches,
@@ -263,6 +265,7 @@ function buildEngineContext(
     model,
     registry: deps.registry,
     ...(governance === undefined ? {} : { governance }),
+    markdownSkills: deps.store.markdownSkills,
     evidence: {
       store: deps.evidenceStore,
       env: deps.env,
@@ -380,6 +383,41 @@ function requireVerifyAppSession(
   };
 }
 
+/**
+ * The private skill the human selected for this run (#4025 AC1): readable only from the paired app
+ * session, like the library itself, and only as the exact revision and digest that were selected.
+ * The run then binds that reference; a selection that is already gone refuses the launch instead
+ * of starting the run without the method the human chose.
+ */
+function rejectUnavailableRunSkill(
+  ctx: RouteContext,
+  request: RunRequest,
+  deps: UiHandlerDeps,
+): RouteResult | undefined {
+  const reference = request.markdownSkill;
+  if (reference === undefined) return undefined;
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    logMarkdownSkillOperation(ctx.correlationId, "selection-read", "rejected", 404);
+    return { status: 404, body: errorBody("NOT_FOUND", "Skill not found.", ctx.correlationId) };
+  }
+  try {
+    deps.store.markdownSkills.resolve(reference);
+  } catch (error) {
+    if (!(error instanceof UiStoreError)) throw error;
+    logMarkdownSkillOperation(ctx.correlationId, "selection-read", "rejected", error.status);
+    return {
+      status: 409,
+      body: errorBody(
+        "SKILL_SELECTION_CHANGED",
+        "The skill selected for this run is no longer available.",
+        ctx.correlationId,
+      ),
+    };
+  }
+  logMarkdownSkillOperation(ctx.correlationId, "selection-read", "completed", 200);
+  return undefined;
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -411,6 +449,8 @@ export async function handleCreateRun(
   if (unregistered !== null) {
     return unregistered;
   }
+  const skillRefusal = rejectUnavailableRunSkill(ctx, governed, deps);
+  if (skillRefusal !== undefined) return skillRefusal;
   const model = resolveRunModel(governed, deps);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
@@ -915,6 +955,7 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
     deps.redactor,
     record.governance,
     record.runId,
+    deps.store.markdownSkills,
   );
   record.applyReport = report;
   record.appliedAt = Date.now();

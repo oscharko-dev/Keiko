@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5f6a512db05709185cf4d3902cd54cc03c324dc51cf443209530a354c010a733" as const;
+  "5390c49025d55b86213abf02672a75545e52327d1c31e766c2164017e9b5ecfd" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -32242,7 +32242,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["skills.library.operation"],
+        state: ["skills.library.operation", "skills.workflow.attached"],
         end: [],
         failure: [],
         loss: [],
@@ -32252,9 +32252,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "skills.library.operation",
           mode: "correlation",
         },
+        {
+          op: "skills.workflow.attached",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["skills.library.operation"],
+      resourceSignals: ["skills.library.operation", "skills.workflow.attached"],
       replayReferences: [],
       operations: [
         {
@@ -32290,6 +32294,73 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["skills.library.operation.lifecycle"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "skills.workflow.attached",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "skillByteCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "skillDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "skillRevision",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "workflow",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["skills.workflow.attached.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -44624,6 +44695,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "server.diagnostic.failure": "bff",
     "server.runtime.shutdown": "lifecycle-crash",
     "skills.library.operation": "bff",
+    "skills.workflow.attached": "bff",
     "speech.stt.language.normalized": "model-gateway",
     "speech.stt.request.completed": "model-gateway",
     "speech.stt.request.dispatch": "model-gateway",

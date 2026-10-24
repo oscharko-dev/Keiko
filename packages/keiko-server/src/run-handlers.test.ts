@@ -148,6 +148,7 @@ interface HandlerDepsOptions {
   readonly managedWorkspaceInstance?: WorkspaceInstance | undefined;
   readonly appSessionPaired?: boolean | undefined;
   readonly maxActiveRuns?: number | undefined;
+  readonly store?: ReturnType<typeof createInMemoryUiStore> | undefined;
 }
 
 const TEST_APP_SESSION: AppSession = {
@@ -179,7 +180,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
 }
 
 function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHandlerDeps {
-  const store = createInMemoryUiStore();
+  const store = options.store ?? createInMemoryUiStore();
   if (options.registerWorkspace !== false) {
     store.createProject(workspace);
   }
@@ -343,6 +344,171 @@ describe("POST /api/runs", () => {
       body: JSON.stringify({ input: {}, modelId: "m" }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/runs carries an explicitly selected private skill (#4025 AC1)", () => {
+  const MARKER = "SYNTHETIC_UNIT_TEST_SKILL_RECEIPT";
+  const SKILL_BODY = `# Test method\nName the generated tests after ${MARKER}.\n`;
+  const DIFF_ANSWER = ["```diff", TEST_DIFF.trimEnd(), "```"].join("\n");
+
+  afterEach(resetServerLogger);
+
+  function skillStore(): {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly skill: { readonly id: string; readonly revision: number; readonly digest: string };
+  } {
+    const store = createInMemoryUiStore();
+    const imported = store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from(SKILL_BODY).toString("base64"),
+    });
+    return {
+      store,
+      skill: { id: imported.id, revision: imported.revision, digest: imported.digest },
+    };
+  }
+
+  /** A model that answers each call in turn and records what reached it. */
+  function scriptedModel(
+    answers: readonly string[],
+    onCall: (index: number) => void = () => undefined,
+  ): { readonly model: ModelPort; readonly sent: string[] } {
+    const sent: string[] = [];
+    const model: ModelPort = {
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        onCall(sent.length);
+        sent.push(JSON.stringify(request.messages));
+        return fakeModel(answers[sent.length - 1] ?? DIFF_ANSWER).call(request, signal);
+      },
+    };
+    return { model, sent };
+  }
+
+  async function launch(skill?: object, taskType?: string): Promise<Response> {
+    return fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        ...(taskType === undefined
+          ? {
+              workflowId: "unit-test-generation",
+              input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
+            }
+          : { taskType, input: { filePath: "src/add.ts", workspaceRoot: workspace } }),
+        modelId: "test-model",
+        ...(skill === undefined ? {} : { skill }),
+      }),
+    });
+  }
+
+  const markers = (sent: readonly string[]): number[] =>
+    sent.map((messages) => messages.split(MARKER).length - 1);
+
+  it("sends the selected skill once in every model call, a repair after a rejected patch included", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { store, skill } = skillStore();
+    const { model, sent } = scriptedModel(["no patch in this answer", DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch(skill);
+    expect(res.status).toBe(202);
+    const { runId } = (await res.json()) as CreateResponse;
+    await awaitTerminal(runId);
+
+    expect(markers(sent)).toEqual([1, 1]);
+    expect(registry.get(runId)?.appliable?.markdownSkill).toEqual(skill);
+    expect(JSON.stringify(registry.get(runId)?.report)).not.toContain(MARKER);
+    const attached = sink.events.filter((event) => event.op === "skills.workflow.attached");
+    expect(attached.map((event) => event.extra?.phase)).toEqual(["attached", "attached"]);
+    expect(attached[0]?.extra).toMatchObject({ runId, workflow: "unit-tests" });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+  });
+
+  it("sends no skill text for a run launched without a selection", async () => {
+    const { store } = skillStore();
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch();
+    const { runId } = (await res.json()) as CreateResponse;
+    await awaitTerminal(runId);
+
+    expect(markers(sent)).toEqual([0]);
+    expect(sent[0]).not.toContain("Selected skill instructions");
+  });
+
+  it("refuses the launch when the selected skill is already gone, before any model call", async () => {
+    const { store, skill } = skillStore();
+    store.markdownSkills.delete(skill.id, skill.revision);
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch(skill);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: { code: "SKILL_SELECTION_CHANGED" } });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("fails the run, unapplied, when the skill is deleted after its first model call", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { store, skill } = skillStore();
+    const { model, sent } = scriptedModel(["no patch in this answer", DIFF_ANSWER], (index) => {
+      if (index === 0) store.markdownSkills.delete(skill.id, skill.revision);
+    });
+    await start(model, { store });
+
+    const res = await launch(skill);
+    const { runId } = (await res.json()) as CreateResponse;
+    await awaitTerminal(runId);
+
+    expect(sent).toHaveLength(1);
+    const record = registry.get(runId);
+    expect(record?.status).toBe("failed");
+    expect(record?.appliable).toBeUndefined();
+    expect(JSON.stringify(record?.report)).toContain("no longer available");
+    expect(
+      sink.events.find(
+        (event) => event.op === "skills.workflow.attached" && event.extra?.phase === "refused",
+      )?.extra,
+    ).toMatchObject({ runId, reason: "skill-unavailable" });
+  });
+
+  it.each([
+    [
+      "a run kind that builds no prompt of its own",
+      { id: "x", revision: 1, digest: "a".repeat(64) },
+      "explain-plan",
+    ],
+    ["a malformed selection", { id: "x", revision: 0, digest: "a".repeat(64) }, undefined],
+    [
+      "a selection with an extra field",
+      { id: "x", revision: 1, digest: "a".repeat(64), body: "x" },
+      undefined,
+    ],
+  ])("refuses %s", async (_label, skill, taskType) => {
+    const { store } = skillStore();
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch(skill, taskType);
+
+    expect(res.status).toBe(400);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("reads no private skill without the paired app session", async () => {
+    const { store, skill } = skillStore();
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store, appSessionPaired: false });
+
+    const res = await launch(skill);
+
+    expect(res.status).toBe(404);
+    expect(sent).toHaveLength(0);
   });
 });
 
@@ -642,6 +808,60 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     expect(res.status).toBe(200);
     const json = (await res.json()) as { report: { status: string } };
     expect(["completed", "dry-run"]).toContain(json.report.status);
+  }, 60_000);
+
+  it("carries the dry run's selected skill into the gated apply, the same revision (#4025 AC1)", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-skill-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    const marker = "SYNTHETIC_APPLY_SKILL_RECEIPT";
+    const store = createInMemoryUiStore();
+    const imported = store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from(`# Apply method\n${marker}\n`).toString("base64"),
+    });
+    const sent: string[] = [];
+    const delegate = fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"));
+    await start(
+      {
+        call: (request, signal): ReturnType<ModelPort["call"]> => {
+          sent.push(JSON.stringify(request.messages));
+          return delegate.call(request, signal);
+        },
+      },
+      { store },
+    );
+    const created = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        workflowId: "unit-test-generation",
+        input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
+        modelId: "test-model",
+        skill: { id: imported.id, revision: imported.revision, digest: imported.digest },
+      }),
+    });
+    const { runId } = (await created.json()) as CreateResponse;
+    await awaitTerminal(runId);
+    const dryRunCalls = sent.length;
+    store.markdownSkills.replace(imported.id, imported.revision, {
+      fileName: "method.md",
+      contentBase64: Buffer.from("# Apply method\nA REPLACED METHOD.\n").toString("base64"),
+    });
+
+    const res = await fetch(`${base()}/api/runs/${runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(res.status).toBe(200);
+    const applyCalls = sent.slice(dryRunCalls);
+    expect(applyCalls.length).toBeGreaterThan(0);
+    for (const messages of applyCalls) {
+      expect(messages.split(marker).length - 1).toBe(1);
+      expect(messages).not.toContain("A REPLACED METHOD");
+    }
   }, 60_000);
 
   it("denies an exhausted apply budget before any downstream model call", async () => {

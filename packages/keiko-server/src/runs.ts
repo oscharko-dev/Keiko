@@ -6,6 +6,7 @@
 // registry is created via `createRunRegistry` and hung off the handler deps, never a module global,
 // so each server instance (and each test) owns an isolated registry with no cross-talk.
 
+import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { AgentRunGovernanceBinding } from "./agent-run-governance.js";
 import type { QueueEventSink } from "./sink.js";
@@ -21,6 +22,8 @@ export interface AppliableSnapshot {
   readonly payload: unknown;
   readonly limits: Record<string, unknown> | undefined;
   readonly governedHandoff?: WorkflowHandoffRequest | undefined;
+  // The skill the dry run was bound to (#4025 AC1); the gated apply carries the same revision.
+  readonly markdownSkill?: MarkdownSkillReference | undefined;
 }
 
 export interface RunRecord {

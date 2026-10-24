@@ -14,6 +14,7 @@ import type {
   VoiceTranscriptSource,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 
 export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
@@ -49,6 +50,9 @@ export interface RunRequest {
   // Present only after server-side governance succeeds: the content-free audit record of the spoken
   // action that governed this run, threaded into evidence.
   readonly governedHandoffVoiceAction?: SpokenActionAuditRecord | undefined;
+  // The private Markdown skill the human selected for this run (#4025 AC1): its identity only,
+  // never its text. The server resolves and binds it when the run begins.
+  readonly markdownSkill?: MarkdownSkillReference | undefined;
 }
 
 export interface RunRequestError {
@@ -480,7 +484,43 @@ function parseGovernedHandoffMetadata(
   return { governedHandoff, governedHandoffSourceGroundedRunId, governedHandoffVoiceOrigin };
 }
 
-function buildRunRequest(core: RunRequestCore, metadata: GovernedHandoffMetadata): RunRequest {
+const MARKDOWN_SKILL_REFERENCE_KEYS: ReadonlySet<string> = new Set(["id", "revision", "digest"]);
+const MARKDOWN_SKILL_DIGEST = /^[0-9a-f]{64}$/u;
+
+function isMarkdownSkillReferenceShape(value: unknown): value is MarkdownSkillReference {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) => MARKDOWN_SKILL_REFERENCE_KEYS.has(key)) &&
+    typeof value.id === "string" &&
+    isBoundedNonNegativeInteger(value.revision, Number.MAX_SAFE_INTEGER) &&
+    value.revision >= 1 &&
+    typeof value.digest === "string" &&
+    MARKDOWN_SKILL_DIGEST.test(value.digest)
+  );
+}
+
+// Only the governed workflows, which build their own prompts, take a selected skill; any other
+// kind refuses it instead of ignoring a selection the human made.
+function parseMarkdownSkill(
+  parsed: Record<string, unknown>,
+  kind: RunKind,
+): MarkdownSkillReference | undefined | RunRequestError {
+  const value = parsed.skill;
+  if (value === undefined) return undefined;
+  if (kind !== "unit-tests" && kind !== "bug-investigation") {
+    return badRequest("skill is accepted only for unit-test generation and bug investigation.");
+  }
+  if (!isMarkdownSkillReferenceShape(value)) {
+    return badRequest("skill must name a skill identity, revision and digest.");
+  }
+  return { id: value.id, revision: value.revision, digest: value.digest };
+}
+
+function buildRunRequest(
+  core: RunRequestCore,
+  metadata: GovernedHandoffMetadata,
+  markdownSkill: MarkdownSkillReference | undefined,
+): RunRequest {
   return {
     kind: core.kind,
     modelId: core.modelId,
@@ -501,6 +541,7 @@ function buildRunRequest(core: RunRequestCore, metadata: GovernedHandoffMetadata
     ...(metadata.governedHandoffVoiceOrigin === undefined
       ? {}
       : { governedHandoffVoiceOrigin: metadata.governedHandoffVoiceOrigin }),
+    ...(markdownSkill === undefined ? {} : { markdownSkill }),
   };
 }
 
@@ -518,5 +559,9 @@ export function parseRunRequest(raw: string): RunRequest | RunRequestError {
   if (isRunRequestError(metadata)) {
     return metadata;
   }
-  return buildRunRequest(core, metadata);
+  const markdownSkill = parseMarkdownSkill(parsed, core.kind);
+  if (isRunRequestError(markdownSkill)) {
+    return markdownSkill;
+  }
+  return buildRunRequest(core, metadata, markdownSkill);
 }

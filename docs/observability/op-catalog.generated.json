@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5f6a512db05709185cf4d3902cd54cc03c324dc51cf443209530a354c010a733",
+    "catalogDigest": "5390c49025d55b86213abf02672a75545e52327d1c31e766c2164017e9b5ecfd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -34925,6 +34925,74 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "skills.workflow.attached",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "markdown-skill-log.logMarkdownSkillWorkflowAttachment",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "runId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 128
+          },
+          "workflow": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["unit-tests", "bug-investigation"]
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["attached", "refused"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["skill-unavailable", "authority-invalid"]
+          },
+          "skillRevision": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "skillDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "skillByteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["markdown-skill-library"],
+        "proofIds": ["skills.workflow.attached.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:76",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:131"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "speech.stt.language.normalized",
         "category": "gateway",
         "owner": "keiko-model-gateway",
@@ -35394,8 +35462,8 @@
         "failureClasses": ["sse-resume-decision"],
         "proofIds": ["sse.run-events.resume.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/run-handlers.ts:56",
-        "emitterSites": ["packages/keiko-server/src/run-handlers.ts:602"]
+        "registrationSite": "packages/keiko-server/src/run-handlers.ts:58",
+        "emitterSites": ["packages/keiko-server/src/run-handlers.ts:642"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39870,17 +39938,24 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["skills.library.operation"],
+          "state": ["skills.library.operation", "skills.workflow.attached"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["skills.library.operation"],
+        "requiredCausalOperations": ["skills.library.operation", "skills.workflow.attached"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["skills.library.operation"],
+        "requiredProofOperations": ["skills.library.operation", "skills.workflow.attached"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["skills.library.operation"],
-        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredResourceOperations": ["skills.library.operation", "skills.workflow.attached"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state",
+          "opaque-id"
+        ],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -82645,7 +82720,7 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["skills.library.operation"],
+            "state": ["skills.library.operation", "skills.workflow.attached"],
             "end": [],
             "failure": [],
             "loss": []
@@ -82654,10 +82729,14 @@
             {
               "op": "skills.library.operation",
               "mode": "correlation"
+            },
+            {
+              "op": "skills.workflow.attached",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["skills.library.operation"],
+          "resourceSignals": ["skills.library.operation", "skills.workflow.attached"],
           "replayReferences": [],
           "operations": [
             {
@@ -82693,6 +82772,73 @@
                 "causeChain": false
               },
               "proofIds": ["skills.library.operation.lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "skills.workflow.attached",
+              "owner": "keiko-server",
+              "category": "gateway",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "runId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "skillByteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "skillDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "skillRevision",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "workflow",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["skills.workflow.attached.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -99676,9 +99822,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "skills.workflow.attached",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:79",
+      "package": "keiko-server"
+    },
+    {
       "op": "sse.run-events.resume",
       "category": "http",
-      "site": "packages/keiko-server/src/run-handlers.ts:59",
+      "site": "packages/keiko-server/src/run-handlers.ts:61",
       "package": "keiko-server"
     },
     {
@@ -100194,7 +100346,7 @@
     {
       "op": "workflow.network-isolation-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/run-engine.ts:270",
+      "site": "packages/keiko-server/src/run-engine.ts:322",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -100852,6 +101004,7 @@
     "server.request",
     "server.runtime.shutdown",
     "skills.library.operation",
+    "skills.workflow.attached",
     "speech.stt.language.normalized",
     "speech.stt.request.completed",
     "speech.stt.request.dispatch",

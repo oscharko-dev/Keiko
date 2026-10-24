@@ -509,6 +509,18 @@ captured session identity and rotation, including retries. Missing or revoked au
 without dispatching the skill. Ordinary no-skill Chat remains available without pairing; rejected
 ordinary requests do not extend a session's idle lifetime merely through request parsing.
 
+The governed unit-test-generation and bug-investigation workflows take an explicitly selected
+skill on `POST /api/runs` (#4025 AC1): the request names only its identity, revision and digest,
+never its text, and is not inferred from any Chat selection. Launch reads it only from the paired
+session and refuses one that is already gone (409 `SKILL_SELECTION_CHANGED`). The run binds that
+exact revision. Every model call, including a repair after a rejected patch and the gated apply,
+carries its instructions once ahead of the first user message, outside the run's budget port so
+they are counted with the prompt. Every physical attempt, a gateway retry included, resolves the
+revision again and asks the run's own Authority Envelope again; a deleted or corrupted revision or
+a revoked run sends nothing further and fails the run without an appliable patch. The body never
+enters the workflow input, the report or evidence; `skills.workflow.attached` records the identity,
+byte size and closed refusal reason only.
+
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains
 browser hygiene, not a security boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed

@@ -152,6 +152,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
   "agentLauncher.selectRepositoryFirst":
     "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
+  "agentLauncher.skill": "Skill",
+  "agentLauncher.skillNone": "Kein Skill",
+  "agentLauncher.skillNote":
+    "Optional. Ein privater Markdown-Skill leitet jeden Modellaufruf dieses Laufs an. Er gewährt keine zusätzlichen Berechtigungen.",
+  "agentLauncher.skillUnavailable":
+    "Private Skills konnten nicht geladen werden. Der Lauf startet ohne Skill.",
   "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
   "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
   "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",

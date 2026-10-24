@@ -154,6 +154,7 @@ import type {
   GitEditorDiffScope,
   GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
+import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
@@ -898,6 +899,8 @@ export interface StartRunInput {
   limits?: Record<string, unknown>;
   governedHandoff?: Record<string, unknown>;
   governedHandoffSourceGroundedRunId?: string;
+  // The private Markdown skill the human selected for a governed workflow run (#4025 AC1).
+  skill?: MarkdownSkillReference;
   voiceOrigin?: {
     readonly profile: string;
     readonly turnIndex: number;
