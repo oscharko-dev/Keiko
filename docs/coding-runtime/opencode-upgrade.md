@@ -71,8 +71,23 @@ Rolling back means reverting the bump commits. The previous pin, its fixtures an
 `portable-runtime-approvals.json` entries come back with them, and nothing needs migrating:
 
 - The runtime's own state, `OPENCODE_DB`, its snapshots and the run's private configuration, lives
-  under the run's private state root. It is removed when the run is disposed (`disposeRun` in
-  `opencodeRuntimeComposition.ts`), so one OpenCode version never reads state another version wrote.
+  under the run's private state root and is removed when the run is disposed (`disposeRun` in
+  `opencodeRuntimeComposition.ts`).
+- A native run that settled normally may leave one retained copy of its session database for the
+  next run of the same Coding History task (#3904, `opencodeSessionRetention.ts`). The copy is
+  compacted and audited first: it must hold exactly that one session and no saved grant, credential,
+  queued input or staged undo. It lives in the server's state directory, never in a workspace. It
+  is bound to the task, a digest of the workspace identity, the pinned runtime version and the
+  model window it was built under, and bounded in size, number and age (14 days).
+- A later run checks the entry out only if every binding still matches. After an upgrade or a
+  rollback the version differs, so the entry is refused (`version-changed`) and removed. A changed
+  workspace (`workspace-changed`), an expired entry, a failed integrity or audit check and an
+  unknown schema are refused and removed the same way. A smaller model window (`window-shrunk`)
+  is refused but kept, since a larger window can still use it. One OpenCode version therefore
+  never reads a session database another version wrote.
+- A refused or missing entry is never an error for the task: the run starts a fresh native session
+  with the task's Coding History as context, and `coding-runtime.session-continuity` records the
+  closed reason.
 - Tasks, Coding History, selected models, workspace bindings and credentials are Keiko's own,
   version-independent state. An upgrade or a rollback leaves them as they are.
 - A runtime that presents an unpinned version, or a digest that differs from its pin, is refused
