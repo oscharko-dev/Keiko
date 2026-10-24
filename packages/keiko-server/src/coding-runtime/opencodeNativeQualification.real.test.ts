@@ -511,7 +511,8 @@ async function withRun(
   } finally {
     await stopChild(launched.child);
     await Promise.all([closeStub(gateway), closeStub(facade)]);
-    rmSync(fixture.root, { recursive: true, force: true });
+    // The runtime may still be flushing its state when the child exits; retry the removal.
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
