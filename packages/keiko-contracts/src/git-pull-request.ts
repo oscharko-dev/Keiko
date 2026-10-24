@@ -19,6 +19,10 @@
 // title/body DRAFT it returns is user-editable and is NEVER persisted to evidence (evidence carries only
 // the titleByteLength / bodyByteLength already defined on the GitDeliveryPr*Inputs).
 
+import {
+  hasGitReadinessForbiddenAdvisory,
+  isGitReadinessSeverityRanked,
+} from "./git-delivery-readiness-validation.js";
 import { isGitDeliveryRiskClass } from "./git-delivery.js";
 import type {
   GitDeliveryExecutionErrorCode,
@@ -650,38 +654,6 @@ function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[])
 const CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT: ReadonlySet<GitPullRequestReadinessBlockerCode> =
   new Set(["draft-pr", "checks-pending", "approval-insufficient"]);
 
-function hasIllegitimateAdvisoryBlocker(
-  blockers: readonly GitPullRequestReadinessBlocker[],
-): boolean {
-  const extent = blockers.length;
-  for (let index = 0; index < extent; index += 1) {
-    const blocker = blockers[index];
-    if (
-      blocker?.severity === "advisory" &&
-      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code)
-    )
-      return true;
-  }
-  return false;
-}
-
-// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
-// been seen, no blocking entry may follow.
-function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
-  let sawAdvisory = false;
-  const extent = blockers.length;
-  for (let index = 0; index < extent; index += 1) {
-    const blocker = blockers[index];
-    if (blocker === undefined) return false;
-    if (blocker.severity === "advisory") {
-      sawAdvisory = true;
-    } else if (sawAdvisory) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // Same gap as isGitMergeReadinessSummary: the documented invariants (reviewReady implies the object
 // exists and carries no blocking blocker; blocking entries precede advisory ones) were unchecked, so
 // a summary could assert reviewReady while carrying a blocking blocker.
@@ -695,8 +667,8 @@ export function isGitPullRequestReadinessSummary(
     isBoolean(value.reviewReady) &&
     isBlockerArray(value.blockers) &&
     (!value.reviewReady || (value.objectExists && !hasBlockingBlocker(value.blockers))) &&
-    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
-    isSeverityRanked(value.blockers)
+    !hasGitReadinessForbiddenAdvisory(value.blockers, CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT) &&
+    isGitReadinessSeverityRanked(value.blockers)
   );
 }
 

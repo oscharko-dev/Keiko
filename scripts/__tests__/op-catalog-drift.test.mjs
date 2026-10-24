@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { format } from "prettier";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -1149,6 +1150,23 @@ describe("op catalog drift", () => {
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
+  it(
+    "pins the complete operation source to the canonical producer",
+    async () => {
+      const regenerated = await format(runtimeOperationsModule(generateCurrentTypedRegistry()), {
+        parser: "typescript",
+        printWidth: 100,
+        tabWidth: 2,
+      });
+      const checkedIn = readFileSync(
+        join(repoRoot, "packages/keiko-contracts/src/activity-log-operations.generated.ts"),
+        "utf8",
+      );
+      expect(checkedIn).toBe(regenerated);
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
+
   it("matches the checked-in file in generated order", async () => {
     const regenerated = await formatGeneratedJson(generateCurrentOpCatalog());
     const checkedIn = await canonicalGeneratedJsonBytes(readFileSync(CATALOG_PATH, "utf8"));

@@ -19,6 +19,10 @@
 // from counts, typed enums, and booleans (the provider-state interfaces), never from raw diffs, commit
 // bodies, or provider error envelopes.
 
+import {
+  hasGitReadinessForbiddenAdvisory,
+  isGitReadinessSeverityRanked,
+} from "./git-delivery-readiness-validation.js";
 import type {
   GitDeliveryExecutionErrorCode,
   GitDeliveryMergeBlockReason,
@@ -553,36 +557,6 @@ const CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT: ReadonlySet<GitMergeReadinessBlocke
   "checks-failing",
 ]);
 
-function hasIllegitimateAdvisoryBlocker(blockers: readonly GitMergeReadinessBlocker[]): boolean {
-  const extent = blockers.length;
-  for (let index = 0; index < extent; index += 1) {
-    const blocker = blockers[index];
-    if (
-      blocker?.severity === "advisory" &&
-      !CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT.has(blocker.code)
-    )
-      return true;
-  }
-  return false;
-}
-
-// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
-// been seen, no blocking entry may follow.
-function isSeverityRanked(blockers: readonly { readonly severity: string }[]): boolean {
-  let sawAdvisory = false;
-  const extent = blockers.length;
-  for (let index = 0; index < extent; index += 1) {
-    const blocker = blockers[index];
-    if (blocker === undefined) return false;
-    if (blocker.severity === "advisory") {
-      sawAdvisory = true;
-    } else if (sawAdvisory) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // The two documented invariants of GitMergeReadinessSummary — `mergeable` is true iff there are no
 // BLOCKING blockers, and every blocking entry precedes every advisory one — were documented but not
 // checked, so a summary crossing a package or process boundary could assert `mergeable: true` while
@@ -595,8 +569,8 @@ export function isGitMergeReadinessSummary(value: unknown): value is GitMergeRea
     isBoolean(value.mergeable) &&
     isBlockerArray(value.blockers) &&
     value.mergeable === !hasBlockingBlocker(value.blockers) &&
-    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
-    isSeverityRanked(value.blockers)
+    !hasGitReadinessForbiddenAdvisory(value.blockers, CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT) &&
+    isGitReadinessSeverityRanked(value.blockers)
   );
 }
 
