@@ -40,6 +40,9 @@ interface FakeRuntime {
   active: (readonly string[])[];
   failSessions: boolean;
   onInterrupt: (id: string) => void;
+  /** The background shell jobs the runtime lists as running (#3901 AC3). */
+  shells: { id: string; sessionId?: string }[];
+  readonly removed: string[];
 }
 
 function fakeRuntime(sessions: readonly SessionRecord[], active: readonly string[]): FakeRuntime {
@@ -50,7 +53,15 @@ function fakeRuntime(sessions: readonly SessionRecord[], active: readonly string
     active: [active],
     failSessions: false,
     onInterrupt: () => undefined,
+    shells: [],
+    removed: [],
     client: {
+      shells: () => Promise.resolve(runtime.shells.map((shell) => ({ ...shell }))),
+      removeShell: (id) => {
+        runtime.removed.push(id);
+        runtime.shells = runtime.shells.filter((shell) => shell.id !== id);
+        return Promise.resolve();
+      },
       active: () => {
         const ids = runtime.active.length > 1 ? runtime.active.shift() : runtime.active[0];
         return Promise.resolve(
@@ -200,7 +211,7 @@ describe("admitting native children", () => {
       activityLog: undefined,
     });
     expect(runtime.interrupts).toContain("ses_late");
-    expect(outcome).toEqual({ interruptedChildren: 1, settled: true });
+    expect(outcome).toEqual({ interruptedChildren: 1, stoppedShells: 0, settled: true });
   });
 
   it("throws when the session list cannot be read, so nothing is admitted unproven", async () => {
@@ -228,12 +239,74 @@ describe("admitting native children", () => {
   });
 });
 
+// #3901 AC3: a background shell job outlives the turn that started it; the run is held while one of
+// its jobs runs, and stopping the turn stops the run's jobs.
+describe("the run's background shell jobs", () => {
+  it("holds the run while its job runs and releases it once the job ended", async () => {
+    const runtime = fakeRuntime([], []);
+    runtime.shells = [{ id: "sh_job", sessionId: PRIMARY }];
+    const log = createBufferedServerLogSink();
+    const status = createNativeTreeStatusPort({
+      runId: "run-tree",
+      client: runtime.client,
+      tree: () => tree(),
+      activityLog: log,
+    });
+    const signal = new AbortController().signal;
+
+    await expect(status(PRIMARY, signal)).resolves.toBe("held");
+    runtime.shells = [];
+    await expect(status(PRIMARY, signal)).resolves.toBe("terminal");
+    expect(log.events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ phase: "held", activeShellCount: 1, activeChildCount: 0 }),
+      expect.objectContaining({ phase: "released" }),
+    ]);
+  });
+
+  it("holds the run for a job of an owned child or of no named session, never for another tree's", async () => {
+    const runtime = fakeRuntime([], []);
+    runtime.shells = [
+      { id: "sh_child", sessionId: "ses_child" },
+      { id: "sh_unnamed" },
+      { id: "sh_other", sessionId: "ses_other" },
+    ];
+
+    await expect(
+      nativeTreeActivity(runtime.client, tree(["ses_child"]), undefined),
+    ).resolves.toMatchObject({ activeShells: ["sh_child", "sh_unnamed"] });
+    runtime.shells = [{ id: "sh_other", sessionId: "ses_other" }];
+    await expect(nativeTreeActivity(runtime.client, tree(), undefined)).resolves.toMatchObject({
+      activeShells: [],
+    });
+  });
+
+  it("stops the run's jobs when the turn is interrupted, once each, and records them", async () => {
+    const runtime = fakeRuntime([], []);
+    runtime.shells = [{ id: "sh_one", sessionId: PRIMARY }, { id: "sh_two" }];
+    const log = createBufferedServerLogSink();
+
+    const outcome = await interruptNativeTree(runtime.client, tree(), {
+      signal: new AbortController().signal,
+      pause: instantPause,
+      runId: "run-tree",
+      activityLog: log,
+    });
+
+    expect(outcome).toEqual({ interruptedChildren: 0, stoppedShells: 2, settled: true });
+    expect(runtime.removed).toEqual(["sh_one", "sh_two"]);
+    expect(log.events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ phase: "interrupted", activeShellCount: 2, activeChildCount: 0 }),
+    ]);
+  });
+});
+
 describe("the run's native session tree activity", () => {
   it("reports an owned child that runs while the primary is idle", async () => {
     const runtime = fakeRuntime([session("ses_a", PRIMARY)], ["ses_a"]);
     await expect(nativeTreeActivity(runtime.client, tree(), undefined)).resolves.toEqual({
       primaryActive: false,
       activeChildren: ["ses_a"],
+      activeShells: [],
       ownedChildCount: 1,
     });
   });
@@ -356,7 +429,7 @@ describe("interrupting the run's native session tree", () => {
     const settings = options();
     const outcome = await interruptNativeTree(runtime.client, run, settings);
     expect(runtime.interrupts).toEqual([PRIMARY, "ses_a", "ses_b"]);
-    expect(outcome).toEqual({ interruptedChildren: 2, settled: true });
+    expect(outcome).toEqual({ interruptedChildren: 2, stoppedShells: 0, settled: true });
     const line = settings.activityLog.events.find(
       (event) => event.op === "coding-runtime.native-session-tree.observed",
     );
@@ -412,7 +485,7 @@ describe("interrupting the run's native session tree", () => {
       if (id === "ses_a") stop.abort();
     };
     const outcome = await interruptNativeTree(runtime.client, tree(), options(stop.signal));
-    expect(outcome).toEqual({ interruptedChildren: 1, settled: false });
+    expect(outcome).toEqual({ interruptedChildren: 1, stoppedShells: 0, settled: false });
   });
 
   it("fails when an interrupt request fails", async () => {

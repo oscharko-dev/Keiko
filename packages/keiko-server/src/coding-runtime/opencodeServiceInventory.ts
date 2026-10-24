@@ -652,14 +652,9 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     "not-yet-implemented",
     3901,
     ["T13"],
-    [
-      "session.background",
-      "shell.list",
-      "shell.create",
-      "shell.get",
-      "shell.remove",
-      "shell.output",
-    ],
+    // `shell.list` and `shell.remove` are admitted (#3901 AC3): the run is held while its
+    // background jobs run and stops them with its turn.
+    ["session.background", "shell.create", "shell.get", "shell.output"],
   ),
   refused("not-yet-implemented", 3900, ["C08"], ["reference.list"]),
   refused(

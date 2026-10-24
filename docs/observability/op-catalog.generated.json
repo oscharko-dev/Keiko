@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1bff526771daf995b996cbef7f82615dbf9ebe8b28538deb934b88540d32f00a",
+    "catalogDigest": "6728e8d6242e1cda1f3a097c9bcfdc54aa908d6ace2305ee32830a778f77f676",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8728,6 +8728,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "activeShellCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -8736,9 +8741,9 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.native-session-tree.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:33",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:34",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:311"
+          "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:354"
         ]
       },
       {
@@ -61932,6 +61937,12 @@
                   "required": true
                 },
                 {
+                  "name": "activeShellCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "ownedChildCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -98433,7 +98444,7 @@
     {
       "op": "coding-runtime.native-session-tree.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:36",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeSessionTree.ts:37",
       "package": "keiko-server"
     },
     {

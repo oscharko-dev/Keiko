@@ -27,9 +27,10 @@ const INACTIVE_READS_TO_SETTLE = 2;
 
 // The run's native session tree (a primary session and the subagent sessions under it). A line is
 // written when the tree's state changes, never per poll: `held` is the moment the run's primary went
-// idle while an owned child session was still active, so the run was kept alive; `released` the
-// moment that stopped being true (the child ended, or its notification started the primary again);
-// `interrupted` a stop or turn replacement that sent interrupts to owned children.
+// idle while an owned child session or a background shell job of the run was still active, so the
+// run was kept alive; `released` the moment that stopped being true (the child or job ended, or its
+// notification started the primary again); `interrupted` a stop or turn replacement that sent
+// interrupts to owned children or stopped the run's background jobs.
 const NATIVE_SESSION_TREE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -50,6 +51,9 @@ const NATIVE_SESSION_TREE_OPERATION = defineActivityLogOperation({
     // The owned children active when the line was written; for `interrupted`, the ones interrupted.
     activeChildCount: { type: "integer", dataClass: "count", required: true },
     ownedChildCount: { type: "integer", dataClass: "count", required: true },
+    // #3901 AC3: the run's background shell jobs running when the line was written; for
+    // `interrupted`, the ones stopped. Absent when there were none.
+    activeShellCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -64,7 +68,7 @@ type SessionRecord = Readonly<Record<string, unknown>>;
 /** The part of the HTTP client the tree reads and drives. */
 export type NativeSessionTreeClient = Pick<
   OpenCodeV2HttpClient,
-  "active" | "interrupt" | "sessions"
+  "active" | "interrupt" | "sessions" | "shells" | "removeShell"
 >;
 
 /** The run's identity in the tree; `children` is the run's admission cache, shared by reference. */
@@ -74,10 +78,14 @@ export interface NativeSessionTreeRun {
   readonly children: Set<string>;
 }
 
-/** What is running now: the primary, and the owned children among the active sessions. */
+/**
+ * What is running now: the primary, the owned children among the active sessions, and the run's
+ * background shell jobs (#3901 AC3), which outlive the turn that started them.
+ */
 export interface NativeTreeActivity {
   readonly primaryActive: boolean;
   readonly activeChildren: readonly string[];
+  readonly activeShells: readonly string[];
   readonly ownedChildCount: number;
 }
 
@@ -162,28 +170,44 @@ export async function classifyNativeSession(
  * active session that is not the run's is ignored: it cannot extend the run. A failed read throws.
  */
 export async function nativeTreeActivity(
-  client: Pick<NativeSessionTreeClient, "active" | "sessions">,
+  client: Pick<NativeSessionTreeClient, "active" | "sessions" | "shells">,
   run: NativeSessionTreeRun,
   signal: AbortSignal | undefined,
 ): Promise<NativeTreeActivity> {
   const active = await client.active(signal);
   const others = Object.keys(active).filter((id) => id !== run.sessionId && SESSION_ID.test(id));
   const activeChildren = await admitNativeChildren(client, run, others, signal);
+  const shells = await client.shells(run.workspaceRoot, signal);
   return {
     primaryActive: Object.hasOwn(active, run.sessionId),
     activeChildren,
+    // The run's runtime hosts this run alone; a job a session of another tree started is not the
+    // run's, and a job the runtime names no session for is held as the run's.
+    activeShells: shells
+      .filter((shell) => shell.sessionId === undefined || ownedSession(run, shell.sessionId))
+      .map((shell) => shell.id),
     ownedChildCount: run.children.size,
   };
 }
 
-/** A run's tree is terminal only when its primary and every owned child are inactive. */
+function ownedSession(run: NativeSessionTreeRun, sessionId: string): boolean {
+  return sessionId === run.sessionId || run.children.has(sessionId);
+}
+
+/** A run's tree is terminal only when its primary, every owned child and every job are inactive. */
 export function nativeTreeInactive(activity: NativeTreeActivity): boolean {
-  return !activity.primaryActive && activity.activeChildren.length === 0;
+  return (
+    !activity.primaryActive &&
+    activity.activeChildren.length === 0 &&
+    activity.activeShells.length === 0
+  );
 }
 
 export interface NativeTreeInterruptOutcome {
   /** The owned children an interrupt was sent to (each counted once, however often it was sent). */
   readonly interruptedChildren: number;
+  /** The run's background shell jobs stopped (#3901 AC3). */
+  readonly stoppedShells: number;
   /** Whether the whole tree was inactive before the signal ended. */
   readonly settled: boolean;
 }
@@ -212,22 +236,34 @@ export async function interruptNativeTree(
 ): Promise<NativeTreeInterruptOutcome> {
   const { signal, pause } = options;
   await client.interrupt(run.sessionId, signal);
-  const fanOut: FanOutState = { interrupted: new Set(), primaryIdleSeen: false, inactiveReads: 0 };
+  const fanOut: FanOutState = {
+    interrupted: new Set(),
+    stopped: new Set(),
+    primaryIdleSeen: false,
+    inactiveReads: 0,
+  };
   let settled = false;
   while (!signal.aborted && !settled) {
     settled = await fanOutStep(client, run, signal, fanOut);
     if (!settled && !(await pause(signal))) break;
   }
-  if (fanOut.interrupted.size > 0)
+  if (fanOut.interrupted.size > 0 || fanOut.stopped.size > 0)
     recordNativeSessionTree(options.activityLog, options.runId, "interrupted", {
       activeChildCount: fanOut.interrupted.size,
       ownedChildCount: run.children.size,
+      activeShellCount: fanOut.stopped.size,
     });
-  return { interruptedChildren: fanOut.interrupted.size, settled };
+  return {
+    interruptedChildren: fanOut.interrupted.size,
+    stoppedShells: fanOut.stopped.size,
+    settled,
+  };
 }
 
 interface FanOutState {
   readonly interrupted: Set<string>;
+  /** The run's background shell jobs already stopped. */
+  readonly stopped: Set<string>;
   // The primary is interrupted again only when it came back after being seen idle, which is the
   // notification turn of a child the loop just ended; an execution still running from the first
   // interrupt is not asked twice.
@@ -253,6 +289,10 @@ async function fanOutStep(
   const pending = activity.activeChildren.filter((id) => !fanOut.interrupted.has(id));
   await Promise.all(pending.map((child) => client.interrupt(child, signal)));
   for (const child of pending) fanOut.interrupted.add(child);
+  // A background job outlives an interrupt of its session; stopping the turn stops it too.
+  const jobs = activity.activeShells.filter((id) => !fanOut.stopped.has(id));
+  await Promise.all(jobs.map((id) => client.removeShell(id, run.workspaceRoot, signal)));
+  for (const id of jobs) fanOut.stopped.add(id);
   if (activity.primaryActive && fanOut.primaryIdleSeen) {
     await client.interrupt(run.sessionId, signal);
     fanOut.primaryIdleSeen = false;
@@ -262,7 +302,7 @@ async function fanOutStep(
 
 export interface NativeTreeStatusDeps {
   readonly runId: string;
-  readonly client: Pick<NativeSessionTreeClient, "active" | "sessions">;
+  readonly client: Pick<NativeSessionTreeClient, "active" | "sessions" | "shells">;
   /** The run's tree, for the primary session the adapter asks about. */
   readonly tree: (sessionId: string) => NativeSessionTreeRun;
   readonly activityLog: ServerLogSink | undefined;
@@ -270,9 +310,10 @@ export interface NativeTreeStatusDeps {
 
 /**
  * The run's liveness as the adapter polls it: `activity` while the primary session runs, `held` when
- * it is idle but a session the run owns still runs, and `terminal` only when nothing of the run
- * runs. A background subagent keeps working after its parent went idle, so the parent's idleness
- * alone is not the end of the run; a session that is not the run's never keeps it alive. A line is written when the run starts being held for an owned child and when it
+ * it is idle but a session the run owns or a background shell job of the run still runs, and
+ * `terminal` only when nothing of the run runs. A background subagent or job keeps working after its
+ * parent went idle, so the parent's idleness alone is not the end of the run (#3901 AC3); a session
+ * that is not the run's never keeps it alive. A line is written when the run starts being held for an owned child and when it
  * stops (never per poll). A failed read throws: an unproven state is not a terminal one.
  */
 export function createNativeTreeStatusPort(
@@ -281,13 +322,14 @@ export function createNativeTreeStatusPort(
   let holding = false;
   return async (sessionId, signal) => {
     const activity = await nativeTreeActivity(deps.client, deps.tree(sessionId), signal);
-    const held = !activity.primaryActive && activity.activeChildren.length > 0;
+    const held = !activity.primaryActive && !nativeTreeInactive(activity);
     if (held !== holding) {
       holding = held;
       recordNativeSessionTree(deps.activityLog, deps.runId, held ? "held" : "released", {
         primaryActive: activity.primaryActive,
         activeChildCount: activity.activeChildren.length,
         ownedChildCount: activity.ownedChildCount,
+        activeShellCount: activity.activeShells.length,
       });
     }
     if (activity.primaryActive) return "activity";
@@ -299,6 +341,7 @@ interface NativeSessionTreeFacts {
   readonly primaryActive?: boolean;
   readonly activeChildCount: number;
   readonly ownedChildCount: number;
+  readonly activeShellCount?: number | undefined;
 }
 
 function recordNativeSessionTree(
@@ -316,6 +359,9 @@ function recordNativeSessionTree(
         ...(facts.primaryActive === undefined ? {} : { primaryActive: facts.primaryActive }),
         activeChildCount: facts.activeChildCount,
         ownedChildCount: facts.ownedChildCount,
+        ...(facts.activeShellCount === undefined || facts.activeShellCount === 0
+          ? {}
+          : { activeShellCount: facts.activeShellCount }),
       },
     ),
   );

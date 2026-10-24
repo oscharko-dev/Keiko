@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1bff526771daf995b996cbef7f82615dbf9ebe8b28538deb934b88540d32f00a" as const;
+  "6728e8d6242e1cda1f3a097c9bcfdc54aa908d6ace2305ee32830a778f77f676" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -11349,6 +11349,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "activeShellCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "ownedChildCount",

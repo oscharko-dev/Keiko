@@ -769,6 +769,8 @@ interface StartBridgeControl {
     };
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
+    /** What `GET /api/shell` lists (#3901 AC3); absent lists no running job. */
+    readonly shellResponses?: () => unknown[];
     readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
     readonly questionResponses?: unknown[];
     readonly onQuestionListFetch?: () => Promise<void> | void;
@@ -1316,6 +1318,10 @@ async function startBridgeFixture(
       else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
       return Promise.resolve(v2Envelope({}));
     }
+    // #3901 AC3: the background shell jobs the runtime lists; none unless the control names some.
+    if (path === "/api/shell") {
+      return Promise.resolve(v2Envelope(control?.runControl?.shellResponses?.() ?? []));
+    }
     if (path === "/api/session/active") {
       const statuses = control?.runControl?.statusResponses;
       const value =
@@ -1625,7 +1631,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "64fed78974757f65a486bb3008929416bb88de78e38f12b5b502b0033cc2b400",
+      "4aecad34bc371f218d25084ef92a758ff9981470463fe79ca35b772efe752ef5",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -1741,6 +1747,7 @@ describe("unmounted OpenCode runtime composition", () => {
       if (path === "/api/session/ses_1/message") return Promise.resolve(v2Envelope([]));
       if (path.endsWith("/prompt")) return Promise.resolve(v2Envelope({}));
       if (path.endsWith("/interrupt")) return Promise.resolve(v2Envelope({}));
+      if (path === "/api/shell") return Promise.resolve(v2Envelope([]));
       if (path === "/api/session/active") {
         observePoll?.();
         return Promise.resolve(
@@ -3136,6 +3143,51 @@ describe("private OpenCode run control", () => {
             .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
             .map((event) => event.extra?.phase);
           expect(phases).toEqual(["held", "released"]);
+        },
+      );
+    });
+
+    // #3901 AC3: a background shell job the turn started keeps the run open until it ended.
+    it("keeps the run open while its background shell job runs, and settles once it ended", async () => {
+      let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(
+        0,
+        1,
+      );
+      let shells: unknown[] = [];
+      await withChildren(
+        {
+          runControl: {
+            promptBodies: [],
+            abortSessions: [],
+            statusResponses: [{}],
+            shellResponses: () => shells,
+          },
+          historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+        },
+        async ({ runtime }, activityLog) => {
+          await expect(runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task")).resolves.toBe(
+            true,
+          );
+          // The primary finished its turn; the job it started in the background still runs.
+          shells = [{ id: "sh_job", status: "running", metadata: { sessionID: "ses_tool" } }];
+          history = completedTurnHistory();
+          let settled = false;
+          const terminal = runtime.runPort
+            .waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(10_000))
+            .finally(() => {
+              settled = true;
+            });
+          await new Promise<void>((resolve) => setTimeout(resolve, 700));
+          expect(settled).toBe(false);
+          shells = [];
+          await expect(terminal).resolves.toBe(true);
+          const lines = activityLog.events
+            .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
+            .map((event) => event.extra);
+          expect(lines).toEqual([
+            expect.objectContaining({ phase: "held", activeShellCount: 1 }),
+            expect.objectContaining({ phase: "released" }),
+          ]);
         },
       );
     });

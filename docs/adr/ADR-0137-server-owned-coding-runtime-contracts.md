@@ -1772,8 +1772,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     message from `subagent` and runs the parent again to read it
     (https://opencode.ai/v2/docs/tools/#subagent; pinned by
     `opencodeNativeChildLifecycle.real.test.ts`). The adapter's status port therefore answers for
-    the whole tree: `activity` (the primary runs), `held` (it is idle and an owned child runs) or
-    `terminal`. A success or an interruption settles only when the tree is quiet, confirmed by a
+    the whole tree: `activity` (the primary runs), `held` (it is idle and an owned child runs, or
+    a background shell job of the run runs) or `terminal`. Background jobs are read from the
+    producer's own `shell.list` (`GET /api/shell`, running commands only, each naming the session
+    whose tool started it); a job of the primary, of an owned child or of no named session is the
+    run's (#3901 AC3). A run that started a dev server or a long job in the background therefore
+    stays running until the job ended, and the producer's own notification turn after it is part of
+    the run, instead of settling and reaping a job that was still working. A success or an interruption settles only when the tree is quiet, confirmed by a
     fresh read at the moment of settlement even when a live hint said otherwise; a failed verdict
     ends the run at once, because settling reaps the tree. The history projection closes the gap
     between a child's end and its parent's restart without a clock: an idle message of a parent
@@ -1782,10 +1787,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     projection line); a failed idle stays a terminal failure. A child that never reports is bounded
     by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
     interrupts the primary, then every owned child still running, and the primary again when it
-    came back to read a report, and settles on two consecutive inactive reads; budget exhaustion
+    came back to read a report, stops every background job of the run with `shell.remove`
+    (`DELETE /api/shell/{id}`), and settles on two consecutive inactive reads; budget exhaustion
     and every settled turn reap the whole process tree through the manager. Evidence:
     `coding-runtime.native-session-tree.observed` (`held`, `released`, `interrupted`; counts only,
-    a line per change, never per poll).
+    `activeShellCount` for jobs, a line per change, never per poll).
   - *Questions.* `opencodeNativeQuestions.ts` lists the pending forms of the primary session and of
     its owned children, binds an answer or a rejection to the session that asked, and refuses
     instead of routing a stale id or a form of any other session (another parent chain, outside
@@ -1895,7 +1901,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   24,000 characters of Coding History as hidden context. The pinned 2.0.10 and 2.1.4 producers admit
   `session.fork` (`POST /api/session/{sessionID}/fork`, body `{ before? }` naming a message) and
   `session.remove` (`DELETE /api/session/{sessionID}`); both are in the digest-pinned protocol
-  surface (23 operations). The design keeps authority out of the persisted state:
+  surface (30 operations). The design keeps authority out of the persisted state:
   - **Retention.** When a native run ends `succeeded` through an orderly stop (the manager passes the
     lifecycle settlement only for `stop()`, and the composition retains after the runtime process was
     reaped; a kill, timeout, crash, cancelled or failed run retains nothing) the run's `opencode.db`

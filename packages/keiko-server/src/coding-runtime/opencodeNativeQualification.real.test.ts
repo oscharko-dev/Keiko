@@ -45,6 +45,11 @@ import {
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
+  createNativeTreeStatusPort,
+  interruptNativeTree,
+  type NativeSessionTreeRun,
+} from "./opencodeNativeSessionTree.js";
+import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
@@ -1320,6 +1325,74 @@ describe("pinned native OpenCode shell processes (T13)", () => {
           const orphans = processesCarrying(marker);
           expect(orphans.length).toBeGreaterThan(0);
           expect(orphans.every((entry) => entry.ppid === 1)).toBe(true);
+        });
+      });
+    },
+    120_000,
+  );
+
+  // #3901 AC3: Keiko reads the run's background jobs through the producer's own `shell.list`, so the
+  // run is held while one runs and a turn interrupt stops it with `shell.remove`.
+  const runTree = (run: Run): NativeSessionTreeRun => ({
+    sessionId: run.sessionId,
+    workspaceRoot: run.fixture.workspace,
+    children: new Set(),
+  });
+
+  it.skipIf(skip)(
+    "holds the run's tree while its background job runs and releases it once the job ended",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          await scriptedTurn(run, shell(idleCommand(3, marker), { background: true }));
+          await settledIdle(run);
+          const status = createNativeTreeStatusPort({
+            runId: RUN_ID,
+            client: run.client,
+            tree: () => runTree(run),
+            activityLog: undefined,
+          });
+          const signal = AbortSignal.timeout(60_000);
+          await expect(status(run.sessionId, signal)).resolves.toBe("held");
+          await expect
+            .poll(() => status(run.sessionId, signal), { timeout: 45_000, interval: 250 })
+            .toBe("terminal");
+          await expect(run.client.shells(run.fixture.workspace)).resolves.toEqual([]);
+        });
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "stops the run's background job when its turn is interrupted, leaving no process",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          await scriptedTurn(run, shell(idleCommand(120, marker), { background: true }));
+          await settledIdle(run);
+          await expect(run.client.shells(run.fixture.workspace)).resolves.toHaveLength(1);
+          expect(processesCarrying(marker).length).toBeGreaterThan(0);
+
+          const outcome = await interruptNativeTree(run.client, runTree(run), {
+            signal: AbortSignal.timeout(20_000),
+            pause: (signal) =>
+              new Promise((resolve) => {
+                const timer = setTimeout(() => {
+                  resolve(!signal.aborted);
+                }, 200);
+                signal.addEventListener("abort", () => {
+                  clearTimeout(timer);
+                  resolve(false);
+                });
+              }),
+            runId: RUN_ID,
+            activityLog: undefined,
+          });
+
+          expect(outcome).toMatchObject({ stoppedShells: 1, settled: true });
+          await expect(run.client.shells(run.fixture.workspace)).resolves.toEqual([]);
+          await expect.poll(() => processesCarrying(marker).length, { timeout: 10_000 }).toBe(0);
         });
       });
     },

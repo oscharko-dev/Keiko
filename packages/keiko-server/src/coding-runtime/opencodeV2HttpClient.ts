@@ -208,6 +208,15 @@ export function classifyOpenCodeV2PromptFailure(error: unknown): OpenCodeV2Promp
  * One file a session turn changed, in the closed shape Keiko reads. The runtime's patch text is
  * dropped at this boundary, so a diff can be counted and logged without ever carrying file content.
  */
+/**
+ * A shell command the runtime runs for the workspace (`shell.list`): its id and, when the runtime
+ * records it, the session whose tool started it. Only running commands are listed.
+ */
+export interface OpenCodeV2Shell {
+  readonly id: string;
+  readonly sessionId?: string | undefined;
+}
+
 export interface OpenCodeV2FileDiff {
   readonly file: string;
   readonly status: "added" | "deleted" | "modified";
@@ -350,6 +359,14 @@ export interface OpenCodeV2HttpClient {
   /** Drops a staged revert and re-applies its files (`DELETE .../revert`, `session.revert.clear`). */
   clearRevert(sessionId: string, signal?: AbortSignal): Promise<void>;
   active(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
+  /**
+   * The shell commands the runtime is running now for the workspace (`GET /api/shell`,
+   * `shell.list`; exited commands are not listed). A background job an agent started outlives its
+   * turn, so a run is not over while one of its jobs runs (#3901 AC3).
+   */
+  shells(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Shell[]>;
+  /** Stops and removes one shell command (`DELETE /api/shell/{id}`, `shell.remove`). */
+  removeShell(id: string, directory: string, signal?: AbortSignal): Promise<void>;
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   /** The producer's plugins and their load state (`GET /api/plugin`, operation `plugin.list`). */
   plugins(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
@@ -832,6 +849,28 @@ function safeRequestId(value: string): string {
   return value;
 }
 
+const SHELL_ID = /^sh_[A-Za-z0-9]{1,128}$/u;
+const SHELL_SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
+
+function safeShellId(value: string): string {
+  if (!SHELL_ID.test(value)) throw new Error("opencode-v2-shell-invalid");
+  return value;
+}
+
+/** The running commands of a `shell.list` answer; any other status or shape is not one. */
+function runningShells(entries: readonly Readonly<Record<string, unknown>>[]): OpenCodeV2Shell[] {
+  return entries.flatMap((entry) => {
+    if (entry.status !== "running" || typeof entry.id !== "string" || !SHELL_ID.test(entry.id))
+      return [];
+    const sessionId = record(entry.metadata)?.sessionID;
+    return [
+      typeof sessionId === "string" && SHELL_SESSION_ID.test(sessionId)
+        ? { id: entry.id, sessionId }
+        : { id: entry.id },
+    ];
+  });
+}
+
 function safeFormId(value: string): string {
   if (!/^frm_[A-Za-z0-9_-]{1,251}$/u.test(value)) throw new Error("opencode-v2-form-invalid");
   return value;
@@ -1147,6 +1186,20 @@ export function createOpenCodeV2HttpClient(
     },
     active: async (signal) =>
       objectEnvelope(await request("GET", "/api/session/active", undefined, signal)),
+    shells: async (directory, signal) =>
+      runningShells(
+        arrayEnvelope(
+          await request("GET", `/api/shell?${locationQuery(directory)}`, undefined, signal),
+        ),
+      ),
+    removeShell: async (id, directory, signal): Promise<void> => {
+      await request(
+        "DELETE",
+        `/api/shell/${safeShellId(id)}?${locationQuery(directory)}`,
+        undefined,
+        signal,
+      );
+    },
     permissions: async (signal) =>
       arrayEnvelope(await request("GET", "/api/permission/request", undefined, signal)),
     plugins: async (signal) =>
