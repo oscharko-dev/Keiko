@@ -32,6 +32,10 @@ import type { PortableSidecarRuntimeVerification } from "../update-portable-side
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import {
+  recordNativeGitMetadataResolution,
+  resolveNativeGitMetadata,
+} from "./opencodeNativeGitMetadata.js";
+import {
   devLaneCheckoutRoot,
   npmLanePackageRoot,
   type DevLanePortableOpenCodeRuntime,
@@ -1001,6 +1005,7 @@ function gatewayFilesystem(
               ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH,
               homedir(),
             ),
+            ...nativeGitMetadataReadRoots(input, run),
             // The policy plugin and the private configuration are read-only to the shell.
             protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
             // The plan agent's private notes take no link that could name a workspace file.
@@ -1009,6 +1014,23 @@ function gatewayFilesystem(
         : {}),
     },
   };
+}
+
+/** A linked worktree's proven common Git directory, recorded body-free (#3897 review). */
+function nativeGitMetadataReadRoots(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): { readonly gitMetadataReadRoots?: readonly string[] } {
+  const resolution = resolveNativeGitMetadata(
+    run.context.workspaceRoot,
+    run.resolveWorkspaceRootAccess(),
+  );
+  recordNativeGitMetadataResolution(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    resolution,
+  );
+  return resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots };
 }
 
 function runtimeGatewayConfinement(

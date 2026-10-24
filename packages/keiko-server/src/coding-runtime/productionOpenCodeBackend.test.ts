@@ -1538,7 +1538,11 @@ describe("ripgrep on the OpenCode launch", () => {
       expect(child.SECRET_TOKEN).toBeUndefined();
       expect(result.processEnv?.SECRET_TOKEN).toBe("t0k3n-value");
       expect(result.toolchainReadRoots).toEqual([directory]);
-      expect(result.events).toHaveLength(1);
+      // The launch also records where the workspace's Git metadata lives (#3897 review).
+      expect(result.events.map((event) => event.op)).toEqual([
+        "coding-runtime.ripgrep.resolved",
+        "coding-runtime.git-metadata.resolved",
+      ]);
       expect(result.events[0]).toMatchObject({
         op: "coding-runtime.ripgrep.resolved",
         level: "info",
@@ -1690,7 +1694,11 @@ describe("ripgrep on the OpenCode launch", () => {
         buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
       ).toBe(directory);
       expect(result.toolchainReadRoots).toEqual([directory]);
-      expect(result.events).toHaveLength(1);
+      // The launch also records where the workspace's Git metadata lives (#3897 review).
+      expect(result.events.map((event) => event.op)).toEqual([
+        "coding-runtime.ripgrep.resolved",
+        "coding-runtime.git-metadata.resolved",
+      ]);
       expect(result.events[0]).toMatchObject({
         op: "coding-runtime.ripgrep.resolved",
         level: "info",

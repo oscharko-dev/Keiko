@@ -1144,6 +1144,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/coding-runtime/opencodeNativeContext",
   "keiko-server/coding-runtime/opencodeNativeDeliveryTools",
   "keiko-server/coding-runtime/opencodeNativeEgress",
+  "keiko-server/coding-runtime/opencodeNativeGitMetadata",
   "keiko-server/coding-runtime/opencodeNativeMessageId",
   "keiko-server/coding-runtime/opencodeNativePluginReadiness",
   "keiko-server/coding-runtime/opencodeNativePolicy",

@@ -1562,6 +1562,79 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
     expect(native.profile).toBe("keiko-native");
   });
 
+  // #3897 review: Keiko's managed task workspaces are linked worktrees, whose `.git` file names the
+  // repository's common Git directory outside the workspace. Without that directory native Git
+  // fails with "not a git repository"; with it read-only, the read-only commands work, a write to
+  // it is refused, and the credential names inside it stay unreadable.
+  it.skipIf(!canProveOnThisHost)(
+    "lets native Git read a linked worktree's common directory, read-only, only when it is named",
+    () => {
+      const tree = createNativeProofTree();
+      try {
+        const repository = join(tree.root, "repository");
+        const worktree = join(tree.root, "linked-worktree");
+        const git = (cwd: string, ...args: string[]): void => {
+          const result = spawnSync(gitExecutable, args, {
+            cwd,
+            encoding: "utf8",
+            env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+          });
+          if (result.status !== 0) throw new Error(`git ${args[0] ?? ""} failed`);
+        };
+        mkdirSync(repository);
+        git(repository, "init", "-q", "-b", "main");
+        writeFileSync(join(repository, "app.js"), "module.exports = 1;\n");
+        git(repository, "add", "app.js");
+        git(repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed");
+        git(repository, "worktree", "add", "-q", worktree);
+        writeFileSync(join(repository, ".git", ".env"), "SYNTHETIC_GIT_ENV=1\n");
+        const common = realpathSync(join(repository, ".git"));
+        const linked = { ...tree, workspaceRoot: realpathSync(worktree) };
+        const commands = {
+          status: ["status", "--porcelain=v1"],
+          log: ["log", "-1", "--format=%s"],
+          diff: ["diff", "HEAD"],
+          show: ["show", "--stat", "HEAD"],
+          blame: ["blame", "app.js"],
+        };
+        const probe = factScript({
+          ...Object.fromEntries(
+            Object.entries(commands).map(([name, args]) => [
+              name,
+              `if (cp.spawnSync(${JSON.stringify(gitExecutable)}, ${JSON.stringify(args)}).status !== 0) throw new Error()`,
+            ]),
+          ),
+          writeCommon: `fs.writeFileSync(${JSON.stringify(join(common, "keiko-probe"))}, "x")`,
+          readCredential: `fs.readFileSync(${JSON.stringify(join(common, ".env"))})`,
+        });
+
+        const without = runNative(linked, nativeConfinement(linked, "loopback-only"), probe);
+        const named = runNative(
+          linked,
+          nativeConfinement(linked, "loopback-only", 1983, { gitMetadataReadRoots: [common] }),
+          probe,
+        );
+
+        expect(JSON.parse(without.stdout)).toMatchObject({
+          status: false,
+          log: false,
+          blame: false,
+        });
+        expect(JSON.parse(named.stdout)).toEqual({
+          status: true,
+          log: true,
+          diff: true,
+          show: true,
+          blame: true,
+          writeCommon: false,
+          readCredential: false,
+        });
+      } finally {
+        tree.cleanup();
+      }
+    },
+  );
+
   it.skipIf(!canProveOnThisHost)(
     "denies an unapproved child executable while permitting the real Apple git chain",
     () => {

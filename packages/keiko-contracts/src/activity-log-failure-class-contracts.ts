@@ -2316,6 +2316,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-runtime-git-metadata-unproven",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.git-metadata.resolved"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.git-metadata.resolved"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.git-metadata.resolved"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.git-metadata.resolved"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-runtime-ripgrep-unavailable",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

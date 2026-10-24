@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "71ac8076f960a48b9d3ad3da411010f2a4ccd7d70e0c3f56954f688514754488" as const;
+  "5341264e741f4024ab568050bea5aa609207a6e153b441c204f6107f41f04c95" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 356,
-  completeClassCount: 356,
+  supportedClassCount: 357,
+  completeClassCount: 357,
   completeness: "complete",
   classes: [
     {
@@ -8112,6 +8112,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.follow-up.dispatch-failed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-git-metadata-unproven",
+      requirementContract: "coding-runtime-git-metadata-unproven",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.git-metadata.resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.git-metadata.resolved",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.git-metadata.resolved"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.git-metadata.resolved",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "binding",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "layout",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "readRootCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.git-metadata.resolved.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -43472,6 +43534,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.event.dropped": "tools-workflows",
     "coding-runtime.event.late-terminal": "tools-workflows",
     "coding-runtime.follow-up.dispatch-failed": "tools-workflows",
+    "coding-runtime.git-metadata.resolved": "tools-workflows",
     "coding-runtime.history": "tools-workflows",
     "coding-runtime.history-projection": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",

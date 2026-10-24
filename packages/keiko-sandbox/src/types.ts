@@ -51,6 +51,14 @@ export interface RuntimeGatewayFilesystem {
    */
   readonly toolchainReadRoots?: readonly string[] | undefined;
   /**
+   * Native profile only: the common Git directory of a workspace that is a linked worktree, which
+   * its `.git` file names outside the workspace. The server proves the reciprocal worktree
+   * registration before it names one; the process reads it, never writes it, so status, diff, log,
+   * show and blame work while staging and delivery stay with Keiko (#3897 review). Absent means the
+   * workspace carries its own Git directory, or none was proven.
+   */
+  readonly gitMetadataReadRoots?: readonly string[] | undefined;
+  /**
    * Native profile only: absolute directories strictly inside the writable roots (the workspace or
    * the private state) that the process may read but never create, change, replace, remove or move
    * entries in, so a shell child cannot rewrite the policy plugin or the configuration the runtime

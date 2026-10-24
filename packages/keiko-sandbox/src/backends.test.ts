@@ -494,6 +494,60 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
   });
 });
 
+describe("native Git metadata read roots (#3897 review)", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+  const filesystem = {
+    workspaceRoot: "/accepted/workspace",
+    workspaceAccess: "read-write" as const,
+    privateStateRoot: "/private/state",
+    runtimeReadRoot: "/immutable/runtime",
+    deniedReadRoots: ["/Users/owner/Library/Application Support/Keiko"],
+  };
+
+  function profile(gitMetadataReadRoots: unknown): string {
+    return (
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/git",
+        { ...filesystem, gitMetadataReadRoots } as never,
+        "keiko-native",
+      ).args[1] ?? ""
+    );
+  }
+
+  it("opens a proven common Git directory read-only, after the denied roots, before credentials", () => {
+    const rules = profile(["/Users/owner/Library/Application Support/Keiko/repos/app/.git"]);
+    const allow =
+      '(allow file-read* (subpath "/Users/owner/Library/Application Support/Keiko/repos/app/.git"))';
+    expect(rules).toContain(allow);
+    const deniedRoots =
+      '(deny file-read* file-write* (subpath "/Users/owner/Library/Application Support/Keiko"))';
+    expect(rules.indexOf(allow)).toBeGreaterThan(rules.indexOf(deniedRoots));
+    // The credential names are denied by the last rule, inside the Git directory too.
+    expect(rules.indexOf(allow)).toBeLessThan(rules.lastIndexOf("(deny file-read"));
+    expect(rules).not.toMatch(/file-write\*[^)]*repos\/app\/\.git/u);
+    expect(rules).toContain('(literal "/Users/owner/Library/Application Support/Keiko/repos/app")');
+  });
+
+  it("adds nothing when no Git metadata root is named", () => {
+    expect(profile(undefined)).not.toContain("repos/app");
+  });
+
+  it.each([
+    ["a top-level directory", ["/Users"]],
+    ["the workspace itself", ["/accepted/workspace"]],
+    ["a directory inside the workspace", ["/accepted/workspace/.git"]],
+    ["an ancestor of the workspace", ["/accepted"]],
+    ["the private state", ["/private/state/git"]],
+    ["a relative path", ["repo/.git"]],
+    ["too many roots", ["/a/1/.git", "/a/2/.git", "/a/3/.git", "/a/4/.git", "/a/5/.git"]],
+  ])("refuses %s as a Git metadata root", (_label, roots) => {
+    expect(() => profile(roots)).toThrow("native-seatbelt-filesystem-invalid");
+  });
+});
+
 describe("Linux native profile (#3897): refused until a Linux boundary is qualified", () => {
   const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
   const nativePlan: IsolatedRunPlan = {

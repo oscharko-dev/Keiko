@@ -96,6 +96,7 @@ const NATIVE_TOOLCHAIN_ROOTS_MAX = 64;
 const NATIVE_DENIED_READ_ROOTS_MAX = 64;
 const NATIVE_PROTECTED_WRITE_ROOTS_MAX = 64;
 const NATIVE_LINK_FREE_WRITE_ROOTS_MAX = 8;
+const NATIVE_GIT_METADATA_READ_ROOTS_MAX = 4;
 
 const GATEWAY_FILESYSTEM_KEYS = new Set([
   "workspaceRoot",
@@ -106,6 +107,7 @@ const GATEWAY_FILESYSTEM_KEYS = new Set([
 const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set([
   "deniedReadRoots",
   "toolchainReadRoots",
+  "gitMetadataReadRoots",
   "protectedWriteRoots",
   "linkFreeWriteRoots",
 ]);
@@ -178,8 +180,27 @@ function validOptionalRoots(value: Record<string, unknown>): boolean {
       NATIVE_TOOLCHAIN_ROOTS_MAX,
       (root) => root.split("/").length > 2,
     ) &&
+    validGitMetadataReadRoots(value) &&
     validProtectedWriteRoots(value) &&
     validLinkFreeWriteRoots(value)
+  );
+}
+
+/** A Git metadata root lies outside the workspace and the private state, never above either. */
+function validGitMetadataReadRoots(value: Record<string, unknown>): boolean {
+  if (value.gitMetadataReadRoots === undefined) return true;
+  const own = [value.workspaceRoot, value.privateStateRoot];
+  return (
+    value.workspaceAccess === "read-write" &&
+    validRootList(
+      value.gitMetadataReadRoots,
+      NATIVE_GIT_METADATA_READ_ROOTS_MAX,
+      (root) =>
+        root.split("/").length > 2 &&
+        own.every(
+          (path) => typeof path === "string" && outsideRoot(root, path) && outsideRoot(path, root),
+        ),
+    )
   );
 }
 
@@ -307,9 +328,25 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     // (their entry names), never their files or sibling subtrees: `literal` matches the directory
     // itself, and every denied subtree stays denied.
     `(allow file-read* ${pathFilters("literal", own.flatMap(ancestors))})` +
+    gitMetadataSeatbeltRules(closed) +
     protectedWriteSeatbeltRules(closed) +
     linkFreeWriteSeatbeltRules(closed) +
     CREDENTIAL_PATH_SEATBELT_RULE
+  );
+}
+
+/**
+ * A linked worktree's common Git directory, read-only. It is re-allowed after the denied roots
+ * because a repository Keiko cloned can sit inside its own state directory; Git resolves the path
+ * with `lstat` on every ancestor, which see their metadata only. The credential names stay denied
+ * by the rule that follows every other one.
+ */
+function gitMetadataSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
+  const roots = closed.gitMetadataReadRoots ?? [];
+  if (roots.length === 0) return "";
+  return (
+    `(allow file-read* ${pathFilters("subpath", roots)})` +
+    `(allow file-read-metadata ${pathFilters("literal", roots.flatMap(ancestors))})`
   );
 }
 

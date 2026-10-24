@@ -1169,8 +1169,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   judged again), no hard link, no sensitive path (`isDenied`, the list the kernel boundary shares),
   at most 64 KiB per file, 192 KiB per prompt and 1 MiB per run (the runtime embeds the bytes in
   the session history that Keiko reads back whole). The first violation refuses the whole prompt
-  before anything is sent. The attachment is the runtime's `files` entry (the `file://` URI of the
-  real path and the file name); the typed text stays the visible message and the file content stays
+  before anything is sent. The attachment is the runtime's `files` entry: the bytes that descriptor
+  read admitted, inline as a `data:text/plain;base64,` URI, and the file name. A `file://` URI is
+  never sent (the client refuses it before a byte leaves), because the runtime would reopen the
+  path after Keiko's check and a hard link swapped in between would reach the model instead (#3897
+  review; the real-binary control replaces the path after admission). The typed text stays the visible message and the file content stays
   out of the timeline, Coding History and logs. Evidence is the body-free
   `coding-runtime.prompt-inputs.settled` line: the run, `accepted` or `refused`, the closed
   delivery, the reference count, and the attached bytes or the closed refusal reason. A delivery
@@ -1348,7 +1351,16 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (bound into the policy digest, strict descendants of a writable root, native profile only) adds a
   final denial of every write operation beneath it (create, overwrite, append, chmod, rename,
   unlink, hard link) and of create and unlink on the intermediate directories, so the directory
-  cannot be moved away. A shell child is refused each of these by the real kernel
+  cannot be moved away. A task workspace that is a linked worktree (every managed task workspace,
+  created by `git worktree add`) keeps its Git metadata in the repository's common Git directory
+  outside the workspace. The server names that directory as the filesystem capability's
+  `gitMetadataReadRoots` (bound into the policy digest, outside the workspace and private state,
+  native profile only) only after `inspectManagedGitdirIdentity` re-proved the reciprocal worktree
+  registration, bound to the managed task's own repository; the kernel re-allows it read-only after
+  the denied roots (a repository Keiko cloned may sit in its state directory) and before the
+  credential names, so native `status`, `diff`, `log`, `show` and `blame` work while a write to it
+  stays refused. A forged, stale or misdirected `.git` file names nothing and is recorded as
+  `unproven` on `coding-runtime.git-metadata.resolved` (#3897 review). A shell child is refused each of these by the real kernel
   (`runtime-gateway.test.ts`, and through the real runtime's own shell tool in
   `opencodeNativeProjectBoundary.real.test.ts`, whose control without the protected root rewrites
   the plugin), while workspace and private-state writes outside it, and the runtime's loading of
