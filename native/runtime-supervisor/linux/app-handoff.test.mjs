@@ -388,9 +388,10 @@ async function initialStart(launcher, helper, hash) {
       root.observation,
     );
   assert(root.ready);
-  assertForegroundRoot(rootPid);
   initialOwner.stdio[3].write(commitPacket(launchId));
   assert.equal((await appResponse(reader)).kind, 5);
+  // After the commit is acknowledged, so the synchronous `ps` lookup never spends commit time.
+  assertForegroundRoot(rootPid);
   initialOwner.stdio[3].end();
   return { launchId, ...(await awaitState("1.0.0", launchId)) };
 }
