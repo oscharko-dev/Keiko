@@ -1740,7 +1740,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   the native and the mapped profile; no private text enters generated plugin source or runtime
   configuration. A replaced skill keeps the bound revision, a deleted one refuses the dispatch
   (`skill-unavailable`), and `coding-sidecar.gateway.skill-attached` records the identity and sizes
-  only.
+  only. The binding is checked again before every physical provider attempt, a gateway or stream
+  retry included, through the existing Markdown-skill attempt admission (composed with, never
+  replacing, the request's own): a revision deleted after the first attempt, or a run whose
+  capability no longer authenticates, sends no further attempt and ends the turn as rejected
+  (409 `SKILL_SELECTION_CHANGED` with `skill-unavailable`, or 401 with `capability-invalid`), so
+  the runtime does not resend it.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's

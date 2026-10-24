@@ -10147,6 +10147,181 @@ describe("coding sidecar gateway carries the run's bound private skill (#4025, #
     ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
   });
 
+  /**
+   * The real gateway and its retry, with only the provider's HTTP replaced: the first attempt is
+   * answered 503, `between` runs before that answer returns, and the retry is answered 200, as one
+   * JSON answer or, for a streamed turn, as a stream.
+   */
+  async function dispatchWithRetry(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    between: () => void,
+    stream = false,
+  ): Promise<{
+    readonly result: RouteResult | typeof STREAMING;
+    readonly bodies: string[];
+    readonly streamed: string;
+  }> {
+    resetGatewayInstanceCacheForTests();
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit): Promise<Response> => {
+        bodies.push(typeof init?.body === "string" ? init.body : "");
+        if (bodies.length === 1) {
+          between();
+          return Promise.resolve(new Response("{}", { status: 503 }));
+        }
+        return Promise.resolve(
+          stream
+            ? providerSse([
+                sseDelta({ content: "Receipt." }),
+                sseFinish("stop"),
+                "data: [DONE]\n\n",
+              ])
+            : new Response(
+                JSON.stringify({
+                  choices: [{ finish_reason: "stop", message: { content: "Receipt." } }],
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+    try {
+      const config = configValue(provider({ maxRetries: 1, retryBaseDelayMs: 1 }), capability());
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "azure-coding-model",
+            messages: [{ role: "user", content: "Give a receipt." }],
+            tools: [],
+            stream,
+          }),
+          res: response.res,
+        },
+        { ...depsValue(config), store },
+      );
+      return { result, bodies, streamed: response.body() };
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  }
+
+  it.each([
+    ["a buffered", false],
+    ["a streamed", true],
+  ])(
+    "sends the bound skill once in every physical attempt of %s turn, a retry included",
+    async (_label, stream) => {
+      const { store } = runStore(BODY);
+
+      const { result, bodies, streamed } = await dispatchWithRetry(store, () => undefined, stream);
+
+      expect(bodies.map((body) => body.split(MARKER).length - 1)).toEqual([1, 1]);
+      if (stream) {
+        expect(result).toBe(STREAMING);
+        expect(frameDeltas(streamed)).toContainEqual({ content: "Receipt." });
+      } else {
+        expect(result).toMatchObject({ status: 200 });
+      }
+    },
+  );
+
+  it("refuses the retry when the bound skill was deleted after the first attempt", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+
+    const { result, bodies } = await dispatchWithRetry(store, () => {
+      store.markdownSkills.delete(skill.id, skill.revision);
+    });
+
+    // The skill was current when the first attempt was sent; the retry is checked again and never
+    // reaches the provider.
+    expect(bodies).toHaveLength(1);
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+  });
+
+  it("ends a streamed turn as rejected when the bound skill was deleted before its retry", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+
+    const { result, bodies, streamed } = await dispatchWithRetry(
+      store,
+      () => {
+        store.markdownSkills.delete(skill.id, skill.revision);
+      },
+      true,
+    );
+
+    expect(bodies).toHaveLength(1);
+    expect(result).toBe(STREAMING);
+    // A rejection, not a retryable fault: the runtime does not resend a turn the skill check refuses.
+    expect(streamed).toContain("invalid_request_error");
+    expect(streamed).not.toContain("Receipt.");
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+  });
+
+  it("sends no further attempt once the run's capability is revoked", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore(BODY);
+    let revoked = false;
+    const deps = (config: GatewayConfig): UiHandlerDeps => {
+      const base = depsValue(config);
+      const authenticator = base.runtimeCapabilityAuthenticator;
+      return {
+        ...base,
+        store,
+        runtimeCapabilityAuthenticator: {
+          ...authenticator,
+          authenticate: (capability: string, audience: "model-gateway" | "tool-facade") =>
+            revoked ? { ok: false } : authenticator?.authenticate(capability, audience),
+        },
+      };
+    };
+    resetGatewayInstanceCacheForTests();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        calls += 1;
+        revoked = true;
+        return Promise.resolve(new Response("{}", { status: 503 }));
+      }),
+    );
+    try {
+      const config = configValue(provider({ maxRetries: 1, retryBaseDelayMs: 1 }), capability());
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [{ role: "user", content: "Give a receipt." }],
+          tools: [],
+        }),
+        deps(config),
+      );
+      expect(calls).toBe(1);
+      expect(result).toMatchObject({ status: 401 });
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+      ).toMatchObject({ reason: "capability-invalid", runId: RUN_ID });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it("counts the skill against the prompt bound: a skill that does not fit refuses as overflow", async () => {
     const sink = captureServerLog("info");
     const { store } = runStore(`${BODY}${"Keep every step of this method in mind. ".repeat(600)}`);

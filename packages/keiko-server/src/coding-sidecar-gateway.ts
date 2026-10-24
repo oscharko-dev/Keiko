@@ -38,6 +38,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
 import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { renderMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
 import type {
   ChatMessageContentPart,
@@ -2489,6 +2490,7 @@ function isStreamInterruption(error: unknown): boolean {
 }
 
 function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+  if (error instanceof BoundSkillAttemptRefused) return "turn-rejected";
   const modelCause = modelTurnFailureCode(error);
   if (modelCause !== undefined) return modelCause;
   return isStreamInterruption(error) ? "stream-incomplete" : "provider-failed";
@@ -2503,6 +2505,7 @@ function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode 
 // rejected, check that the gateway is running".
 function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
   if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
+  if (error instanceof BoundSkillAttemptRefused) return "turn-rejected";
   const modelCause = modelTurnFailureCode(error);
   if (modelCause !== undefined) return modelCause;
   return error instanceof GatewayError && !isStreamInterruption(error)
@@ -2535,6 +2538,7 @@ function runtimeRetryFor(
   failureCode: CodingWorkbenchTurnFailureCode,
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
+  if (error instanceof BoundSkillAttemptRefused) return "refused";
   if (repairFailedAgain(error, failureCode)) return "refused";
   // The gateway already owns bounded schema/transport correction. Repeating the identical
   // malformed turn in OpenCode adds no correction and can loop without an attempt limit.
@@ -3204,6 +3208,8 @@ interface GatewayChatDelivery {
   // enforces for this model plus the bridge's settlement grace (`opencodeGatewayOfferLifetimeMs`),
   // so a legitimately long generation never comes back to an expired offer.
   readonly offerLifetimeMs: number;
+  // Narrows every physical attempt, a retry included, to the run's bound skill (#4025 AC5).
+  readonly protectRequest?: ((request: GatewayCallRequest) => GatewayCallRequest) | undefined;
 }
 
 interface PinnedGatewayBinding {
@@ -3228,7 +3234,7 @@ function requestForGatewayDelivery(
   signal: AbortSignal,
   retryObserver: GatewayRetryObserver,
 ): GatewayCallRequest {
-  return {
+  const request: GatewayCallRequest = {
     ...buildChatRequest(
       parsed,
       delivery.modelAlias,
@@ -3244,6 +3250,7 @@ function requestForGatewayDelivery(
     ),
     retryObserver,
   };
+  return delivery.protectRequest?.(request) ?? request;
 }
 
 async function executeGatewayChat(
@@ -3280,24 +3287,24 @@ async function dispatchGatewayChat(
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
   const retries = gatewayRetryTrace(ctx, deps, runId);
-  const request = requestForGatewayDelivery(
-    ctx,
-    parsed,
-    delivery,
-    cancellation.signal,
-    retries.observer,
-  );
-  const dispatch = {
-    deps,
-    binding,
-    modelAlias,
-    request,
-    runId,
-    cancellation,
-    promptTokenReservation: delivery.promptTokenReservation,
-  } satisfies GatewayChatDispatchContext;
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
+    const dispatch = {
+      deps,
+      binding,
+      modelAlias,
+      // Built inside the settlement: a bound skill that is already gone refuses here (#4025 AC5).
+      request: requestForGatewayDelivery(
+        ctx,
+        parsed,
+        delivery,
+        cancellation.signal,
+        retries.observer,
+      ),
+      runId,
+      cancellation,
+      promptTokenReservation: delivery.promptTokenReservation,
+    } satisfies GatewayChatDispatchContext;
     if (parsed.stream && upstreamStreamingSupported) {
       return await streamGatewayChat(ctx, dispatch);
     }
@@ -3376,22 +3383,34 @@ function settleFailedGatewayChat(
     NO_GATEWAY_OUTPUT,
     settledRepair(outputRepairOf(error)),
   );
-  const spendReason = gatewaySpendRejectionReason(error);
-  const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
+  const failureCode =
+    gatewaySpendRejectionReason(error) === undefined
+      ? gatewayTurnFailureCode(error)
+      : "turn-rejected";
   const runtimeRetry = runtimeRetryFor(error, failureCode);
   const turnFailureRecorded =
     !cancelled && reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
-  if (spendReason !== undefined && bufferedStream === undefined) {
-    logGatewayRejection(ctx, runId, 403, spendReason);
-    return forbiddenGatewayRequest();
-  }
+  const refusal = bufferedStream === undefined ? refusalAnswer(ctx, runId, error) : undefined;
+  if (refusal !== undefined) return refusal;
   const refused = !cancelled && runtimeRetry === "refused";
   if (bufferedStream === undefined) return refused ? providerRejectionError() : unavailableError();
   return refused
     ? settleBufferedOpenAiStreamRejection(bufferedStream)
     : settleBufferedOpenAiStreamError(bufferedStream, "error");
+}
+
+// What the route answers for an attempt it refused itself, before any output reached the runtime:
+// the spend budget's refusal, or the bound skill's (#4025 AC5).
+function refusalAnswer(ctx: RouteContext, runId: string, error: unknown): RouteResult | undefined {
+  const spendReason = gatewaySpendRejectionReason(error);
+  if (spendReason !== undefined) {
+    logGatewayRejection(ctx, runId, 403, spendReason);
+    return forbiddenGatewayRequest();
+  }
+  if (!(error instanceof BoundSkillAttemptRefused)) return undefined;
+  return error.capabilityRevoked ? unauthorizedGatewayRequest() : skillSelectionChanged(ctx);
 }
 
 async function executeBufferedGatewayChat(
@@ -4725,17 +4744,20 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     productive.parsed,
     authentication,
     productive.estimatedPromptTokens,
-    productiveChatOptions(deps, resolved, authentication, productive.estimatedPromptTokens),
+    productiveChatOptions(ctx, deps, resolved, authentication, productive),
   );
 }
 
 function productiveChatOptions(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   resolved: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
-  estimatedPromptTokens: number,
+  productive: ProductiveChatRequest,
 ): Parameters<typeof executeBudgetedGatewayChat>[6] {
+  const { estimatedPromptTokens, skillTurnMessageId } = productive;
   return {
+    ...boundSkillProtection(ctx, deps, authentication, skillTurnMessageId),
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
     upstreamStreamingSupported: upstreamGatewayStreamingSupported(
@@ -4750,8 +4772,101 @@ function productiveChatOptions(
 
 type BoundRunSkill =
   | { readonly kind: "none" }
-  | { readonly kind: "bound"; readonly skill: MarkdownSkillDocument }
+  | { readonly kind: "bound"; readonly skill: MarkdownSkillDocument; readonly messageId: string }
   | { readonly kind: "unavailable" };
+
+/** A productive dispatch, and the task turn whose bound skill it carries. */
+interface ProductiveChatRequest extends ValidatedChatRequest {
+  readonly skillTurnMessageId?: string | undefined;
+}
+
+// The run's capability, authenticated again: a stopped, revoked or expired run sends no attempt.
+function runCapabilityStillBound(
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+): boolean {
+  const authenticated = runtimeCapabilityAuthenticator(deps)?.authenticate(
+    authentication.capability,
+    "model-gateway",
+  );
+  return authenticatedRuntimeBinding(authenticated)?.runId === authentication.runId;
+}
+
+/**
+ * The check every physical attempt passes before it reaches the provider, a gateway retry and a
+ * stream retry included (#4025 AC5): the turn's bound revision must still resolve, intact, and the
+ * run's capability must still be current. Resolving once before the call let a retry carry a skill
+ * deleted after the first attempt. Composes with, never replaces, the request's own admission.
+ */
+function boundSkillProtection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+  messageId: string | undefined,
+): Pick<GatewayChatDelivery, "protectRequest"> {
+  if (messageId === undefined) return {};
+  const { runId } = authentication;
+  const authority = (): boolean => runCapabilityStillBound(deps, authentication);
+  const refused = (error: unknown): BoundSkillAttemptRefused => {
+    const revoked = !runCapabilityStillBound(deps, authentication);
+    if (revoked) logGatewayRejection(ctx, runId, 401, "capability-invalid");
+    else logGatewayRejection(ctx, runId, 409, "skill-unavailable");
+    return new BoundSkillAttemptRefused(error, revoked);
+  };
+  return {
+    protectRequest: (request): GatewayCallRequest => {
+      let guarded: GatewayCallRequest;
+      try {
+        guarded = protectMarkdownSkillRequest(
+          request,
+          deps.store.markdownSkills,
+          messageId,
+          authority,
+        );
+      } catch (error) {
+        throw refused(error);
+      }
+      const admit = guarded.attemptAdmission;
+      if (admit === undefined) return guarded;
+      return {
+        ...guarded,
+        attemptAdmission: (input): ReturnType<typeof admit> => {
+          try {
+            return admit(input);
+          } catch (error) {
+            throw refused(error);
+          }
+        },
+      };
+    },
+  };
+}
+
+/**
+ * An attempt the bound skill's own check refused (#4025 AC5): the turn's revision was deleted or
+ * failed its integrity check, or the run's capability is no longer current. The turn is final, as
+ * the same refusal before the first attempt is: a runtime retry would be refused again.
+ */
+class BoundSkillAttemptRefused extends Error {
+  public constructor(
+    cause: unknown,
+    public readonly capabilityRevoked: boolean,
+  ) {
+    super("The skill selected for this coding task is no longer available.", { cause });
+    this.name = "BoundSkillAttemptRefused";
+  }
+}
+
+function skillSelectionChanged(ctx: RouteContext): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "SKILL_SELECTION_CHANGED",
+      "The skill selected for this coding task is no longer available.",
+      ctx.correlationId,
+    ),
+  };
+}
 
 /**
  * The private Markdown skill the run's task turn was bound to when the run began (#4025, #3897
@@ -4765,7 +4880,7 @@ function boundRunSkill(ctx: RouteContext, deps: UiHandlerDeps, runId: string): B
   if (messageId === undefined) return { kind: "none" };
   try {
     const skill = deps.store.markdownSkills.forTurn(messageId);
-    return skill === undefined ? { kind: "none" } : { kind: "bound", skill };
+    return skill === undefined ? { kind: "none" } : { kind: "bound", skill, messageId };
   } catch {
     // The store refuses a deleted skill or a failed integrity check (409/500): the dispatch is
     // refused with that closed reason instead of being sent without the selected method.
@@ -4821,18 +4936,11 @@ function withBoundRunSkill(
   resolved: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
   validated: ValidatedChatRequest,
-): RouteResult | ValidatedChatRequest {
+): RouteResult | ProductiveChatRequest {
   const bound = boundRunSkill(ctx, deps, authentication.runId);
   if (bound.kind === "none") return validated;
   if (bound.kind === "unavailable") {
-    const refusal: RouteResult = {
-      status: 409,
-      body: errorBody(
-        "SKILL_SELECTION_CHANGED",
-        "The skill selected for this coding task is no longer available.",
-        ctx.correlationId,
-      ),
-    };
+    const refusal = skillSelectionChanged(ctx);
     reportGatewayTurnRejection(ctx, deps, authentication.runId, refusal);
     return refusal;
   }
@@ -4855,7 +4963,7 @@ function withBoundRunSkill(
     return validationError;
   }
   logSkillAttached(ctx, authentication.runId, bound.skill, estimatedPromptTokens);
-  return { parsed, estimatedPromptTokens };
+  return { parsed, estimatedPromptTokens, skillTurnMessageId: bound.messageId };
 }
 
 function logSkillAttached(
@@ -4977,6 +5085,7 @@ function executeBudgetedGatewayChat(
     readonly modelAlias: string;
     readonly maxOutputTokens: number;
     readonly upstreamStreamingSupported: boolean;
+    readonly protectRequest?: GatewayChatDelivery["protectRequest"];
   },
 ): Promise<RouteResult | typeof STREAMING> {
   const promptTokenReservation = reserveGatewayPromptBudget(

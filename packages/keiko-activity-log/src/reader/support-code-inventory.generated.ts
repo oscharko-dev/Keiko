@@ -2744,6 +2744,7 @@ export const SUPPORT_CODE_ERROR_CLASSES: readonly string[] = [
   "BadJsonError",
   "BodyTimeoutError",
   "BodyTooLargeError",
+  "BoundSkillAttemptRefused",
   "BoundedIndexingCancelledError",
   "BoundedIndexingPolicyError",
   "BrowserToolError",
