@@ -29,6 +29,7 @@ import {
   OpenCodeV2PromptRefusedError,
   OpenCodeV2ReceiptMismatchError,
   OPENCODE_PROMPT_FILE_MAX_BYTES,
+  OPENCODE_PROMPT_MEDIA_MAX_BYTES,
   openCodeV2PromptFileData,
 } from "./opencodeV2HttpClient.js";
 import {
@@ -355,6 +356,104 @@ describe("prompt references resolved against the run's workspace", () => {
     writeFileSync(join(outside, "src", "app.ts"), "OUTSIDE-CANARY\n");
     symlinkSync(join(outside, "src"), join(workspace, "src"));
     expect(refusal("src/app.ts")).toBe("reference-outside-workspace");
+  });
+});
+
+// #3906 AC1: an image or PDF the human references reaches a model that declares that input, as
+// the very bytes the descriptor read proved, under its own type.
+describe("image and PDF references", () => {
+  const PNG = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from("synthetic image body"),
+  ]);
+  const PDF = Buffer.from("%PDF-1.4\nsynthetic document\n%%EOF\n", "latin1");
+  const BOTH = { image: true, pdf: true } as const;
+
+  function resolveMedia(
+    paths: readonly string[],
+    media: { readonly image: boolean; readonly pdf: boolean } = BOTH,
+    remainingRunBytes = OPENCODE_PROMPT_RUN_FILES_MAX_BYTES,
+  ): ReturnType<typeof resolvePromptReferences> {
+    return resolvePromptReferences({
+      workspaceRoot: workspace,
+      references: paths.map((path) => ({ path })),
+      remainingRunBytes,
+      media,
+    });
+  }
+
+  it("attaches an image and a PDF byte for byte under their own types", () => {
+    writeFileSync(join(workspace, "screen.png"), PNG);
+    writeFileSync(join(workspace, "spec.PDF"), PDF);
+
+    expect(resolveMedia(["screen.png", "spec.PDF"])).toEqual({
+      ok: true,
+      bytes: PNG.length + PDF.length,
+      files: [
+        { uri: `data:image/png;base64,${PNG.toString("base64")}`, name: "screen.png" },
+        { uri: `data:application/pdf;base64,${PDF.toString("base64")}`, name: "spec.PDF" },
+      ],
+    });
+  });
+
+  it("refuses an image or PDF the run's model does not declare, before anything is read", () => {
+    writeFileSync(join(workspace, "screen.png"), PNG);
+    writeFileSync(join(workspace, "spec.pdf"), PDF);
+
+    expect(resolveMedia(["screen.png"], { image: false, pdf: true })).toEqual({
+      ok: false,
+      reason: "reference-media-unsupported",
+    });
+    expect(resolveMedia(["spec.pdf"], { image: true, pdf: false })).toEqual({
+      ok: false,
+      reason: "reference-media-unsupported",
+    });
+    // A run that names no media (a mapped profile, an older caller) attaches none.
+    expect(refusal("screen.png")).toBe("reference-media-unsupported");
+  });
+
+  it("never sends a renamed file as what it is not", () => {
+    writeFileSync(join(workspace, "notes.png"), "plain text named like an image\n");
+    writeFileSync(join(workspace, "image.pdf"), PNG);
+
+    expect(resolveMedia(["notes.png"])).toEqual({ ok: false, reason: "reference-not-media" });
+    expect(resolveMedia(["image.pdf"])).toEqual({ ok: false, reason: "reference-not-media" });
+  });
+
+  it("bounds one medium at its own ceiling and the run at its budget", () => {
+    const large = Buffer.concat([PNG, Buffer.alloc(OPENCODE_PROMPT_MEDIA_MAX_BYTES - PNG.length)]);
+    writeFileSync(join(workspace, "exact.png"), large);
+    writeFileSync(join(workspace, "over.png"), Buffer.concat([large, Buffer.from([0])]));
+
+    expect(resolveMedia(["exact.png"])).toMatchObject({ ok: true, bytes: large.length });
+    expect(resolveMedia(["over.png"])).toEqual({ ok: false, reason: "reference-too-large" });
+    expect(resolveMedia(["exact.png"], BOTH, large.length - 1)).toEqual({
+      ok: false,
+      reason: "references-run-budget",
+    });
+  });
+
+  it("charges media to the run's budget, not to the prompt's text bound", () => {
+    const names = ["a.txt", "b.txt", "c.txt"];
+    for (const name of names)
+      writeFileSync(join(workspace, name), "x".repeat(OPENCODE_PROMPT_FILE_MAX_BYTES));
+    writeFileSync(join(workspace, "screen.png"), PNG);
+
+    expect(resolveMedia([...names, "screen.png"])).toMatchObject({
+      ok: true,
+      bytes: OPENCODE_PROMPT_FILES_MAX_BYTES + PNG.length,
+    });
+  });
+
+  it("keeps the sensitive-path and workspace boundaries for media", () => {
+    writeFileSync(join(outside, "leak.png"), PNG);
+    symlinkSync(join(outside, "leak.png"), join(workspace, "linked.png"));
+
+    expect(resolveMedia(["linked.png"])).toEqual({
+      ok: false,
+      reason: "reference-outside-workspace",
+    });
+    expect(resolveMedia([".env.png"])).toMatchObject({ ok: false });
   });
 });
 

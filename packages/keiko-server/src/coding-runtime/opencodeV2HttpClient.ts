@@ -28,6 +28,20 @@ const MAX_JSON_BYTES = OPENCODE_HISTORY_RESPONSE_MAX_BYTES;
 export const OPENCODE_PROMPT_TEXT_MAX_BYTES = 65_536;
 /** One referenced file's ceiling, in the file's own bytes. */
 export const OPENCODE_PROMPT_FILE_MAX_BYTES = 64 * 1024;
+/**
+ * One image or PDF attachment (#3906 AC1). Larger than a text file because a screenshot is; the
+ * run's attachment budget still bounds what all of them add up to.
+ */
+export const OPENCODE_PROMPT_MEDIA_MAX_BYTES = 512 * 1024;
+/** The media a prompt may attach inline, as the runtime's own `File.mime`. */
+export const OPENCODE_PROMPT_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+] as const;
+export type OpenCodePromptMediaType = (typeof OPENCODE_PROMPT_MEDIA_TYPES)[number];
 const MAX_TEXT_BYTES = OPENCODE_PROMPT_TEXT_MAX_BYTES;
 // History reads share the sidecar's event loop with tool execution. A burst of parallel tools may
 // delay its local HTTP response without making the run unhealthy; keep a bounded scheduling margin.
@@ -621,24 +635,37 @@ function stagedRevert(value: Readonly<Record<string, unknown>>): OpenCodeV2Stage
   return { messageId, files: value.files === undefined ? [] : fileDiffs(value.files) };
 }
 
-const PROMPT_FILE_DATA_PREFIX = "data:text/plain;base64,";
-const PROMPT_FILE_DATA_MAX_CHARS =
-  PROMPT_FILE_DATA_PREFIX.length + 4 * Math.ceil(OPENCODE_PROMPT_FILE_MAX_BYTES / 3);
 const PROMPT_FILE_NAME_MAX_CHARS = 255;
 
-/** The inline text attachment of a file's admitted bytes. */
-export function openCodeV2PromptFileData(bytes: Buffer): string {
-  return `${PROMPT_FILE_DATA_PREFIX}${bytes.toString("base64")}`;
+function promptDataPrefix(mime: string): string {
+  return `data:${mime};base64,`;
+}
+
+/** Each inline attachment prefix with the byte ceiling of what it may carry. */
+const PROMPT_FILE_DATA_BOUNDS: readonly (readonly [string, number])[] = [
+  [promptDataPrefix("text/plain"), OPENCODE_PROMPT_FILE_MAX_BYTES],
+  ...OPENCODE_PROMPT_MEDIA_TYPES.map(
+    (mime) => [promptDataPrefix(mime), OPENCODE_PROMPT_MEDIA_MAX_BYTES] as const,
+  ),
+];
+
+/** The inline attachment of a file's admitted bytes: text, or an admitted image or PDF. */
+export function openCodeV2PromptFileData(
+  bytes: Buffer,
+  mime: "text/plain" | OpenCodePromptMediaType = "text/plain",
+): string {
+  return `${promptDataPrefix(mime)}${bytes.toString("base64")}`;
 }
 
 /** A canonical, bounded inline attachment; a file URI or any other scheme is refused. */
 function promptFileDataValid(uri: string): boolean {
-  if (!uri.startsWith(PROMPT_FILE_DATA_PREFIX) || uri.length > PROMPT_FILE_DATA_MAX_CHARS) {
-    return false;
-  }
-  const encoded = uri.slice(PROMPT_FILE_DATA_PREFIX.length);
+  const bound = PROMPT_FILE_DATA_BOUNDS.find(([prefix]) => uri.startsWith(prefix));
+  if (bound === undefined) return false;
+  const [prefix, maxBytes] = bound;
+  if (uri.length > prefix.length + 4 * Math.ceil(maxBytes / 3)) return false;
+  const encoded = uri.slice(prefix.length);
   const bytes = Buffer.from(encoded, "base64");
-  return bytes.length <= OPENCODE_PROMPT_FILE_MAX_BYTES && bytes.toString("base64") === encoded;
+  return bytes.length <= maxBytes && bytes.toString("base64") === encoded;
 }
 
 function hasControlCharacter(value: string): boolean {

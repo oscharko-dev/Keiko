@@ -126,6 +126,7 @@ import {
   openCodePromptInputs,
   type AdmittedPromptInputs,
   type OpenCodePromptInputsRunPort,
+  type PromptMediaInputs,
 } from "./opencodePromptInputs.js";
 import { createOpenCodeInboxRunPort, type OpenCodeInboxRunPort } from "./opencodeInbox.js";
 import {
@@ -707,6 +708,8 @@ interface PreparedRun {
   agent?: CodingWorkbenchAgent | undefined;
   /** What the references of this run's accepted prompts added up to (`opencodePromptInputs.ts`). */
   promptFileBytes?: number | undefined;
+  /** The media the run's model accepts as prompt attachments (`opencodePromptInputs.ts`). */
+  media?: PromptMediaInputs | undefined;
   /** How a slash command's turn is shown in the history (`opencodeCommands.ts`). */
   readonly commandPresentation: OpenCodeCommandPresentation;
   /** The retained session this run's database was seeded with (`opencodeSessionContinuation.ts`). */
@@ -1569,7 +1572,11 @@ async function materializePrepare(
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
   const result = preparedLaunch(input, bridge, profile.env);
-  persistPreparedRun(runs, request, runRoot, password, configDigest, { continuation, mcp });
+  persistPreparedRun(runs, request, runRoot, password, configDigest, {
+    continuation,
+    mcp,
+    media: promptMedia(input),
+  });
   recordNativeFormatterBound(input.activityLog, request, profile.formatter);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
@@ -1736,9 +1743,10 @@ function persistPreparedRun(
   extras: {
     readonly continuation?: RunContinuation | undefined;
     readonly mcp?: OpenCodeNativeMcpGrants | undefined;
+    readonly media?: PromptMediaInputs | undefined;
   } = {},
 ): void {
-  const { continuation, mcp } = extras;
+  const { continuation, mcp, media } = extras;
   const run = preparedRun(
     request.runId,
     runRoot,
@@ -1750,7 +1758,21 @@ function persistPreparedRun(
   );
   if (continuation !== undefined) run.continuation = continuation;
   if (mcp !== undefined) run.mcp = mcp;
+  if (media !== undefined) run.media = media;
   runs.set(request.runId, run);
+}
+
+/**
+ * The media a native run's prompt may attach: exactly what its launch profile declares to the
+ * runtime (`fixedOpenCodeV2Provider`), so a reference the model cannot receive is refused before it
+ * is sent. A mapped profile takes no reference at all.
+ */
+function promptMedia(input: OpenCodeRuntimeCompositionInput): PromptMediaInputs | undefined {
+  if (input.toolProfile !== "native") return undefined;
+  return {
+    image: input.contextGeometry.imageInput === true,
+    pdf: input.contextGeometry.documentInput === true,
+  };
 }
 
 async function prepare(

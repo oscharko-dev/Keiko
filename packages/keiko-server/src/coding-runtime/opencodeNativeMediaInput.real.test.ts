@@ -33,6 +33,7 @@ import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   createOpenCodeV2HttpClient,
+  openCodeV2PromptFileData,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
 } from "./opencodeV2HttpClient.js";
@@ -745,6 +746,30 @@ function dataUrl(mime: string, bytes: Buffer): string {
   return `data:${mime};base64,${bytes.toString("base64")}`;
 }
 
+/** The first request whose newest message is the user's prompt with the attachment. */
+function promptRequest(gateway: Stub, text: string): Recorded | undefined {
+  return gateway.requests.find((recorded) => JSON.stringify(recorded.body).includes(text));
+}
+
+/** Prompts with one inline attachment, as `opencodePromptInputs.ts` admits it, and waits. */
+async function attachToPrompt(
+  run: Run<GatewayStub>,
+  text: string,
+  file: {
+    readonly bytes: Buffer;
+    readonly mime: "image/png" | "application/pdf";
+    readonly name: string;
+  },
+): Promise<Recorded> {
+  await run.client.prompt(run.sessionId, text, undefined, undefined, {
+    files: [{ uri: openCodeV2PromptFileData(file.bytes, file.mime), name: file.name }],
+  });
+  await expect.poll(() => promptRequest(run.model, text), { timeout: 60_000 }).not.toBeUndefined();
+  const recorded = promptRequest(run.model, text);
+  if (recorded === undefined) throw new Error("fixture-prompt-request-missing");
+  return recorded;
+}
+
 describe("pinned native OpenCode media input", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 
@@ -824,6 +849,37 @@ describe("pinned native OpenCode media input", () => {
         // The original runtime itself tells the model it cannot read the PDF, as standalone.
         expect(toolResultText(followUp)).toContain("does not support pdf input");
         expect(JSON.stringify(followUp.body)).not.toContain(run.fixture.pdf.toString("base64"));
+      });
+    },
+    120_000,
+  );
+
+  // #3906 AC1: an image or PDF the human attached with `@` reaches the model as the runtime's own
+  // user-message part, byte for byte.
+  it.skipIf(skip)(
+    "hands a prompt's attached image and PDF to a model that declares both, byte for byte",
+    async () => {
+      await withRun({ image: true, pdf: true }, startGateway, async (run) => {
+        const image = await attachToPrompt(run, "Describe the attached screenshot.", {
+          bytes: run.fixture.png,
+          mime: "image/png",
+          name: IMAGE_FILE,
+        });
+        expect(mediaParts(image, "image_url").map((entry) => entry.role)).toEqual(["user"]);
+        expect(object(mediaParts(image, "image_url")[0]?.part.image_url)?.url).toBe(
+          dataUrl("image/png", run.fixture.png),
+        );
+
+        const document = await attachToPrompt(run, "Summarize the attached brief.", {
+          bytes: run.fixture.pdf,
+          mime: "application/pdf",
+          name: PDF_FILE,
+        });
+        const files = mediaParts(document, "file");
+        expect(files.map((entry) => entry.role)).toContain("user");
+        expect(files.map((entry) => object(entry.part.file)?.file_data)).toContain(
+          dataUrl("application/pdf", run.fixture.pdf),
+        );
       });
     },
     120_000,

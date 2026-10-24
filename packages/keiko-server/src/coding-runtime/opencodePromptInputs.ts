@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve, sep, basename } from "node:path";
+import { isAbsolute, relative, resolve, sep, basename, extname } from "node:path";
 
 import {
   CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS,
@@ -32,7 +32,9 @@ import type { OpenCodeRuntimeAdapter } from "./opencodeRuntimeAdapter.js";
 import {
   classifyOpenCodeV2PromptFailure,
   OPENCODE_PROMPT_FILE_MAX_BYTES,
+  OPENCODE_PROMPT_MEDIA_MAX_BYTES,
   openCodeV2PromptFileData,
+  type OpenCodePromptMediaType,
   type OpenCodeV2HttpClient,
   type OpenCodeV2PromptInputs,
 } from "./opencodeV2HttpClient.js";
@@ -42,8 +44,9 @@ import {
  * message that joins the turn that is running (`steer` / `queue`) and workspace files the human
  * referenced with `@`. Both are human-authored intent for the run's own session, so they only need
  * the session's mode-independent boundaries, which this module owns for files: a reference must
- * name a plain, contained, non-sensitive UTF-8 text file inside the run's workspace root, within
- * bounds that keep the model request and the runtime's history reads small.
+ * name a plain, contained, non-sensitive UTF-8 text file inside the run's workspace root, or an
+ * image or PDF the run's model declares it accepts (#3906 AC1), within bounds that keep the model
+ * request and the runtime's history reads small.
  */
 
 /** What one prompt's references may add up to; one file's ceiling is the client's. */
@@ -145,6 +148,8 @@ export type PromptInputsRefusal =
   | "reference-sensitive"
   | "reference-not-file"
   | "reference-not-text"
+  | "reference-not-media"
+  | "reference-media-unsupported"
   | "reference-too-large"
   | "references-prompt-budget"
   | "references-run-budget"
@@ -162,7 +167,65 @@ interface ResolvedReference {
   readonly real: string;
   readonly attachment: PromptFileAttachment;
   readonly bytes: number;
+  /** A text file counts against the prompt's text bound; an image or PDF only the run's. */
+  readonly text: boolean;
 }
+
+/** The media the run's model declares it accepts (`imageInput`, `documentInput`). */
+export interface PromptMediaInputs {
+  readonly image: boolean;
+  readonly pdf: boolean;
+}
+
+const NO_MEDIA: PromptMediaInputs = { image: false, pdf: false };
+
+interface PromptMedium {
+  readonly mime: OpenCodePromptMediaType;
+  readonly kind: keyof PromptMediaInputs;
+  /** The file's own leading bytes, so a renamed file is never sent as what it is not. */
+  readonly signature: (bytes: Buffer) => boolean;
+}
+
+function startsWith(bytes: Buffer, prefix: string, offset = 0): boolean {
+  return bytes.subarray(offset, offset + prefix.length).toString("latin1") === prefix;
+}
+
+const PNG: PromptMedium = {
+  mime: "image/png",
+  kind: "image",
+  signature: (bytes) => startsWith(bytes, "\x89PNG\r\n\x1a\n"),
+};
+const JPEG: PromptMedium = {
+  mime: "image/jpeg",
+  kind: "image",
+  signature: (bytes) => startsWith(bytes, "\xff\xd8\xff"),
+};
+/** By extension, the producer's own attachment mapping for the media a model can receive. */
+const PROMPT_MEDIA: ReadonlyMap<string, PromptMedium> = new Map([
+  [".png", PNG],
+  [".jpg", JPEG],
+  [".jpeg", JPEG],
+  [
+    ".gif",
+    {
+      mime: "image/gif",
+      kind: "image",
+      signature: (bytes) => startsWith(bytes, "GIF87a") || startsWith(bytes, "GIF89a"),
+    },
+  ],
+  [
+    ".webp",
+    {
+      mime: "image/webp",
+      kind: "image",
+      signature: (bytes) => startsWith(bytes, "RIFF") && startsWith(bytes, "WEBP", 8),
+    },
+  ],
+  [
+    ".pdf",
+    { mime: "application/pdf", kind: "pdf", signature: (bytes) => startsWith(bytes, "%PDF-") },
+  ],
+]);
 
 /**
  * A prompt that cannot be admitted. It carries the closed reason and nothing of the path, the name
@@ -199,13 +262,17 @@ function containedRelative(root: string, path: string): string | undefined {
   return rel.split(sep).join("/");
 }
 
-function readDescriptorText(root: string, real: string): { rawText: string; sizeBytes: number } {
+function readDescriptor(
+  root: string,
+  real: string,
+  maxBytes: number,
+): { rawText: string; sizeBytes: number; bytes?: Buffer | undefined } {
   const read = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
   if (read === undefined) throw new PromptInputsRefused("reference-unreadable");
   try {
     // `reject`: a second hard link may name a file outside the workspace; `complete`: a file above
     // the bound is refused, never silently cut.
-    return read(root, real, OPENCODE_PROMPT_FILE_MAX_BYTES, "reject", "complete");
+    return read(root, real, maxBytes, "reject", "complete");
   } catch (error) {
     const known = error instanceof WorkspaceDescriptorReadError ? error.reason : undefined;
     throw new PromptInputsRefused(
@@ -215,7 +282,7 @@ function readDescriptorText(root: string, real: string): { rawText: string; size
 }
 
 function readBoundedText(root: string, real: string): ResolvedReference {
-  const { rawText, sizeBytes } = readDescriptorText(root, real);
+  const { rawText, sizeBytes } = readDescriptor(root, real, OPENCODE_PROMPT_FILE_MAX_BYTES);
   // A text file is valid UTF-8 without NUL bytes: the model request carries text content only.
   if (rawText.includes("\u0000") || rawText.includes("\uFFFD")) {
     throw new PromptInputsRefused("reference-not-text");
@@ -223,10 +290,25 @@ function readBoundedText(root: string, real: string): ResolvedReference {
   return {
     real,
     bytes: sizeBytes,
+    text: true,
     attachment: {
       uri: openCodeV2PromptFileData(Buffer.from(rawText, "utf8")),
       name: basename(real),
     },
+  };
+}
+
+/** An image or PDF, sent as the very bytes the descriptor read proved, under its own type. */
+function readBoundedMedia(root: string, real: string, medium: PromptMedium): ResolvedReference {
+  const { bytes } = readDescriptor(root, real, OPENCODE_PROMPT_MEDIA_MAX_BYTES);
+  if (bytes === undefined || !medium.signature(bytes)) {
+    throw new PromptInputsRefused("reference-not-media");
+  }
+  return {
+    real,
+    bytes: bytes.length,
+    text: false,
+    attachment: { uri: openCodeV2PromptFileData(bytes, medium.mime), name: basename(real) },
   };
 }
 
@@ -239,6 +321,7 @@ function readBoundedText(root: string, real: string): ResolvedReference {
 function resolveReference(
   root: string,
   reference: CodingWorkbenchPromptReference,
+  media: PromptMediaInputs,
 ): ResolvedReference {
   if (!isCodingWorkbenchPromptReferencePath(reference.path)) {
     throw new PromptInputsRefused("reference-invalid");
@@ -248,7 +331,11 @@ function resolveReference(
   const rel = containedRelative(root, real);
   if (rel === undefined) throw new PromptInputsRefused("reference-outside-workspace");
   if (isDenied(rel)) throw new PromptInputsRefused("reference-sensitive");
-  return readBoundedText(root, real);
+  const medium = PROMPT_MEDIA.get(extname(real).toLowerCase());
+  if (medium === undefined) return readBoundedText(root, real);
+  // The runtime would refuse an image or PDF its model does not declare; say so before sending.
+  if (!media[medium.kind]) throw new PromptInputsRefused("reference-media-unsupported");
+  return readBoundedMedia(root, real, medium);
 }
 
 export interface ResolvePromptReferencesInput {
@@ -256,6 +343,8 @@ export interface ResolvePromptReferencesInput {
   readonly references: readonly CodingWorkbenchPromptReference[];
   /** What the run's budget still has room for, from the files its earlier prompts attached. */
   readonly remainingRunBytes: number;
+  /** The media the run's model accepts; none when absent. */
+  readonly media?: PromptMediaInputs | undefined;
 }
 
 export type PromptReferencesResolution =
@@ -269,13 +358,15 @@ function admitReferences(
   const seen = new Set<string>();
   const files: PromptFileAttachment[] = [];
   let bytes = 0;
+  let textBytes = 0;
   for (const reference of input.references) {
-    const resolved = resolveReference(root, reference);
+    const resolved = resolveReference(root, reference, input.media ?? NO_MEDIA);
     // The same file under two spellings (a case variant, a link) is attached, and charged, once.
     if (seen.has(resolved.real)) continue;
     seen.add(resolved.real);
     bytes += resolved.bytes;
-    if (bytes > OPENCODE_PROMPT_FILES_MAX_BYTES) {
+    if (resolved.text) textBytes += resolved.bytes;
+    if (textBytes > OPENCODE_PROMPT_FILES_MAX_BYTES) {
       throw new PromptInputsRefused("references-prompt-budget");
     }
     if (bytes > input.remainingRunBytes) throw new PromptInputsRefused("references-run-budget");
@@ -368,7 +459,9 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
         "delivery-unresolved-limit",
         "delivery-unsupported",
         "reference-invalid",
+        "reference-media-unsupported",
         "reference-not-file",
+        "reference-not-media",
         "reference-not-text",
         "reference-outside-workspace",
         "reference-sensitive",
@@ -540,6 +633,8 @@ export interface PromptInputsRun {
   readonly ready: boolean;
   /** What the references of the run's earlier accepted prompts added up to. */
   promptFileBytes?: number | undefined;
+  /** The media the run's model declares it accepts (#3906 AC1); none when absent. */
+  readonly media?: PromptMediaInputs | undefined;
 }
 
 export interface OpenCodePromptInputsRunPort {
@@ -643,6 +738,7 @@ function admitForRun(
     workspaceRoot: run.workspaceRoot,
     references,
     remainingRunBytes: remainingRunBytes(run),
+    media: run.media,
   });
   if (!resolved.ok) return resolved;
   return { ok: true, inputs: admittedInputs(request, resolved.files, resolved.bytes) };

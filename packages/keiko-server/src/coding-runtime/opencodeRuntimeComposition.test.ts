@@ -352,11 +352,7 @@ interface OpenCodeRuntimeCompositionModule {
       readonly target: "macos-arm64";
     };
     readonly stateBaseRoot: string;
-    readonly contextGeometry: {
-      readonly contextWindowTokens: number;
-      readonly maxInputTokens: number;
-      readonly maxOutputTokens: number;
-    };
+    readonly contextGeometry: FixtureContextGeometry;
     readonly capabilities: {
       readonly modelGatewayCapability: string;
       readonly toolFacadeCapability: string;
@@ -671,6 +667,8 @@ interface StartBridgeControl {
   };
   readonly toolFacadeCapability?: string;
   readonly readToolProfile?: () => "direct" | "code-mode" | "native";
+  /** The media the run's model declares (#3906 AC1); absent declares text only. */
+  readonly media?: { readonly imageInput?: boolean; readonly documentInput?: boolean };
   /** What `plugin.list` reports; absent reports Keiko's generated plugins active. */
   readonly pluginEntries?: (launch: RuntimeSupervisorLaunchRequest | undefined) => unknown[];
   readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
@@ -1118,6 +1116,24 @@ function fixtureSignal(control: StartBridgeControl | undefined): AbortSignal | u
   return control?.signal;
 }
 
+interface FixtureContextGeometry {
+  readonly contextWindowTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+  readonly imageInput?: boolean;
+  readonly documentInput?: boolean;
+}
+
+/** The fixture's model window, with the media its control declares (#3906 AC1). */
+function fixtureContextGeometry(control: StartBridgeControl | undefined): FixtureContextGeometry {
+  return {
+    contextWindowTokens: 65_536,
+    maxInputTokens: 61_440,
+    maxOutputTokens: 4_096,
+    ...control?.media,
+  };
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -1364,11 +1380,7 @@ async function startBridgeFixture(
     processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
-    contextGeometry: {
-      contextWindowTokens: 65_536,
-      maxInputTokens: 61_440,
-      maxOutputTokens: 4_096,
-    },
+    contextGeometry: fixtureContextGeometry(control),
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
       toolFacadeCapability: fixtureToolCapability(control),
@@ -7890,7 +7902,10 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
     execute: () => Promise.resolve({ status: "observed", evidence: [] }),
   };
 
-  async function inputsFixture(profile: "native" | "direct" | "code-mode" = "native"): Promise<{
+  async function inputsFixture(
+    profile: "native" | "direct" | "code-mode" = "native",
+    media?: StartBridgeControl["media"],
+  ): Promise<{
     readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
     readonly port: OpenCodeRuntimeComposition["runPort"];
     readonly workspace: string;
@@ -7910,6 +7925,7 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       readToolProfile: () => profile,
       diagnostics: { record: (record): void => void diagnostics.push(record) },
       runControl: { promptBodies, abortSessions: [], statusResponses: [{}] },
+      ...(media === undefined ? {} : { media }),
     });
     return {
       fixture,
@@ -7938,6 +7954,39 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       const { fixture, port } = await inputsFixture(profile);
       try {
         expect(port.promptInputs).toEqual(expected);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  // #3906 AC1: the run's own launch geometry decides which media its prompt may attach.
+  it("attaches an image only when the run's model declares image input", async () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from("IMAGE-CANARY"),
+    ]);
+    for (const [media, expected] of [
+      [{ imageInput: true }, "admitted"],
+      [undefined, "reference-media-unsupported"],
+    ] as const) {
+      const { fixture, port, workspace } = await inputsFixture("native", media);
+      writeFileSync(join(workspace, "screen.png"), png);
+      try {
+        const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: [{ path: "screen.png" }],
+        });
+        if (expected === "admitted") {
+          expect(admitted).toMatchObject({
+            ok: true,
+            inputs: {
+              files: [{ uri: openCodeV2PromptFileData(png, "image/png"), name: "screen.png" }],
+              fileBytes: png.length,
+            },
+          });
+        } else {
+          expect(admitted).toEqual({ ok: false, reason: expected });
+        }
       } finally {
         await fixture.stop();
       }

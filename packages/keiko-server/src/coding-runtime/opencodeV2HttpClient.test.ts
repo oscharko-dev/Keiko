@@ -8,6 +8,7 @@ import {
   createOpenCodeV2HttpClient,
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   openCodeV2PromptFileData,
+  OPENCODE_PROMPT_MEDIA_MAX_BYTES,
   parseOpenCodeV2ChildEndpoint,
 } from "./opencodeV2HttpClient.js";
 
@@ -242,6 +243,23 @@ describe("OpenCode V2 prompt inputs", () => {
     expect(sentBody(fetch)).toEqual({ text: "see @src/app.ts", files, delivery: "steer" });
   });
 
+  // #3906 AC1: an admitted image or PDF travels inline under its own type, up to its own ceiling.
+  it("sends an admitted image and PDF inline under their own types", async () => {
+    const { client, fetch } = promptClient();
+    const files = [
+      { uri: openCodeV2PromptFileData(Buffer.from("png"), "image/png"), name: "screen.png" },
+      {
+        uri: openCodeV2PromptFileData(
+          Buffer.alloc(OPENCODE_PROMPT_MEDIA_MAX_BYTES, 37),
+          "application/pdf",
+        ),
+        name: "spec.pdf",
+      },
+    ];
+    await client.prompt("ses_prompt_1", "see these", undefined, undefined, { files });
+    expect(sentBody(fetch)).toEqual({ text: "see these", files });
+  });
+
   it("copies only the two admitted fields of a file, whatever else the caller object carries", async () => {
     const { client, fetch } = promptClient();
     const uri = openCodeV2PromptFileData(Buffer.from("b"));
@@ -256,6 +274,17 @@ describe("OpenCode V2 prompt inputs", () => {
     // A path the runtime would open itself, after Keiko's check (#3897 review).
     ["a file uri", { uri: "file:///work/space/a.ts", name: "a.ts" }],
     ["another media type", { uri: "data:text/html;base64,PGI+", name: "a.ts" }],
+    ["an image type no model receives", { uri: "data:image/svg+xml;base64,PGI+", name: "a.svg" }],
+    [
+      "an oversized image",
+      {
+        uri: openCodeV2PromptFileData(
+          Buffer.alloc(OPENCODE_PROMPT_MEDIA_MAX_BYTES + 1, 1),
+          "image/png",
+        ),
+        name: "a.png",
+      },
+    ],
     ["non-canonical base64", { uri: "data:text/plain;base64,YQ", name: "a.ts" }],
     ["base64 noise", { uri: "data:text/plain;base64,Y Q==", name: "a.ts" }],
     [

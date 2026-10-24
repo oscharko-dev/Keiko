@@ -1310,7 +1310,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   again, and a prompt that no longer fits because another admitted prompt was sent first is refused
   unsent with `references-run-budget`. Turn prompts, slash commands and deliveries share this
   rule (`reservePromptInputs` / `releasePromptInputs`). The attachment is the runtime's `files` entry: the bytes that descriptor
-  read admitted, inline as a `data:text/plain;base64,` URI, and the file name. A `file://` URI is
+  read admitted, inline as a `data:text/plain;base64,` URI, and the file name. An image (`.png`,
+  `.jpg`, `.jpeg`, `.gif`, `.webp`) or PDF reference is attached the same way under its own type
+  (#3906 AC1), but only when the run's model declares that input (the same `imageInput` /
+  `documentInput` the launch profile declares to the runtime) and only when the descriptor-read
+  bytes carry the medium's own signature; otherwise the prompt is refused with
+  `reference-media-unsupported` or `reference-not-media`. One medium may hold 512 KiB
+  (`OPENCODE_PROMPT_MEDIA_MAX_BYTES`), counts against the run's 1 MiB budget and not against the
+  prompt's text bound, and the original runtime hands it to the model as its own user-message
+  `image_url` or `file` part (`opencodeNativeMediaInput.real.test.ts`). A `file://` URI is
   never sent (the client refuses it before a byte leaves), because the runtime would reopen the
   path after Keiko's check and a hard link swapped in between would reach the model instead (#3897
   review; the real-binary control replaces the path after admission). The typed text stays the visible message and the file content stays
