@@ -13,6 +13,7 @@ import {
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
+  extractOpenCodeBuiltinPlugins,
   extractOpenCodeConfigurationPaths,
   extractOpenCodeServiceOperations,
   parseOpenCodeCliSubcommands,
@@ -26,8 +27,8 @@ import {
 /**
  * Drift detection for the complete service inventory (#3908 AC4, #3899 AC3) and its configuration
  * settings (#3903 AC5, #3908 AC2). The pinned executable serves its OpenAPI document and its
- * `--help` tree; the operations, the commands and the setting paths of its configuration schema
- * must equal the committed producer-derived fixture, so a producer that adds, removes or moves one
+ * `--help` tree; the operations, the commands, the setting paths of its configuration schema and
+ * its built-in plugins must equal the committed producer-derived fixture, so a producer that adds, removes or moves one
  * fails here before anyone admits it. Run with KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set;
  * otherwise it is skipped. After an upgrade, KEIKO_WRITE_OPENCODE_SERVICE_INVENTORY_FIXTURE=1
  * rewrites the fixture of the running version (format it with prettier); the unit test then names
@@ -150,6 +151,18 @@ async function stopChild(child: Child): Promise<void> {
   });
 }
 
+/** The built-in plugins, once the runtime lists them: its first listing can still be empty. */
+async function loadedBuiltinPlugins(
+  client: ReturnType<typeof createOpenCodeV2HttpClient>,
+): Promise<readonly string[]> {
+  await expect
+    .poll(async () => extractOpenCodeBuiltinPlugins(await client.plugins()).length, {
+      timeout: 20_000,
+    })
+    .toBeGreaterThan(0);
+  return extractOpenCodeBuiltinPlugins(await client.plugins());
+}
+
 describe("pinned OpenCode complete service inventory", () => {
   it.skipIf(BINARY === undefined || RESOURCE_ROOT === undefined)(
     "serves exactly the operations and commands of the committed producer-derived inventory",
@@ -174,6 +187,7 @@ describe("pinned OpenCode complete service inventory", () => {
           operations: extractOpenCodeServiceOperations(document),
           cliCommands: walkCli(binary, root).sort(),
           configurationPaths: extractOpenCodeConfigurationPaths(document),
+          plugins: await loadedBuiltinPlugins(client),
         };
         if (WRITE_FIXTURE)
           writeFileSync(fixtureUrl(live.version), `${JSON.stringify(live, null, 2)}\n`);
@@ -183,6 +197,7 @@ describe("pinned OpenCode complete service inventory", () => {
         expect(live.operations).toEqual(committed.operations);
         expect(live.cliCommands).toEqual(committed.cliCommands);
         expect(live.configurationPaths).toEqual(committed.configurationPaths);
+        expect(live.plugins).toEqual(committed.plugins);
         // The admitted subset of the same live document still projects to the pinned digest.
         expect(projectOpenCodeV2ProtocolSurface(document).digest).toBe(
           OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,

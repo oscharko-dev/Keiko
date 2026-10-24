@@ -5,22 +5,30 @@ import { describe, expect, it } from "vitest";
 
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts";
 
-import { createFixedOpenCodeV2Config } from "./opencodeLaunchProfile.js";
+import {
+  OPENCODE_GATEWAY_PROVIDER_POLICIES,
+  OPENCODE_RUNTIME_PROVIDER_ID,
+  createFixedOpenCodeV2Config,
+} from "./opencodeLaunchProfile.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
 import {
   OPENCODE_CLI_DISPOSITIONS,
   OPENCODE_CONFIGURATION_DISPOSITIONS,
+  OPENCODE_PLUGIN_DISPOSITIONS,
   OPENCODE_SERVICE_DISPOSITIONS,
   OPENCODE_SERVICE_REFUSAL_REASONS,
   diffOpenCodeConfigurationPaths,
   diffOpenCodeServiceOperations,
+  extractOpenCodeBuiltinPlugins,
   extractOpenCodeConfigurationPaths,
   extractOpenCodeServiceOperations,
   openCodeConfigurationDisposition,
+  openCodePluginDisposition,
   openCodeServiceDisposition,
   parseOpenCodeCliSubcommands,
   parseOpenCodeServiceInventory,
   type OpenCodeConfigurationDisposition,
+  type OpenCodePluginDisposition,
   type OpenCodeServiceDisposition,
   type OpenCodeServiceDispositionEntry,
   type OpenCodeServiceOperation,
@@ -39,6 +47,8 @@ const BEGIN = "<!-- service-inventory:begin -->";
 const END = "<!-- service-inventory:end -->";
 const CONFIGURATION_BEGIN = "<!-- configuration-inventory:begin -->";
 const CONFIGURATION_END = "<!-- configuration-inventory:end -->";
+const PLUGIN_BEGIN = "<!-- plugin-inventory:begin -->";
+const PLUGIN_END = "<!-- plugin-inventory:end -->";
 /** The epic #3897 child issues that can own an original surface. */
 const OWNER_ISSUES: ReadonlySet<number> = new Set([
   3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3906, 3907, 3908,
@@ -57,6 +67,7 @@ function inventory(version: string): ReturnType<typeof parseOpenCodeServiceInven
 const CURRENT = inventory(OPENCODE_PINNED_VERSION);
 const CLI_COMMANDS = CURRENT.cliCommands ?? [];
 const CONFIGURATION_PATHS = CURRENT.configurationPaths ?? [];
+const PLUGINS = CURRENT.plugins ?? [];
 const OPERATION_IDS: ReadonlySet<string> = new Set(CURRENT.operations.map((o) => o.operationId));
 
 function endpoint(operation: OpenCodeServiceOperation): string {
@@ -758,6 +769,145 @@ describe("parity document configuration inventory section", () => {
       document.indexOf(CONFIGURATION_BEGIN),
     );
     for (const term of ["keiko-set", "keiko-operation", "refused"])
+      expect(legend, term).toContain(`\`${term}\``);
+  });
+});
+
+// ---- Built-in plugins (#3903 AC5, #3908 AC2) ----
+
+function pluginNames(kind: OpenCodePluginDisposition["kind"]): readonly string[] {
+  return OPENCODE_PLUGIN_DISPOSITIONS.filter((entry) => entry.disposition.kind === kind)
+    .map((entry) => entry.name)
+    .sort();
+}
+
+describe("OpenCode 2.1.4 plugin dispositions fail closed", () => {
+  it("hold every built-in plugin of the pinned version, ordered", () => {
+    expect(PLUGINS).toHaveLength(90);
+    expect(duplicates(PLUGINS)).toEqual([]);
+    expect(PLUGINS).toEqual([...PLUGINS].sort());
+  });
+
+  it("give every built-in plugin exactly one disposition and name no other", () => {
+    const names = OPENCODE_PLUGIN_DISPOSITIONS.map((entry) => entry.name);
+    expect(duplicates(names)).toEqual([]);
+    expect([...names].sort()).toEqual([...PLUGINS]);
+    expect(PLUGINS.filter((id) => openCodePluginDisposition(id) === undefined)).toEqual([]);
+  });
+
+  it("let a configuration plugin name only a setting of the configuration inventory", () => {
+    const declared: ReadonlySet<string> = new Set(CONFIGURATION_PATHS);
+    const settings = OPENCODE_PLUGIN_DISPOSITIONS.flatMap((entry) =>
+      entry.disposition.kind === "configuration" ? [entry.disposition.setting] : [],
+    );
+    expect(settings.length).toBeGreaterThan(0);
+    expect(settings.filter((setting) => !declared.has(setting))).toEqual([]);
+  });
+
+  it("give every refusal a closed reason and an epic owner, and every plugin matrix rows", () => {
+    const rows = matrixRows(readFileSync(DOCUMENT_URL, "utf8"));
+    for (const { name, disposition, rows: named } of OPENCODE_PLUGIN_DISPOSITIONS) {
+      expect(named.length, name).toBeGreaterThan(0);
+      expect(
+        named.filter((row) => !rows.has(row)),
+        name,
+      ).toEqual([]);
+      if (disposition.kind !== "refused") continue;
+      expect(OPENCODE_SERVICE_REFUSAL_REASONS, name).toContain(disposition.reason);
+      expect(OWNER_ISSUES.has(disposition.owner), name).toBe(true);
+    }
+  });
+
+  // The gateway-only provider policy is what makes the other provider plugins unusable: it denies
+  // every provider and admits only the gateway binding, which the dynamic provider plugin loads.
+  it("refuse every provider plugin but the one that loads the gateway binding", () => {
+    expect(OPENCODE_GATEWAY_PROVIDER_POLICIES.at(0)).toMatchObject({
+      action: "provider.use",
+      resource: "*",
+      effect: "deny",
+    });
+    expect(OPENCODE_GATEWAY_PROVIDER_POLICIES.at(-1)).toMatchObject({
+      action: "provider.use",
+      resource: OPENCODE_RUNTIME_PROVIDER_ID,
+      effect: "allow",
+    });
+    const providers = PLUGINS.filter((id) => id.startsWith("opencode.provider."));
+    const usable = providers.filter((id) => openCodePluginDisposition(id)?.kind === "native");
+    expect(usable).toEqual(["opencode.provider.dynamic"]);
+    const setting = providers.filter(
+      (id) => openCodePluginDisposition(id)?.kind === "configuration",
+    );
+    expect(setting).toEqual(["opencode.provider.prompt-cache-key"]);
+  });
+
+  it("extracts only built-in plugin ids and refuses a listing that could hide one", () => {
+    const listing = [
+      { id: "opencode.tool.read", source: { type: "builtin" } },
+      { id: "keiko_native_policy", source: { type: "file" } },
+      { id: "opencode.agent", source: { type: "builtin" } },
+    ];
+    expect(extractOpenCodeBuiltinPlugins(listing)).toEqual([
+      "opencode.agent",
+      "opencode.tool.read",
+    ]);
+    expect(() => extractOpenCodeBuiltinPlugins([{ source: { type: "builtin" } }])).toThrow(
+      "opencode-plugin-id-missing",
+    );
+    const twice = [listing[0] ?? {}, listing[0] ?? {}];
+    expect(() => extractOpenCodeBuiltinPlugins(twice)).toThrow("opencode-plugin-id-duplicate");
+  });
+});
+
+function pluginLabel(disposition: OpenCodePluginDisposition): string[] {
+  if (disposition.kind === "native") return ["`native`", "runs as in standalone OpenCode", "-"];
+  if (disposition.kind === "configuration")
+    return ["`configuration`", `applies \`${disposition.setting}\``, "-"];
+  return label(disposition);
+}
+
+function renderPluginBlock(): string {
+  const entries = new Map(OPENCODE_PLUGIN_DISPOSITIONS.map((entry) => [entry.name, entry]));
+  const plugins = PLUGINS.map((id) => {
+    const entry = entries.get(id);
+    if (entry === undefined) throw new TypeError(`no disposition: ${id}`);
+    return [`\`${id}\``, ...pluginLabel(entry.disposition), rowsCell(entry)];
+  });
+  const kinds = ["native", "configuration", "refused"] as const;
+  const counts = [
+    ...kinds.map((kind) => [`\`${kind}\``, String(pluginNames(kind).length)]),
+    ["Total", String(plugins.length)],
+  ];
+  return [
+    PLUGIN_BEGIN,
+    "",
+    ...table(["Disposition", "Plugins"], counts),
+    "",
+    `#### Built-in plugins (${String(plugins.length)})`,
+    "",
+    ...table(["Plugin", "Disposition", "Detail", "Owner", "Rows"], plugins),
+    "",
+    PLUGIN_END,
+  ].join("\n");
+}
+
+describe("parity document plugin inventory section", () => {
+  it("lists exactly the plugin dispositions and the committed fixture", () => {
+    let document = readFileSync(DOCUMENT_URL, "utf8");
+    const block = (text: string): string => documentBlock(text, PLUGIN_BEGIN, PLUGIN_END);
+    if (WRITE_DOCUMENT) {
+      document = document.replace(block(document), renderPluginBlock());
+      writeFileSync(DOCUMENT_URL, document);
+    }
+    expect(normalized(block(document))).toEqual(normalized(renderPluginBlock()));
+  });
+
+  it("explains the plugin disposition kinds", () => {
+    const document = readFileSync(DOCUMENT_URL, "utf8");
+    const legend = document.slice(
+      document.indexOf("### Built-in plugin inventory"),
+      document.indexOf(PLUGIN_BEGIN),
+    );
+    for (const term of ["native", "configuration", "refused"])
       expect(legend, term).toContain(`\`${term}\``);
   });
 });

@@ -17,7 +17,10 @@
  * setting path its configuration schema declares, and `OPENCODE_CONFIGURATION_DISPOSITIONS` says
  * of each one whether Keiko composes it, a named Keiko product owner provides it, or it stays
  * unavailable for a closed reason with its owning issue. An unavailable setting keeps the
- * producer's own default, because no configuration layer the runtime loads can set it.
+ * producer's own default, because no configuration layer the runtime loads can set it. The same
+ * fixture lists the producer's built-in plugins (`GET /api/plugin`), and
+ * `OPENCODE_PLUGIN_DISPOSITIONS` says of each whether it runs natively, only applies settings of
+ * the configuration inventory, or offers nothing a Keiko run can use, for a closed reason.
  */
 import { OPENCODE_V2_APPROVED_ENDPOINTS } from "./opencodeProtocolSurface.js";
 
@@ -37,6 +40,8 @@ export interface OpenCodeServiceInventory {
   readonly cliCommands?: readonly string[];
   /** Every setting path of the configuration schema (`extractOpenCodeConfigurationPaths`). */
   readonly configurationPaths?: readonly string[];
+  /** The ids of the producer's built-in plugins (`extractOpenCodeBuiltinPlugins`). */
+  readonly plugins?: readonly string[];
 }
 
 const OPERATION_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
@@ -124,12 +129,33 @@ export function parseOpenCodeServiceInventory(json: string): OpenCodeServiceInve
   if (!operations.every(isOperation)) throw new TypeError(INVENTORY_MALFORMED);
   const cliCommands = optionalNames(parsed.cliCommands);
   const configurationPaths = optionalNames(parsed.configurationPaths);
+  const plugins = optionalNames(parsed.plugins);
   return {
     version: parsed.version,
     operations,
     ...(cliCommands === undefined ? {} : { cliCommands }),
     ...(configurationPaths === undefined ? {} : { configurationPaths }),
+    ...(plugins === undefined ? {} : { plugins }),
   };
+}
+
+/**
+ * The ids of the built-in plugins in the producer's own plugin listing (`GET /api/plugin`),
+ * ordered. Keiko's generated plugins and any other source are not built-in and are left out. An
+ * entry without an id, or an id listed twice, throws: the inventory must not drop a plugin.
+ */
+export function extractOpenCodeBuiltinPlugins(
+  listing: readonly Readonly<Record<string, unknown>>[],
+): readonly string[] {
+  const ids = listing
+    .filter((entry) => record(entry.source)?.type === "builtin")
+    .map((entry) => {
+      if (typeof entry.id !== "string" || entry.id === "")
+        throw new TypeError("opencode-plugin-id-missing");
+      return entry.id;
+    });
+  if (new Set(ids).size !== ids.length) throw new TypeError("opencode-plugin-id-duplicate");
+  return ids.sort(compareCodeUnits);
 }
 
 const CONFIGURATION_ROOT_SCHEMA = "Config.InfoEncoded";
@@ -352,6 +378,20 @@ export type OpenCodeServiceDispositionEntry = OpenCodeDispositionEntry<
 export type OpenCodeConfigurationDispositionEntry =
   OpenCodeDispositionEntry<OpenCodeConfigurationDisposition>;
 
+/**
+ * Of one built-in plugin, which the producer loads in every run: it runs as in standalone OpenCode
+ * (`native`; where it acts on the workspace, the machine or the network, that effect passes
+ * `keiko.native-policy` and the native sandbox), it only applies a setting of the configuration
+ * inventory, whose disposition then decides (`configuration`), or what it offers is unavailable in
+ * a Keiko run for a closed reason with its owner (`refused`).
+ */
+export type OpenCodePluginDisposition =
+  | { readonly kind: "native" }
+  | { readonly kind: "configuration"; readonly setting: string }
+  | RefusedDisposition;
+
+export type OpenCodePluginDispositionEntry = OpenCodeDispositionEntry<OpenCodePluginDisposition>;
+
 interface DispositionGroup<D> {
   readonly disposition: D;
   readonly rows: readonly string[];
@@ -389,6 +429,21 @@ function keikoSet(
   names: string[],
 ): DispositionGroup<OpenCodeConfigurationDisposition> {
   return { disposition: { kind: "keiko-set" }, rows, names };
+}
+
+function nativePlugin(
+  rows: string[],
+  names: string[],
+): DispositionGroup<OpenCodePluginDisposition> {
+  return { disposition: { kind: "native" }, rows, names };
+}
+
+function configurationPlugin(
+  setting: string,
+  rows: string[],
+  names: string[],
+): DispositionGroup<OpenCodePluginDisposition> {
+  return { disposition: { kind: "configuration", setting }, rows, names };
 }
 
 function flatten<D>(
@@ -1039,6 +1094,138 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     ],
   ),
 ]);
+
+/**
+ * Every built-in plugin of the pinned 2.1.4 producer, by id. Every provider plugin but the one that
+ * loads the gateway binding's own SDK package (`opencode.provider.dynamic`) serves a provider the
+ * gateway-only provider policy refuses (`OPENCODE_GATEWAY_PROVIDER_POLICIES`). The workspace's
+ * Claude-compatible skill directories are not read by the runtime under the launch profile; Keiko
+ * admits those skills itself as sanitized copies (`codingRuntimeRepositoryItems.ts`).
+ */
+export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
+  nativePlugin(["S01"], ["opencode.tool.input.repair"]),
+  nativePlugin(["T01", "T02"], ["opencode.tool.read"]),
+  nativePlugin(["T03"], ["opencode.tool.glob"]),
+  nativePlugin(["T04"], ["opencode.tool.grep"]),
+  nativePlugin(["T05"], ["opencode.tool.edit"]),
+  nativePlugin(["T06", "T07"], ["opencode.tool.write"]),
+  nativePlugin(["T08"], ["opencode.tool.patch"]),
+  nativePlugin(["T10", "T11", "T12", "T13"], ["opencode.tool.shell"]),
+  nativePlugin(["T14"], ["opencode.tool.webfetch"]),
+  nativePlugin(["T15"], ["opencode.tool.websearch"]),
+  nativePlugin(["T16"], ["opencode.tool.subagent"]),
+  nativePlugin(["T17"], ["opencode.tool.skill", "opencode.skill"]),
+  nativePlugin(["T18"], ["opencode.tool.question"]),
+  nativePlugin(["T19"], ["opencode.tool.todo"]),
+  nativePlugin(["T21", "T22"], ["opencode.tools"]),
+  nativePlugin(["C04", "T21"], ["opencode.tools.mcp-resources"]),
+  nativePlugin(["C01"], ["opencode.agent", "opencode.plan"]),
+  nativePlugin(["C02"], ["opencode.command"]),
+  nativePlugin(["T12", "S17"], ["opencode.vcs.git", "opencode.vcs.hg"]),
+  nativePlugin(
+    ["S11"],
+    [
+      "opencode.provider.dynamic",
+      "opencode.prompt.anthropic",
+      "opencode.prompt.arcee",
+      "opencode.prompt.identity",
+      "opencode.prompt.kimi",
+      "opencode.prompt.meta",
+      "opencode.prompt.openai",
+      "opencode.prompt.verbosity",
+    ],
+  ),
+  configurationPlugin("worktree", ["S17"], ["opencode.config.worktree"]),
+  configurationPlugin("mcp", ["C04"], ["opencode.config.mcp"]),
+  configurationPlugin("mcp.servers.*.codemode", ["C04", "T21"], ["opencode.mcp.codemode.defaults"]),
+  configurationPlugin("instructions", ["C03"], ["opencode.config.instruction"]),
+  configurationPlugin("references", ["C08"], ["opencode.config.reference"]),
+  configurationPlugin("agents", ["C01"], ["opencode.config.agent"]),
+  configurationPlugin("commands", ["C02"], ["opencode.config.command"]),
+  configurationPlugin("compaction", ["S08"], ["opencode.config.compaction"]),
+  configurationPlugin("formatter", ["C07"], ["opencode.config.formatter"]),
+  configurationPlugin("media", ["S14"], ["opencode.config.image"]),
+  configurationPlugin("watcher", ["C06"], ["opencode.config.location-watcher"]),
+  configurationPlugin("shell", ["T10", "T11"], ["opencode.config.shell"]),
+  configurationPlugin("snapshots", ["S04"], ["opencode.config.snapshot"]),
+  configurationPlugin("tool_output", ["S09"], ["opencode.config.tool-output"]),
+  configurationPlugin("skills", ["T17"], ["opencode.config.skill"]),
+  configurationPlugin("providers", ["S11"], ["opencode.config.provider"]),
+  configurationPlugin("websearch", ["T15"], ["opencode.config.websearch"]),
+  configurationPlugin("policies", ["S11"], ["opencode.config.policy"]),
+  configurationPlugin("warming", ["S10"], ["opencode.warming"]),
+  configurationPlugin(
+    "providers.*.compatibility.supportsPromptCacheKey",
+    ["S11"],
+    ["opencode.provider.prompt-cache-key"],
+  ),
+  refused("keiko-owns-configuration", 3903, ["T17", "C06"], ["opencode.config.compatibility"]),
+  refused("host-surface", 3899, ["T21", "T22"], ["opencode.browser"]),
+  refused(
+    "leaves-machine",
+    3905,
+    ["S11"],
+    ["opencode.wellknown", "opencode.models.dev", "opencode.provider.opencode"],
+  ),
+  refused(
+    "leaves-machine",
+    3900,
+    ["T15"],
+    [
+      "opencode.websearch.exa",
+      "opencode.websearch.firecrawl",
+      "opencode.websearch.parallel",
+      "opencode.websearch.tavily",
+      "opencode.websearch.tinyfish",
+    ],
+  ),
+  refused(
+    "keiko-owns-configuration",
+    3905,
+    ["S11"],
+    [
+      "opencode.provider.amazon.bedrock",
+      "opencode.provider.azure",
+      "opencode.provider.cerebras",
+      "opencode.provider.chatgpt",
+      "opencode.provider.cloudflare.ai.gateway",
+      "opencode.provider.cloudflare.workers.ai",
+      "opencode.provider.cohere",
+      "opencode.provider.databricks",
+      "opencode.provider.digitalocean",
+      "opencode.provider.github.copilot",
+      "opencode.provider.gitlab",
+      "opencode.provider.google.vertex",
+      "opencode.provider.kilo",
+      "opencode.provider.llmgateway",
+      "opencode.provider.lmstudio",
+      "opencode.provider.modal",
+      "opencode.provider.neon",
+      "opencode.provider.nvidia",
+      "opencode.provider.ollama",
+      "opencode.provider.openai",
+      "opencode.provider.openai-context-caps",
+      "opencode.provider.openrouter",
+      "opencode.provider.perplexity",
+      "opencode.provider.poe",
+      "opencode.provider.sap.ai.core",
+      "opencode.provider.snowflake.cortex",
+      "opencode.provider.vercel",
+      "opencode.provider.vllm",
+      "opencode.provider.xai",
+      "opencode.provider.zenmux",
+    ],
+  ),
+]);
+
+const PLUGIN_DISPOSITIONS: ReadonlyMap<string, OpenCodePluginDisposition> = new Map(
+  OPENCODE_PLUGIN_DISPOSITIONS.map((entry) => [entry.name, entry.disposition]),
+);
+
+/** The disposition of one built-in plugin id, or `undefined` when none exists. */
+export function openCodePluginDisposition(id: string): OpenCodePluginDisposition | undefined {
+  return PLUGIN_DISPOSITIONS.get(id);
+}
 
 const CONFIGURATION_DISPOSITIONS: ReadonlyMap<string, OpenCodeConfigurationDisposition> = new Map(
   OPENCODE_CONFIGURATION_DISPOSITIONS.map((entry) => [entry.name, entry.disposition]),

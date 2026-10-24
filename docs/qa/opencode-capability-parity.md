@@ -306,10 +306,8 @@ Native tool names are the ones the 2.1.4 producer registers [B] ([native-tools-f
 
 Every runtime setting of the 2.1.4 configuration schema, including `watcher`, `warming`,
 `username`, `shell`, `media`, `references` and `experimental`, has its own disposition and owner in
-the configuration setting inventory of section 7. The plugins the 2.1.4 bundle embeds (for example
-`opencode.browser`, `opencode.wellknown`, `opencode.vcs.git`, `opencode.vcs.hg`) [B] still need a
-plugin comparison; their omission from this table is not parity evidence, and whether any of them
-adds model-visible capability under Keiko's profile is unverified.
+the configuration setting inventory of section 7, and every plugin the 2.1.4 bundle embeds has its
+own in the built-in plugin inventory of the same section.
 
 ### 3.4 Summary
 
@@ -1169,6 +1167,136 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `worktree.directory`                                              | `refused`         | `keiko-owns-workspace-binding`                                                                    | #3902 | S17      |
 
 <!-- configuration-inventory:end -->
+
+### Built-in plugin inventory
+
+The extension half of the same acceptance items: the 2.1.4 producer ships its tools, providers,
+prompts, configuration loaders and integrations as built-in plugins, loaded in every run. The
+fixture holds the ids of every built-in plugin the original executable lists (`GET /api/plugin`
+under Keiko's launch profile, 90, all `active`), derived by `extractOpenCodeBuiltinPlugins`; Keiko's
+generated plugins are not built-in and are not listed. The real-binary drift test compares the live
+listing, and the tables below are generated from the fixture and `OPENCODE_PLUGIN_DISPOSITIONS`.
+
+Every built-in plugin has exactly one disposition:
+
+| Disposition     | Meaning                                                                                                                                                                                                                       |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native`        | Runs as in standalone OpenCode. Where it acts on the workspace, the machine or the network (a tool, the Git and Mercurial integration), that effect passes `keiko.native-policy` and the native sandbox.                      |
+| `configuration` | Only applies a setting of the configuration inventory above; that setting's disposition decides what it does in a Keiko run.                                                                                                  |
+| `refused`       | Loaded, but what it offers is unavailable in a Keiko run, for one of the closed reasons of the operation inventory and with its owner: a provider the gateway-only provider policy refuses, a remote service, a host surface. |
+
+Every provider plugin except `opencode.provider.dynamic`, which loads the gateway binding's own SDK
+package, serves a provider the gateway-only policy refuses (S11), so the runtime reaches no model but
+through the Model Gateway. `opencode.config.compatibility` would load skills from Claude-compatible
+directories; under the launch profile the original executable loads none of the workspace's
+`.claude/skills`, `.agents/skills` or `.opencode/skills` (only its two built-in skills, `opencode`
+and `report`), and Keiko admits those skills itself as sanitized copies (T17).
+
+<!-- plugin-inventory:begin -->
+
+| Disposition     | Plugins |
+| --------------- | ------- |
+| `native`        | 30      |
+| `configuration` | 20      |
+| `refused`       | 40      |
+| Total           | 90      |
+
+#### Built-in plugins (90)
+
+| Plugin                                    | Disposition     | Detail                                                     | Owner | Rows               |
+| ----------------------------------------- | --------------- | ---------------------------------------------------------- | ----- | ------------------ |
+| `opencode.agent`                          | `native`        | runs as in standalone OpenCode                             | -     | C01                |
+| `opencode.browser`                        | `refused`       | `host-surface`                                             | #3899 | T21, T22           |
+| `opencode.command`                        | `native`        | runs as in standalone OpenCode                             | -     | C02                |
+| `opencode.config.agent`                   | `configuration` | applies `agents`                                           | -     | C01                |
+| `opencode.config.command`                 | `configuration` | applies `commands`                                         | -     | C02                |
+| `opencode.config.compaction`              | `configuration` | applies `compaction`                                       | -     | S08                |
+| `opencode.config.compatibility`           | `refused`       | `keiko-owns-configuration`                                 | #3903 | T17, C06           |
+| `opencode.config.formatter`               | `configuration` | applies `formatter`                                        | -     | C07                |
+| `opencode.config.image`                   | `configuration` | applies `media`                                            | -     | S14                |
+| `opencode.config.instruction`             | `configuration` | applies `instructions`                                     | -     | C03                |
+| `opencode.config.location-watcher`        | `configuration` | applies `watcher`                                          | -     | C06                |
+| `opencode.config.mcp`                     | `configuration` | applies `mcp`                                              | -     | C04                |
+| `opencode.config.policy`                  | `configuration` | applies `policies`                                         | -     | S11                |
+| `opencode.config.provider`                | `configuration` | applies `providers`                                        | -     | S11                |
+| `opencode.config.reference`               | `configuration` | applies `references`                                       | -     | C08                |
+| `opencode.config.shell`                   | `configuration` | applies `shell`                                            | -     | T10, T11           |
+| `opencode.config.skill`                   | `configuration` | applies `skills`                                           | -     | T17                |
+| `opencode.config.snapshot`                | `configuration` | applies `snapshots`                                        | -     | S04                |
+| `opencode.config.tool-output`             | `configuration` | applies `tool_output`                                      | -     | S09                |
+| `opencode.config.websearch`               | `configuration` | applies `websearch`                                        | -     | T15                |
+| `opencode.config.worktree`                | `configuration` | applies `worktree`                                         | -     | S17                |
+| `opencode.mcp.codemode.defaults`          | `configuration` | applies `mcp.servers.*.codemode`                           | -     | C04, T21           |
+| `opencode.models.dev`                     | `refused`       | `leaves-machine`                                           | #3905 | S11                |
+| `opencode.plan`                           | `native`        | runs as in standalone OpenCode                             | -     | C01                |
+| `opencode.prompt.anthropic`               | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.prompt.arcee`                   | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.prompt.identity`                | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.prompt.kimi`                    | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.prompt.meta`                    | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.prompt.openai`                  | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.prompt.verbosity`               | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.provider.amazon.bedrock`        | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.azure`                 | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.cerebras`              | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.chatgpt`               | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.cloudflare.ai.gateway` | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.cloudflare.workers.ai` | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.cohere`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.databricks`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.digitalocean`          | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.dynamic`               | `native`        | runs as in standalone OpenCode                             | -     | S11                |
+| `opencode.provider.github.copilot`        | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.gitlab`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.google.vertex`         | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.kilo`                  | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.llmgateway`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.lmstudio`              | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.modal`                 | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.neon`                  | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.nvidia`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.ollama`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.openai`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.openai-context-caps`   | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.opencode`              | `refused`       | `leaves-machine`                                           | #3905 | S11                |
+| `opencode.provider.openrouter`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.perplexity`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.poe`                   | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.prompt-cache-key`      | `configuration` | applies `providers.*.compatibility.supportsPromptCacheKey` | -     | S11                |
+| `opencode.provider.sap.ai.core`           | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.snowflake.cortex`      | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.vercel`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.vllm`                  | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.xai`                   | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.zenmux`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.skill`                          | `native`        | runs as in standalone OpenCode                             | -     | T17                |
+| `opencode.tool.edit`                      | `native`        | runs as in standalone OpenCode                             | -     | T05                |
+| `opencode.tool.glob`                      | `native`        | runs as in standalone OpenCode                             | -     | T03                |
+| `opencode.tool.grep`                      | `native`        | runs as in standalone OpenCode                             | -     | T04                |
+| `opencode.tool.input.repair`              | `native`        | runs as in standalone OpenCode                             | -     | S01                |
+| `opencode.tool.patch`                     | `native`        | runs as in standalone OpenCode                             | -     | T08                |
+| `opencode.tool.question`                  | `native`        | runs as in standalone OpenCode                             | -     | T18                |
+| `opencode.tool.read`                      | `native`        | runs as in standalone OpenCode                             | -     | T01, T02           |
+| `opencode.tool.shell`                     | `native`        | runs as in standalone OpenCode                             | -     | T10, T11, T12, T13 |
+| `opencode.tool.skill`                     | `native`        | runs as in standalone OpenCode                             | -     | T17                |
+| `opencode.tool.subagent`                  | `native`        | runs as in standalone OpenCode                             | -     | T16                |
+| `opencode.tool.todo`                      | `native`        | runs as in standalone OpenCode                             | -     | T19                |
+| `opencode.tool.webfetch`                  | `native`        | runs as in standalone OpenCode                             | -     | T14                |
+| `opencode.tool.websearch`                 | `native`        | runs as in standalone OpenCode                             | -     | T15                |
+| `opencode.tool.write`                     | `native`        | runs as in standalone OpenCode                             | -     | T06, T07           |
+| `opencode.tools`                          | `native`        | runs as in standalone OpenCode                             | -     | T21, T22           |
+| `opencode.tools.mcp-resources`            | `native`        | runs as in standalone OpenCode                             | -     | C04, T21           |
+| `opencode.vcs.git`                        | `native`        | runs as in standalone OpenCode                             | -     | T12, S17           |
+| `opencode.vcs.hg`                         | `native`        | runs as in standalone OpenCode                             | -     | T12, S17           |
+| `opencode.warming`                        | `configuration` | applies `warming`                                          | -     | S10                |
+| `opencode.websearch.exa`                  | `refused`       | `leaves-machine`                                           | #3900 | T15                |
+| `opencode.websearch.firecrawl`            | `refused`       | `leaves-machine`                                           | #3900 | T15                |
+| `opencode.websearch.parallel`             | `refused`       | `leaves-machine`                                           | #3900 | T15                |
+| `opencode.websearch.tavily`               | `refused`       | `leaves-machine`                                           | #3900 | T15                |
+| `opencode.websearch.tinyfish`             | `refused`       | `leaves-machine`                                           | #3900 | T15                |
+| `opencode.wellknown`                      | `refused`       | `leaves-machine`                                           | #3905 | S11                |
+
+<!-- plugin-inventory:end -->
 
 ## 8. Verification sources
 
