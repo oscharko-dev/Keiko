@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ae63901efa54272d0cc6fc2cd97d89e617cf092559712911fe0b52c204fbc46a",
+    "catalogDigest": "6b9fda15bde77005cbfa36387e8703b3536b06d1172b509d5aa6033116050c39",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8558,6 +8558,7 @@
               "unsupported-action",
               "workspace-escape",
               "sensitive-path",
+              "linked-file",
               "delivery-reserved",
               "approved",
               "denied",
@@ -8629,8 +8630,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1085",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1272"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1131",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1319"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -98174,7 +98175,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1088",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1134",
       "package": "keiko-server"
     },
     {

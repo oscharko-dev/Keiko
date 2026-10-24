@@ -538,6 +538,97 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
   });
 });
 
+// PR #4064 review: a hard link inside the workspace can name a protected file or one outside it,
+// and the producer's read tool loads every AGENTS.md it passes without asking.
+describe("hard links inside the workspace (PR #4064 review)", () => {
+  const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"];
+
+  function withWorkspace(body: (workspace: string, outside: string) => void): void {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-links-")));
+    try {
+      const workspace = join(root, "workspace");
+      mkdirSync(join(workspace, "src", "nested"), { recursive: true });
+      writeFileSync(join(workspace, "src", "file.ts"), "export {};\n");
+      writeFileSync(join(workspace, "src", "nested", "deep.ts"), "export {};\n");
+      const outside = join(root, "outside.txt");
+      writeFileSync(outside, "OUTSIDE-CANARY\n");
+      body(workspace, outside);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  function verdict(
+    workspace: string,
+    mode: string,
+    permission: string,
+    resources: readonly string[],
+  ): string {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: workspace,
+      request: request(permission, resources),
+      nowMs: NOW,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  }
+
+  it("refuses to read or edit a file that is a hard link, in every mode", () => {
+    withWorkspace((workspace, outside) => {
+      linkSync(outside, join(workspace, "alias.txt"));
+      for (const mode of MODES) {
+        // The producer asks `edit` for its edit, write and patch tools alike.
+        for (const permission of ["read", "edit"]) {
+          expect(verdict(workspace, mode, permission, ["alias.txt"])).toBe("deny:linked-file");
+          expect(verdict(workspace, mode, permission, [join(workspace, "alias.txt")])).toBe(
+            "deny:linked-file",
+          );
+        }
+      }
+    });
+  });
+
+  it("refuses a read that would load an AGENTS.md that is a hard link", () => {
+    withWorkspace((workspace, outside) => {
+      linkSync(outside, join(workspace, "src", "AGENTS.md"));
+      for (const mode of MODES) {
+        expect(verdict(workspace, mode, "read", ["src/file.ts"])).toBe("deny:linked-file");
+        expect(verdict(workspace, mode, "read", ["src/nested/deep.ts"])).toBe("deny:linked-file");
+        expect(verdict(workspace, mode, "read", ["src"])).toBe("deny:linked-file");
+      }
+      // An edit loads no instructions, and a read beside the linked file does not pass it.
+      expect(verdict(workspace, "autonomous-delivery", "edit", ["src/file.ts"])).toBe("allow");
+      writeFileSync(join(workspace, "top.ts"), "export {};\n");
+      expect(verdict(workspace, "autonomous-delivery", "read", ["top.ts"])).toBe("allow");
+    });
+  });
+
+  it("refuses a read anywhere under a root AGENTS.md that is a hard link", () => {
+    withWorkspace((workspace, outside) => {
+      linkSync(outside, join(workspace, "AGENTS.md"));
+      expect(verdict(workspace, "autonomous-delivery", "read", ["src/nested/deep.ts"])).toBe(
+        "deny:linked-file",
+      );
+      expect(verdict(workspace, "autonomous-delivery", "read", ["."])).toBe("deny:linked-file");
+    });
+  });
+
+  it("keeps ordinary files, regular AGENTS.md files and new files admitted", () => {
+    withWorkspace((workspace) => {
+      writeFileSync(join(workspace, "src", "AGENTS.md"), "# rules\n");
+      writeFileSync(join(workspace, "AGENTS.md"), "# root rules\n");
+      for (const mode of MODES) {
+        expect(verdict(workspace, mode, "read", ["src/file.ts"])).toBe("allow");
+        expect(verdict(workspace, mode, "read", ["src/AGENTS.md"])).toBe("allow");
+        expect(verdict(workspace, mode, "read", ["."])).toBe("allow");
+        expect(verdict(workspace, mode, "read", ["src/file.ts/below-a-file"])).toBe("allow");
+      }
+      expect(verdict(workspace, "autonomous-delivery", "edit", ["src/new.ts"])).toBe("allow");
+      expect(verdict(workspace, "autonomous-delivery", "edit", ["src/file.ts"])).toBe("allow");
+    });
+  });
+});
+
 // #3901: a native shell line is verification evidence only when its one exit status can speak for
 // the check alone: every simple command is a project check or a `cd`.
 describe("native verification commands (#3901, #3897 review)", () => {

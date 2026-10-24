@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -825,6 +826,117 @@ describe("pinned native OpenCode directory reads (T02)", () => {
 });
 
 // ─── T08: patch ────────────────────────────────────────────────────────────────────────────────
+
+// ─── PR #4064 review: hard links inside the workspace ─────────────────────────────────────────────
+
+describe("pinned native OpenCode hard links inside the workspace (PR #4064 review)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const CANARY = "HARD-LINK-OUTSIDE-CANARY";
+  const files = {
+    [FIXTURE_FILE]: "readme\n",
+    "src/file.ts": "export const harmless = 1;\n",
+  };
+
+  /** A synthetic file outside the workspace, linked into it under `alias` before the run reads. */
+  function linkOutside(run: Run, alias: string): string {
+    const outside = join(run.fixture.root, `outside-${randomUUID()}.txt`);
+    writeFileSync(outside, `${CANARY}\n`);
+    linkSync(outside, join(run.fixture.workspace, alias));
+    return outside;
+  }
+
+  it.skipIf(skip)(
+    "refuses an ordinary read that would load a hard-linked AGENTS.md, and no canary reaches the model",
+    async () => {
+      for (const mode of ["supervised-coding", "autonomous-delivery"] as const) {
+        await withRun({ files, mode }, async (run) => {
+          linkOutside(run, "src/AGENTS.md");
+          const refused = await scriptedTurn(run, read("src/file.ts"));
+          expect(refused).toContain("hard link");
+          expect(run.facade.decisions).toEqual([
+            {
+              permission: "read",
+              resources: ["src/file.ts"],
+              effect: "deny",
+              reason: "linked-file",
+            },
+          ]);
+          expect(JSON.stringify(run.gateway.requests)).not.toContain(CANARY);
+        });
+      }
+    },
+    240_000,
+  );
+
+  it.skipIf(skip)(
+    "refuses a native edit of a hard link and leaves the outside file unchanged",
+    async () => {
+      for (const mode of ["supervised-coding", "autonomous-delivery"] as const) {
+        await withRun({ files, mode }, async (run) => {
+          const outside = linkOutside(run, "alias.txt");
+          const refused = await scriptedTurn(run, {
+            name: "edit",
+            arguments: { path: "alias.txt", oldString: CANARY, newString: "CHANGED" },
+          });
+          expect(refused).toContain("hard link");
+          expect(readFileSync(outside, "utf8")).toBe(`${CANARY}\n`);
+          expect(run.facade.decisions.map((decision) => decision.reason)).toEqual(["linked-file"]);
+        });
+      }
+    },
+    240_000,
+  );
+
+  it.skipIf(skip)(
+    "lets no shell child of the run create a hard link to a file outside the workspace",
+    async () => {
+      await withRun({ files, mode: "autonomous-delivery" }, async (run) => {
+        const outside = join(run.fixture.root, "outside-target.txt");
+        writeFileSync(outside, `${CANARY}\n`);
+        const output = await scriptedTurn(
+          run,
+          shell(`ln '${outside}' made-alias.txt; cat made-alias.txt`),
+        );
+        // The policy let the command run; the kernel refused the link to a file the run may not
+        // read, so an alias inside the workspace can only predate the run.
+        expect(run.facade.decisions.map((decision) => decision.effect)).toEqual(["allow"]);
+        expect(output).toContain("Operation not permitted");
+        expect(existsSync(join(run.fixture.workspace, "made-alias.txt"))).toBe(false);
+        expect(output).not.toContain(CANARY);
+        expect(JSON.stringify(run.gateway.requests)).not.toContain(CANARY);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps reading and editing ordinary files beside a regular AGENTS.md",
+    async () => {
+      await withRun(
+        { files: { ...files, "src/AGENTS.md": "Use tabs.\n" }, mode: "autonomous-delivery" },
+        async (run) => {
+          expect(await scriptedTurn(run, read("src/file.ts"))).toContain("harmless");
+          await scriptedTurn(run, {
+            name: "edit",
+            arguments: {
+              path: "src/file.ts",
+              oldString: "harmless = 1",
+              newString: "harmless = 2",
+            },
+          });
+          expect(readFileSync(join(run.fixture.workspace, "src/file.ts"), "utf8")).toContain(
+            "harmless = 2",
+          );
+          expect(run.facade.decisions.map((decision) => decision.effect)).toEqual([
+            "allow",
+            "allow",
+          ]);
+        },
+      );
+    },
+    120_000,
+  );
+});
 
 describe("pinned native OpenCode patch (T08)", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;

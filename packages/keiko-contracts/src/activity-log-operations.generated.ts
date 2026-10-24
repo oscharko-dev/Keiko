@@ -8175,6 +8175,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsupported-action",
           "workspace-escape",
           "sensitive-path",
+          "linked-file",
           "delivery-reserved",
           "approved",
           "denied",

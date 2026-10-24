@@ -1673,7 +1673,16 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
   stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
   workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are
-  denied at the resolved path. The task workspace and the run's private state are re-allowed after
+  denied at the resolved path. A hard link is not: it is the same file under a workspace path,
+  which no pathname or realpath rule resolves (PR #4064 review). Native admission therefore
+  refuses with `linked-file` a read, edit, write or patch of an existing regular file with more
+  than one link, and a read when any `AGENTS.md` between its target and the workspace root, which
+  the producer's read tool loads as instructions without asking, has more than one link. The
+  kernel refuses a sandboxed `link()` to a file the run may not read, so such an alias can only
+  predate the run. A shell or search child that reads a hard link created on the host before the
+  run is not bounded by link count: a package manager's global store (pnpm) links every
+  installed file to a store outside the workspace, so refusing externally linked files would
+  break those projects. The task workspace and the run's private state are re-allowed after
   the credential-root denials, because the packaged product keeps its managed task workspaces
   inside its own state directory, and the ancestor directory nodes of both are readable (their
   entry names, never their files or sibling subtrees) because the runtime opens the workspace's

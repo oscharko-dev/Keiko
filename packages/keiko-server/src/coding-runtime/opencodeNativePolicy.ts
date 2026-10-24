@@ -64,6 +64,7 @@ export type OpenCodeNativePolicyDenyReason =
   | "unsupported-action"
   | "workspace-escape"
   | "sensitive-path"
+  | "linked-file"
   | "delivery-reserved"
   | "mode-denied";
 
@@ -817,6 +818,7 @@ function guardedPaths(
   resources: readonly string[],
   roots: AdmittedRoots,
   classification: OpenCodeNativeActionClassification,
+  loadsInstructions = false,
 ): Classified {
   for (const resource of resources) {
     const contained = admittedRelative(resource, roots);
@@ -830,8 +832,50 @@ function guardedPaths(
         reason: "sensitive-path",
         message: "Keiko refused this action: the path is a protected sensitive file.",
       };
+    if (linkedInWorkspace(resource, roots.workspaceRoot, loadsInstructions))
+      return {
+        reason: "linked-file",
+        message:
+          "Keiko refused this action: the file, or an AGENTS.md instruction file the read would load, is a hard link that can name a file outside the task workspace.",
+      };
   }
   return classification;
+}
+
+/** The instruction file the producer's read tool loads from every directory it passes. */
+const READ_INSTRUCTION_FILE = "AGENTS.md";
+
+/**
+ * A pathname names exactly one file only while that file has one link (PR #4064 review): a hard
+ * link inside the workspace can alias a protected file or one outside it, and no pathname or
+ * realpath check resolves it. An existing regular file a read or edit touches must therefore have
+ * one link, and so must every `AGENTS.md` between a read target and the workspace root, which the
+ * producer's read tool loads as instructions without asking. The kernel refuses a sandboxed link to
+ * a file the run may not read, so such an alias can only predate the run.
+ */
+function linkedInWorkspace(
+  resource: string,
+  workspaceRoot: string,
+  instructions: boolean,
+): boolean {
+  const contained = workspaceRelative(resource, workspaceRoot);
+  if (contained === undefined) return false;
+  const root = resolve(workspaceRoot);
+  const target = resolve(root, contained);
+  const stat = lstatIfPresent(target);
+  if (multiplyLinked(stat)) return true;
+  if (!instructions) return false;
+  let directory = stat?.isDirectory() === true ? target : dirname(target);
+  while (!relative(root, directory).startsWith("..")) {
+    if (multiplyLinked(lstatIfPresent(join(directory, READ_INSTRUCTION_FILE)))) return true;
+    if (directory === root) return false;
+    directory = dirname(directory);
+  }
+  return false;
+}
+
+function multiplyLinked(stat: Stats | undefined): boolean {
+  return stat?.isFile() === true && stat.nlink > 1;
 }
 
 /** The path-bearing actions; `undefined` for every other action. */
@@ -845,7 +889,8 @@ function classifyPathAction(
   // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
   if (SEARCH_ACTIONS.has(permission))
     return guardedPaths(request.searchPath === undefined ? [] : [request.searchPath], roots, READ);
-  if (READ_ACTIONS.has(permission)) return guardedPaths(resources, roots, READ);
+  if (READ_ACTIONS.has(permission))
+    return guardedPaths(resources, roots, READ, permission === "read" || permission === "list");
   // The plan agent's notes live in the run's private plan directory, not in the workspace: writing
   // them is planning, allowed in every mode like a read (standalone OpenCode does not ask either).
   if (EDIT_ACTIONS.has(permission))
@@ -888,7 +933,8 @@ function lstatIfPresent(path: string): Stats | undefined {
   try {
     return lstatSync(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    const { code } = error as NodeJS.ErrnoException;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
     throw error;
   }
 }
@@ -1136,6 +1182,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "unsupported-action",
         "workspace-escape",
         "sensitive-path",
+        "linked-file",
         "delivery-reserved",
         "approved",
         "denied",
