@@ -2,12 +2,13 @@ import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
+  McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isCodingSafeActivityToolPresentation } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -167,6 +168,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** The operator's `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` decision; absent keeps the default, on. */
   readonly repositoryItemsEnabled?: boolean | undefined;
+  /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
+  readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
@@ -350,7 +353,7 @@ function composeOpenCodeRun(
   return createOpenCodeRuntimeComposition({
     toolProfile,
     ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
-    ...(toolProfile === "native" ? { repositoryItems: repositoryItemsFor(input, run) } : {}),
+    ...nativeRunInputs(input, run, toolProfile),
     portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
@@ -389,6 +392,39 @@ function composeOpenCodeRun(
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
   });
+}
+
+/**
+ * The directories of the admitted local MCP servers' executables join the toolchain `PATH` the
+ * kernel reads from (#3903): an MCP server is a process of the run, and it runs only where its
+ * install prefix is readable, under the same rules as every toolchain (a home directory or anything
+ * above it is never opened).
+ */
+function withMcpExecutableDirectories(
+  path: string | undefined,
+  servers: readonly McpServerDefinition[],
+): string | undefined {
+  const directories = servers.flatMap((server) =>
+    server.enabled && server.transport.kind === "local"
+      ? [dirname(server.transport.command[0])]
+      : [],
+  );
+  if (directories.length === 0) return path;
+  return [...(path === undefined ? [] : [path]), ...directories].join(delimiter);
+}
+
+// What only a native run reads from the repository and the operator: its Markdown items (#3903)
+// and its MCP servers (C04).
+function nativeRunInputs(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
+): Pick<OpenCodeRuntimeCompositionInput, "repositoryItems" | "mcpServers"> {
+  if (toolProfile !== "native") return {};
+  return {
+    repositoryItems: repositoryItemsFor(input, run),
+    ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+  };
 }
 
 // A task's retained native session (#3904), bound to the run's own workspace.
@@ -1048,7 +1084,10 @@ function gatewayFilesystem(
             // The launcher's PATH plus the one verified ripgrep directory the child gets in front
             // of it, so the kernel opens exactly what the child can run and nothing broader.
             toolchainReadRoots: nativeToolchainReadRoots(
-              ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH,
+              withMcpExecutableDirectories(
+                ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH,
+                input.mcpServers?.(run.minted.authorityRef.runId) ?? [],
+              ),
               homedir(),
             ),
             ...nativeGitMetadataReadRoots(input, run),

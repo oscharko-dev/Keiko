@@ -82,6 +82,12 @@ export interface OpenCodeLaunchProfileInput {
    * Absent or unrecognized fails closed to formatters off.
    */
   readonly mode?: string | undefined;
+  /**
+   * The native run's admitted MCP servers (`openCodeNativeMcpAdmission`), written on the
+   * server-owned binding. Absent means none: the binding still names an empty set, so no other
+   * configuration layer can add a server.
+   */
+  readonly mcp?: { readonly servers: Readonly<Record<string, unknown>> } | undefined;
 }
 
 /** The optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
@@ -151,6 +157,7 @@ export function buildOpenCodeLaunchProfile(
     input.toolProfile,
     input.stateRoot,
     formatter,
+    input.mcp,
   );
   return {
     ok: true,
@@ -355,10 +362,11 @@ export function createFixedOpenCodeV2Config(
   profile: OpenCodeToolProfile = "direct",
   stateRoot?: string,
   formatter: OpenCodeNativeFormatterDisposition = "disabled-unknown-mode",
+  mcp: { readonly servers: Readonly<Record<string, unknown>> } = { servers: {} },
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
   if (profile === "native")
-    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, formatter);
+    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, formatter, mcp);
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -415,6 +423,7 @@ function createNativeOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   stateRoot: string | undefined,
   formatter: OpenCodeNativeFormatterDisposition,
+  mcp: { readonly servers: Readonly<Record<string, unknown>> },
 ): Readonly<Record<string, unknown>> {
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -440,6 +449,8 @@ function createNativeOpenCodeV2Config(
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
     experimental: { todo: true },
+    // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
+    mcp,
     permissions: [
       { action: "external_directory", resource: "*", effect: "deny" },
       // Last match wins: the plan agent's own plan directory is the one admitted external path.
@@ -460,7 +471,9 @@ function createNativeOpenCodeV2Config(
  * The fields no layer below Keiko may change: the single gateway-bound provider and model, the
  * mode-independent permission floor, the self-update and sharing switches, and the built-in
  * formatter setting (a child process the permission hook never sees, so no layer may turn it on
- * for a mode that must not run it; see `openCodeNativeFormatterDisposition`). The pinned runtime
+ * for a mode that must not run it; see `openCodeNativeFormatterDisposition`), and the MCP servers
+ * (an MCP server is a process or a remote endpoint, so only the operator's registry names one;
+ * see `opencodeNativeMcp.ts`). The pinned runtime
  * merges `OPENCODE_CONFIG_CONTENT` after the private file and after every discovered project
  * document, so this subset is the last word if a project layer is ever admitted (#3903). Only
  * `{env:…}` placeholders appear in it; the gateway address and capability stay in the child
@@ -470,6 +483,7 @@ const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
   "update",
   "share",
   "formatter",
+  "mcp",
   "model",
   "default_agent",
   "providers",

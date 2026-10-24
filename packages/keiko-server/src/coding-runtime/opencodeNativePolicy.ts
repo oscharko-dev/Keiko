@@ -18,6 +18,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { McpToolRisk } from "@oscharko-dev/keiko-contracts";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
@@ -91,7 +92,12 @@ export interface OpenCodeNativeActionClassification {
 }
 
 type NativeActionLabel =
-  "native-read" | "native-edit" | "native-shell" | "native-egress" | "native-execute";
+  | "native-read"
+  | "native-edit"
+  | "native-shell"
+  | "native-egress"
+  | "native-execute"
+  | "native-mcp";
 
 const SEARCH_ACTIONS = new Set(["glob", "grep"]);
 /**
@@ -130,6 +136,16 @@ const PERMISSION_LOG_VALUES = [
   "doom_loop",
 ] as const;
 type PermissionLogValue = (typeof PERMISSION_LOG_VALUES)[number] | "other";
+// An MCP tool is logged by its class alone: its server and tool names are the operator's words.
+function loggedPermission(
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+): PermissionLogValue | "mcp" {
+  return decision.classification?.label === "native-mcp"
+    ? "mcp"
+    : permissionLogValue(request.permission);
+}
+
 function permissionLogValue(permission: string): PermissionLogValue {
   const known = PERMISSION_LOG_VALUES.find((value) => value === permission);
   return known ?? "other";
@@ -616,6 +632,17 @@ export interface OpenCodeNativePolicyInput {
   readonly planRoot?: string | undefined;
   readonly request: OpenCodeNativePolicyRequest;
   readonly nowMs: number;
+  /**
+   * The MCP tools the operator's registry admits for this run (#3903, parity row C04), derived by
+   * the server: the action each tool reaches the policy under, with its declared risk and transport.
+   * A tool, or a resource of a server, that it does not name stays an unsupported action.
+   */
+  readonly mcp?: OpenCodeNativeMcpGrants | undefined;
+}
+
+export interface OpenCodeNativeMcpGrants {
+  readonly actions: ReadonlyMap<string, { readonly risk: McpToolRisk; readonly remote: boolean }>;
+  readonly servers: ReadonlyMap<string, { readonly remote: boolean }>;
 }
 
 export function decideOpenCodeNativePolicy(
@@ -624,10 +651,12 @@ export function decideOpenCodeNativePolicy(
   const { request } = input;
   if (!isCodingWorkbenchMode(input.mode))
     return deny("mode-denied", "Keiko refused this action: the run's autonomy mode is unknown.");
-  const classification = classifyNativeAction(request, {
-    workspaceRoot: input.workspaceRoot,
-    planRoot: input.planRoot,
-  });
+  const classification =
+    classifyMcpAction(request, input.mcp) ??
+    classifyNativeAction(request, {
+      workspaceRoot: input.workspaceRoot,
+      planRoot: input.planRoot,
+    });
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
   if (classification.actionClass === "workspace-read") return { effect: "allow", classification };
@@ -691,6 +720,52 @@ function classifyNativeAction(
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
   if (permission === "shell") return classifyShell(resources);
   return EXECUTE;
+}
+
+const MCP_RESOURCE_ACTIONS = new Set(["opencode_list_mcp_resources", "opencode_read_mcp_resource"]);
+// A local MCP server is a process Keiko starts in the run's sandbox: its read tools are a vetted
+// command, its write tools a risky one. A remote server is internet use, whatever the tool says.
+const MCP_LOCAL_READ: OpenCodeNativeActionClassification = Object.freeze({
+  actionClass: "command-execution",
+  kind: "command-execution",
+  scope: "workspace-contained",
+  risk: "low",
+  label: "native-mcp",
+});
+const MCP_LOCAL_WRITE: OpenCodeNativeActionClassification = Object.freeze({
+  ...MCP_LOCAL_READ,
+  risk: "high",
+});
+const MCP_REMOTE: OpenCodeNativeActionClassification = Object.freeze({
+  actionClass: "network-egress",
+  kind: "network-egress",
+  scope: "internet",
+  risk: "medium",
+  label: "native-mcp",
+});
+
+/**
+ * An MCP tool or resource action the registry admits, or undefined to fall through to the native
+ * classification (which refuses what it does not know). A resource action names its servers in its
+ * resources (`probe`, or `probe:<uri>` for a read); every one must be admitted.
+ */
+function classifyMcpAction(
+  request: OpenCodeNativePolicyRequest,
+  mcp: OpenCodeNativeMcpGrants | undefined,
+): OpenCodeNativeActionClassification | undefined {
+  if (mcp === undefined) return undefined;
+  const grant = mcp.actions.get(request.permission);
+  if (grant !== undefined) {
+    if (grant.remote) return MCP_REMOTE;
+    return grant.risk === "write" ? MCP_LOCAL_WRITE : MCP_LOCAL_READ;
+  }
+  if (!MCP_RESOURCE_ACTIONS.has(request.permission) || request.resources.length === 0)
+    return undefined;
+  const servers = request.resources.map((resource) =>
+    mcp.servers.get(resource.split(":")[0] ?? ""),
+  );
+  if (servers.includes(undefined)) return undefined;
+  return servers.some((server) => server?.remote === true) ? MCP_REMOTE : MCP_LOCAL_READ;
 }
 
 const READ: OpenCodeNativeActionClassification = Object.freeze({
@@ -1041,6 +1116,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "execute",
         "external_directory",
         "doom_loop",
+        "mcp",
         "other",
       ],
     },
@@ -1198,7 +1274,7 @@ export function recordOpenCodeNativePolicyDecision(
       { correlationId: runId, level: decision.effect === "deny" ? "warn" : "info" },
       {
         mode: isCodingWorkbenchMode(input.mode) ? input.mode : "unknown",
-        permission: permissionLogValue(request.permission),
+        permission: loggedPermission(request, decision),
         effect: decision.effect,
         outcome: input.outcome,
         ...(input.sessionRelation === undefined ? {} : { sessionRelation: input.sessionRelation }),

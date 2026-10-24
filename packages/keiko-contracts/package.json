@@ -179,6 +179,10 @@
       "types": "./dist/coding-workbench-runtime-api.d.ts",
       "import": "./dist/coding-workbench-runtime-api.js"
     },
+    "./runtime/mcp-servers": {
+      "types": "./dist/mcp-servers.d.ts",
+      "import": "./dist/mcp-servers.js"
+    },
     "./runtime/coding-workbench-runtime-approval-review": {
       "types": "./dist/coding-workbench-runtime-approval-review.d.ts",
       "import": "./dist/coding-workbench-runtime-approval-review.js"

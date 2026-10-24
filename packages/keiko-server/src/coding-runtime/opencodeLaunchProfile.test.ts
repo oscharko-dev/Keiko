@@ -246,6 +246,7 @@ describe("OpenCode launch profile", () => {
       expect(Object.keys(content).sort()).toEqual([
         "default_agent",
         "formatter",
+        "mcp",
         "model",
         "permissions",
         "providers",

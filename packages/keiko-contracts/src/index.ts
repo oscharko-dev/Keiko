@@ -5253,3 +5253,12 @@ export type {
   isGitJourneyRemoteFacts,
   isJourneyOutcome,
 } from "./git-journey-validation.js";
+
+export type {
+  McpLocalTransport,
+  McpRemoteTransport,
+  McpServerDefinition,
+  McpServerRegistryParse,
+  McpServerRegistryRefusal,
+  McpToolRisk,
+} from "./mcp-servers.js";

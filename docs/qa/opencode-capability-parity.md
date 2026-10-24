@@ -297,7 +297,7 @@ Native tool names are the ones the 2.1.4 producer registers [B] ([native-tools-f
 | C01 | `agents`: built-ins `build`, `plan`, `general`, `explore`; custom agents and plan mode [B]      | Primary-agent selection between `build` and `plan` ([agents][agents]); the producer's own agent rules; sanitized repository subagents ([repository-items][repository-items])                       | `partial`  | The Workbench sends an optional `agent` with a start, retry or follow-up and the composition issues `session.switchAgent` once, before the prompt, when it differs from the run's agent; a refused switch fails the submission. The Build and Plan switch shows only where the server offers `plan` (native profile) and is fixed while a turn runs. Every built-in agent keeps the producer's rules and Keiko writes none over them: Plan cannot edit project files and writes only its plan directory, Explore cannot edit or execute, General cannot launch subagents (real binary). The autonomy mode selects authority, never the agent. Mapped profiles and Codex runs refuse `plan` as `invalid-intent`. Custom agents: the workspace's `.opencode/agent(s)/*.md` are admitted as sanitized subagent copies in the run's private discovery directory ([repository-items][repository-items], ADR-0137 D10, #3903): `description`, `mode` and bounded `temperature` and `top_p` survive, while `model`, permissions, tools, MCP, plugin and every other key are dropped and counted, and a name that collides with a built-in is refused. The producer lists them and the model launches them; they are never selectable as the primary agent. An admitted subagent has a plain agent's rules and the policy hook's decision, not Plan's read-only rules (a hostile agent lists with no model route and no extra rule, and the same file copied unsanitized would register both, real binary: [repository-items-test][repository-items-test]). Not available: a Workbench surface to define or edit an agent. Evidence: `coding-runtime.agent.selected`, `coding-runtime.repository-items.admitted`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | C02 | `commands`: `init`, `review`, custom commands, MCP prompts as commands [B]                      | Native: `/` menu, `command.list` and `session.command` admitted ([commands][commands], [protocol-surface][protocol-surface]); sanitized repository commands ([repository-items][repository-items]) | `partial`  | The pinned 2.1.4 producer lists two built-ins, `init` (guided AGENTS.md setup) and `review` (review changes, defaulting to the uncommitted ones), and runs one as a turn. Both operations are admitted (the surface digest and fixture moved; the original executable's live document projects to the new digest), and a start or a follow-up may carry `command: { name }` with the text after it in `taskIntent` (empty is valid only with a command). The dispatcher admits it like any prompt input, then asks the runtime whether it lists the name, ahead of every reservation, and posts `session.command` in place of `prompt` through the same orchestrator, coordinator, run port, revision, replay and turn lifecycle. A command is a server-authored template and so untrusted intent: it grants nothing and its effects pass the native policy of the run's mode. Limits: the command body has no message id and no metadata, so a command turn carries no initial context (repository instructions, memory, history) and is not retried after a lost acknowledgement; the runtime stores the expanded template as the user message, so the timeline and Coding History present the turn by the typed `/name text`; sent to a running turn the producer folds a command into that execution, so Keiko dispatches one only as the start of a turn. Real binary: `command.list` returns exactly `init` and `review`; `review` runs a turn whose model request carries the producer's template and ends idle; neither template substitutes a shell command. Custom commands: the workspace's `.opencode/command(s)/*.md` are admitted as sanitized copies ([repository-items][repository-items], #3903) and appear in the runtime's own listing; `description`, `agent` (only an agent admitted as a subagent in the same pass) and `subagent` (alias `subtask`) survive. A template that contains a shell-substitution block, or can form one at a placeholder boundary, is refused, because the producer runs those blocks in the project directory outside `keiko.native-policy` (real binary: a copy that bypassed admission writes its canary with the hook never asked). The command client also refuses an argument text that contains one, for built-ins too. `$ARGUMENTS`, `$1` and `@path` text are inert and admitted. Open: MCP prompts as commands (C04) and the mapped profiles, which offer none. Backlog B4 ([audit-3560][audit-3560]). |
 | C03 | `instructions` and AGENTS.md discovery, global and walking up from the project; `init` [B]      | `AGENTS.md` at the task workspace root attached to the first message by Keiko's own loader ([repository instructions][repository-instructions])                                                    | `partial`  | Keiko reads exactly the workspace-root `AGENTS.md` through the secure read helper (first 800 lines, at most 16 KiB; files up to 1 MiB are read, larger ones refused as `too-large`) and attaches it as a nonce-framed, repository-authored, untrusted block that grants no authority. On by default; `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` opts out. The runtime's own discovery is off with the project layer: nested and walk-up `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.agents/` (apart from its skills, C06), global instructions (the private `HOME` is empty) and the `instructions` setting do not load, and `init` is not offered. Evidence: `coding-runtime.repository-instructions.context`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| C04 | `mcp`: MCP servers, tools, OAuth and prompts (`opencode mcp add`, `list`, `auth`, `logout`) [B] | none                                                                                                                                                                                               | `gap`      | No MCP server is configured: Keiko writes no `mcp` configuration and the project layer that could carry one is off. There is no Keiko registry, trust admission or UI for MCP servers; it is deferred to #2287 ([migration][migration]) and must stay inside the live envelope and admitted egress (a remote server also needs outbound internet). A configured server's tools would still meet the fail-closed policy, which refuses any permission action outside the pinned inventory (by code reading; the MCP resource tools are refused today, T22). Backlog B5.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| C04 | `mcp`: MCP servers, tools, OAuth and prompts (`opencode mcp add`, `list`, `auth`, `logout`) [B] | Native: the operator's MCP server registry (`<stateDir>/mcp-servers.json`, [mcp-registry][mcp-registry]) on the server-owned binding ([native-mcp][native-mcp]); Code Mode exposes the tools       | `partial`  | Admitted only from an owner-private registry file of closed shape: a local server is an absolute executable with literal arguments and non-secret literal variables (no `{env:}`/`{file:}` placeholders anywhere), a remote server an `https` URL; every tool is named with a declared risk. A local server starts through `/usr/bin/env -i` (PATH, the run's private HOME and its own variables only; without it the child inherited Keiko's gateway and tool capabilities and the service password, proven), inside the run's sandbox, with its install prefix opened by the toolchain rule; remote servers only in Full access, OAuth off. The policy classifies exactly the named `<server>_<tool>` actions and the resource tools of admitted servers: local read is a vetted command, local write a risky command, remote is internet use; everything else stays unsupported. The supervisor's coalition reaps MCP children. Real binary: [qualification-test][qualification-test] (admitted tool through Code Mode with an emptied environment, unnamed tool refused and never run, Ask asks, control without the registry). Open: credentials for MCP servers, MCP prompts as commands, OAuth, a registry editor and use by Chat.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | C05 | `plugins`: npm and local plugins (`opencode plugin add`) [B]                                    | Only Keiko's generated plugins                                                                                                                                                                     | `disabled` | Project plugins do not load (`OPENCODE_DISABLE_PROJECT_CONFIG`) and the package manager is offline. Real binary: a repository that executes a canary from a file plugin, a directory plugin and a configured plugin at module load produces none, and a control with the layer on shows all three executing ([boundary-test][boundary-test]). The generated plugins live in the private run directory with mode 0600, and the run is not ready without them active.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | C06 | Project configuration: `opencode.json` and `.opencode/` directories [B]                         | The project layer stays off; its Markdown-only items are admitted one by one as sanitized copies ([repository-items][repository-items], [sanitizer][repository-items-sanitizer])                   | `partial`  | `OPENCODE_DISABLE_PROJECT_CONFIG=true` for every profile: the producer offers no per-item admission, imports a plugin's top-level code before any permission is evaluated, and would merge a project `providers` entry above Keiko's file. On the native profile Keiko therefore reads the Markdown-only items itself (ADR-0137 D10, #3903): custom agents, custom commands and skills (C01, C02, T17) through the secure read helper, only while the run's workspace is the active one, validated against a closed per-kind key allowlist and re-rendered into the run's private discovery directory before launch. Bounded counts and bytes, a closed name grammar, built-in names refused. Operator switch: `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` (on by default; `false` or any unrecognised value disables it). Evidence: `coding-runtime.repository-items.admitted` (counts per kind, closed refusal reasons, stripped-key counts, a digest of the copies, never a name or a body). Still refused: the project `opencode.json` (providers, model, permissions, `plugins`, MCP), every plugin, nested and walk-up discovery, `.claude/`. Real binary: [boundary-test][boundary-test] (no project plugin runs and the model route stays on the gateway across reloads) and [repository-items-test][repository-items-test] (the admitted items list and run; the hostile ones do not widen anything).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | C07 | `formatter`: built-in formatters after native edits [B]                                         | An explicit `formatter` setting on the server-owned binding, by launch mode ([native-formatter][native-formatter], [profile][profile])                                                             | `partial`  | The 2.1.4 producer runs a built-in formatter after its own `write` and `edit` (and `patch`, by its documentation) as a plain child process that no permission sees, and only when the configuration says `formatter: true`; its default is off [B]. Keiko sets it explicitly on both configuration layers by launch mode: Full enables it; Supervised and Ask turn it off; an absent or unrecognized mode fails closed. Supervised stays off because the setting is bound at launch and a resume may narrow Supervised to Ask in place, while a Full tree cannot be narrowed in place (the egress rule, ADR-0137), so an enabled formatter never outlives its authority. Real binary under the Seatbelt profile ([formatter-test][formatter-test]): in Full a native `write` and `edit` are each followed by the PATH-resolved `gofmt` built-in with no permission asked; in Ask and Supervised the same calls land verbatim; without the key none runs even in Full. The producer resolves `prettier`, `oxfmt` and `biome` through its own package manager and cache, not the repository's `node_modules/.bin` [B], and Keiko keeps that offline, so these formatters, which cover most JavaScript and TypeScript repositories, do not run: a real prettier in the repository stays unused (registry unreachable). Formatters that resolve a binary on the launcher's `PATH` run when it is installed and readable inside the toolchain roots; `pint` runs the repository's `./vendor/bin/pint` (code reading), so the Full-only rule covers it. `patch` is not exercised; custom formatter configuration lives in the off project layer. Evidence: `coding-runtime.native-formatter.bound`. Backlog B7.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -315,9 +315,9 @@ capability under Keiko's profile is unverified.
 | Status     | Count |
 | ---------- | ----- |
 | `governed` | 21    |
-| `partial`  | 22    |
+| `partial`  | 23    |
 | `disabled` | 4     |
-| `gap`      | 2     |
+| `gap`      | 1     |
 | Total      | 49    |
 
 ### 3.5 Real-binary qualification of 2026-10-24
@@ -647,221 +647,221 @@ table with an owner. The diff unit test pins both fixtures.
 
 <!-- service-inventory:begin -->
 
-| Disposition | HTTP operations | CLI commands |
-| --- | --- | --- |
-| `admitted` | 26 | 0 |
-| `covered` | 6 | 0 |
-| `keiko-operation` | 8 | 5 |
-| `refused` | 109 | 36 |
-| refused: `leaves-machine` | 8 | 4 |
-| refused: `keiko-owns-workspace-binding` | 9 | 0 |
-| refused: `keiko-owns-authority` | 6 | 0 |
-| refused: `keiko-owns-configuration` | 5 | 1 |
-| refused: `keiko-owns-credentials` | 16 | 6 |
-| refused: `experimental-unadmitted` | 19 | 0 |
-| refused: `host-surface` | 19 | 17 |
-| refused: `not-yet-implemented` | 27 | 8 |
-| Total | 149 | 41 |
+| Disposition                             | HTTP operations | CLI commands |
+| --------------------------------------- | --------------- | ------------ |
+| `admitted`                              | 26              | 0            |
+| `covered`                               | 6               | 0            |
+| `keiko-operation`                       | 8               | 5            |
+| `refused`                               | 109             | 36           |
+| refused: `leaves-machine`               | 8               | 4            |
+| refused: `keiko-owns-workspace-binding` | 9               | 0            |
+| refused: `keiko-owns-authority`         | 6               | 0            |
+| refused: `keiko-owns-configuration`     | 5               | 1            |
+| refused: `keiko-owns-credentials`       | 16              | 6            |
+| refused: `experimental-unadmitted`      | 19              | 0            |
+| refused: `host-surface`                 | 19              | 17           |
+| refused: `not-yet-implemented`          | 27              | 8            |
+| Total                                   | 149             | 41           |
 
 #### HTTP operations (149)
 
-| operationId | Endpoint | Disposition | Detail | Owner | Rows |
-| --- | --- | --- | --- | --- | --- |
-| `agent.get` | `GET /api/agent/{agentID}` | `refused` | `not-yet-implemented` | #3903 | C01 |
-| `agent.list` | `GET /api/agent` | `refused` | `not-yet-implemented` | #3903 | C01 |
-| `command.list` | `GET /api/command` | `admitted` | digest-pinned protocol surface | - | - |
-| `config.get` | `GET /api/config` | `refused` | `keiko-owns-configuration` | #3903 | C06 |
-| `config.shells` | `GET /api/config/shell` | `refused` | `keiko-owns-configuration` | #3903 | C06 |
-| `credential.activate` | `POST /api/credential/{credentialID}/activate` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `credential.create` | `POST /api/credential` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `credential.list` | `GET /api/credential` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `credential.remove` | `DELETE /api/credential/{credentialID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `credential.update` | `PATCH /api/credential/{credentialID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `debug.heapDump` | `POST /api/debug/heap-dump` | `refused` | `host-surface` | #3899 | S18 |
-| `debug.location.evict` | `DELETE /api/debug/location` | `refused` | `host-surface` | #3899 | S18 |
-| `debug.location.list` | `GET /api/debug/location` | `refused` | `host-surface` | #3899 | S18 |
-| `event.subscribe` | `GET /api/event` | `admitted` | digest-pinned protocol surface | - | - |
-| `experimental.config.update` | `PATCH /api/experimental/config` | `refused` | `keiko-owns-configuration` | #3903 | C06 |
-| `experimental.fs.write` | `POST /api/experimental/fs/write` | `refused` | `keiko-owns-authority` | #3900 | T06 |
-| `experimental.generate.text` | `POST /api/experimental/generate` | `refused` | `experimental-unadmitted` | #3908 | - |
-| `experimental.integration.wellknown.add` | `POST /api/experimental/integration/wellknown` | `refused` | `leaves-machine` | #3905 | S11 |
-| `experimental.mcp.add` | `PUT /api/experimental/mcp/{server}` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `experimental.mcp.client` | `GET /api/experimental/client-mcp` | `refused` | `host-surface` | #3899 | C04 |
-| `experimental.mcp.client.token` | `POST /api/experimental/client-mcp/token` | `refused` | `host-surface` | #3899 | C04 |
-| `experimental.mcp.connect` | `POST /api/experimental/mcp/{server}/connect` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `experimental.mcp.disconnect` | `POST /api/experimental/mcp/{server}/disconnect` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `experimental.mcp.remove` | `DELETE /api/experimental/mcp/{server}` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `experimental.migration.v1.status` | `GET /api/experimental/migration/v1` | `refused` | `experimental-unadmitted` | #3908 | - |
-| `experimental.session.export` | `GET /api/experimental/session/{sessionID}/export` | `keiko-operation` | Coding History task export (local, redacted) (`coding-runtime/codingTaskExport.ts`) | - | S05 |
-| `experimental.session.import` | `POST /api/experimental/session/import` | `refused` | `not-yet-implemented` | #3904 | S05 |
-| `experimental.session.instructions.entry.list` | `GET /api/experimental/session/{sessionID}/instructions/entries` | `refused` | `experimental-unadmitted` | #3900 | C03 |
-| `experimental.session.instructions.entry.put` | `PUT /api/experimental/session/{sessionID}/instructions/entries/{key}` | `refused` | `experimental-unadmitted` | #3900 | C03 |
-| `experimental.session.instructions.entry.remove` | `DELETE /api/experimental/session/{sessionID}/instructions/entries/{key}` | `refused` | `experimental-unadmitted` | #3900 | C03 |
-| `experimental.session.skill` | `POST /api/experimental/session/{sessionID}/skill` | `refused` | `not-yet-implemented` | #3903 | T17 |
-| `experimental.session.stats` | `GET /api/experimental/session/stats` | `refused` | `experimental-unadmitted` | #3899 | S18 |
-| `experimental.session.wait` | `POST /api/experimental/session/{sessionID}/wait` | `refused` | `experimental-unadmitted` | #3908 | S01 |
-| `experimental.voice.instructions` | `POST /api/experimental/voice/session/{sessionID}/instructions` | `refused` | `leaves-machine` | #3899 | - |
-| `experimental.voice.models` | `GET /api/experimental/voice/models` | `refused` | `leaves-machine` | #3899 | - |
-| `experimental.voice.session` | `POST /api/experimental/voice/session` | `refused` | `leaves-machine` | #3899 | - |
-| `form.list` | `GET /api/form` | `admitted` | digest-pinned protocol surface | - | - |
-| `fs.find` | `GET /api/fs/find` | `keiko-operation` | Files and Editor, human-operated (`files.ts`) | - | - |
-| `fs.list` | `GET /api/fs/list` | `keiko-operation` | Files and Editor, human-operated (`files.ts`) | - | - |
-| `fs.read` | `GET /api/fs/read/*` | `keiko-operation` | Files and Editor, human-operated (`files.ts`) | - | - |
-| `integration.command.cancel` | `DELETE /api/integration/{integrationID}/connect/command/{attemptID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.command.connect` | `POST /api/integration/{integrationID}/connect/command` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.command.status` | `GET /api/integration/{integrationID}/connect/command/{attemptID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.connect.external` | `POST /api/integration/{integrationID}/connect/external` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.connect.key` | `POST /api/integration/{integrationID}/connect/key` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.get` | `GET /api/integration/{integrationID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.list` | `GET /api/integration` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.oauth.cancel` | `DELETE /api/integration/{integrationID}/connect/oauth/{attemptID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.oauth.complete` | `POST /api/integration/{integrationID}/connect/oauth/{attemptID}/complete` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.oauth.connect` | `POST /api/integration/{integrationID}/connect/oauth` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `integration.oauth.status` | `GET /api/integration/{integrationID}/connect/oauth/{attemptID}` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `location.get` | `GET /api/location` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17 |
-| `location.reload` | `POST /api/location/reload` | `refused` | `keiko-owns-configuration` | #3903 | C06 |
-| `mcp.list` | `GET /api/mcp` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `mcp.resource.catalog` | `GET /api/mcp/resource` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `model.default` | `GET /api/model/default` | `keiko-operation` | Model Gateway model catalog (`read-handlers.ts`) | - | S11 |
-| `model.list` | `GET /api/model` | `keiko-operation` | Model Gateway model catalog (`read-handlers.ts`) | - | S11 |
-| `permission.request.list` | `GET /api/permission/request` | `admitted` | digest-pinned protocol surface | - | - |
-| `permission.saved.list` | `GET /api/permission/saved` | `refused` | `keiko-owns-authority` | #3899 | S16 |
-| `permission.saved.remove` | `DELETE /api/permission/saved/{id}` | `refused` | `keiko-owns-authority` | #3899 | S16 |
-| `permission.saved.update` | `PATCH /api/permission/saved/{id}` | `refused` | `keiko-owns-authority` | #3899 | S16 |
-| `persistentPty.connect` | `GET /api/experimental/persistent-pty/{ptyID}/connect` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `plugin.check` | `POST /api/plugin/check` | `refused` | `leaves-machine` | #3903 | C05 |
-| `plugin.list` | `GET /api/plugin` | `admitted` | digest-pinned protocol surface | - | - |
-| `plugin.update` | `POST /api/plugin/update` | `refused` | `leaves-machine` | #3903 | C05 |
-| `project.list` | `GET /api/project` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17 |
-| `project.update` | `PATCH /api/project/{projectID}` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17 |
-| `provider.get` | `GET /api/provider/{providerID}` | `keiko-operation` | Model Gateway readiness and provider settings (`gateway-readiness.ts`) | - | S11 |
-| `provider.list` | `GET /api/provider` | `keiko-operation` | Model Gateway readiness and provider settings (`gateway-readiness.ts`) | - | S11 |
-| `pty.connect` | `GET /api/pty/{ptyID}/connect` | `refused` | `host-surface` | #3901 | T13 |
-| `pty.connect.token` | `POST /api/pty/{ptyID}/connect-token` | `refused` | `host-surface` | #3901 | T13 |
-| `pty.create` | `POST /api/pty` | `refused` | `host-surface` | #3901 | T13 |
-| `pty.get` | `GET /api/pty/{ptyID}` | `refused` | `host-surface` | #3901 | T13 |
-| `pty.list` | `GET /api/pty` | `refused` | `host-surface` | #3901 | T13 |
-| `pty.remove` | `DELETE /api/pty/{ptyID}` | `refused` | `host-surface` | #3901 | T13 |
-| `pty.update` | `PUT /api/pty/{ptyID}` | `refused` | `host-surface` | #3901 | T13 |
-| `reference.list` | `GET /api/reference` | `refused` | `not-yet-implemented` | #3900 | C08 |
-| `rpc.call` | `POST /api/rpc/{rpcID}/{method}` | `refused` | `host-surface` | #3899 | C05 |
-| `server.connect` | `GET /auth/connect/{code}` | `refused` | `host-surface` | #3899 | S18 |
-| `server.experimental.persistentPty.connectToken` | `POST /api/experimental/persistent-pty/{ptyID}/connect-token` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.create` | `POST /api/experimental/session/{sessionID}/terminal` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.get` | `GET /api/experimental/persistent-pty/{ptyID}` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.handoff` | `POST /api/experimental/persistent-pty/handoff` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.list` | `GET /api/experimental/session/{sessionID}/terminal` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.read` | `GET /api/experimental/session/{sessionID}/terminal/read` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.remove` | `DELETE /api/experimental/persistent-pty/{ptyID}` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.shutdown` | `POST /api/experimental/persistent-pty/shutdown` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.snapshot` | `GET /api/experimental/persistent-pty/{ptyID}/snapshot` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.experimental.persistentPty.update` | `PUT /api/experimental/persistent-pty/{ptyID}` | `refused` | `experimental-unadmitted` | #3901 | T13 |
-| `server.info` | `GET /api/info` | `admitted` | digest-pinned protocol surface | - | - |
-| `server.pair` | `POST /api/pair` | `refused` | `host-surface` | #3899 | S18 |
-| `session.active` | `GET /api/session/active` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.background` | `POST /api/session/{sessionID}/background` | `refused` | `not-yet-implemented` | #3901 | T13 |
-| `session.command` | `POST /api/session/{sessionID}/command` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.compact` | `POST /api/session/{sessionID}/compact` | `refused` | `not-yet-implemented` | #3904 | S08 |
-| `session.context` | `GET /api/session/{sessionID}/context` | `refused` | `not-yet-implemented` | #3904 | S08 |
-| `session.create` | `POST /api/session` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.diff` | `GET /api/session/{sessionID}/diff` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.environment` | `PUT /api/session/{sessionID}/environment` | `refused` | `keiko-owns-authority` | #3901 | T11 |
-| `session.fork` | `POST /api/session/{sessionID}/fork` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.form.cancel` | `DELETE /api/session/{sessionID}/form/{formID}` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.form.create` | `POST /api/session/{sessionID}/form` | `refused` | `host-surface` | #3899 | T18 |
-| `session.form.get` | `GET /api/session/{sessionID}/form/{formID}` | `covered` | through `form.list` | - | T18 |
-| `session.form.list` | `GET /api/session/{sessionID}/form` | `covered` | through `form.list` | - | T18 |
-| `session.form.reply` | `POST /api/session/{sessionID}/form/{formID}/reply` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.generate` | `POST /api/session/{sessionID}/generate` | `refused` | `host-surface` | #3899 | S01 |
-| `session.get` | `GET /api/session/{sessionID}` | `covered` | through `session.list` | - | S01 |
-| `session.inbox.cancel` | `DELETE /api/session/{sessionID}/inbox/{inboxID}` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.inbox.list` | `GET /api/session/{sessionID}/inbox` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.inbox.update` | `PATCH /api/session/{sessionID}/inbox/{inboxID}` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.interrupt` | `POST /api/session/{sessionID}/interrupt` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.list` | `GET /api/session` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.log` | `GET /api/experimental/session/{sessionID}/log` | `refused` | `experimental-unadmitted` | #3908 | S01 |
-| `session.message.get` | `GET /api/session/{sessionID}/message/{messageID}` | `covered` | through `session.message.list` | - | S01 |
-| `session.message.list` | `GET /api/session/{sessionID}/message` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.move` | `POST /api/session/{sessionID}/move` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17, T22 |
-| `session.permission.create` | `POST /api/session/{sessionID}/permission` | `refused` | `keiko-owns-authority` | #3899 | S16 |
-| `session.permission.get` | `GET /api/session/{sessionID}/permission/{requestID}` | `covered` | through `permission.request.list` | - | S16 |
-| `session.permission.list` | `GET /api/session/{sessionID}/permission` | `covered` | through `permission.request.list` | - | S16 |
-| `session.permission.reply` | `POST /api/session/{sessionID}/permission/{requestID}/reply` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.prompt` | `POST /api/session/{sessionID}/prompt` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.remove` | `DELETE /api/session/{sessionID}` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.revert.clear` | `DELETE /api/session/{sessionID}/revert` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.revert.commit` | `POST /api/session/{sessionID}/revert/commit` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.revert.stage` | `POST /api/session/{sessionID}/revert/stage` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.shell` | `POST /api/session/{sessionID}/shell` | `refused` | `not-yet-implemented` | #3901 | T11 |
-| `session.switchAgent` | `POST /api/session/{sessionID}/agent` | `admitted` | digest-pinned protocol surface | - | - |
-| `session.switchModel` | `POST /api/session/{sessionID}/model` | `refused` | `keiko-owns-configuration` | #3905 | S11, S12 |
-| `session.synthetic` | `POST /api/session/{sessionID}/synthetic` | `refused` | `host-surface` | #3899 | S01 |
-| `session.update` | `PATCH /api/session/{sessionID}` | `refused` | `not-yet-implemented` | #3904 | S02 |
-| `session.view` | `POST /api/session/{sessionID}/view` | `refused` | `host-surface` | #3899 | S01 |
-| `shell.create` | `POST /api/shell` | `refused` | `not-yet-implemented` | #3901 | T13 |
-| `shell.get` | `GET /api/shell/{id}` | `refused` | `not-yet-implemented` | #3901 | T13 |
-| `shell.list` | `GET /api/shell` | `refused` | `not-yet-implemented` | #3901 | T13 |
-| `shell.output` | `GET /api/shell/{id}/output` | `refused` | `not-yet-implemented` | #3901 | T13 |
-| `shell.remove` | `DELETE /api/shell/{id}` | `refused` | `not-yet-implemented` | #3901 | T13 |
-| `skill.list` | `GET /api/skill` | `refused` | `not-yet-implemented` | #3903 | T17 |
-| `vcs.base` | `GET /api/vcs/base` | `refused` | `not-yet-implemented` | #3902 | T12 |
-| `vcs.branch.list` | `GET /api/vcs/branch` | `refused` | `not-yet-implemented` | #3902 | T12 |
-| `vcs.diff` | `GET /api/vcs/diff` | `refused` | `not-yet-implemented` | #3902 | T12 |
-| `vcs.get` | `GET /api/vcs` | `refused` | `not-yet-implemented` | #3902 | T12 |
-| `vcs.init` | `POST /api/vcs/init` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17 |
-| `vcs.status` | `GET /api/vcs/status` | `refused` | `not-yet-implemented` | #3902 | T12 |
-| `websearch.providers` | `GET /api/websearch/provider` | `refused` | `leaves-machine` | #3903 | T15 |
-| `websearch.query` | `POST /api/websearch` | `refused` | `leaves-machine` | #3903 | T15 |
-| `worktree.create` | `POST /api/worktree` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17, T22 |
-| `worktree.list` | `GET /api/worktree` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17, T22 |
-| `worktree.refresh` | `POST /api/worktree/refresh` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17, T22 |
-| `worktree.remove` | `DELETE /api/worktree` | `refused` | `keiko-owns-workspace-binding` | #3902 | S17, T22 |
+| operationId                                      | Endpoint                                                                   | Disposition       | Detail                                                                              | Owner | Rows     |
+| ------------------------------------------------ | -------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- | ----- | -------- |
+| `agent.get`                                      | `GET /api/agent/{agentID}`                                                 | `refused`         | `not-yet-implemented`                                                               | #3903 | C01      |
+| `agent.list`                                     | `GET /api/agent`                                                           | `refused`         | `not-yet-implemented`                                                               | #3903 | C01      |
+| `command.list`                                   | `GET /api/command`                                                         | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `config.get`                                     | `GET /api/config`                                                          | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
+| `config.shells`                                  | `GET /api/config/shell`                                                    | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
+| `credential.activate`                            | `POST /api/credential/{credentialID}/activate`                             | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `credential.create`                              | `POST /api/credential`                                                     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `credential.list`                                | `GET /api/credential`                                                      | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `credential.remove`                              | `DELETE /api/credential/{credentialID}`                                    | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `credential.update`                              | `PATCH /api/credential/{credentialID}`                                     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `debug.heapDump`                                 | `POST /api/debug/heap-dump`                                                | `refused`         | `host-surface`                                                                      | #3899 | S18      |
+| `debug.location.evict`                           | `DELETE /api/debug/location`                                               | `refused`         | `host-surface`                                                                      | #3899 | S18      |
+| `debug.location.list`                            | `GET /api/debug/location`                                                  | `refused`         | `host-surface`                                                                      | #3899 | S18      |
+| `event.subscribe`                                | `GET /api/event`                                                           | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `experimental.config.update`                     | `PATCH /api/experimental/config`                                           | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
+| `experimental.fs.write`                          | `POST /api/experimental/fs/write`                                          | `refused`         | `keiko-owns-authority`                                                              | #3900 | T06      |
+| `experimental.generate.text`                     | `POST /api/experimental/generate`                                          | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.integration.wellknown.add`         | `POST /api/experimental/integration/wellknown`                             | `refused`         | `leaves-machine`                                                                    | #3905 | S11      |
+| `experimental.mcp.add`                           | `PUT /api/experimental/mcp/{server}`                                       | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `experimental.mcp.client`                        | `GET /api/experimental/client-mcp`                                         | `refused`         | `host-surface`                                                                      | #3899 | C04      |
+| `experimental.mcp.client.token`                  | `POST /api/experimental/client-mcp/token`                                  | `refused`         | `host-surface`                                                                      | #3899 | C04      |
+| `experimental.mcp.connect`                       | `POST /api/experimental/mcp/{server}/connect`                              | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `experimental.mcp.disconnect`                    | `POST /api/experimental/mcp/{server}/disconnect`                           | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `experimental.mcp.remove`                        | `DELETE /api/experimental/mcp/{server}`                                    | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `experimental.migration.v1.status`               | `GET /api/experimental/migration/v1`                                       | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.session.export`                    | `GET /api/experimental/session/{sessionID}/export`                         | `keiko-operation` | Coding History task export (local, redacted) (`coding-runtime/codingTaskExport.ts`) | -     | S05      |
+| `experimental.session.import`                    | `POST /api/experimental/session/import`                                    | `refused`         | `not-yet-implemented`                                                               | #3904 | S05      |
+| `experimental.session.instructions.entry.list`   | `GET /api/experimental/session/{sessionID}/instructions/entries`           | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
+| `experimental.session.instructions.entry.put`    | `PUT /api/experimental/session/{sessionID}/instructions/entries/{key}`     | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
+| `experimental.session.instructions.entry.remove` | `DELETE /api/experimental/session/{sessionID}/instructions/entries/{key}`  | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
+| `experimental.session.skill`                     | `POST /api/experimental/session/{sessionID}/skill`                         | `refused`         | `not-yet-implemented`                                                               | #3903 | T17      |
+| `experimental.session.stats`                     | `GET /api/experimental/session/stats`                                      | `refused`         | `experimental-unadmitted`                                                           | #3899 | S18      |
+| `experimental.session.wait`                      | `POST /api/experimental/session/{sessionID}/wait`                          | `refused`         | `experimental-unadmitted`                                                           | #3908 | S01      |
+| `experimental.voice.instructions`                | `POST /api/experimental/voice/session/{sessionID}/instructions`            | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
+| `experimental.voice.models`                      | `GET /api/experimental/voice/models`                                       | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
+| `experimental.voice.session`                     | `POST /api/experimental/voice/session`                                     | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
+| `form.list`                                      | `GET /api/form`                                                            | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `fs.find`                                        | `GET /api/fs/find`                                                         | `keiko-operation` | Files and Editor, human-operated (`files.ts`)                                       | -     | -        |
+| `fs.list`                                        | `GET /api/fs/list`                                                         | `keiko-operation` | Files and Editor, human-operated (`files.ts`)                                       | -     | -        |
+| `fs.read`                                        | `GET /api/fs/read/*`                                                       | `keiko-operation` | Files and Editor, human-operated (`files.ts`)                                       | -     | -        |
+| `integration.command.cancel`                     | `DELETE /api/integration/{integrationID}/connect/command/{attemptID}`      | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.command.connect`                    | `POST /api/integration/{integrationID}/connect/command`                    | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.command.status`                     | `GET /api/integration/{integrationID}/connect/command/{attemptID}`         | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.connect.external`                   | `POST /api/integration/{integrationID}/connect/external`                   | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.connect.key`                        | `POST /api/integration/{integrationID}/connect/key`                        | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.get`                                | `GET /api/integration/{integrationID}`                                     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.list`                               | `GET /api/integration`                                                     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.oauth.cancel`                       | `DELETE /api/integration/{integrationID}/connect/oauth/{attemptID}`        | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.oauth.complete`                     | `POST /api/integration/{integrationID}/connect/oauth/{attemptID}/complete` | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.oauth.connect`                      | `POST /api/integration/{integrationID}/connect/oauth`                      | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `integration.oauth.status`                       | `GET /api/integration/{integrationID}/connect/oauth/{attemptID}`           | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11      |
+| `location.get`                                   | `GET /api/location`                                                        | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17      |
+| `location.reload`                                | `POST /api/location/reload`                                                | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
+| `mcp.list`                                       | `GET /api/mcp`                                                             | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `mcp.resource.catalog`                           | `GET /api/mcp/resource`                                                    | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `model.default`                                  | `GET /api/model/default`                                                   | `keiko-operation` | Model Gateway model catalog (`read-handlers.ts`)                                    | -     | S11      |
+| `model.list`                                     | `GET /api/model`                                                           | `keiko-operation` | Model Gateway model catalog (`read-handlers.ts`)                                    | -     | S11      |
+| `permission.request.list`                        | `GET /api/permission/request`                                              | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `permission.saved.list`                          | `GET /api/permission/saved`                                                | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
+| `permission.saved.remove`                        | `DELETE /api/permission/saved/{id}`                                        | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
+| `permission.saved.update`                        | `PATCH /api/permission/saved/{id}`                                         | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
+| `persistentPty.connect`                          | `GET /api/experimental/persistent-pty/{ptyID}/connect`                     | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `plugin.check`                                   | `POST /api/plugin/check`                                                   | `refused`         | `leaves-machine`                                                                    | #3903 | C05      |
+| `plugin.list`                                    | `GET /api/plugin`                                                          | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `plugin.update`                                  | `POST /api/plugin/update`                                                  | `refused`         | `leaves-machine`                                                                    | #3903 | C05      |
+| `project.list`                                   | `GET /api/project`                                                         | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17      |
+| `project.update`                                 | `PATCH /api/project/{projectID}`                                           | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17      |
+| `provider.get`                                   | `GET /api/provider/{providerID}`                                           | `keiko-operation` | Model Gateway readiness and provider settings (`gateway-readiness.ts`)              | -     | S11      |
+| `provider.list`                                  | `GET /api/provider`                                                        | `keiko-operation` | Model Gateway readiness and provider settings (`gateway-readiness.ts`)              | -     | S11      |
+| `pty.connect`                                    | `GET /api/pty/{ptyID}/connect`                                             | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `pty.connect.token`                              | `POST /api/pty/{ptyID}/connect-token`                                      | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `pty.create`                                     | `POST /api/pty`                                                            | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `pty.get`                                        | `GET /api/pty/{ptyID}`                                                     | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `pty.list`                                       | `GET /api/pty`                                                             | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `pty.remove`                                     | `DELETE /api/pty/{ptyID}`                                                  | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `pty.update`                                     | `PUT /api/pty/{ptyID}`                                                     | `refused`         | `host-surface`                                                                      | #3901 | T13      |
+| `reference.list`                                 | `GET /api/reference`                                                       | `refused`         | `not-yet-implemented`                                                               | #3900 | C08      |
+| `rpc.call`                                       | `POST /api/rpc/{rpcID}/{method}`                                           | `refused`         | `host-surface`                                                                      | #3899 | C05      |
+| `server.connect`                                 | `GET /auth/connect/{code}`                                                 | `refused`         | `host-surface`                                                                      | #3899 | S18      |
+| `server.experimental.persistentPty.connectToken` | `POST /api/experimental/persistent-pty/{ptyID}/connect-token`              | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.create`       | `POST /api/experimental/session/{sessionID}/terminal`                      | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.get`          | `GET /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.handoff`      | `POST /api/experimental/persistent-pty/handoff`                            | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.list`         | `GET /api/experimental/session/{sessionID}/terminal`                       | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.read`         | `GET /api/experimental/session/{sessionID}/terminal/read`                  | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.remove`       | `DELETE /api/experimental/persistent-pty/{ptyID}`                          | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.shutdown`     | `POST /api/experimental/persistent-pty/shutdown`                           | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.snapshot`     | `GET /api/experimental/persistent-pty/{ptyID}/snapshot`                    | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.experimental.persistentPty.update`       | `PUT /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `server.info`                                    | `GET /api/info`                                                            | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `server.pair`                                    | `POST /api/pair`                                                           | `refused`         | `host-surface`                                                                      | #3899 | S18      |
+| `session.active`                                 | `GET /api/session/active`                                                  | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.background`                             | `POST /api/session/{sessionID}/background`                                 | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
+| `session.command`                                | `POST /api/session/{sessionID}/command`                                    | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.compact`                                | `POST /api/session/{sessionID}/compact`                                    | `refused`         | `not-yet-implemented`                                                               | #3904 | S08      |
+| `session.context`                                | `GET /api/session/{sessionID}/context`                                     | `refused`         | `not-yet-implemented`                                                               | #3904 | S08      |
+| `session.create`                                 | `POST /api/session`                                                        | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.diff`                                   | `GET /api/session/{sessionID}/diff`                                        | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.environment`                            | `PUT /api/session/{sessionID}/environment`                                 | `refused`         | `keiko-owns-authority`                                                              | #3901 | T11      |
+| `session.fork`                                   | `POST /api/session/{sessionID}/fork`                                       | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.form.cancel`                            | `DELETE /api/session/{sessionID}/form/{formID}`                            | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.form.create`                            | `POST /api/session/{sessionID}/form`                                       | `refused`         | `host-surface`                                                                      | #3899 | T18      |
+| `session.form.get`                               | `GET /api/session/{sessionID}/form/{formID}`                               | `covered`         | through `form.list`                                                                 | -     | T18      |
+| `session.form.list`                              | `GET /api/session/{sessionID}/form`                                        | `covered`         | through `form.list`                                                                 | -     | T18      |
+| `session.form.reply`                             | `POST /api/session/{sessionID}/form/{formID}/reply`                        | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.generate`                               | `POST /api/session/{sessionID}/generate`                                   | `refused`         | `host-surface`                                                                      | #3899 | S01      |
+| `session.get`                                    | `GET /api/session/{sessionID}`                                             | `covered`         | through `session.list`                                                              | -     | S01      |
+| `session.inbox.cancel`                           | `DELETE /api/session/{sessionID}/inbox/{inboxID}`                          | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.inbox.list`                             | `GET /api/session/{sessionID}/inbox`                                       | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.inbox.update`                           | `PATCH /api/session/{sessionID}/inbox/{inboxID}`                           | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.interrupt`                              | `POST /api/session/{sessionID}/interrupt`                                  | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.list`                                   | `GET /api/session`                                                         | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.log`                                    | `GET /api/experimental/session/{sessionID}/log`                            | `refused`         | `experimental-unadmitted`                                                           | #3908 | S01      |
+| `session.message.get`                            | `GET /api/session/{sessionID}/message/{messageID}`                         | `covered`         | through `session.message.list`                                                      | -     | S01      |
+| `session.message.list`                           | `GET /api/session/{sessionID}/message`                                     | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.move`                                   | `POST /api/session/{sessionID}/move`                                       | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17, T22 |
+| `session.permission.create`                      | `POST /api/session/{sessionID}/permission`                                 | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
+| `session.permission.get`                         | `GET /api/session/{sessionID}/permission/{requestID}`                      | `covered`         | through `permission.request.list`                                                   | -     | S16      |
+| `session.permission.list`                        | `GET /api/session/{sessionID}/permission`                                  | `covered`         | through `permission.request.list`                                                   | -     | S16      |
+| `session.permission.reply`                       | `POST /api/session/{sessionID}/permission/{requestID}/reply`               | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.prompt`                                 | `POST /api/session/{sessionID}/prompt`                                     | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.remove`                                 | `DELETE /api/session/{sessionID}`                                          | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.revert.clear`                           | `DELETE /api/session/{sessionID}/revert`                                   | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.revert.commit`                          | `POST /api/session/{sessionID}/revert/commit`                              | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.revert.stage`                           | `POST /api/session/{sessionID}/revert/stage`                               | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.shell`                                  | `POST /api/session/{sessionID}/shell`                                      | `refused`         | `not-yet-implemented`                                                               | #3901 | T11      |
+| `session.switchAgent`                            | `POST /api/session/{sessionID}/agent`                                      | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `session.switchModel`                            | `POST /api/session/{sessionID}/model`                                      | `refused`         | `keiko-owns-configuration`                                                          | #3905 | S11, S12 |
+| `session.synthetic`                              | `POST /api/session/{sessionID}/synthetic`                                  | `refused`         | `host-surface`                                                                      | #3899 | S01      |
+| `session.update`                                 | `PATCH /api/session/{sessionID}`                                           | `refused`         | `not-yet-implemented`                                                               | #3904 | S02      |
+| `session.view`                                   | `POST /api/session/{sessionID}/view`                                       | `refused`         | `host-surface`                                                                      | #3899 | S01      |
+| `shell.create`                                   | `POST /api/shell`                                                          | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
+| `shell.get`                                      | `GET /api/shell/{id}`                                                      | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
+| `shell.list`                                     | `GET /api/shell`                                                           | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
+| `shell.output`                                   | `GET /api/shell/{id}/output`                                               | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
+| `shell.remove`                                   | `DELETE /api/shell/{id}`                                                   | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
+| `skill.list`                                     | `GET /api/skill`                                                           | `refused`         | `not-yet-implemented`                                                               | #3903 | T17      |
+| `vcs.base`                                       | `GET /api/vcs/base`                                                        | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
+| `vcs.branch.list`                                | `GET /api/vcs/branch`                                                      | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
+| `vcs.diff`                                       | `GET /api/vcs/diff`                                                        | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
+| `vcs.get`                                        | `GET /api/vcs`                                                             | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
+| `vcs.init`                                       | `POST /api/vcs/init`                                                       | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17      |
+| `vcs.status`                                     | `GET /api/vcs/status`                                                      | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
+| `websearch.providers`                            | `GET /api/websearch/provider`                                              | `refused`         | `leaves-machine`                                                                    | #3903 | T15      |
+| `websearch.query`                                | `POST /api/websearch`                                                      | `refused`         | `leaves-machine`                                                                    | #3903 | T15      |
+| `worktree.create`                                | `POST /api/worktree`                                                       | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17, T22 |
+| `worktree.list`                                  | `GET /api/worktree`                                                        | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17, T22 |
+| `worktree.refresh`                               | `POST /api/worktree/refresh`                                               | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17, T22 |
+| `worktree.remove`                                | `DELETE /api/worktree`                                                     | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17, T22 |
 
 #### CLI commands (41)
 
-| Command | Disposition | Detail | Owner | Rows |
-| --- | --- | --- | --- | --- |
-| `serve` | `keiko-operation` | Coding runtime host starts the service (`coding-runtime/opencodeLaunchProfile.ts`) | - | S18 |
-| `run` | `keiko-operation` | Coding Workbench task run (`coding-runtime/codingRuntimeOrchestrator.ts`) | - | S01 |
-| `session list` | `keiko-operation` | Coding History (`coding-runtime/codingHistoryRoutes.ts`) | - | S02 |
-| `models` | `keiko-operation` | Model Gateway model catalog (`read-handlers.ts`) | - | S11 |
-| `acp` | `refused` | `host-surface` | #3899 | S18 |
-| `api` | `refused` | `host-surface` | #3899 | S18 |
-| `mini` | `refused` | `host-surface` | #3899 | S18 |
-| `pair` | `refused` | `host-surface` | #3899 | S18 |
-| `stats` | `refused` | `host-surface` | #3899 | S18 |
-| `debug agents` | `refused` | `host-surface` | #3899 | S18 |
-| `debug config` | `refused` | `host-surface` | #3899 | S18 |
-| `debug heap-dump` | `refused` | `host-surface` | #3899 | S18 |
-| `debug paths` | `refused` | `host-surface` | #3899 | S18 |
-| `service get` | `refused` | `host-surface` | #3899 | S18 |
-| `service restart` | `refused` | `host-surface` | #3899 | S18 |
-| `service set` | `refused` | `host-surface` | #3899 | S18 |
-| `service start` | `refused` | `host-surface` | #3899 | S18 |
-| `service status` | `refused` | `host-surface` | #3899 | S18 |
-| `service stop` | `refused` | `host-surface` | #3899 | S18 |
-| `service unset` | `refused` | `host-surface` | #3899 | S18 |
-| `uninstall` | `refused` | `host-surface` | #3898 | S06 |
-| `reload` | `refused` | `keiko-owns-configuration` | #3903 | C06 |
-| `auth export` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `auth import` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `auth list` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `auth login` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `auth logout` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `auth switch` | `refused` | `keiko-owns-credentials` | #3905 | S11 |
-| `mcp add` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `mcp auth` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `mcp list` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `mcp logout` | `refused` | `not-yet-implemented` | #3903 | C04 |
-| `plugin list` | `refused` | `not-yet-implemented` | #3903 | C05 |
-| `plugin remove` | `refused` | `not-yet-implemented` | #3903 | C05 |
-| `plugin add` | `refused` | `leaves-machine` | #3903 | C05 |
-| `plugin check` | `refused` | `leaves-machine` | #3903 | C05 |
-| `plugin update` | `refused` | `leaves-machine` | #3903 | C05 |
-| `session export` | `keiko-operation` | Coding History task export (local, redacted) (`coding-runtime/codingTaskExport.ts`) | - | S05 |
-| `session import` | `refused` | `not-yet-implemented` | #3904 | S05 |
-| `session delete` | `refused` | `not-yet-implemented` | #3904 | S02 |
-| `upgrade` | `refused` | `leaves-machine` | #3904 | S06 |
+| Command           | Disposition       | Detail                                                                              | Owner | Rows |
+| ----------------- | ----------------- | ----------------------------------------------------------------------------------- | ----- | ---- |
+| `serve`           | `keiko-operation` | Coding runtime host starts the service (`coding-runtime/opencodeLaunchProfile.ts`)  | -     | S18  |
+| `run`             | `keiko-operation` | Coding Workbench task run (`coding-runtime/codingRuntimeOrchestrator.ts`)           | -     | S01  |
+| `session list`    | `keiko-operation` | Coding History (`coding-runtime/codingHistoryRoutes.ts`)                            | -     | S02  |
+| `models`          | `keiko-operation` | Model Gateway model catalog (`read-handlers.ts`)                                    | -     | S11  |
+| `acp`             | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `api`             | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `mini`            | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `pair`            | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `stats`           | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `debug agents`    | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `debug config`    | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `debug heap-dump` | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `debug paths`     | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service get`     | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service restart` | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service set`     | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service start`   | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service status`  | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service stop`    | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `service unset`   | `refused`         | `host-surface`                                                                      | #3899 | S18  |
+| `uninstall`       | `refused`         | `host-surface`                                                                      | #3898 | S06  |
+| `reload`          | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06  |
+| `auth export`     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11  |
+| `auth import`     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11  |
+| `auth list`       | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11  |
+| `auth login`      | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11  |
+| `auth logout`     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11  |
+| `auth switch`     | `refused`         | `keiko-owns-credentials`                                                            | #3905 | S11  |
+| `mcp add`         | `refused`         | `not-yet-implemented`                                                               | #3903 | C04  |
+| `mcp auth`        | `refused`         | `not-yet-implemented`                                                               | #3903 | C04  |
+| `mcp list`        | `refused`         | `not-yet-implemented`                                                               | #3903 | C04  |
+| `mcp logout`      | `refused`         | `not-yet-implemented`                                                               | #3903 | C04  |
+| `plugin list`     | `refused`         | `not-yet-implemented`                                                               | #3903 | C05  |
+| `plugin remove`   | `refused`         | `not-yet-implemented`                                                               | #3903 | C05  |
+| `plugin add`      | `refused`         | `leaves-machine`                                                                    | #3903 | C05  |
+| `plugin check`    | `refused`         | `leaves-machine`                                                                    | #3903 | C05  |
+| `plugin update`   | `refused`         | `leaves-machine`                                                                    | #3903 | C05  |
+| `session export`  | `keiko-operation` | Coding History task export (local, redacted) (`coding-runtime/codingTaskExport.ts`) | -     | S05  |
+| `session import`  | `refused`         | `not-yet-implemented`                                                               | #3904 | S05  |
+| `session delete`  | `refused`         | `not-yet-implemented`                                                               | #3904 | S02  |
+| `upgrade`         | `refused`         | `leaves-machine`                                                                    | #3904 | S06  |
 
 <!-- service-inventory:end -->
 
@@ -1018,3 +1018,5 @@ names are the stable facts. The opt-in real-binary suites run with `KEIKO_OPENCO
 [v2-client]: ../../packages/keiko-server/src/coding-runtime/opencodeV2HttpClient.ts
 [verify-detect]: ../../packages/keiko-verification/src/detect.ts
 [versions]: ../../packages/keiko-server/src/coding-runtime/opencodeRuntimeVersions.ts
+[mcp-registry]: ../../packages/keiko-server/src/mcp/mcpServerRegistry.ts
+[native-mcp]: ../../packages/keiko-server/src/coding-runtime/opencodeNativeMcp.ts

@@ -189,6 +189,43 @@ appear, read its `refusalReasons`: `invalid-name`, `reserved-name`, `duplicate-n
 `body-empty`, `unsafe-characters`, `oversize`, `template-shell-substitution`, `agent-not-admitted`,
 `name-mismatch`, `not-regular-file`, `unreadable`, `directory-unreadable` or `limit-exceeded`.
 
+## MCP servers
+
+A native run admits only the MCP servers the operator names in `mcp-servers.json` in Keiko's state
+directory (the directory that holds the UI database). The file must belong to the user Keiko runs
+as and must not be group- or world-writable (`chmod 600`); a missing file means no MCP server.
+Changes apply to the next run.
+
+```json
+{
+  "schemaVersion": 1,
+  "servers": [
+    {
+      "name": "docs",
+      "description": "Internal documentation search",
+      "transport": {
+        "kind": "local",
+        "command": ["/opt/tools/bin/docs-mcp", "--stdio"],
+        "environment": { "DOCS_INDEX": "/srv/docs" }
+      },
+      "tools": { "search": "read", "page.update": "write" }
+    }
+  ]
+}
+```
+
+- `name` is a lowercase word without `_`; at most 16 servers and 64 tools each.
+- A local server's command starts with an absolute executable; arguments and variables are
+  literal. `{env:…}` and `{file:…}` placeholders are refused, and no secret belongs in this file.
+- A remote server (`"kind": "remote"`, an `https` URL) is used only in Full access.
+- Every tool the model may call is named with `read` or `write`. A tool the file does not name is
+  refused. Ask for approval asks before an MCP tool; Supervised workspace allows `read` tools and
+  asks before `write` tools; Full access allows both.
+- The server starts with an empty environment plus `PATH`, the run's private `HOME` and its own
+  variables, inside the run's sandbox.
+- The Activity Log records `mcp.registry.loaded` per run (`absent`, `loaded` or `refused` with a
+  closed reason) and `coding-runtime.native-policy.decided` with `permission: mcp` per call.
+
 ## Review Commands
 
 Run focused closeout checks:

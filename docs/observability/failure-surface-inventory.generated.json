@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0870bdbc66fada55c6507a86dbaf86dbbd7d061f94ada3e450f0a23c8ead89b9"
+    "catalogDigest": "35317e3f9a52738aaba911f19e3a10789ff8ae9c29de7c3400dd25f50aca2533"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 572,
-    "proofCount": 585,
-    "resolvedProofCount": 585,
-    "failureClassCount": 359,
+    "operationCount": 573,
+    "proofCount": 586,
+    "resolvedProofCount": 586,
+    "failureClassCount": 360,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -403,6 +403,7 @@
         "git.ci-repair.budget",
         "git.verified-commit.authority",
         "harness.context.compacted",
+        "mcp.registry.loaded",
         "portable.runtime.native-helper-bound",
         "pr-description.workbench.egress.denied",
         "runtime.confinement.failed",
@@ -825,6 +826,7 @@
     "coding-runtime-prompt-inputs": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-instructions": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-items": ["tools-workflows.dependency-failure"],
+    "mcp-registry": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-list": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-revision-rebound": ["tools-workflows.dependency-failure"],
@@ -2283,6 +2285,7 @@
     "lsp.spawn.failed.emitted-line": [
       "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
     ],
+    "mcp.registry.loaded.emitted-line": ["packages/keiko-server/src/mcp/mcpServerRegistry.test.ts"],
     "memory-vault.log.sink-failed.body-free": ["packages/keiko-memory-vault/src/vault-log.test.ts"],
     "memory-vault.store.encryption-checkpoint-degraded.state": [
       "packages/keiko-memory-vault/src/schema.test.ts"

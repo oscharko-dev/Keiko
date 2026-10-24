@@ -10,14 +10,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
+import type { McpServerDefinition, VerificationKind } from "@oscharko-dev/keiko-contracts";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
+  nativeToolchainReadRoots,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { CodingRuntimeRunEffortLedger } from "./codingRuntimeRunEffort.js";
@@ -33,8 +34,13 @@ import {
   decideOpenCodeNativePolicy,
   openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
+  type OpenCodeNativeMcpGrants,
 } from "./opencodeNativePolicy.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
+import {
+  openCodeNativeMcpAdmission,
+  type OpenCodeNativeMcpAdmission,
+} from "./opencodeNativeMcp.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
@@ -218,6 +224,8 @@ interface Governance {
   readonly planRoot: string;
   /** True answers an `ask` as the human would approve it; false refuses it. */
   readonly approveAsks: boolean;
+  /** The MCP grants of the run's admitted registry servers (#3903). */
+  readonly mcp?: OpenCodeNativeMcpGrants | undefined;
 }
 
 /** Keiko's own native policy answers every ask the generated hook sends. */
@@ -233,6 +241,7 @@ async function startFacade(governance: Governance): Promise<FacadeStub> {
         planRoot: governance.planRoot,
         request,
         nowMs: Date.now(),
+        ...(governance.mcp === undefined ? {} : { mcp: governance.mcp }),
       });
       decisions.push({
         permission: request.permission,
@@ -296,6 +305,8 @@ interface LaunchOptions {
   readonly env: Readonly<Record<string, string>>;
   /** Throwaway observation plugins (never product code); `{{STATE}}` names the run's state root. */
   readonly plugins: Readonly<Record<string, string>>;
+  /** The operator's MCP registry servers for this run, admitted as production admits them. */
+  readonly mcpServers?: ((fixture: Fixture) => readonly McpServerDefinition[]) | undefined;
 }
 
 const PRODUCTION_LAUNCH: LaunchOptions = {
@@ -369,6 +380,7 @@ function launch(
   runtimeRoot: string,
   ports: { readonly gateway: number; readonly facade: number },
   options: LaunchOptions,
+  mcp?: OpenCodeNativeMcpAdmission,
 ): Launched {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
@@ -379,6 +391,7 @@ function launch(
       maxInputTokens: 24_000,
       maxOutputTokens: 4_096,
     },
+    ...(mcp === undefined ? {} : { mcp: mcp.config }),
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
   materializePrivateConfiguration(fixture, options, profile.config);
@@ -402,6 +415,20 @@ function launch(
       privateStateRoot: fixture.state,
       runtimeReadRoot: runtimeRoot,
       protectedWriteRoots: [openCodeConfigDirectory(fixture.state)],
+      // As production opens them: the admitted local MCP servers' install prefixes (#3903).
+      ...(options.mcpServers === undefined
+        ? {}
+        : {
+            toolchainReadRoots: nativeToolchainReadRoots(
+              options
+                .mcpServers(fixture)
+                .flatMap((server) =>
+                  server.transport.kind === "local" ? [dirname(server.transport.command[0])] : [],
+                )
+                .join(":"),
+              homedir(),
+            ),
+          }),
     },
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
@@ -479,6 +506,8 @@ interface Run {
   readonly client: OpenCodeV2HttpClient;
   readonly sessionId: string;
   readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  /** A GET of the runtime's own API for the run's location (`/api/mcp`, say). */
+  readonly raw: (path: string) => Promise<unknown>;
 }
 
 async function withRun(
@@ -491,11 +520,20 @@ async function withRun(
   expect(process.platform).toBe("darwin");
   const fixture = createFixture(options.files);
   const gateway = await startGateway();
+  const mcp =
+    options.mcpServers === undefined
+      ? undefined
+      : openCodeNativeMcpAdmission({
+          servers: options.mcpServers(fixture),
+          mode: options.mode,
+          home: join(fixture.state, "home"),
+        });
   const facade = await startFacade({
     mode: options.mode,
     workspaceRoot: fixture.workspace,
     planRoot: openCodePlanDirectory(fixture.state),
     approveAsks: options.approveAsks,
+    ...(mcp === undefined ? {} : { mcp: mcp.grants }),
   });
   const launched = launch(
     fixture,
@@ -503,6 +541,7 @@ async function withRun(
     realpathSync(RESOURCE_ROOT),
     { gateway: gateway.port, facade: facade.port },
     options,
+    mcp,
   );
   try {
     const endpoint = await childEndpoint(launched.child);
@@ -510,7 +549,23 @@ async function withRun(
     expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
     const session = await client.createSession(fixture.workspace);
     if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-    await body({ fixture, gateway, facade, client, sessionId: session.id, child: launched.child });
+    const raw: Run["raw"] = async (path) => {
+      const location = `location%5Bdirectory%5D=${encodeURIComponent(fixture.workspace)}`;
+      const authorization = `Basic ${Buffer.from(`opencode:${launched.password}`).toString("base64")}`;
+      const response = await fetch(`${endpoint}${path}?${location}`, {
+        headers: { Authorization: authorization },
+      });
+      return (await response.json()) as unknown;
+    };
+    await body({
+      fixture,
+      gateway,
+      facade,
+      client,
+      sessionId: session.id,
+      child: launched.child,
+      raw,
+    });
   } finally {
     await stopChild(launched.child);
     await Promise.all([closeStub(gateway), closeStub(facade)]);
@@ -1312,6 +1367,167 @@ describe("pinned native OpenCode formatters (C07)", () => {
       const edited = await editWith({});
       expect(edited.content).toBe("const   a  =  {b:2}\n");
       expect(edited.registryRequests).toEqual([]);
+    },
+    120_000,
+  );
+});
+
+// ─── C04: MCP servers from the operator's registry ─────────────────────────────────────────────
+
+// A stdio MCP server: `echo` answers, `wipe` writes a marker (it must never run unadmitted), and at
+// start it records the names of the environment it was given.
+const MCP_FIXTURE_SERVER = String.raw`
+const { writeFileSync } = require("node:fs");
+const { createInterface } = require("node:readline");
+writeFileSync("mcp-env.json", JSON.stringify(Object.keys(process.env).sort()));
+const out = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
+const tools = [
+  { name: "echo", description: "Echoes text", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
+  { name: "wipe", description: "Writes a marker", inputSchema: { type: "object", properties: {} } },
+];
+createInterface({ input: process.stdin }).on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") out({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: msg.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1.0.0" } } });
+  else if (msg.method === "tools/list") out({ jsonrpc: "2.0", id: msg.id, result: { tools } });
+  else if (msg.method === "tools/call" && msg.params.name === "wipe") { writeFileSync("WIPED", "x"); out({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "wiped" }] } }); }
+  else if (msg.method === "tools/call") out({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ECHO:" + msg.params.arguments.text }] } });
+  else if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, result: {} });
+});
+`;
+
+describe("pinned native OpenCode MCP servers from the operator's registry (C04, #3903)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const server = (fixture: Fixture): readonly McpServerDefinition[] => [
+    {
+      name: "fixture",
+      description: undefined,
+      enabled: true,
+      transport: {
+        kind: "local",
+        command: [process.execPath, join(fixture.workspace, "mcp-server.cjs")],
+        environment: { FIXTURE_MODE: "qualification" },
+      },
+      // `wipe` is deliberately not named: the registry admits `echo` alone.
+      tools: { echo: "read" },
+    },
+  ];
+  const mcpLaunch = (mode: Mode, approveAsks: boolean): Partial<LaunchOptions> => ({
+    mode,
+    approveAsks,
+    files: {
+      [FIXTURE_FILE]: "native qualification fixture\n",
+      "mcp-server.cjs": MCP_FIXTURE_SERVER,
+    },
+    mcpServers: server,
+  });
+  const viaCodeMode = (code: string): ScriptedCall => ({ name: "execute", arguments: { code } });
+  // The runtime starts a location's MCP servers lazily, on its first use, and registers their tools
+  // shortly after it reports them connected: wait until Code Mode itself lists the server.
+  async function connected(run: Run): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          const listed = object(await run.raw("/api/mcp"))?.data;
+          return Array.isArray(listed) ? JSON.stringify(listed) : "";
+        },
+        { timeout: 20_000 },
+      )
+      .toContain('"connected"');
+    await expect
+      .poll(
+        async () => await scriptedTurn(run, viaCodeMode("return Object.keys(tools).join(',');")),
+        { timeout: 20_000, interval: 250 },
+      )
+      .toContain("fixture");
+    run.facade.decisions.length = 0;
+  }
+
+  it.skipIf(skip)(
+    "admits a registry-named MCP tool through Code Mode from an emptied environment",
+    async () => {
+      await withRun(mcpLaunch("autonomous-delivery", true), async (run) => {
+        await connected(run);
+        const result = await scriptedTurn(
+          run,
+          viaCodeMode('return await tools.fixture.echo({ text: "hello" });'),
+        );
+        expect(result).toContain("ECHO:hello");
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({ permission: "fixture_echo", effect: "allow" }),
+        );
+        // The server started from `env -i`: none of Keiko's capabilities or the service password,
+        // only its own variables (macOS adds `__CF_USER_TEXT_ENCODING` to every process).
+        const names = JSON.parse(
+          readFileSync(join(run.fixture.workspace, "mcp-env.json"), "utf8"),
+        ) as string[];
+        expect(names.filter((name) => name !== "__CF_USER_TEXT_ENCODING")).toEqual([
+          "FIXTURE_MODE",
+          "HOME",
+          "PATH",
+        ]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "refuses an MCP tool the registry does not name, and the server never runs it",
+    async () => {
+      await withRun(mcpLaunch("autonomous-delivery", true), async (run) => {
+        await connected(run);
+        await scriptedTurn(run, viaCodeMode("return await tools.fixture.wipe({});"));
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({
+            permission: "fixture_wipe",
+            effect: "deny",
+            reason: "unsupported-action",
+          }),
+        );
+        expect(existsSync(join(run.fixture.workspace, "WIPED"))).toBe(false);
+      });
+    },
+    120_000,
+  );
+
+  // Ask for approval asks before Code Mode itself and again before the MCP tool; the human here
+  // approves both, so the tool's own ask is what the run shows.
+  it.skipIf(skip)(
+    "asks before an admitted MCP read tool in Ask for approval",
+    async () => {
+      await withRun(mcpLaunch("governed-assist", true), async (run) => {
+        await connected(run);
+        const result = await scriptedTurn(
+          run,
+          viaCodeMode('return await tools.fixture.echo({ text: "hello" });'),
+        );
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({ permission: "fixture_echo", effect: "ask" }),
+        );
+        expect(result).toContain("ECHO:hello");
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "control: without the registry the same server is not configured at all",
+    async () => {
+      await withRun(
+        {
+          mode: "autonomous-delivery",
+          approveAsks: true,
+          files: { "mcp-server.cjs": MCP_FIXTURE_SERVER },
+        },
+        async (run) => {
+          await run.raw("/api/mcp");
+          await expect
+            .poll(async () => JSON.stringify(object(await run.raw("/api/mcp"))?.data), {
+              timeout: 3_000,
+            })
+            .toBe("[]");
+          expect(existsSync(join(run.fixture.workspace, "mcp-env.json"))).toBe(false);
+        },
+      );
     },
     120_000,
   );

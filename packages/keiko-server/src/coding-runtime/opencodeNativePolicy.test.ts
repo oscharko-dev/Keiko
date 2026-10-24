@@ -24,6 +24,7 @@ import {
   type OpenCodeNativePolicyRequest,
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
+import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -601,4 +602,96 @@ describe("program names that collide with prototype members", () => {
       expect(openCodeNativeVerificationKind([command])).toBeUndefined();
     },
   );
+});
+
+// #3903 (parity row C04): an MCP tool is callable only when the operator's registry names it. Its
+// declared risk and transport choose the action class; everything else stays unsupported.
+describe("MCP tools under the operator's registry (#3903)", () => {
+  const admission = openCodeNativeMcpAdmission({
+    servers: [
+      {
+        name: "docs",
+        description: undefined,
+        enabled: true,
+        transport: { kind: "local", command: ["/opt/docs-mcp"], environment: {} },
+        tools: { search: "read", "page.update": "write" },
+      },
+      {
+        name: "tracker",
+        description: undefined,
+        enabled: true,
+        transport: { kind: "remote", url: "https://tracker.example.test/mcp" },
+        tools: { find: "read" },
+      },
+    ],
+    mode: "autonomous-delivery",
+    home: "/tmp/keiko-native-policy/home",
+  });
+  const mcpEffect = (mode: string, permission: string, resources: readonly string[]): string => {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: WORKSPACE,
+      request: request(permission, resources),
+      nowMs: NOW,
+      mcp: admission.grants,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  };
+
+  it.each([
+    ["docs_search", ["*"], ["ask", "allow", "allow"]],
+    ["docs_page_update", ["*"], ["ask", "ask", "allow"]],
+    ["tracker_find", ["*"], ["deny:mode-denied", "deny:mode-denied", "allow"]],
+    ["opencode_list_mcp_resources", ["docs"], ["ask", "allow", "allow"]],
+    ["opencode_read_mcp_resource", ["docs:docs://note"], ["ask", "allow", "allow"]],
+    [
+      "opencode_list_mcp_resources",
+      ["docs", "tracker"],
+      ["deny:mode-denied", "deny:mode-denied", "allow"],
+    ],
+  ] as const)("classifies %s %j by mode", (permission, resources, effects) => {
+    expect(
+      ["governed-assist", "supervised-coding", "autonomous-delivery"].map((mode) =>
+        mcpEffect(mode, permission, resources),
+      ),
+    ).toEqual(effects);
+  });
+
+  it.each([
+    ["docs_delete", ["*"]],
+    ["other_search", ["*"]],
+    ["opencode_list_mcp_resources", ["other"]],
+    ["opencode_list_mcp_resources", []],
+    ["opencode_read_mcp_resource", ["other:x://y"]],
+  ] as const)("keeps %s %j unsupported", (permission, resources) => {
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+      expect(mcpEffect(mode, permission, resources)).toBe("deny:unsupported-action");
+  });
+
+  it("refuses every MCP tool when no registry grants are given", () => {
+    expect(effectOf("autonomous-delivery", "docs_search", ["*"])).toBe("deny:unsupported-action");
+  });
+
+  it("logs an MCP tool by its class, never by its server or tool name", () => {
+    const records: ServerLogEvent[] = [];
+    const decision = decideOpenCodeNativePolicy({
+      mode: "autonomous-delivery",
+      workspaceRoot: WORKSPACE,
+      request: request("docs_search", ["*"]),
+      nowMs: NOW,
+      mcp: admission.grants,
+    });
+    recordOpenCodeNativePolicyDecision(
+      { write: (event) => void records.push(event) },
+      "run-native-1",
+      {
+        mode: "autonomous-delivery",
+        request: request("docs_search", ["*"]),
+        decision,
+        outcome: "allowed",
+      },
+    );
+    expect(records[0]?.extra).toMatchObject({ permission: "mcp", effect: "allow" });
+    expect(JSON.stringify(records[0])).not.toContain("docs");
+  });
 });

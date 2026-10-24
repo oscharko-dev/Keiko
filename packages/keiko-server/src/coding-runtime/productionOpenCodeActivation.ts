@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimeUnavailableReason,
+  McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createFetchEditorAgentHttpTransport,
@@ -20,6 +21,7 @@ import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
+import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
@@ -199,6 +201,21 @@ export function productionOpenCodeLoopbackEndpoints(
       };
 }
 
+const MEMOIZED_RUNS_MAX = 8;
+
+/** One value per run id, the few most recent runs only. */
+function memoizedPerRun<Value>(load: (runId: string) => Value): (runId: string) => Value {
+  const loaded = new Map<string, Value>();
+  return (runId) => {
+    const held = loaded.get(runId);
+    if (held !== undefined) return held;
+    const value = load(runId);
+    if (loaded.size >= MEMOIZED_RUNS_MAX) loaded.delete(loaded.keys().next().value ?? "");
+    loaded.set(runId, value);
+    return value;
+  };
+}
+
 function activatedPorts(
   input: ProductionOpenCodeActivationInput,
   portable: ResolvedPortableOpenCodeRuntime,
@@ -217,6 +234,16 @@ function activatedPorts(
       secureWorkspaceTextRead,
       repositoryItemsEnabled: configuredCodingRuntimeRepositoryItemsEnabled(
         input.env[KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV],
+      ),
+      // #3903 (C04): the operator's MCP server registry, read once for each native run at its
+      // launch; the run's sandbox and its runtime binding see the same load.
+      mcpServers: memoizedPerRun(
+        (correlationId: string): readonly McpServerDefinition[] =>
+          loadMcpServerRegistry({
+            stateDir: input.runtimeStateDir,
+            activityLog: input.activityLog ?? processServerLogSink(),
+            correlationId,
+          }).servers,
       ),
       gatewayUrl: endpoints.gatewayUrl,
       resolveGatewayRunMetadata:

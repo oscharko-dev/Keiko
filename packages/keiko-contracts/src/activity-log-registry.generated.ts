@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0870bdbc66fada55c6507a86dbaf86dbbd7d061f94ada3e450f0a23c8ead89b9" as const;
+  "35317e3f9a52738aaba911f19e3a10789ff8ae9c29de7c3400dd25f50aca2533" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 359,
-  completeClassCount: 359,
+  supportedClassCount: 360,
+  completeClassCount: 360,
   completeness: "complete",
   classes: [
     {
@@ -32298,6 +32298,118 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "mcp-registry",
+      requirementContract: "mcp-registry",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["mcp.registry.loaded"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "mcp.registry.loaded",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["mcp.registry.loaded"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "mcp.registry.loaded",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "consumer",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "enabledServerCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "registrySha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "remoteServerCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "serverCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "toolCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["mcp.registry.loaded.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "memory-audit-state-cache",
       requirementContract: "memory-audit-state-cache",
       productSurfaces: ["keiko-server"],
@@ -44414,6 +44526,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "lsp.process.terminated": "editor-delivery",
     "lsp.spawn.completed": "editor-delivery",
     "lsp.spawn.failed": "editor-delivery",
+    "mcp.registry.loaded": "tools-workflows",
     "memory-vault.log.sink-failed": "memory-knowledge",
     "memory-vault.store.encryption-checkpoint-degraded": "memory-knowledge",
     "memory-vault.store.encryption-migrated": "memory-knowledge",

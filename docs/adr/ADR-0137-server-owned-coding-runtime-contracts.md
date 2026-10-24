@@ -1107,6 +1107,32 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
   `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
   Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
+- **MCP servers come from the operator's registry, never from the repository (#3903, parity row
+  C04, owner decision of 2026-10-24).** `mcp-servers.json` in Keiko's state directory, owned by the
+  user Keiko runs as and writable by nobody else, is read for each native run at its launch
+  (`mcpServerRegistry.ts`; the grammar is `parseMcpServerRegistry` in `keiko-contracts`, so Chat and
+  other components can consume the same registry later). A local server is an absolute executable
+  with literal arguments and literal, non-secret variables, a remote server an `https` URL, and every
+  tool is named with its declared risk (`read` or `write`); a `{env:…}` or `{file:…}` placeholder is
+  refused anywhere, because the runtime resolves it from its own environment and files. A file Keiko
+  cannot trust (a link, another owner, group- or world-writable, over 64 KiB, not JSON, an invalid
+  entry) admits no server. `opencodeNativeMcp.ts` writes the admitted servers as `mcp.servers` on the
+  server-owned binding, always present so no lower layer can add one. The pinned runtime starts a
+  local server as its direct child and hands it its whole environment, Keiko's gateway and tool
+  capabilities and the service password included (proven on the original executable), so a server
+  starts through `/usr/bin/env -i` with a fixed `PATH`, the run's private `HOME` and its own
+  variables only. It runs inside the run's sandbox; its executable's install prefix is opened for
+  reading under the same toolchain rule as the launcher's `PATH`, and the supervisor's resource
+  coalition reaps it with the tree. A remote server is written only for Full access, with OAuth off.
+  The runtime exposes MCP tools through Code Mode, and every nested call reaches the policy as
+  `<server>_<tool>`: a named local `read` tool is a vetted command (Ask for approval asks,
+  Supervised workspace and Full access allow), a named local `write` tool a risky command (Full
+  access allows), a remote server's tool internet use (Full access only), and the resource tools of
+  admitted servers are reads of those servers. Every other MCP action stays unsupported. Evidence:
+  `mcp.registry.loaded` (consumer, state, counts, a digest of the admitted definitions, the closed
+  reason) and `coding-runtime.native-policy.decided` with `permission: mcp`; no server, tool, path
+  or URL enters the log. Open: credentials for MCP servers, MCP prompts as commands, OAuth, a
+  registry editor and the first consumer outside Coding.
 - **The plan tool is on (#3897, parity row T19, owner decision of 2026-10-24).** The pinned 2.1.4
   producer registers its plan tool `todowrite` only under `experimental.todo` (off by default in
   standalone), so a native run used to show no plan card. `createNativeOpenCodeV2Config` sets the
@@ -1254,7 +1280,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - **Not admitted, with the reason.** Everything else under `.claude`. Skill sibling files, nested
     agent and command names (`team/reviewer`), `mode: all`, the producer's `steps`, `hidden`,
     `color` and `request` keys, global directories (the private `HOME` is empty), remote skill
-    indexes and MCP stay out.
+    indexes stay out; MCP servers come from the operator's registry (below).
   - **Operator switch and evidence.** `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` is on by default;
     `true` keeps it, and `false` or any other value disables it (an unrecognised value fails
     closed to off). Each native launch records one body-free

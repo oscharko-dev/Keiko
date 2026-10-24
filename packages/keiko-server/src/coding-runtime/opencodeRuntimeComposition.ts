@@ -20,6 +20,7 @@ import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
   CodingWorkbenchActionClass,
+  McpServerDefinition,
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -163,7 +164,12 @@ import {
   type OpenCodeNativePolicyOutcome,
   type OpenCodeNativeSessionRelation,
   type OpenCodeNativePolicyRequest,
+  type OpenCodeNativeMcpGrants,
 } from "./opencodeNativePolicy.js";
+import {
+  openCodeNativeMcpAdmission,
+  type OpenCodeNativeMcpAdmission,
+} from "./opencodeNativeMcp.js";
 import { OPENCODE_NATIVE_POLICY_ACTION } from "./opencodeNativePolicyPlugin.js";
 import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
 import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
@@ -185,7 +191,10 @@ import {
   openCodeConfigDirectory,
   openCodePlanDirectory,
 } from "./opencodeLaunchProfile.js";
-import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import type {
+  OpenCodeContextGeometry,
+  OpenCodeLaunchProfileResult,
+} from "./opencodeLaunchProfile.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import {
   createGeneratedOpenCodeV2Plugins,
@@ -385,6 +394,11 @@ export interface OpenCodeRuntimeCompositionInput {
    * absent leaves the discovery directory exactly as Keiko generated it.
    */
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort | undefined;
+  /**
+   * The operator's MCP server registry, read once per native run at launch (#3903,
+   * `mcpServerRegistry.ts`); absent admits no MCP server.
+   */
+  readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -629,6 +643,8 @@ interface PreparedRun {
   mode: string | undefined;
   /** The mode the tree was launched with; its kernel egress was bound then and cannot narrow. */
   readonly launchMode: string | undefined;
+  /** The MCP tools and servers this run's binding admitted (`opencodeNativeMcp.ts`). */
+  mcp?: OpenCodeNativeMcpGrants | undefined;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
@@ -1448,14 +1464,7 @@ async function materializePrepare(
   createPrivateState(runRoot);
   const continuation = serviceHost === undefined ? seedRun(input, request, runRoot) : undefined;
   await bridge.start();
-  const profile = buildOpenCodeLaunchProfile({
-    executable: request.executablePath,
-    stateRoot: runRoot,
-    contextGeometry: input.contextGeometry,
-    toolProfile: input.toolProfile,
-    mode: request.env.KEIKO_CODING_MODE,
-  });
-  if (!profile.ok) throw new Error("profile-invalid");
+  const { profile, mcp } = runLaunchProfile(input, request, runRoot);
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
@@ -1476,9 +1485,45 @@ async function materializePrepare(
         );
   if (serviceHost !== undefined && program === undefined)
     throw new Error("host-preparation-invalid");
-  persistPreparedRun(runs, request, runRoot, password, configDigest, program, continuation);
+  persistPreparedRun(runs, request, runRoot, password, configDigest, program, continuation, mcp);
   recordNativeFormatterBound(input.activityLog, request, profile.formatter);
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
+}
+
+/** The run's launch profile, with the MCP servers the operator's registry admits for it. */
+function runLaunchProfile(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): {
+  readonly profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>;
+  readonly mcp: OpenCodeNativeMcpGrants | undefined;
+} {
+  const mcp = nativeMcpAdmission(input, request, runRoot);
+  const profile = buildOpenCodeLaunchProfile({
+    executable: request.executablePath,
+    stateRoot: runRoot,
+    contextGeometry: input.contextGeometry,
+    toolProfile: input.toolProfile,
+    mode: request.env.KEIKO_CODING_MODE,
+    ...(mcp === undefined ? {} : { mcp: mcp.config }),
+  });
+  if (!profile.ok) throw new Error("profile-invalid");
+  return { profile, mcp: mcp?.grants };
+}
+
+/** A native run's MCP servers from the operator's registry; none for a mapped profile. */
+function nativeMcpAdmission(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): OpenCodeNativeMcpAdmission | undefined {
+  if (input.toolProfile !== "native" || input.mcpServers === undefined) return undefined;
+  return openCodeNativeMcpAdmission({
+    servers: input.mcpServers(request.runId),
+    mode: request.env.KEIKO_CODING_MODE,
+    home: join(runRoot, "home"),
+  });
 }
 
 /** The prepared launch: the profile's environment plus the run's two capabilities. */
@@ -1576,6 +1621,7 @@ function persistPreparedRun(
   configDigest: string,
   program: PreparedOpenCodeServiceHostLaunch | undefined,
   continuation?: RunContinuation,
+  mcp?: OpenCodeNativeMcpGrants,
 ): void {
   const run = preparedRun(
     request.runId,
@@ -1588,6 +1634,7 @@ function persistPreparedRun(
   );
   if (program !== undefined) run.serviceHostPrepared = true;
   if (continuation !== undefined) run.continuation = continuation;
+  if (mcp !== undefined) run.mcp = mcp;
   runs.set(request.runId, run);
 }
 
@@ -3086,6 +3133,7 @@ async function handleNativePolicyRequest(
     planRoot: openCodePlanDirectory(run.runRoot),
     request,
     nowMs: Date.now(),
+    ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
   });
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, approvals);
   const { outcome } = settled;
