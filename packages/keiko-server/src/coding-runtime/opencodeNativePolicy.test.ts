@@ -698,6 +698,7 @@ describe("native verification commands (#3901, #3897 review)", () => {
     [["pytest --collect-only"]],
     [["python3 -m pytest --co tests"]],
     [["go test -list ."]],
+    [["go test -list=. ./..."]],
     [["cargo test --no-run"]],
     [["make -n test"]],
     [["make -Bn test"]],
@@ -724,6 +725,7 @@ describe("native verification commands (#3901, #3897 review)", () => {
   it.each([
     [["pytest -v"], "test"],
     [["go test -v ./..."], "test"],
+    [["go test -run=X ./..."], "test"],
     [["npx vitest run --reporter=verbose"], "test"],
     [["make test"], "test"],
     // Option operands may contain n/q/h: they are not combined switches.

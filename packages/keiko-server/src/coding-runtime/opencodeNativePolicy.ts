@@ -527,7 +527,7 @@ function nonExecutingCheck(tokens: readonly string[]): boolean {
   const program = tokens[0] ?? "";
   const own = PROGRAM_NON_EXECUTING.get(program);
   return tokens.slice(1).some((token) => {
-    const option = token.startsWith("--") ? (token.split("=", 1)[0] ?? token) : token;
+    const option = token.startsWith("-") ? (token.split("=", 1)[0] ?? token) : token;
     return (
       NON_EXECUTING_FLAGS.has(option) ||
       own?.has(option) === true ||
