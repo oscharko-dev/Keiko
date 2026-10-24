@@ -1,3 +1,7 @@
+import {
+  isCodeTaskRecord as isRecord,
+  codeTaskUnknownKeys as unknownKeys,
+} from "./code-task-record-validation.js";
 // Producer-owned acceptance contribution for Epic #2384 Code-task children (#2385 owns the
 // definition; #2396 consumes and aggregates it and must not redefine it). Every child PR emits
 // one contribution bound to its final source/tree SHA. The payload is content-free by contract:
@@ -193,15 +197,6 @@ function appendValidationErrors(errors: string[], messages: readonly string[]): 
   return messages.length === 0;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getPrototypeOf(value) === Object.prototype
-  );
-}
-
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
@@ -338,25 +333,6 @@ function factFieldsAreValid(
 // field on a documented content-free contract must never ride through into evidence. These four did
 // not, so a payload could carry `promptText` (or any other free-text field) alongside the validated
 // ones and be accepted, then be handed on as `value`. Mirrors code-task-governance.ts's unknownKeys.
-// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
-// debug/debug-lifecycle.ts's idiom for the same class of threat: Object.keys alone misses a
-// non-enumerable own property; every caller here already passes through the hardened isRecord
-// above, which is what actually closes the prototype case (see its own comment) that neither this
-// nor debug-lifecycle.ts's own-property scan can see on its own.
-function unknownKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  const errors = Object.getOwnPropertyNames(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
-  if (Object.getOwnPropertySymbols(value).length > 0) {
-    errors.push(`${path} must not carry symbol-keyed properties`);
-  }
-  return errors;
-}
-
 const CONTRIBUTION_KEYS = [
   "kind",
   "schemaVersion",

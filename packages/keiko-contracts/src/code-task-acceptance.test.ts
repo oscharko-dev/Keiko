@@ -2230,3 +2230,47 @@ describe("qualification manifest public parser (#3918)", () => {
     expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
   });
 });
+
+it.each(["source", "public"])(
+  "preserves strict record and own-key admission through %s",
+  async (surface) => {
+    const validate =
+      surface === "source"
+        ? validateCodeTaskAcceptanceContribution
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+            .validateCodeTaskAcceptanceContribution;
+    const healthy = validContribution();
+    const accepted = validate(healthy);
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) expect(accepted.value).toBe(healthy);
+    const prototypeTrace: string[] = [];
+    const inherited = new Proxy(healthy, {
+      getPrototypeOf(): object {
+        prototypeTrace.push("prototype");
+        return { fixtureInherited: true };
+      },
+      ownKeys(): never {
+        throw new TypeError("prototype admission must precede key inspection");
+      },
+    });
+    expect(validate(inherited).ok).toBe(false);
+    expect(prototypeTrace).toEqual(["prototype"]);
+    const input = validContribution();
+    Object.defineProperty(input, "fixtureExtra", { value: true });
+    Object.defineProperty(input, Symbol("fixtureExtra"), { value: true });
+    const result = validate(input);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.errors.filter(
+          (error) =>
+            error.includes("fixtureExtra") ||
+            error === "contribution must not carry symbol-keyed properties",
+        ),
+      ).toEqual([
+        "contribution.fixtureExtra is not allowed",
+        "contribution must not carry symbol-keyed properties",
+      ]);
+    }
+  },
+);

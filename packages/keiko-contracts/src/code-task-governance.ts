@@ -1,3 +1,7 @@
+import {
+  isCodeTaskRecord as isRecord,
+  codeTaskUnknownKeys as unknownKeys,
+} from "./code-task-record-validation.js";
 // Cross-child governance contracts for Epic #2384 Code-task children (Issue #2386). These are
 // acceptance boundaries, not implementation suggestions: every value is a readonly, JSON-
 // serializable discriminated union with literal `schemaVersion: 1`; identity values use validated
@@ -65,7 +69,7 @@ export function isCodeTaskPolicyVersion(value: unknown): value is CodeTaskPolicy
   return typeof value === "string" && POLICY_VERSION_PATTERN.test(value);
 }
 
-// KfQ Critical on code-task-acceptance.ts's identical unknownKeys (this file mirrors it): a value
+// KfQ Critical: the shared strict Code-task record admission rejects a value
 // shaped via Object.create(secretHolder) can carry every required field as an OWN property (so it
 // looks complete) plus one extra field reachable ONLY through the prototype -- verified empirically
 // that such a value's own-property count and names match an honest input exactly, so no
@@ -83,15 +87,6 @@ function appendValidationErrors(errors: string[], messages: readonly string[]): 
   return messages.length === 0;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getPrototypeOf(value) === Object.prototype
-  );
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -99,24 +94,6 @@ function isNonNegativeInteger(value: unknown): value is number {
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   const values: readonly string[] = allowed;
   return typeof value === "string" && values.includes(value);
-}
-
-// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
-// debug/debug-lifecycle.ts's idiom: Object.keys alone misses a non-enumerable own property. Every
-// caller here already passes through the hardened isRecord above, which is what actually closes
-// the prototype case (see its own comment).
-function unknownKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  const errors = Object.getOwnPropertyNames(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
-  if (Object.getOwnPropertySymbols(value).length > 0) {
-    errors.push(`${path} must not carry symbol-keyed properties`);
-  }
-  return errors;
 }
 
 // A content-free failure reason: a bounded lower-kebab reason code that cannot smuggle secrets or
@@ -289,7 +266,7 @@ function envelopeFieldsAreValid(errors: string[], value: Record<string, unknown>
 // hasInheritedEnumerableProperty is kept as an extra, cheaper rejection for the common case, not as
 // the check this predicate depends on for correctness.
 function isAbsent(value: unknown): value is GovernedActionAbsent {
-  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // getOwnPropertyNames + no-symbols, matching shared unknownKeys: Object.keys alone misses a
   // non-enumerable own property. isRecord already rejects a non-default prototype.
   return (
     isRecord(value) &&
@@ -504,7 +481,7 @@ const GOVERNED_ACTION_KEYS = new Set([
 function admitGovernedActionV1(value: unknown, errors: string[]): value is GovernedActionV1 {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, "governed action must be an object");
-  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // getOwnPropertyNames + no-symbols, matching shared unknownKeys: Object.keys alone misses a
   // non-enumerable own property. isRecord already rejects a non-default prototype.
   valid =
     appendValidationErrors(
@@ -722,7 +699,7 @@ function executionFailureFactFieldsAreValid(
 function admitCodeTaskExecutionV1(value: unknown, errors: string[]): value is CodeTaskExecutionV1 {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, "code-task execution must be an object");
-  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // getOwnPropertyNames + no-symbols, matching shared unknownKeys: Object.keys alone misses a
   // non-enumerable own property. isRecord already rejects a non-default prototype.
   valid =
     appendValidationErrors(

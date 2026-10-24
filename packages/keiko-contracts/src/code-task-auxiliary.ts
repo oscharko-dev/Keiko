@@ -1,3 +1,7 @@
+import {
+  isCodeTaskRecord as isRecord,
+  codeTaskUnknownKeys as unknownKeys,
+} from "./code-task-record-validation.js";
 import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
 // Cross-child auxiliary-capability contract for Epic #2384 Code tasks (Issue #2387, produced for
 // #2388). `AuxiliaryCapabilityPortV1` is the acceptance boundary through which a Code task requests
@@ -125,15 +129,6 @@ function appendValidationErrors(errors: string[], messages: readonly string[]): 
   return messages.length === 0;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getPrototypeOf(value) === Object.prototype
-  );
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -145,24 +140,6 @@ function isPositiveInteger(value: unknown): value is number {
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   const values: readonly string[] = allowed;
   return typeof value === "string" && values.includes(value);
-}
-
-// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching the sibling
-// files' idiom: Object.keys alone misses a non-enumerable own property. isRecord above rejects a
-// non-default prototype; neither closes a genuinely polluted Object.prototype (see
-// hasInheritedEnumerableProperty's own comment at its definition in code-task-acceptance.ts).
-function unknownKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  const errors = Object.getOwnPropertyNames(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
-  if (Object.getOwnPropertySymbols(value).length > 0) {
-    errors.push(`${path} must not carry symbol-keyed properties`);
-  }
-  return errors;
 }
 
 // ─── Shared target (parent authority refs) ─────────────────────────────────────────
