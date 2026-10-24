@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "78c86e4cba17b147fce2a820e38ea89268585761c17a2e0214f28b3b25908506"
+    "catalogDigest": "6770ef9977ac64ec289f4d1a29afd4c9229d915bf0e1a9ca4d44f1053e926224"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 576,
-    "proofCount": 589,
-    "resolvedProofCount": 589,
-    "failureClassCount": 360,
+    "operationCount": 577,
+    "proofCount": 590,
+    "resolvedProofCount": 590,
+    "failureClassCount": 361,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -119,6 +119,7 @@
         "reference-id.exhausted",
         "reference-id.issued",
         "request",
+        "runs.apply.settled",
         "server.diagnostic.failure",
         "skills.library.operation",
         "skills.workflow.attached",
@@ -1067,6 +1068,7 @@
     "speech-stt-request": ["model-gateway.dependency-failure"],
     "speech-tts-request": ["model-gateway.dependency-failure"],
     "sse-resume-decision": ["bff.dependency-failure"],
+    "workflow-run-apply": ["bff.dependency-failure"],
     "sse-stream": ["bff.dependency-failure"],
     "startup-recovery-failed": ["lifecycle-crash.crash"],
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
@@ -2403,6 +2405,7 @@
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],
     "request.close-line": ["packages/keiko-server/src/server.activity-log-proof.test.ts"],
+    "runs.apply.settled.line": ["packages/keiko-server/src/run-handlers.test.ts"],
     "runtime.confinement.failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],

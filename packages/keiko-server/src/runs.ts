@@ -13,9 +13,17 @@ import type { QueueEventSink } from "./sink.js";
 
 export type RunStatus = "running" | "completed" | "cancelled" | "failed";
 
+// The patch the human reviewed, exactly as the dry run's report showed it (#4025 AC4). Every
+// snapshot carries one: an apply has nothing else to write, so a snapshot cannot be built without it.
+// The engine owns the fields beside the diff.
+export interface ReviewedPatchSnapshot {
+  readonly diff: string;
+  readonly [field: string]: unknown;
+}
+
 // The appliable snapshot the gated apply path (route 9) re-invokes with `apply: true`. `kind`
 // selects the workflow; `payload` is the original validated run input minus the apply flag; `limits`
-// carries the per-run limits so the apply re-invocation matches the reviewed dry-run exactly.
+// carries the per-run limits; `reviewedPatch` is the reviewed artifact the apply writes.
 // Stored opaquely (the run engine owns its shape) so the registry stays free of workflow types.
 export interface AppliableSnapshot {
   readonly kind: "unit-tests" | "bug-investigation";
@@ -24,6 +32,8 @@ export interface AppliableSnapshot {
   readonly governedHandoff?: WorkflowHandoffRequest | undefined;
   // The skill the dry run was bound to (#4025 AC1); the gated apply carries the same revision.
   readonly markdownSkill?: MarkdownSkillReference | undefined;
+  // The apply writes this artifact and asks the model nothing.
+  readonly reviewedPatch: ReviewedPatchSnapshot;
 }
 
 export interface RunRecord {

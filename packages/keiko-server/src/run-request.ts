@@ -401,6 +401,10 @@ function validateBugInvestigationInput(input: Record<string, unknown>): RunReque
 }
 
 function validateRunInput(kind: RunKind, input: Record<string, unknown>): RunRequestError | null {
+  // The reviewed patch is the server's own record of a dry run (#4025 AC4), never client input.
+  if (Object.hasOwn(input, "reviewedPatch")) {
+    return { code: "BAD_REQUEST", message: "reviewedPatch is set by the server only." };
+  }
   const workspaceRootError = validateWorkspaceRoot(input);
   if (workspaceRootError !== null) {
     return workspaceRootError;

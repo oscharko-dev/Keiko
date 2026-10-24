@@ -1,5 +1,9 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
@@ -11,7 +15,16 @@ import {
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
 import { EventEmitter } from "node:events";
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -856,12 +869,107 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     });
 
     expect(res.status).toBe(200);
-    const applyCalls = sent.slice(dryRunCalls);
-    expect(applyCalls.length).toBeGreaterThan(0);
-    for (const messages of applyCalls) {
+    // The dry run carried the selected revision once per request. The apply writes the reviewed
+    // patch and asks the model nothing (#4025 AC4), so no request can carry a replaced method.
+    for (const messages of sent.slice(0, dryRunCalls))
       expect(messages.split(marker).length - 1).toBe(1);
-      expect(messages).not.toContain("A REPLACED METHOD");
-    }
+    expect(sent.slice(dryRunCalls)).toEqual([]);
+  }, 60_000);
+
+  // #4025 AC4, the auditor's counterexample: preview A changes one file and the model's next answer
+  // B would change two. Apply must write exactly the reviewed A, with no further model call.
+  it("writes only the reviewed patch and asks the model nothing (#4025 AC4)", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-reviewed-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    const unreviewed =
+      "--- /dev/null\n+++ b/tests/unreviewed.test.ts\n@@ -0,0 +1,1 @@\n+// not reviewed\n";
+    const answers = [
+      ["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"),
+      ["```diff", (TEST_DIFF + unreviewed).trimEnd(), "```"].join("\n"),
+    ];
+    let calls = 0;
+    const applyLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: applyLog, level: "info" }));
+    await start({
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        const content = answers[Math.min(calls, answers.length - 1)] ?? "";
+        calls += 1;
+        return fakeModel(content).call(request, signal);
+      },
+    });
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    const dryRunCalls = calls;
+
+    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toBe(dryRunCalls);
+    expect(existsSync(join(workspace, "tests", "add.test.ts"))).toBe(true);
+    expect(existsSync(join(workspace, "tests", "unreviewed.test.ts"))).toBe(false);
+    const json = (await res.json()) as {
+      report: { applyReport: { addedTestFiles: readonly unknown[]; modelCallCount: number } };
+    };
+    expect(json.report.applyReport.addedTestFiles).toHaveLength(1);
+    expect(json.report.applyReport.modelCallCount).toBe(0);
+    // The settled apply is reconstructable from the Activity Log alone, without any body.
+    const settled = applyLog.events.find((event) => event.op === "runs.apply.settled");
+    if (settled === undefined) throw new Error("expected a runs.apply.settled line");
+    const persisted = expectActivityLogProof(
+      "runs.apply.settled.line",
+      formatActivityLogProofLine(settled),
+    );
+    expect(persisted).toMatchObject({
+      workflow: "unit-tests",
+      outcome: "applied",
+      modelCallCount: 0,
+      fileCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("describe('add'");
+    resetServerLogger();
+  }, 60_000);
+
+  // A reviewed patch that no longer fits the workspace is rejected, not regenerated: nothing is
+  // written and the model is not asked again.
+  it("refuses a reviewed patch the workspace no longer accepts, without writing (#4025 AC4)", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-stale-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    let calls = 0;
+    const delegate = fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"));
+    await start({
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        calls += 1;
+        return delegate.call(request, signal);
+      },
+    });
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    const dryRunCalls = calls;
+    // The reviewed patch creates this file; it now exists with other content.
+    mkdirSync(join(workspace, "tests"), { recursive: true });
+    writeFileSync(join(workspace, "tests", "add.test.ts"), "// written after the review\n");
+
+    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toBe(dryRunCalls);
+    expect(readFileSync(join(workspace, "tests", "add.test.ts"), "utf8")).toBe(
+      "// written after the review\n",
+    );
+    const json = (await res.json()) as { report: { applyReport: { status: string } } };
+    expect(json.report.applyReport.status).not.toBe("completed");
   }, 60_000);
 
   it("denies an exhausted apply budget before any downstream model call", async () => {
@@ -1038,6 +1146,24 @@ async function awaitEvidence(runId: string): Promise<void> {
 }
 
 describe("FIX 2 — POST /api/runs is always dry-run (security M1)", () => {
+  it("refuses a reviewed patch supplied by the client (#4025 AC4)", async () => {
+    await start(fakeModel("noop"));
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        workflowId: "unit-test-generation",
+        input: {
+          workspaceRoot: workspace,
+          target: { kind: "file", filePath: "src/add.ts" },
+          reviewedPatch: { diff: TEST_DIFF },
+        },
+        modelId: "test-model",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("ignores apply:true in the body and still produces a dry-run (no write)", async () => {
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
     const created = await createRun(true);
@@ -1099,6 +1225,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
           target: { kind: "file", filePath: "x.ts" },
         },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
 
@@ -1153,6 +1280,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
           target: { kind: "file", filePath: "x.ts" },
         },
         limits: testLimits,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
 
@@ -1428,10 +1556,10 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
 
 // Issue #638 — the apply handler must atomically claim the pending snapshot before awaiting
 // applyRun so two overlapping POST /api/runs/:runId/apply requests cannot both consume the
-// same patch. The race is reproduced by holding the model port's promise: the second request
-// has to enter the handler while the first is suspended in applyRun → workflow → model.call().
+// same patch. The second request enters the handler while the first is suspended in applyRun on the
+// workflow's workspace reads; the reviewed patch is written without a model call (#4025 AC4).
 describe("issue #638 — overlapping apply requests cannot reuse the same snapshot", () => {
-  it("returns 409 to the second request while the first is still awaiting the model", async () => {
+  it("returns 409 to the second request while the first is still applying", async () => {
     // start() is called so the file-level afterEach has a real HTTP server to close (the
     // handler-only test below does not depend on the HTTP path itself).
     await start(fakeModel("noop"));
@@ -1456,15 +1584,16 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
           target: { kind: "file", filePath: "x.ts" },
         },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
 
-    let releaseModel: (response: NormalizedResponse) => void = () => undefined;
-    const modelHold = new Promise<NormalizedResponse>((resolve) => {
-      releaseModel = resolve;
-    });
-    const hangingModel: ModelPort = {
-      call: (): Promise<NormalizedResponse> => modelHold,
+    const modelCalls: string[] = [];
+    const recordingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        modelCalls.push("call");
+        return Promise.reject(new Error("the apply asks the model nothing"));
+      },
     };
 
     const deps: UiHandlerDeps = {
@@ -1475,7 +1604,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
       redactor: buildRedactor({}),
       registry: localRegistry,
       store: applyWorkspace.store,
-      modelPortFactory: (): ModelPort => hangingModel,
+      modelPortFactory: (): ModelPort => recordingModel,
     };
     const ctx = {
       req: {} as never,
@@ -1487,7 +1616,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
 
     const first = handleApplyRun(ctx, deps);
     // Yield so the first request progresses through its synchronous prologue (claiming the
-    // snapshot) and suspends at `await applyRun(...)` → workflow → model.call().
+    // snapshot) and suspends at `await applyRun(...)` on the workflow's workspace reads.
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
 
     // The snapshot must have been claimed atomically before the await: a second concurrent
@@ -1496,24 +1625,10 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
     const second = await handleApplyRun(ctx, deps);
     expect(second.status).toBe(409);
 
-    // Release the model so the first request finishes and the registry settles.
-    releaseModel({
-      modelId: "m",
-      content: "",
-      finishReason: "stop",
-      toolCalls: [],
-      structuredOutput: null,
-      usage: {
-        requestId: "r",
-        promptTokens: 0,
-        completionTokens: 0,
-        latencyMs: 0,
-        costClass: "low",
-      },
-    });
     const firstResult = await first;
     expect(firstResult.status).toBe(200);
     expect(localRegistry.get("race-run")?.applyReport).toBeDefined();
+    expect(modelCalls).toEqual([]);
   });
 });
 
@@ -1626,6 +1741,7 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
         kind: "unit-tests",
         payload: { workspaceRoot, target: { kind: "file", filePath: "x.ts" } },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
   }
@@ -1692,6 +1808,7 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
         kind: "unit-tests",
         payload: { target: { kind: "file", filePath: "x.ts" } },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
     const { deps, modelCalls } = applyDeps(createInMemoryUiStore(), registry);
@@ -1742,6 +1859,7 @@ describe("apply threads the run's own id into its verification egress probe", ()
           kind: "unit-tests",
           payload: { workspaceRoot: workspace.root, target: { kind: "file", filePath: "x.ts" } },
           limits: undefined,
+          reviewedPatch: { diff: TEST_DIFF },
         },
       );
       const deps: UiHandlerDeps = {

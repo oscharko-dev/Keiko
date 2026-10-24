@@ -78,6 +78,41 @@ const SSE_RUN_EVENTS_RESUME_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+type RunApplyOutcome = "applied" | "rejected" | "cancelled" | "failed";
+
+const RUN_APPLY_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "runs.apply.settled",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "run-handlers.logApplySettled",
+  fields: {
+    workflow: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unit-tests", "bug-investigation"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["applied", "rejected", "cancelled", "failed"],
+    },
+    modelCallCount: { type: "integer", dataClass: "count", required: true },
+    fileCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["workflow-run-apply"],
+  proofIds: ["runs.apply.settled.line"],
+  releaseImpact: "patch",
+});
+
 const VERIFY_NOOP_MODEL: ModelPort = {
   call: () => Promise.reject(new Error("verify runs must not call the model")),
 };
@@ -825,6 +860,43 @@ export function handleGetRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
   };
 }
 
+function applyOutcome(status: unknown): RunApplyOutcome {
+  if (status === "completed" || status === "fix-applied") return "applied";
+  return status === "rejected" || status === "cancelled" ? status : "failed";
+}
+
+function countOf(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+// Body-free evidence of a gated apply (#4025 AC4): which workflow, how it settled, how many model
+// calls the apply made (zero: it writes the reviewed patch) and how many files the patch names.
+function logApplySettled(
+  correlationId: string | undefined,
+  workflow: AppliableSnapshot["kind"],
+  report: unknown,
+): void {
+  const fields = isRecord(report) ? report : {};
+  const modelCallCount = fields.modelCallCount;
+  getServerLogger().info(
+    activityLogEvent(
+      RUN_APPLY_SETTLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        workflow,
+        outcome: applyOutcome(fields.status),
+        modelCallCount:
+          typeof modelCallCount === "number" && Number.isSafeInteger(modelCallCount)
+            ? modelCallCount
+            : 0,
+        fileCount: countOf(fields.addedTestFiles) + countOf(fields.changedFiles),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 function reportWithApply(
   report: unknown,
   applyReport: unknown,
@@ -957,6 +1029,7 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
     record.runId,
     deps.store.markdownSkills,
   );
+  logApplySettled(ctx.correlationId, snapshot.kind, report);
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

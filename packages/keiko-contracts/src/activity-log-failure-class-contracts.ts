@@ -8553,6 +8553,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "workflow-run-apply",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["runs.apply.settled"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["runs.apply.settled"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["runs.apply.settled"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["runs.apply.settled"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "sse-stream",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

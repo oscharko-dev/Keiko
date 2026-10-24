@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "78c86e4cba17b147fce2a820e38ea89268585761c17a2e0214f28b3b25908506" as const;
+  "6770ef9977ac64ec289f4d1a29afd4c9229d915bf0e1a9ca4d44f1053e926224" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 360,
-  completeClassCount: 360,
+  supportedClassCount: 361,
+  completeClassCount: 361,
   completeness: "complete",
   classes: [
     {
@@ -43909,6 +43909,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "workflow-run-apply",
+      requirementContract: "workflow-run-apply",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["runs.apply.settled"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "runs.apply.settled",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["runs.apply.settled"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "runs.apply.settled",
+          owner: "keiko-server",
+          category: "http",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "fileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "modelCallCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "workflow",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["runs.apply.settled.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "workspace-identity-capability",
       requirementContract: "workspace-identity-capability",
       productSurfaces: ["keiko-server"],
@@ -44789,6 +44857,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "reference-id.issued": "bff",
     "repository.fingerprint-diff.completed": "memory-knowledge",
     request: "bff",
+    "runs.apply.settled": "bff",
     "runtime.confinement.failed": "tools-workflows",
     "runtime.confinement.spawned": "tools-workflows",
     "runtime.confinement.unavailable": "tools-workflows",

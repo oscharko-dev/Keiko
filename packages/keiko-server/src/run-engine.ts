@@ -206,6 +206,11 @@ function unitTestAppliable(
         limits: request.limits,
         governedHandoff: request.governedHandoff,
         markdownSkill: request.markdownSkill,
+        reviewedPatch: {
+          diff: report.proposedDiff,
+          coveredBehavior: report.coveredBehavior,
+          knownGaps: report.knownGaps,
+        },
       }
     : undefined;
 }
@@ -221,6 +226,7 @@ function bugAppliable(
         limits: request.limits,
         governedHandoff: request.governedHandoff,
         markdownSkill: request.markdownSkill,
+        reviewedPatch: { diff: report.proposedDiff, hypothesis: report.hypothesis },
       }
     : undefined;
 }
@@ -753,8 +759,10 @@ function applyExecutionModel(
 
 // Re-invokes a workflow with apply:true through the SAME gated entry point (D8). This is the only
 // place the engine sets apply:true; it does not construct a patch or write a file — the workflow's
-// own guards (isSensitivePath, patch limits, #6 applyEnabled) fire at its boundary. Awaits the
-// apply+verify result and returns the redacted report. The model is resolved by the caller.
+// own guards (isSensitivePath, patch limits, #6 applyEnabled) fire at its boundary. The workflow
+// writes the snapshot's reviewed patch and asks the model nothing (#4025 AC4): the snapshot's value
+// replaces anything the original input carried under that name. Awaits the apply+verify result and
+// returns the redacted report. The model is resolved by the caller.
 export async function applyRun(
   snapshot: AppliableSnapshot,
   model: ModelPort,
@@ -797,17 +805,18 @@ export async function applyRun(
       ? {}
       : { workflowHandoff: snapshot.governedHandoff }),
   };
+  const applyInput = {
+    ...input,
+    modelId,
+    apply: true,
+    ...limitsOverride,
+    reviewedPatch: snapshot.reviewedPatch,
+  };
   if (snapshot.kind === "unit-tests") {
-    const report = await generateUnitTests(
-      { ...input, modelId, apply: true, ...limitsOverride } as unknown as UnitTestWorkflowInput,
-      deps,
-    );
+    const report = await generateUnitTests(applyInput as unknown as UnitTestWorkflowInput, deps);
     return redactReport(report);
   }
-  const report = await investigateBug(
-    { ...input, modelId, apply: true, ...limitsOverride } as unknown as BugInvestigationInput,
-    deps,
-  );
+  const report = await investigateBug(applyInput as unknown as BugInvestigationInput, deps);
   return redactReport(report);
 }
 

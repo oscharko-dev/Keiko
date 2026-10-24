@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "78c86e4cba17b147fce2a820e38ea89268585761c17a2e0214f28b3b25908506",
+    "catalogDigest": "6770ef9977ac64ec289f4d1a29afd4c9229d915bf0e1a9ca4d44f1053e926224",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -30546,6 +30546,56 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "runs.apply.settled",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "run-handlers.logApplySettled",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "workflow": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["unit-tests", "bug-investigation"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["applied", "rejected", "cancelled", "failed"]
+          },
+          "modelCallCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "fileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["workflow-run-apply"],
+        "proofIds": ["runs.apply.settled.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/run-handlers.ts:83",
+        "emitterSites": ["packages/keiko-server/src/run-handlers.ts:882"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "runtime.confinement.failed",
         "category": "process",
         "owner": "keiko-server",
@@ -35617,7 +35667,7 @@
         "proofIds": ["sse.run-events.resume.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/run-handlers.ts:58",
-        "emitterSites": ["packages/keiko-server/src/run-handlers.ts:642"]
+        "emitterSites": ["packages/keiko-server/src/run-handlers.ts:677"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -48896,6 +48946,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "workflow-run-apply",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["runs.apply.settled"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["runs.apply.settled"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["runs.apply.settled"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["runs.apply.settled"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "sse-stream",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -50299,8 +50370,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 360,
-      "completeClassCount": 360,
+      "supportedClassCount": 361,
+      "completeClassCount": 361,
       "completeness": "complete",
       "classes": [
         {
@@ -94607,6 +94678,74 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "workflow-run-apply",
+          "requirementContract": "workflow-run-apply",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["runs.apply.settled"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "runs.apply.settled",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["runs.apply.settled"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "runs.apply.settled",
+              "owner": "keiko-server",
+              "category": "http",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "fileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "modelCallCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "workflow",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["runs.apply.settled.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "workspace-identity-capability",
           "requirementContract": "workspace-identity-capability",
           "productSurfaces": ["keiko-server"],
@@ -99945,6 +100084,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "runs.apply.settled",
+      "category": "http",
+      "site": "packages/keiko-server/src/run-handlers.ts:86",
+      "package": "keiko-server"
+    },
+    {
       "op": "runtime.confinement.failed",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:131",
@@ -100670,7 +100815,7 @@
     {
       "op": "workflow.network-isolation-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/run-engine.ts:322",
+      "site": "packages/keiko-server/src/run-engine.ts:328",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101274,6 +101419,7 @@
     "repository.fingerprint-diff.completed",
     "request",
     "retrieval-activity.tryBuild",
+    "runs.apply.settled",
     "runtime.confinement.failed",
     "runtime.confinement.spawned",
     "runtime.confinement.unavailable",
