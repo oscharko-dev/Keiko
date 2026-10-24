@@ -14,16 +14,18 @@ export function isCodeTaskRecord(value: unknown): value is Record<string, unknow
   );
 }
 
-export function codeTaskUnknownKeys(
+export function validateCodeTaskOwnKeys(
+  errors: string[],
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
-): string[] {
-  const errors = Object.getOwnPropertyNames(value)
+): boolean {
+  const unknownErrors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
   if (Object.getOwnPropertySymbols(value).length > 0) {
-    errors.push(`${path} must not carry symbol-keyed properties`);
+    unknownErrors.push(`${path} must not carry symbol-keyed properties`);
   }
-  return errors;
+  errors.push(...unknownErrors);
+  return unknownErrors.length === 0;
 }

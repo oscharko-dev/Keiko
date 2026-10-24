@@ -40,15 +40,19 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 /** Validate the shared parent identity/revision fields; callers retain schema admission. */
-export function codeTaskParentTargetErrors(value: Record<string, unknown>): string[] {
-  const errors: string[] = [];
-  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+export function validateCodeTaskParentTarget(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  const targetErrors: string[] = [];
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) targetErrors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) targetErrors.push("runId is invalid");
   if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) {
-    errors.push("workspaceId is invalid");
+    targetErrors.push("workspaceId is invalid");
   }
   if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
-    errors.push("stateRevision must be a non-negative integer");
+    targetErrors.push("stateRevision must be a non-negative integer");
   }
-  return errors;
+  errors.push(...targetErrors);
+  return targetErrors.length === 0;
 }

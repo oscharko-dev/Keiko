@@ -1,8 +1,8 @@
 import {
   isCodeTaskRecord as isRecord,
-  codeTaskUnknownKeys as unknownKeys,
+  validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
-import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
+import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
 // Cross-child run-control contracts for Epic #2384 Code-task children (Issue #2386). Same type
 // rule as ./code-task-governance.ts: readonly, JSON-serializable, discriminated unions, literal
 // `schemaVersion: 1`, branded ids, explicit tagged-absent facts, content-free payloads.
@@ -50,11 +50,6 @@ import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 function addValidationError(errors: string[], message: string): false {
   errors.push(message);
   return false;
-}
-
-function appendValidationErrors(errors: string[], messages: readonly string[]): boolean {
-  errors.push(...messages);
-  return messages.length === 0;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -108,9 +103,11 @@ function grantRefFieldsAreValid(errors: string[], value: unknown, index: number)
   if (!isRecord(value))
     return addValidationError(errors, `grantRefs[${String(index)}] must be an object`);
   valid =
-    appendValidationErrors(
+    validateCodeTaskOwnKeys(
       errors,
-      unknownKeys(value, ["grantId", "grantScope"], `grantRefs[${String(index)}]`),
+      value,
+      ["grantId", "grantScope"],
+      `grantRefs[${String(index)}]`,
     ) && valid;
   if (!isCodeTaskGrantId(ownField(value, "grantId"))) {
     valid = addValidationError(errors, `grantRefs[${String(index)}].grantId is invalid`);
@@ -139,7 +136,7 @@ function boundedStringFactKnownFieldsAreValid(
   let valid = true;
   // Collected, not early-returned (KfQ 3789542365's shape, fixed consistently here too): an
   // object can carry both an extra own key and an invalid value, and both are worth reporting.
-  valid = appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], path) && valid;
   // recoveryRef is documented as a content-free handle, so it takes the same lower-kebab shape
   // rather than a bare length bound that a filesystem path would pass.
   if (!isContentFreeReasonCode(ownField(value, "value"))) {
@@ -160,7 +157,7 @@ function boundedStringFactFieldsAreValid(errors: string[], value: unknown, path:
   const outcome = ownField(value, "outcome");
   if (outcome === "known") return boundedStringFactKnownFieldsAreValid(errors, value, path);
   if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
-    valid = appendValidationErrors(errors, unknownKeys(value, ["outcome"], path)) && valid;
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], path) && valid;
     if (Object.hasOwn(value, "value")) {
       valid = addValidationError(errors, `${path} must not carry a value for outcome ${outcome}`);
     }
@@ -177,9 +174,7 @@ function questionFactKnownFieldsAreValid(
   value: Record<string, unknown>,
 ): boolean {
   let valid = true;
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], "pendingQuestion")) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], "pendingQuestion") && valid;
   if (!isCodeTaskQuestionId(ownField(value, "value"))) {
     valid = addValidationError(errors, "pendingQuestion.value must be a question id");
   }
@@ -199,8 +194,7 @@ function questionFactFieldsAreValid(errors: string[], value: unknown): boolean {
   const outcome = ownField(value, "outcome");
   if (outcome === "known") return questionFactKnownFieldsAreValid(errors, value);
   if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
-    valid =
-      appendValidationErrors(errors, unknownKeys(value, ["outcome"], "pendingQuestion")) && valid;
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], "pendingQuestion") && valid;
     if (Object.hasOwn(value, "value")) {
       valid = addValidationError(
         errors,
@@ -246,10 +240,8 @@ function admitRunControlSnapshotV1(
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, "run-control snapshot must be an object");
   valid =
-    appendValidationErrors(
-      errors,
-      unknownKeys(value, RUN_CONTROL_SNAPSHOT_KEYS, "runControlSnapshot"),
-    ) && valid;
+    validateCodeTaskOwnKeys(errors, value, RUN_CONTROL_SNAPSHOT_KEYS, "runControlSnapshot") &&
+    valid;
   valid = runControlHeaderFieldsAreValid(errors, value) && valid;
   const grantRefs = ownField(value, "grantRefs");
   if (Array.isArray(grantRefs)) {
@@ -369,7 +361,7 @@ export interface RuntimeGovernancePortV1 {
 function targetFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
   let valid = true;
 
-  valid = appendValidationErrors(errors, codeTaskParentTargetErrors(value)) && valid;
+  valid = validateCodeTaskParentTarget(errors, value) && valid;
   if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
     valid = addValidationError(errors, "idempotencyKey is invalid");
   }
@@ -392,13 +384,11 @@ function requestOperationFieldsAreValid(errors: string[], value: Record<string, 
     return addValidationError(errors, "operation is invalid");
   if (operation === "decide") {
     valid =
-      appendValidationErrors(
+      validateCodeTaskOwnKeys(
         errors,
-        unknownKeys(
-          value,
-          [...RUNTIME_GOVERNANCE_TARGET_KEYS, "actionKind", "requestedGrantScope"],
-          "runtimeGovernanceRequest",
-        ),
+        value,
+        [...RUNTIME_GOVERNANCE_TARGET_KEYS, "actionKind", "requestedGrantScope"],
+        "runtimeGovernanceRequest",
       ) && valid;
     if (!isOneOf(ownField(value, "actionKind"), GOVERNED_ACTION_ACTION_KINDS)) {
       valid = addValidationError(errors, "actionKind is invalid");
@@ -408,9 +398,11 @@ function requestOperationFieldsAreValid(errors: string[], value: Record<string, 
     }
     return valid;
   }
-  return appendValidationErrors(
+  return validateCodeTaskOwnKeys(
     errors,
-    unknownKeys(value, RUNTIME_GOVERNANCE_TARGET_KEYS, "runtimeGovernanceRequest"),
+    value,
+    RUNTIME_GOVERNANCE_TARGET_KEYS,
+    "runtimeGovernanceRequest",
   );
 }
 
@@ -445,9 +437,11 @@ function lifecycleEventFieldsAreValid(errors: string[], value: unknown, index: n
   if (!isRecord(value))
     return addValidationError(errors, `events[${String(index)}] must be an object`);
   valid =
-    appendValidationErrors(
+    validateCodeTaskOwnKeys(
       errors,
-      unknownKeys(value, ["sequence", "kind", "stateRevision"], `events[${String(index)}]`),
+      value,
+      ["sequence", "kind", "stateRevision"],
+      `events[${String(index)}]`,
     ) && valid;
   for (const key of ["sequence", "stateRevision"] as const) {
     if (!isNonNegativeInteger(ownField(value, key))) {
@@ -490,9 +484,11 @@ function outcomeBodyFieldsAreValid(errors: string[], value: Record<string, unkno
     return addValidationError(errors, "status is invalid");
   if (status === "decided") {
     valid =
-      appendValidationErrors(
+      validateCodeTaskOwnKeys(
         errors,
-        unknownKeys(value, ["kind", "schemaVersion", "status", "decision"], "outcome"),
+        value,
+        ["kind", "schemaVersion", "status", "decision"],
+        "outcome",
       ) && valid;
     if (!isOneOf(ownField(value, "decision"), GOVERNED_ACTION_DECISIONS)) {
       valid = addValidationError(errors, "decision is invalid");
@@ -501,17 +497,21 @@ function outcomeBodyFieldsAreValid(errors: string[], value: Record<string, unkno
   }
   if (status === "settled") {
     valid =
-      appendValidationErrors(
+      validateCodeTaskOwnKeys(
         errors,
-        unknownKeys(value, ["kind", "schemaVersion", "status", "events"], "outcome"),
+        value,
+        ["kind", "schemaVersion", "status", "events"],
+        "outcome",
       ) && valid;
     valid = outcomeLifecycleFieldsAreValid(errors, value) && valid;
     return valid;
   }
   valid =
-    appendValidationErrors(
+    validateCodeTaskOwnKeys(
       errors,
-      unknownKeys(value, ["kind", "schemaVersion", "status", "reasonCode"], "outcome"),
+      value,
+      ["kind", "schemaVersion", "status", "reasonCode"],
+      "outcome",
     ) && valid;
   // Length alone is not content-freeness: "Denied: /Users/alice/secret" is well under 64 characters.
   // The shared lower-kebab predicate is the rule this message already claims to enforce.

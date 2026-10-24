@@ -1,4 +1,5 @@
-import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
+import { validateCodeTaskOwnKeys } from "./code-task-record-validation.js";
+import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
 import {
@@ -1257,27 +1258,31 @@ describe("code task execution public parser (#3918)", () => {
   });
 });
 
-describe("codeTaskParentTargetErrors", () => {
+describe("validateCodeTaskParentTarget", () => {
   it("accepts a complete parent target", () => {
+    const errors: string[] = [];
     expect(
-      codeTaskParentTargetErrors({
+      validateCodeTaskParentTarget(errors, {
         taskId: "task-1",
         runId: "run-1",
         workspaceId: "workspace-1",
         stateRevision: 0,
       }),
-    ).toEqual([]);
+    ).toBe(true);
+    expect(errors).toEqual([]);
   });
 
   it("keeps malformed parent-field errors ordered", () => {
+    const errors: string[] = [];
     expect(
-      codeTaskParentTargetErrors({
+      validateCodeTaskParentTarget(errors, {
         taskId: "",
         runId: null,
         workspaceId: false,
         stateRevision: -1,
       }),
-    ).toEqual([
+    ).toBe(false);
+    expect(errors).toEqual([
       "taskId is invalid",
       "runId is invalid",
       "workspaceId is invalid",
@@ -1329,3 +1334,104 @@ it.each(["source", "public"])(
     }
   },
 );
+
+function invokeOwnKeyValidation(errors: string[], value: Record<string, unknown>): boolean {
+  return validateCodeTaskOwnKeys(errors, value, [], "fixture");
+}
+
+function invokeParentTargetValidation(errors: string[], value: Record<string, unknown>): boolean {
+  return validateCodeTaskParentTarget(errors, value);
+}
+
+function observedValidationErrors(trace: string[]): string[] {
+  const errors: string[] = ["earlier diagnostic"];
+  return new Proxy(errors, {
+    get(target, key, receiver): unknown {
+      if (key === "push") {
+        return (...messages: string[]): number => {
+          trace.push(`push:${String(messages.length)}`);
+          return target.push(...messages);
+        };
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+}
+
+describe("code-task validation collection settlement", () => {
+  it.each([false, true])("gathers closed-own-key diagnostics before appending: %s", (invalid) => {
+    const trace: string[] = [];
+    const target = invalid ? { extra: true, [Symbol("fixture")]: true } : {};
+    const value = new Proxy(target, {
+      ownKeys(current): (string | symbol)[] {
+        trace.push("keys");
+        return Reflect.ownKeys(current);
+      },
+    });
+    const errors = observedValidationErrors(trace);
+    expect(invokeOwnKeyValidation(errors, value)).toBe(!invalid);
+    expect(trace).toEqual(["keys", "keys", invalid ? "push:2" : "push:0"]);
+    expect(errors).toEqual(
+      invalid
+        ? [
+            "earlier diagnostic",
+            "fixture.extra is not allowed",
+            "fixture must not carry symbol-keyed properties",
+          ]
+        : ["earlier diagnostic"],
+    );
+  });
+
+  it("does not append a partial collection when symbol enumeration throws", () => {
+    const trace: string[] = [];
+    const failure = new TypeError("fixture symbol enumeration refused");
+    const value = new Proxy(
+      { extra: true },
+      {
+        ownKeys(current): (string | symbol)[] {
+          trace.push("keys");
+          if (trace.length === 2) throw failure;
+          return Reflect.ownKeys(current);
+        },
+      },
+    );
+    const errors = observedValidationErrors(trace);
+    expect(() => invokeOwnKeyValidation(errors, value)).toThrow(failure);
+    expect(trace).toEqual(["keys", "keys"]);
+    expect(errors).toEqual(["earlier diagnostic"]);
+  });
+
+  it.each([false, true])("settles parent-field reads before appending: %s", (throws) => {
+    const trace: string[] = [];
+    const failure = new TypeError("fixture revision read refused");
+    const target = { taskId: "", runId: null, workspaceId: false, stateRevision: -1 };
+    const value = new Proxy(target, {
+      get(current, key, receiver): unknown {
+        trace.push(String(key));
+        if (throws && key === "stateRevision") throw failure;
+        return Reflect.get(current, key, receiver);
+      },
+    });
+    const errors = observedValidationErrors(trace);
+    if (throws) {
+      expect(() => invokeParentTargetValidation(errors, value)).toThrow(failure);
+      expect(errors).toEqual(["earlier diagnostic"]);
+    } else {
+      expect(invokeParentTargetValidation(errors, value)).toBe(false);
+      expect(errors).toEqual([
+        "earlier diagnostic",
+        "taskId is invalid",
+        "runId is invalid",
+        "workspaceId is invalid",
+        "stateRevision must be a non-negative integer",
+      ]);
+    }
+    expect(trace).toEqual([
+      "taskId",
+      "runId",
+      "workspaceId",
+      "stateRevision",
+      ...(throws ? [] : ["push:4"]),
+    ]);
+  });
+});

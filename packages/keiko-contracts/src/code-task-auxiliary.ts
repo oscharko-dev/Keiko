@@ -1,8 +1,8 @@
 import {
   isCodeTaskRecord as isRecord,
-  codeTaskUnknownKeys as unknownKeys,
+  validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
-import { codeTaskParentTargetErrors } from "./code-task-target-validation.js";
+import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
 // Cross-child auxiliary-capability contract for Epic #2384 Code tasks (Issue #2387, produced for
 // #2388). `AuxiliaryCapabilityPortV1` is the acceptance boundary through which a Code task requests
 // exactly one bounded, read-only auxiliary capability — public research, an approved skill, or a
@@ -124,11 +124,6 @@ function addValidationError(errors: string[], message: string): false {
   return false;
 }
 
-function appendValidationErrors(errors: string[], messages: readonly string[]): boolean {
-  errors.push(...messages);
-  return messages.length === 0;
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -159,7 +154,7 @@ const AUXILIARY_TARGET_KEYS = ["taskId", "runId", "workspaceId", "stateRevision"
 function targetFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
   let valid = true;
 
-  valid = appendValidationErrors(errors, codeTaskParentTargetErrors(value)) && valid;
+  valid = validateCodeTaskParentTarget(errors, value) && valid;
   if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
     valid = addValidationError(errors, "idempotencyKey is invalid");
   }
@@ -211,7 +206,7 @@ function knownFactFieldsAreValid(
   isKnownValue: (candidate: unknown) => boolean,
 ): boolean {
   let valid = true;
-  valid = appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], path) && valid;
   if (!isKnownValue(ownField(value, "value")))
     valid = addValidationError(errors, `${path}.value is invalid`);
   return valid;
@@ -234,7 +229,7 @@ function factFieldsAreValid(
   const outcome = ownField(value, "outcome");
   if (outcome === "known") return knownFactFieldsAreValid(errors, value, path, isKnownValue);
   if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
-    valid = appendValidationErrors(errors, unknownKeys(value, ["outcome"], path)) && valid;
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], path) && valid;
     if (Object.hasOwn(value, "value")) {
       valid = addValidationError(errors, `${path} must not carry a value for outcome ${outcome}`);
     }
@@ -249,9 +244,7 @@ function factFieldsAreValid(
 function researchScopeFieldsAreValid(errors: string[], value: unknown): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, "research scope must be an object");
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, RESEARCH_SCOPE_KEYS, "researchScope")) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, value, RESEARCH_SCOPE_KEYS, "researchScope") && valid;
   if (!isCodeTaskGrantId(ownField(value, "grantId")))
     valid = addValidationError(errors, "researchScope.grantId is invalid");
   const domains = ownField(value, "domains");
@@ -362,7 +355,7 @@ function admitAuxiliaryCapabilityRequestV1(
   if (keys === undefined) {
     return addValidationError(errors, "capability must be research, skill, or child-agent");
   }
-  valid = appendValidationErrors(errors, unknownKeys(value, keys, "auxiliaryRequest")) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, keys, "auxiliaryRequest") && valid;
   if (ownField(value, "schemaVersion") !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
     valid = addValidationError(errors, "schemaVersion must be the literal 1");
   }
@@ -484,13 +477,11 @@ function admitAuxiliaryCapabilityOutcomeV1(
   if (!isRecord(value)) return addValidationError(errors, "auxiliary outcome must be an object");
   const status = ownField(value, "status");
   valid =
-    appendValidationErrors(
+    validateCodeTaskOwnKeys(
       errors,
-      unknownKeys(
-        value,
-        status === "accepted" ? ACCEPTED_OUTCOME_KEYS : REJECTED_OUTCOME_KEYS,
-        "auxiliaryOutcome",
-      ),
+      value,
+      status === "accepted" ? ACCEPTED_OUTCOME_KEYS : REJECTED_OUTCOME_KEYS,
+      "auxiliaryOutcome",
     ) && valid;
   if (ownField(value, "schemaVersion") !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
     valid = addValidationError(errors, "schemaVersion must be the literal 1");

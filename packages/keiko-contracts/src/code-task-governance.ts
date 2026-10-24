@@ -1,6 +1,6 @@
 import {
   isCodeTaskRecord as isRecord,
-  codeTaskUnknownKeys as unknownKeys,
+  validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
 // Cross-child governance contracts for Epic #2384 Code-task children (Issue #2386). These are
 // acceptance boundaries, not implementation suggestions: every value is a readonly, JSON-
@@ -33,7 +33,7 @@ import type {
   CodeTaskWorkspaceId,
 } from "./code-task-target-validation.js";
 import {
-  codeTaskParentTargetErrors,
+  validateCodeTaskParentTarget,
   isCodeTaskGrantId,
   isCodeTaskRunId,
   isCodeTaskTaskId,
@@ -239,7 +239,7 @@ function envelopeFieldsAreValid(errors: string[], value: Record<string, unknown>
   if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     valid = addValidationError(errors, "schemaVersion must be the literal 1");
   }
-  valid = appendValidationErrors(errors, codeTaskParentTargetErrors(value)) && valid;
+  valid = validateCodeTaskParentTarget(errors, value) && valid;
   if (!isOneOf(ownField(value, "actionKind"), GOVERNED_ACTION_ACTION_KINDS)) {
     valid = addValidationError(errors, "actionKind is invalid");
   }
@@ -299,9 +299,7 @@ function grantReferenceValueFieldsAreValid(
     valid = addValidationError(errors, "grant.value must be an object");
     return valid;
   }
-  valid =
-    appendValidationErrors(errors, unknownKeys(grant, ["grantId", "grantScope"], "grant.value")) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, grant, ["grantId", "grantScope"], "grant.value") && valid;
   if (!isCodeTaskGrantId(ownField(grant, "grantId")))
     valid = addValidationError(errors, "grant.value.grantId is invalid");
   if (!isCodeTaskGrantScope(ownField(grant, "grantScope"))) {
@@ -321,15 +319,14 @@ function grantRefFactFieldsAreValid(errors: string[], value: unknown): boolean {
   }
   const outcome = ownField(value, "outcome");
   if (outcome === "absent") {
-    valid = appendValidationErrors(errors, unknownKeys(value, ["outcome"], "grant")) && valid;
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], "grant") && valid;
     if (Object.hasOwn(value, "value"))
       valid = addValidationError(errors, "grant must not carry a value");
     return valid;
   }
   if (outcome !== "known")
     return addValidationError(errors, "grant.outcome must be known or absent");
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], "grant")) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], "grant") && valid;
   valid = grantReferenceValueFieldsAreValid(errors, value) && valid;
   return valid;
 }
@@ -346,9 +343,11 @@ function questionReferenceValueFieldsAreValid(
     return valid;
   }
   valid =
-    appendValidationErrors(
+    validateCodeTaskOwnKeys(
       errors,
-      unknownKeys(question, ["questionId", "expectedRevision"], "question.value"),
+      question,
+      ["questionId", "expectedRevision"],
+      "question.value",
     ) && valid;
   if (!isCodeTaskQuestionId(ownField(question, "questionId"))) {
     valid = addValidationError(errors, "question.value.questionId is invalid");
@@ -373,15 +372,14 @@ function questionRefFactFieldsAreValid(errors: string[], value: unknown): boolea
   }
   const outcome = ownField(value, "outcome");
   if (outcome === "absent") {
-    valid = appendValidationErrors(errors, unknownKeys(value, ["outcome"], "question")) && valid;
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], "question") && valid;
     if (Object.hasOwn(value, "value"))
       valid = addValidationError(errors, "question must not carry a value");
     return valid;
   }
   if (outcome !== "known")
     return addValidationError(errors, "question.outcome must be known or absent");
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], "question")) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], "question") && valid;
   valid = questionReferenceValueFieldsAreValid(errors, value) && valid;
   return valid;
 }
@@ -629,8 +627,7 @@ function knownFailureFactFieldsAreValid(
   state: unknown,
 ): boolean {
   let valid = true;
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], "failure")) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], "failure") && valid;
   if (!isContentFreeReasonCode(ownField(value, "value"))) {
     valid = addValidationError(errors, "failure.value must be a bounded content-free reason code");
   }
@@ -650,7 +647,7 @@ function nonKnownFailureFactFieldsAreValid(
   state: unknown,
 ): boolean {
   let valid = true;
-  valid = appendValidationErrors(errors, unknownKeys(value, ["outcome"], "failure")) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], "failure") && valid;
   if (Object.hasOwn(value, "value")) {
     valid = addValidationError(errors, `failure must not carry a value for outcome ${outcome}`);
   }

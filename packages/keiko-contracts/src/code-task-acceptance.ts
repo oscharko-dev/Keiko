@@ -1,6 +1,6 @@
 import {
   isCodeTaskRecord as isRecord,
-  codeTaskUnknownKeys as unknownKeys,
+  validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
 // Producer-owned acceptance contribution for Epic #2384 Code-task children (#2385 owns the
 // definition; #2396 consumes and aggregates it and must not redefine it). Every child PR emits
@@ -192,11 +192,6 @@ function addValidationError(errors: string[], message: string): false {
   return false;
 }
 
-function appendValidationErrors(errors: string[], messages: readonly string[]): boolean {
-  errors.push(...messages);
-  return messages.length === 0;
-}
-
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
@@ -290,7 +285,7 @@ function knownFactFieldsAreValid(
   // Collected, not early-returned: an object can carry both an extra own key and an invalid
   // value, and both are worth reporting (KfQ 3789542365 raised this for the branch below; the
   // same shape applied here).
-  valid = appendValidationErrors(errors, unknownKeys(value, ["outcome", "value"], path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], path) && valid;
   if (!isValue(ownField(value, "value"))) {
     valid = addValidationError(errors, `${path}.value is invalid for a known fact`);
   }
@@ -317,7 +312,7 @@ function factFieldsAreValid(
     // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran
     // and any OTHER extra own key went unreported. Collected instead, matching the "report every
     // violation" position already taken for onlyKnownKeys elsewhere in this PR.
-    valid = appendValidationErrors(errors, unknownKeys(value, ["outcome"], path)) && valid;
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], path) && valid;
     if (Object.hasOwn(value, "value")) {
       valid = addValidationError(errors, `${path} must not carry a value for outcome ${outcome}`);
     }
@@ -370,7 +365,7 @@ const CLEANUP_KEYS = ["state", "residueCount"] as const;
 function scenarioFieldsAreValid(errors: string[], value: unknown, path: string): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid = appendValidationErrors(errors, unknownKeys(value, SCENARIO_KEYS, path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, SCENARIO_KEYS, path) && valid;
   if (!isCodeTaskScenarioId(ownField(value, "scenarioId"))) {
     valid = addValidationError(errors, `${path}.scenarioId is invalid`);
   }
@@ -406,7 +401,7 @@ function scenarioFieldsAreValid(errors: string[], value: unknown, path: string):
 function salvageFieldsAreValid(errors: string[], value: unknown, path: string): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid = appendValidationErrors(errors, unknownKeys(value, SALVAGE_KEYS, path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, SALVAGE_KEYS, path) && valid;
   if (!isCodeTaskContentFreeNote(ownField(value, "sourceBranch"))) {
     valid = addValidationError(
       errors,
@@ -440,7 +435,7 @@ function salvageFieldsAreValid(errors: string[], value: unknown, path: string): 
 
 function cleanupFieldsAreValid(errors: string[], value: unknown): boolean {
   if (!isRecord(value)) return addValidationError(errors, "cleanup must be an object");
-  const closed = appendValidationErrors(errors, unknownKeys(value, CLEANUP_KEYS, "cleanup"));
+  const closed = validateCodeTaskOwnKeys(errors, value, CLEANUP_KEYS, "cleanup");
   const state = ownField(value, "state");
   if (state === "complete") {
     const fields =
@@ -544,7 +539,7 @@ function admitCodeTaskAcceptanceContribution(
   if (!isRecord(value)) return addValidationError(errors, "contribution must be an object");
   valid = [
     valid,
-    appendValidationErrors(errors, unknownKeys(value, CONTRIBUTION_KEYS, "contribution")),
+    validateCodeTaskOwnKeys(errors, value, CONTRIBUTION_KEYS, "contribution"),
     contributionHeaderFieldsAreValid(errors, value),
     contributionBodyFieldsAreValid(errors, value),
   ].every(Boolean);
@@ -1151,8 +1146,7 @@ function qualificationScenarioFieldsAreValid(
 ): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, QUALIFICATION_SCENARIO_KEYS, path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_SCENARIO_KEYS, path) && valid;
   valid = qualificationScenarioIdentityFieldsAreValid(errors, value, path) && valid;
   return valid;
 }
@@ -1206,7 +1200,7 @@ function qualificationRequiredChecksFieldsAreValid(
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
   valid = [
     valid,
-    appendValidationErrors(errors, unknownKeys(value, QUALIFICATION_REQUIRED_CHECK_KEYS, path)),
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_REQUIRED_CHECK_KEYS, path),
     qualificationRequiredCheckCountFieldsAreValid(errors, value, path),
     qualificationRequiredCheckCompletionFieldsAreValid(errors, value, path),
   ].every(Boolean);
@@ -1236,10 +1230,7 @@ function qualificationAuthorityObservationFieldsAreValid(
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
   valid =
-    appendValidationErrors(
-      errors,
-      unknownKeys(value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path),
-    ) && valid;
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path) && valid;
   for (const field of QUALIFICATION_AUTHORITY_COUNT_KEYS) {
     const count = ownField(value, field);
     if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
@@ -1483,9 +1474,7 @@ function qualificationRubricReviewFieldsAreValid(
 ): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, QUALIFICATION_RUBRIC_REVIEW_KEYS, path)) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_RUBRIC_REVIEW_KEYS, path) && valid;
   if (!isCodeTaskContentFreeNote(ownField(value, "reviewId"))) {
     valid = addValidationError(errors, `${path}.reviewId must be a bounded content-free reference`);
   }
@@ -1544,9 +1533,7 @@ function qualificationStageReceiptFieldsAreValid(
 ): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, QUALIFICATION_STAGE_RECEIPT_KEYS, path)) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_STAGE_RECEIPT_KEYS, path) && valid;
   if (
     !isCodeTaskScenarioId(ownField(value, "scenarioId")) ||
     ownField(value, "scenarioId") !== expectedScenarioId
@@ -1573,10 +1560,7 @@ function qualificationFlowStageEvidenceFieldsAreValid(
     : "invalid-mode";
   valid = [
     valid,
-    appendValidationErrors(
-      errors,
-      unknownKeys(value, QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS, path),
-    ),
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS, path),
     qualificationStageReceiptFieldsAreValid(
       errors,
       ownField(value, "issueToPr"),
@@ -1667,9 +1651,7 @@ function qualificationFlowSpendFieldsAreValid(
 ): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid =
-    appendValidationErrors(errors, unknownKeys(value, QUALIFICATION_FLOW_SPEND_KEYS, path)) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_FLOW_SPEND_KEYS, path) && valid;
   for (const field of QUALIFICATION_FLOW_SPEND_KEYS) {
     const amount = ownField(value, field);
     if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) {
@@ -1905,7 +1887,7 @@ function qualificationFlowArtifactFieldsAreValid(
 ): boolean {
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
-  valid = appendValidationErrors(errors, unknownKeys(value, allowedKeys, path)) && valid;
+  valid = validateCodeTaskOwnKeys(errors, value, allowedKeys, path) && valid;
   if (ownField(value, "evidenceKind") !== CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND) {
     valid = addValidationError(errors, `${path}.evidenceKind is invalid`);
   }
@@ -2194,7 +2176,7 @@ function admitCodeTaskQualificationManifest(
   if (!isRecord(value)) return addValidationError(errors, "manifest must be an object");
   valid = [
     valid,
-    appendValidationErrors(errors, unknownKeys(value, QUALIFICATION_MANIFEST_KEYS, "manifest")),
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_MANIFEST_KEYS, "manifest"),
     qualificationManifestHeaderFieldsAreValid(errors, value),
     qualificationManifestBodyFieldsAreValid(errors, value),
   ].every(Boolean);
@@ -2557,10 +2539,8 @@ function qualificationApprovalRequestMemberFieldsAreValid(
   const itemPath = `${path}.approvalRequests[${String(index)}]`;
   if (!isRecord(request)) return addValidationError(errors, `${itemPath} must be an object`);
   valid =
-    appendValidationErrors(
-      errors,
-      unknownKeys(request, QUALIFICATION_APPROVAL_REQUEST_KEYS, itemPath),
-    ) && valid;
+    validateCodeTaskOwnKeys(errors, request, QUALIFICATION_APPROVAL_REQUEST_KEYS, itemPath) &&
+    valid;
   const actionClass = ownField(request, "actionClass");
   const actionKind = ownField(request, "actionKind");
   if (!isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES))
@@ -2589,10 +2569,8 @@ function qualificationApprovedProposalMemberFieldsAreValid(
   const itemPath = `${path}.approvedProposalActions[${String(index)}]`;
   if (!isRecord(action)) return addValidationError(errors, `${itemPath} must be an object`);
   valid =
-    appendValidationErrors(
-      errors,
-      unknownKeys(action, QUALIFICATION_APPROVED_PROPOSAL_KEYS, itemPath),
-    ) && valid;
+    validateCodeTaskOwnKeys(errors, action, QUALIFICATION_APPROVED_PROPOSAL_KEYS, itemPath) &&
+    valid;
   if (!isOneOf(ownField(action, "actionKind"), QUALIFICATION_PROPOSAL_ACTION_KINDS))
     valid = addValidationError(errors, `${itemPath}.actionKind is invalid`);
   if (!positiveSafeInteger(ownField(action, "approvalCount")))
@@ -2609,9 +2587,7 @@ function qualificationEffectToolMemberFieldsAreValid(
   let valid = true;
   const itemPath = `${path}.effectStartedTools[${String(index)}]`;
   if (!isRecord(tool)) return addValidationError(errors, `${itemPath} must be an object`);
-  valid =
-    appendValidationErrors(errors, unknownKeys(tool, QUALIFICATION_EFFECT_TOOL_KEYS, itemPath)) &&
-    valid;
+  valid = validateCodeTaskOwnKeys(errors, tool, QUALIFICATION_EFFECT_TOOL_KEYS, itemPath) && valid;
   const canonicalId = ownField(tool, "canonicalId");
   if (typeof canonicalId !== "string" || !CANONICAL_TOOL_ID_PATTERN.test(canonicalId))
     valid = addValidationError(errors, `${itemPath}.canonicalId is invalid`);
