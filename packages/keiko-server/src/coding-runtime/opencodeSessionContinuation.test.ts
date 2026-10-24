@@ -806,6 +806,22 @@ describe("retaining a settled run", () => {
     },
   );
 
+  it("names the audit check behind a schema-unknown retain refusal (#3904)", () => {
+    const h = harness({
+      results: { retain: { ok: false, reason: "schema-unknown", check: "workspace-rows" } },
+    });
+
+    retainSettledRun(h.context, run, "succeeded");
+
+    const [line] = lines(h);
+    expect(line).toMatchObject({
+      action: "retain",
+      outcome: "refused",
+      reason: "schema-unknown",
+      auditCheck: "workspace-rows",
+    });
+  });
+
   it("records a store that throws as one failed line and never throws itself", () => {
     const h = harness({ results: { retain: new Error("EACCES: /secret/path") } });
 

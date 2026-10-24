@@ -12,6 +12,7 @@ import {
   createRetainedSessionStore,
   retainedSessionKey,
   type RetainedSessionStore,
+  type RetentionAuditCheck,
 } from "./opencodeSessionRetention.js";
 
 /**
@@ -267,6 +268,13 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
     // A digest of the Coding History task (never its id) so a retain, a resume and a fork of one
     // task read as one chain; a fork also names the task it was forked from.
     taskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Which audit check made a copy `schema-unknown` (#3904): a table name class, never content.
+    auditCheck: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["kv-rows", "workspace-rows", "copy-unreadable", "audit-unreadable", "count-invalid"],
+    },
     sourceTaskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     boundary: {
       type: "string",
@@ -317,6 +325,7 @@ export interface SessionContinuityRecord {
   readonly entryCount?: number;
   readonly prunedCount?: number;
   readonly ageMs?: number;
+  readonly auditCheck?: RetentionAuditCheck;
   /** The failure behind a `failed` outcome; only its class, frames and cause chain are written. */
   readonly error?: unknown;
 }

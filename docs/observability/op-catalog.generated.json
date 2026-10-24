@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5390c49025d55b86213abf02672a75545e52327d1c31e766c2164017e9b5ecfd",
+    "catalogDigest": "fd70641397bc8bdb60b8f2dd2d41293af5f67c5ddb6b835b8a2dcfc2d81ed050",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11727,6 +11727,18 @@
             "required": false,
             "maxLength": 64
           },
+          "auditCheck": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "kv-rows",
+              "workspace-rows",
+              "copy-unreadable",
+              "audit-unreadable",
+              "count-invalid"
+            ]
+          },
           "sourceTaskDigest": {
             "type": "string",
             "dataClass": "digest",
@@ -11785,8 +11797,8 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.session-continuity.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:213",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:337"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:214",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:346"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -61478,6 +61490,12 @@
                   "required": false
                 },
                 {
+                  "name": "auditCheck",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "boundary",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -97997,7 +98015,7 @@
     {
       "op": "coding-runtime.session-continuity",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:216",
+      "site": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:217",
       "package": "keiko-server"
     },
     {

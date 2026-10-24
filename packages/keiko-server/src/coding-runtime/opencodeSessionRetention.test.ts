@@ -297,20 +297,21 @@ describe("retaining a settled run's session state", () => {
     ["an inbox entry", { rows: { session_inbox: 1 } }, "pending-input"],
     ["a suspended session", { session: { time_suspended: 5 } }, "pending-input"],
     ["a staged undo", { session: { revert: '{"messageID":"msg_1"}' } }, "revert-staged"],
-    ["key-value state", { rows: { kv: 1 } }, "schema-unknown"],
-    ["a remote workspace", { rows: { workspace: 1 } }, "schema-unknown"],
+    ["key-value state", { rows: { kv: 1 } }, "schema-unknown", "kv-rows"],
+    ["a remote workspace", { rows: { workspace: 1 } }, "schema-unknown", "workspace-rows"],
     ["another workspace directory", { session: { directory: "/elsewhere" } }, "session-mismatch"],
     ["another runtime version", { session: { version: "2.0.10" } }, "session-mismatch"],
     ["a child session", { session: { parent_id: "ses_parent" } }, "session-mismatch"],
     ["an archived session", { session: { time_archived: 4 } }, "session-mismatch"],
     ["a second session", { extraSessions: 1 }, "session-mismatch"],
-    ["an unknown schema", { without: ["permission"] }, "schema-unknown"],
-  ] as const)("refuses a database that carries %s", (_name, database, reason) => {
+    ["an unknown schema", { without: ["permission"] }, "schema-unknown", "audit-unreadable"],
+  ] as const)("refuses a database that carries %s", (_name, database, reason, check?: string) => {
     const f = fixture(database);
 
     const result = retain(f);
 
-    expect(result).toEqual({ ok: false, reason });
+    // A `schema-unknown` refusal names the audit check that failed (#3904), never content.
+    expect(result).toEqual({ ok: false, reason, ...(check === undefined ? {} : { check }) });
     expect(entryNames(f)).toEqual([]);
   });
 
@@ -326,7 +327,7 @@ describe("retaining a settled run's session state", () => {
     ).toEqual({ ok: false, reason: "session-mismatch" });
 
     writeFileSync(f.source, "this is not a database");
-    expect(retain(f)).toEqual({ ok: false, reason: "schema-unknown" });
+    expect(retain(f)).toEqual({ ok: false, reason: "schema-unknown", check: "copy-unreadable" });
     expect(retain({ ...f, source: join(f.root, "missing.db") })).toEqual({
       ok: false,
       reason: "database-missing",
@@ -712,6 +713,6 @@ describe("auditing a database directly", () => {
         directory: WORKSPACE,
         version: VERSION,
       }),
-    ).toEqual({ ok: false, reason: "schema-unknown" });
+    ).toEqual({ ok: false, reason: "schema-unknown", check: "audit-unreadable" });
   });
 });

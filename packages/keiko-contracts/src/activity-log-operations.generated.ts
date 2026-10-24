@@ -11201,6 +11201,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      auditCheck: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "kv-rows",
+          "workspace-rows",
+          "copy-unreadable",
+          "audit-unreadable",
+          "count-invalid",
+        ],
+      },
       sourceTaskDigest: {
         type: "string",
         dataClass: "digest",

@@ -94,6 +94,14 @@ export type RetentionRefusal =
   | "workspace-changed"
   | "window-shrunk";
 
+/**
+ * Which audit check refused a copy as `schema-unknown`, so a refusal names the table or read that
+ * failed without naming any content: rows in a table Keiko does not model, a copy SQLite cannot
+ * read, a database or table the audit cannot read as it expects, or a count that is not one.
+ */
+export type RetentionAuditCheck =
+  "kv-rows" | "workspace-rows" | "copy-unreadable" | "audit-unreadable" | "count-invalid";
+
 /** What a retained entry is valid for. A resume must present the same task, workspace and version. */
 export interface RetainedSessionBinding {
   readonly taskId: string;
@@ -120,7 +128,11 @@ export type RetainResult =
       readonly entryCount: number;
       readonly prunedCount: number;
     }
-  | { readonly ok: false; readonly reason: RetentionRefusal };
+  | {
+      readonly ok: false;
+      readonly reason: RetentionRefusal;
+      readonly check?: RetentionAuditCheck | undefined;
+    };
 
 export type CheckoutResult =
   | {
@@ -207,7 +219,11 @@ interface AuditExpectation {
 
 type AuditResult =
   | { readonly ok: true; readonly messageCount: number }
-  | { readonly ok: false; readonly reason: RetentionRefusal };
+  | {
+      readonly ok: false;
+      readonly reason: RetentionRefusal;
+      readonly check?: RetentionAuditCheck | undefined;
+    };
 
 class Store {
   private readonly root: string;
@@ -297,14 +313,14 @@ class Store {
     mkdirSync(staging, { mode: 0o700 });
     const database = join(staging, DATABASE_FILE);
     if (compactCopy(input.sourceDatabase, database) === "unreadable") {
-      return { ok: false, reason: "schema-unknown" };
+      return { ok: false, reason: "schema-unknown", check: "copy-unreadable" };
     }
     const audit = auditDatabase(database, {
       sessionId: input.sessionId,
       directory: input.directory,
       version: input.binding.runtimeVersion,
     });
-    if (!audit.ok) return { ok: false, reason: audit.reason };
+    if (!audit.ok) return audit;
     if (audit.messageCount > this.limits.maxMessages) {
       return { ok: false, reason: "database-oversized" };
     }
@@ -461,7 +477,11 @@ class Store {
 
 type StageResult =
   | { readonly ok: true; readonly databaseBytes: number; readonly messageCount: number }
-  | { readonly ok: false; readonly reason: RetentionRefusal };
+  | {
+      readonly ok: false;
+      readonly reason: RetentionRefusal;
+      readonly check?: RetentionAuditCheck | undefined;
+    };
 
 interface PrunableEntry {
   readonly path: string;
@@ -603,6 +623,9 @@ const CREDENTIAL_TABLES = ["credential", "account", "account_state", "control_ac
 const PENDING_TABLES = ["session_pending", "session_inbox"] as const;
 /** Tables whose content Keiko does not model: any row is a state it cannot vouch for. */
 const UNKNOWN_STATE_TABLES = ["kv", "workspace"] as const;
+const UNKNOWN_STATE_CHECKS: Readonly<
+  Record<(typeof UNKNOWN_STATE_TABLES)[number], RetentionAuditCheck>
+> = { kv: "kv-rows", workspace: "workspace-rows" };
 
 interface SessionRow {
   readonly id?: unknown;
@@ -639,11 +662,11 @@ export function auditDatabase(path: string, expected: AuditExpectation): AuditRe
     return auditOpenDatabase(database, expected);
   } catch (error) {
     // A file SQLite cannot open or whose tables are not the ones audited is an unknown schema.
-    if (
-      error instanceof AuditRefused ||
-      (error as { code?: unknown } | undefined)?.code === SQLITE_ERROR
-    ) {
-      return { ok: false, reason: "schema-unknown" };
+    if (error instanceof AuditRefused) {
+      return { ok: false, reason: "schema-unknown", check: "count-invalid" };
+    }
+    if ((error as { code?: unknown } | undefined)?.code === SQLITE_ERROR) {
+      return { ok: false, reason: "schema-unknown", check: "audit-unreadable" };
     }
     throw error;
   } finally {
@@ -656,13 +679,17 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
     [GRANT_TABLES, "grant-present"],
     [CREDENTIAL_TABLES, "credential-present"],
     [PENDING_TABLES, "pending-input"],
-    [UNKNOWN_STATE_TABLES, "schema-unknown"],
   ];
   for (const [names, reason] of tables) {
     for (const name of names) {
       if (rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0) {
         return { ok: false, reason };
       }
+    }
+  }
+  for (const name of UNKNOWN_STATE_TABLES) {
+    if (rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0) {
+      return { ok: false, reason: "schema-unknown", check: UNKNOWN_STATE_CHECKS[name] };
     }
   }
   const sessions = database

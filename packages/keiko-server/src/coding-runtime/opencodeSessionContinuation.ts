@@ -463,6 +463,7 @@ function attemptRetain(
       ...line,
       outcome: "refused",
       reason: result.reason,
+      ...(result.check === undefined ? {} : { auditCheck: result.check }),
     });
   } catch (error) {
     // The copy or the audit failed on the filesystem or in the database: the previous entry no
