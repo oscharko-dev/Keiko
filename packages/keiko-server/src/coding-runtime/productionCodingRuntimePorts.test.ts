@@ -1340,6 +1340,40 @@ describe("production runtime singleton manager", () => {
     });
   });
 
+  it("cleans a minted run stopped before managed start", async () => {
+    const inner = fakeManager({ health: vi.fn(() => ({ status: "stopped" as const })) });
+    const start = vi.spyOn(inner, "start");
+    const authority = fakeAuthority();
+    const record = managedRecord("run-1", inner);
+    const runs = new Map([["run-1", record]]);
+    const manager = createProductionRuntimeManager(runs, authority);
+
+    await expect(manager.stop("unknown-run", "failed")).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+    });
+    expect(record.dispose).not.toHaveBeenCalled();
+    await expect(manager.stop("run-1", "failed")).resolves.toMatchObject({ ok: true });
+    expect(authority.abandonUnlaunched.mock.calls).toEqual([["run-1", expect.any(String)]]);
+    expect(record.dispose).toHaveBeenCalledTimes(1);
+    expect(record.controller.signal.aborted).toBe(true);
+    expect(runs.size).toBe(0);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("keeps the authority of a minted run whose disposal fails, so its start stays recovery-required", async () => {
+    const record = managedRecord("run-1", fakeManager());
+    const dispose = vi.fn(() => Promise.reject(new Error("dispose failed")));
+    const runs = new Map([["run-1", { ...record, dispose }]]);
+    const authority = fakeAuthority();
+    const manager = createProductionRuntimeManager(runs, authority);
+
+    await expect(manager.stop("run-1", "failed")).rejects.toThrow("dispose failed");
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(authority.abandonUnlaunched.mock.calls).toEqual([]);
+    expect(runs.has("run-1")).toBe(true);
+  });
+
   it("abandons unlaunched authority and disposes the record after a dead launch failure", async () => {
     const inner = fakeManager({
       start: vi.fn(() =>
@@ -1407,10 +1441,14 @@ describe("production runtime singleton manager", () => {
     const runs = new Map([["run-1", cleaned]]);
     const manager = createProductionRuntimeManager(runs, fakeAuthority());
 
-    await expect(manager.stop("run-1")).resolves.toMatchObject({
+    // A run that is neither live nor minted here is a mismatch with no effect; a minted run that
+    // never started is released by stop (r4368287263, "cleans a minted run stopped before managed
+    // start").
+    await expect(manager.stop("run-9")).resolves.toMatchObject({
       ok: false,
       failureCode: "runtime-run-mismatch",
     });
+    expect(cleaned.dispose).not.toHaveBeenCalled();
 
     await manager.start(launch("run-1"));
     await expect(manager.takeover("run-1")).resolves.toEqual({ ok: true, status: "stopped" });

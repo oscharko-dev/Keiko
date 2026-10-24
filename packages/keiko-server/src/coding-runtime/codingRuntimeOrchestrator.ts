@@ -3670,9 +3670,19 @@ export class CodingRuntimeOrchestrator {
     this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
-    if (!this.beginHistory(request, active, runId))
-      return this.transitionActive("failed", "runtime-failed");
+    if (!this.beginHistory(request, active, runId)) return this.failMintedStart(runId);
     return this.startWithCancellation(request, active, runId, launch, issue.attachment);
+  }
+
+  /**
+   * History initialization failed after the launch minted the run's backend and authority but
+   * before the manager started it (r4368287263). The manager releases exactly that run; a release
+   * it cannot prove leaves the run recovery-required, so no later start runs over it.
+   */
+  private async failMintedStart(runId: string): Promise<CodingRuntimeOrchestratorResult> {
+    return (await this.stopForSettlement(runId, "failed"))
+      ? this.transitionActive("failed", "runtime-failed")
+      : this.transitionActive("recovery-required", "recovery-required");
   }
 
   private async startWithCancellation(

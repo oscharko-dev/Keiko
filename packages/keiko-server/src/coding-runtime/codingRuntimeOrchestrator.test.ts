@@ -7154,6 +7154,43 @@ describe("history initialization diagnostics", () => {
       );
       expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_");
       expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalledWith("history-start-run", "failed");
+      expect(f.orchestrator.snapshot()).toMatchObject({ state: "failed" });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("leaves the minted run recovery-required when its release cannot be proven", async () => {
+    const store = createInMemoryUiStore();
+    try {
+      const history = new CodingRuntimeHistory(store, () => "operator", undefined);
+      vi.spyOn(history, "begin").mockImplementation(() => {
+        throw new TypeError("history failed");
+      });
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => "history-start-run",
+        undefined,
+        undefined,
+        history,
+      );
+      f.manager.stop.mockResolvedValueOnce({
+        ok: false,
+        failureCode: "runtime-reap-unproven",
+        retryable: false,
+      });
+      await f.orchestrator.start(start);
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalledWith("history-start-run", "failed");
+      expect(f.orchestrator.snapshot()).toMatchObject({ state: "recovery-required" });
     } finally {
       store.close();
     }

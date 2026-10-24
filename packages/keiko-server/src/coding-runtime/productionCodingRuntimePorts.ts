@@ -408,7 +408,7 @@ function buildProductionRuntimeManager(
     declineApproval: (request) => context.slot.manager()?.declineApproval?.(request) ?? false,
     pause: (runId) => pauseProductionRuntime(context, runId),
     resume: (runId, requestedMode) => resumeProductionRuntime(context, runId, requestedMode),
-    stop: (runId, resultStatus) => stopProductionRuntime(context, runId, resultStatus),
+    stop: (runId, resultStatus) => stopProductionRuntime(runs, context, runId, resultStatus),
     hold: (runId) => holdProductionRuntime(runs, context, runId),
     takeover: (runId) => settleProductionRuntime(context, runId, "takeover"),
     reconcile: (runId) => settleProductionRuntime(context, runId, "reconcile"),
@@ -517,18 +517,38 @@ async function holdProductionRuntime(
 }
 
 async function stopProductionRuntime(
+  runs: Map<string, ProductionRuntimeRunRecord>,
   context: ProductionRuntimeManagerContext,
   runId: string,
   resultStatus?: Parameters<CodingRuntimeManager["stop"]>[1],
 ): ReturnType<CodingRuntimeManager["stop"]> {
   const manager = context.slot.manager();
-  if (manager === undefined || !context.slot.matches(runId)) return stoppedRun();
+  if (manager === undefined || !context.slot.matches(runId))
+    return releaseUnlaunchedRun(runs, context, runId);
   const result = await manager.stop(runId, resultStatus);
   if (result.ok) {
     captureTerminalResult(context, manager, runId);
     await context.slot.cleanup(runId);
   }
   return result;
+}
+
+/**
+ * A run the launch resolver minted but that never reached `start` holds no slot and no process,
+ * only its backend record and its starting authority (r4368287263: history initialization failed
+ * in between). Stopping it disposes exactly that record first and only then releases the
+ * unlaunched authority, so a disposal that throws keeps the authority and the start stays
+ * recovery-required. A run that is neither the slot's nor minted is a mismatch with no effect.
+ */
+async function releaseUnlaunchedRun(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+  context: ProductionRuntimeManagerContext,
+  runId: string,
+): ReturnType<CodingRuntimeManager["stop"]> {
+  if (context.slot.matches(runId) || !runs.has(runId)) return stoppedRun();
+  await cleanupRun(runs, runId);
+  context.authority.abandonUnlaunched(runId, context.now().toISOString());
+  return { ok: true, status: "stopped" };
 }
 
 function authorityBoundaryFailure(reason: string): ReturnType<CodingRuntimeManager["pause"]> {
