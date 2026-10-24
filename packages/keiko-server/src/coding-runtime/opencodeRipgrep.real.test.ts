@@ -496,6 +496,66 @@ describe("pinned native OpenCode and the verified ripgrep", () => {
     180_000,
   );
 
+  // #3900 AC1: the original Read paging and the Glob/Grep parameters keep their own semantics.
+  it.skipIf(skip)(
+    "pages a file, narrows and limits glob, and searches by regex, literal, case, include and root",
+    async () => {
+      const resolution = provisionedResolution();
+      await withRun(
+        () => resolution,
+        async (run) => {
+          const at = (name: string): string => join(run.fixture.workspace, name);
+          const notes = Array.from({ length: 30 }, (_, index) => `line ${String(index + 1)}`);
+          writeFileSync(at("paged.txt"), `${notes.join("\n")}\n`);
+          for (const [name, content] of [
+            ["src/app.ts", "export const APP_NAME = 'Keiko';\n"],
+            ["src/nested/deep.ts", "export const deep = 'needle';\n"],
+            ["docs/guide.md", "# Guide\nA NEEDLE in the docs.\n"],
+            [".hidden/tool.ts", "export const hidden = 'needle';\n"],
+          ] as const) {
+            mkdirSync(dirname(at(name)), { recursive: true });
+            writeFileSync(at(name), content);
+          }
+          const call = (name: string, args: Readonly<Record<string, unknown>>): Promise<string> =>
+            scriptedTurn(run, { name, arguments: args });
+
+          const page = await call("read", { path: "paged.txt", offset: 10, limit: 3 });
+          expect(page).toMatch(/line 10\b/u);
+          expect(page).toMatch(/line 12\b/u);
+          expect(page).not.toMatch(/line 9\b/u);
+          expect(page).not.toMatch(/line 13\b/u);
+
+          const all = await call("glob", { pattern: "**/*.ts" });
+          expect(all).toContain("src/app.ts");
+          expect(all).toContain("src/nested/deep.ts");
+          expect(await call("glob", { pattern: "**/*.ts", hidden: true })).toContain(
+            ".hidden/tool.ts",
+          );
+          const narrowed = await call("glob", { pattern: "*.ts", path: "src/nested" });
+          expect(narrowed).toContain("deep.ts");
+          expect(narrowed).not.toContain("app.ts");
+          const limited = await call("glob", { pattern: "**/*.ts", limit: 1 });
+          expect(limited.split("\n").filter((line) => line.trim().endsWith(".ts"))).toHaveLength(1);
+
+          expect(await call("grep", { pattern: "need.e" })).toContain("deep.ts");
+          expect(await call("grep", { pattern: "need.e", literal: true })).not.toContain("deep.ts");
+          const caseless = await call("grep", {
+            pattern: "needle",
+            caseSensitive: false,
+            include: "*.md",
+          });
+          expect(caseless).toContain("guide.md");
+          expect(caseless).not.toContain("deep.ts");
+          const rooted = await call("grep", { pattern: "needle", path: "src" });
+          expect(rooted).toContain("deep.ts");
+          expect(rooted).not.toContain("guide.md");
+          expect(downloadedBinaries(run.fixture)).toEqual([]);
+        },
+      );
+    },
+    240_000,
+  );
+
   it.skipIf(skip)(
     "control: without a verified ripgrep the run starts, search degrades and nothing is downloaded",
     async () => {

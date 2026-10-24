@@ -829,6 +829,71 @@ describe("pinned native OpenCode directory reads (T02)", () => {
 
 // ─── PR #4064 review: hard links inside the workspace ─────────────────────────────────────────────
 
+// #3900 AC1: the original Write and Edit keep their own schemas and results -- create, overwrite,
+// replace and replace-all -- while every write reaches Keiko's one native policy owner. Move and
+// delete run through the shell for this model, as in standalone OpenCode (patch is the producer's
+// gpt-model variant, T08). Read paging and the Glob/Grep semantics are pinned beside the verified
+// ripgrep in `opencodeRipgrep.real.test.ts`.
+describe("pinned native OpenCode file tools keep their original semantics (T01-T07, #3900 AC1)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const notes = Array.from({ length: 30 }, (_, index) => `line ${String(index + 1)}`).join("\n");
+  const matrixFiles = {
+    "notes.txt": `${notes}\n`,
+    "src/app.ts": "export const APP_NAME = 'Keiko';\n",
+    "src/repeat.ts": "x = 1;\nx = 2;\n",
+    "src/nested/deep.ts": "export const deep = 'needle';\n",
+    "docs/guide.md": "# Guide\nA NEEDLE in the docs.\n",
+    ".hidden/tool.ts": "export const hidden = 'needle';\n",
+  };
+  const call = (name: string, args: Readonly<Record<string, unknown>>): ScriptedCall => ({
+    name,
+    arguments: args,
+  });
+
+  it.skipIf(skip)(
+    "creates, overwrites and replaces through write and edit, and moves and deletes through the shell",
+    async () => {
+      await withRun({ files: matrixFiles }, async (run) => {
+        const workspaceFile = (name: string): string =>
+          readFileSync(join(run.fixture.workspace, name), "utf8");
+        await scriptedTurn(
+          run,
+          call("write", { path: "src/created.ts", content: "export const created = true;\n" }),
+        );
+        expect(workspaceFile("src/created.ts")).toBe("export const created = true;\n");
+
+        await scriptedTurn(run, read("notes.txt"));
+        await scriptedTurn(run, call("write", { path: "notes.txt", content: "overwritten\n" }));
+        expect(workspaceFile("notes.txt")).toBe("overwritten\n");
+
+        await scriptedTurn(run, read("src/app.ts"));
+        await scriptedTurn(
+          run,
+          call("edit", { path: "src/app.ts", oldString: "'Keiko'", newString: "'KeikoNative'" }),
+        );
+        expect(workspaceFile("src/app.ts")).toBe("export const APP_NAME = 'KeikoNative';\n");
+        await scriptedTurn(run, read("src/repeat.ts"));
+        await scriptedTurn(
+          run,
+          call("edit", { path: "src/repeat.ts", oldString: "x", newString: "y", replaceAll: true }),
+        );
+        expect(workspaceFile("src/repeat.ts")).toBe("y = 1;\ny = 2;\n");
+
+        await scriptedTurn(run, shell("mv src/created.ts src/renamed.ts && rm docs/guide.md"));
+        expect(existsSync(join(run.fixture.workspace, "src/renamed.ts"))).toBe(true);
+        expect(existsSync(join(run.fixture.workspace, "src/created.ts"))).toBe(false);
+        expect(existsSync(join(run.fixture.workspace, "docs/guide.md"))).toBe(false);
+
+        // Writes went through Keiko's policy as edits, the shell as a shell command.
+        const asked = run.facade.decisions.map((decision) => decision.permission);
+        expect(asked.filter((permission) => permission === "edit")).toHaveLength(4);
+        expect(asked).toContain("shell");
+      });
+    },
+    240_000,
+  );
+});
+
 describe("pinned native OpenCode hard links inside the workspace (PR #4064 review)", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const CANARY = "HARD-LINK-OUTSIDE-CANARY";
