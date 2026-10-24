@@ -135,7 +135,7 @@ function mermaidConfig(dark: boolean): MermaidConfig {
 
 // `url(#id)`, `url('#id')` or `url("#id")`: a reference to an element of the same drawing, which
 // loads nothing. It is the only `url(` Mermaid writes.
-const ELEMENT_REFERENCE = /url\(\s*(["']?)#[A-Za-z_][\w-]*\1\s*\)/giu;
+const ELEMENT_REFERENCE = /url\(\s*(["']?)#[a-z_][\w-]*\1\s*\)/giu;
 
 function hasActiveToken(value: string): boolean {
   // A CSS escape can spell any function name (`\75 rl(` is `url(`); Mermaid writes none.
@@ -183,7 +183,9 @@ function inTextColour(text: Element): void {
 // A `switch` draws its first alternative the browser supports; without the HTML one, that is the
 // plain SVG fallback Mermaid writes beside it (the user-journey diagram's section and task labels).
 function withoutHtmlAlternatives(root: Element): void {
-  for (const choice of [...root.getElementsByTagNameNS(SVG_NAMESPACE, "switch")]) {
+  // Removing an alternative removes only what follows its own switch in document order, so the live
+  // collection never skips a switch that remains.
+  for (const choice of root.getElementsByTagNameNS(SVG_NAMESPACE, "switch")) {
     const alternatives = [...choice.children];
     if (!alternatives.some(isHtmlAlternative)) continue;
     for (const alternative of alternatives) {
