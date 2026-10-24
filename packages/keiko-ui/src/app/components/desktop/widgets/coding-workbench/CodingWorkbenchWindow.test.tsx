@@ -555,9 +555,11 @@ beforeEach(() => {
         ? {
             status: "ready",
             commands: [{ name: "review" }, { name: "team:deploy-check", description: "Deploy" }],
+            agents: [{ name: "explore", description: "Fast agent for exploring code" }],
+            skills: [{ id: "review-method", name: "review-method", description: "A method" }],
             retry: vi.fn(),
           }
-        : { status: "idle", commands: [], retry: vi.fn() },
+        : { status: "idle", commands: [], agents: [], skills: [], retry: vi.fn() },
     );
   filesSearchMock.mockReset().mockResolvedValue({
     root: "/repo",
@@ -6100,6 +6102,99 @@ describe("messages waiting for the running turn (S07)", () => {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();
     }
+  });
+});
+
+// Parity row S15 (#3906): a prompt mentions the runtime's subagents with `@` and its skills with `$`,
+// picked from the run's own listing; what is sent names the tokens of exactly the text sent.
+describe("CodingWorkbenchWindow @agent and $skill mentions (#3906)", () => {
+  const PROMPT_INPUTS = {
+    delivery: true,
+    references: true,
+    commands: true,
+    mentions: true,
+  } as const;
+  const taskBox = (): HTMLElement => screen.getByRole("textbox", { name: "Task instructions" });
+
+  function idle(overrides: Partial<CodingWorkbenchRuntimeState> = {}): CodingWorkbenchRuntimeState {
+    return liveState({ promptInputs: PROMPT_INPUTS, ...overrides });
+  }
+
+  function pausedRun(): CodingWorkbenchRuntimeState {
+    return idle({
+      run: {
+        status: "ready",
+        value: snapshot({ state: "paused", runId: "run-1", effectiveMode: "supervised-coding" }),
+        error: null,
+      },
+    });
+  }
+
+  it("mentions a subagent the run lists, picked from the @ list, with the span of its token", async () => {
+    const live = renderWorkbench(pausedRun());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "Ask @exp");
+
+    await user.click(await screen.findByRole("button", { name: "Mention agent explore" }));
+    await user.type(taskBox(), "to look");
+    await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("Ask @explore to look", {
+      references: [],
+      mentions: { agents: [{ name: "explore", mention: { start: 4, end: 12, text: "@explore" } }] },
+    });
+  });
+
+  it("uses a skill the run lists, picked from the $ list with the keyboard", async () => {
+    const live = renderWorkbench(pausedRun());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "Use $rev");
+
+    expect(await screen.findByRole("group", { name: "Use a skill" })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    await user.type(taskBox(), "now");
+    await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("Use $review-method now", {
+      references: [],
+      mentions: {
+        skills: [{ id: "review-method", mention: { start: 4, end: 18, text: "$review-method" } }],
+      },
+    });
+  });
+
+  it("offers the built-in subagents to a new task and starts it with the mention", async () => {
+    const live = renderWorkbench(idle());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "@gen");
+
+    await user.click(await screen.findByRole("button", { name: "Mention agent general" }));
+    await user.type(taskBox(), "plan it");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    expect(
+      (vi.mocked(live.start).mock.calls[0]?.[1] as { mentions?: unknown } | undefined)?.mentions,
+    ).toEqual({ agents: [{ name: "general", mention: { start: 0, end: 8, text: "@general" } }] });
+    // No skill can be listed before a run exists.
+    await user.type(taskBox(), " $x");
+    expect(screen.queryByRole("group", { name: "Use a skill" })).toBeNull();
+  });
+
+  it("sends no mention once the person deleted its token, and none where the runtime takes none", async () => {
+    const live = renderWorkbench(pausedRun());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "Ask @exp");
+    await user.click(await screen.findByRole("button", { name: "Mention agent explore" }));
+    await user.clear(taskBox());
+    await user.type(taskBox(), "Ask explore");
+    await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("Ask explore");
+    cleanup();
+
+    renderWorkbench(idle({ promptInputs: { delivery: true, references: true, commands: true } }));
+    await userEvent.setup().type(taskBox(), "@gen");
+    expect(screen.queryByRole("button", { name: "Mention agent general" })).toBeNull();
   });
 });
 

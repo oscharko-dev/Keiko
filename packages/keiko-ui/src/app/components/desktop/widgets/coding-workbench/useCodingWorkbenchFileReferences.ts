@@ -11,13 +11,20 @@ import {
 } from "react";
 import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
+  type CodingWorkbenchMentionableAgent,
   type CodingWorkbenchPromptReference,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import { fetchFilesSearch } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
-import { handleListboxKey, useCaretAfterInsert } from "./codingWorkbenchComposerListbox";
+import {
+  handleListboxKey,
+  useCaretAfterInsert,
+  usePickedNames,
+} from "./codingWorkbenchComposerListbox";
+import { insertMention, namesStillMentioned } from "./codingWorkbenchPromptMentions";
+import { filterCommands } from "./codingWorkbenchSlashCommands";
 import {
   canPickReference,
   fileMentionAtCursor,
@@ -35,9 +42,27 @@ const SEARCH_DEBOUNCE_MS = 150;
 
 type FileReferenceSearchStatus = "idle" | "searching" | "found" | "empty" | "error";
 
+/** A subagent the `@` list offers beside the files (S15, #3906), as the runtime lists it. */
+export interface AgentReferenceOption {
+  readonly agent: string;
+  readonly description?: string | undefined;
+}
+
+/** One entry of the `@` list: a subagent or a file. */
+export type ReferenceOption = AgentReferenceOption | FileReferenceOption;
+
+export function isAgentOption(option: ReferenceOption): option is AgentReferenceOption {
+  return "agent" in option;
+}
+
 export interface FileReferencePickerInput {
   /** False hides the picker and drops every pick: the run offers no references, or has no root. */
   readonly enabled: boolean;
+  /**
+   * The subagents the `@` list offers first (#3906); absent or empty, it lists files only. A picked
+   * subagent adds its `@name` token, and the prompt mentions it while the text still names it.
+   */
+  readonly agents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
   /** The run's workspace root the file search runs against; the picker needs one. */
   readonly root: string | null;
   readonly draft: string;
@@ -47,8 +72,14 @@ export interface FileReferencePickerInput {
 
 export interface FileReferencePicker {
   readonly open: boolean;
+  /** False when the list offers subagents only: there is no root to search files in. */
+  readonly filesOffered: boolean;
   readonly status: FileReferenceSearchStatus;
   readonly options: readonly FileReferenceOption[];
+  /** The subagents matching what follows the `@`, listed above the files. */
+  readonly agentOptions: readonly AgentReferenceOption[];
+  /** The subagents a draft still names, in the order they were picked: what a prompt mentions. */
+  readonly agentsFor: (draft: string) => readonly string[];
   readonly highlighted: number;
   readonly listId: string;
   readonly optionId: (index: number) => string;
@@ -64,7 +95,7 @@ export interface FileReferencePicker {
   readonly track: (value: string, cursor: number | null) => void;
   /** Keyboard navigation while the list is open; true when the key was the picker's. */
   readonly handleKey: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
-  readonly pick: (option: FileReferenceOption) => void;
+  readonly pick: (option: ReferenceOption) => void;
   readonly remove: (path: string) => void;
   readonly dismiss: () => void;
 }
@@ -234,8 +265,37 @@ function usePickedPaths(enabled: boolean, draft: string, root: string | null): P
 }
 
 interface PickActions {
-  readonly pick: (option: FileReferenceOption) => void;
+  readonly pick: (option: ReferenceOption) => void;
   readonly remove: (path: string) => void;
+}
+
+const NO_AGENTS: readonly AgentReferenceOption[] = Object.freeze([]);
+
+/** The subagents matching the text after the `@`, name prefixes first; a listing's order kept. */
+function agentOptionsFor(
+  agents: readonly CodingWorkbenchMentionableAgent[] | undefined,
+  query: string | null,
+): readonly AgentReferenceOption[] {
+  if (agents === undefined || agents.length === 0 || query === null) return NO_AGENTS;
+  return filterCommands(agents, query).map((agent) => ({
+    agent: agent.name,
+    ...(agent.description === undefined ? {} : { description: agent.description }),
+  }));
+}
+
+/** The subagents the `@` list offers for the mention under the caret, and the ones picked. */
+function useAgentOptions(
+  enabled: boolean,
+  agents: readonly CodingWorkbenchMentionableAgent[] | undefined,
+  mention: FileMention | null,
+): {
+  readonly pickedAgents: ReturnType<typeof usePickedNames>;
+  readonly agentOptions: readonly AgentReferenceOption[];
+} {
+  const pickedAgents = usePickedNames(enabled);
+  const query = mention?.query ?? null;
+  const agentOptions = useMemo(() => agentOptionsFor(agents, query), [agents, query]);
+  return { pickedAgents, agentOptions };
 }
 
 /** Picking inserts the `@path` token and records the file; removing takes the token out again. */
@@ -243,14 +303,23 @@ function usePickActions(
   input: FileReferencePickerInput,
   mentionState: MentionState,
   pickedPaths: PickedPaths,
+  addAgent: (name: string) => void,
 ): PickActions {
   const { draft, onDraftChange, textareaRef } = input;
   const { mention, dismiss, close } = mentionState;
   const { setPicked, paths } = pickedPaths;
   const placeCaret = useCaretAfterInsert(textareaRef);
   const pick = useCallback(
-    (option: FileReferenceOption): void => {
-      if (mention === null || !canPickReference(paths, option.path)) {
+    (option: ReferenceOption): void => {
+      if (mention !== null && isAgentOption(option)) {
+        const inserted = insertMention(draft, mention, "@", option.agent);
+        onDraftChange(inserted.value);
+        addAgent(option.agent);
+        close();
+        placeCaret(inserted.cursor);
+        return;
+      }
+      if (mention === null || isAgentOption(option) || !canPickReference(paths, option.path)) {
         dismiss();
         return;
       }
@@ -260,7 +329,7 @@ function usePickActions(
       close();
       placeCaret(inserted.cursor);
     },
-    [close, dismiss, draft, mention, onDraftChange, paths, placeCaret, setPicked],
+    [addAgent, close, dismiss, draft, mention, onDraftChange, paths, placeCaret, setPicked],
   );
   const remove = useCallback(
     (path: string): void => {
@@ -286,24 +355,35 @@ export function useFileReferencePicker(input: FileReferencePickerInput): FileRef
   const pickedPaths = usePickedPaths(enabled, draft, root);
   const { picked, references, paths } = pickedPaths;
   const search = useFileSearch(enabled ? root : null, mention?.query ?? null, paths);
+  const { pickedAgents, agentOptions } = useAgentOptions(enabled, input.agents, mention);
   const listId = `${baseId}-file-references`;
   const atLimit = paths.length >= CODING_WORKBENCH_PROMPT_REFERENCES_MAX;
-  const { pick, remove } = usePickActions(input, mentionState, pickedPaths);
+  const { pick, remove } = usePickActions(input, mentionState, pickedPaths, pickedAgents.add);
+  // The subagents come first, then the files; at the file bound only the subagents stay pickable.
+  const listed = useMemo(
+    (): readonly ReferenceOption[] => [...agentOptions, ...(atLimit ? [] : search.options)],
+    [agentOptions, atLimit, search.options],
+  );
   const handleKey = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): boolean =>
       handleListboxKey(
-        { open, options: search.options, highlighted, setHighlighted, dismiss, pick },
+        { open, options: listed, highlighted, setHighlighted, dismiss, pick },
         event,
       ),
-    [dismiss, highlighted, open, pick, search.options, setHighlighted],
+    [dismiss, highlighted, listed, open, pick, setHighlighted],
   );
+  const hasList = listed.length > 0 && (agentOptions.length > 0 || search.status === "found");
   return {
     open,
+    filesOffered: root !== null,
     status: search.status,
     options: search.options,
-    highlighted: Math.min(highlighted, Math.max(search.options.length - 1, 0)),
+    agentOptions,
+    agentsFor: (value: string): readonly string[] =>
+      namesStillMentioned(value, pickedAgents.picked, "@"),
+    highlighted: Math.min(highlighted, Math.max(listed.length - 1, 0)),
     listId,
-    controls: open && search.status === "found" && !atLimit ? listId : undefined,
+    controls: open && hasList ? listId : undefined,
     optionId: (index: number): string => `${baseId}-file-reference-${String(index)}`,
     references,
     referencesFor: (value: string): readonly CodingWorkbenchPromptReference[] =>

@@ -334,35 +334,62 @@ export function projectCommands(listing: readonly OpenCodeV2Command[]): CommandP
   return { commands, skippedCount: listing.length - commands.length };
 }
 
-async function listRunCommands(
+type ListingFailure =
+  | { readonly outcome: "unavailable" | "unsupported" }
+  | { readonly outcome: "failed"; readonly error: unknown };
+
+/**
+ * The one listing lifecycle of the run's menus: every read ends in exactly one settled line, a
+ * failed read included, and the browser is given nothing it was not told about.
+ */
+async function listForRun<T, S extends { readonly outcome: "listed" }>(
   deps: OpenCodeCommandsRunPortDeps,
   runId: string,
-  correlationId: string | undefined,
-): Promise<readonly CodingWorkbenchCommand[] | undefined> {
-  const settle = (settled: CommandsListedSettlement): void => {
-    recordCommandsListed(deps.activityLog, runId, settled, correlationId);
-  };
-  if (deps.capabilities.commands !== true) {
-    settle({ outcome: "unsupported" });
+  supported: boolean,
+  recordListing: (settled: S | ListingFailure) => void,
+  read: (run: CommandsRun) => Promise<readonly [T, S]>,
+): Promise<T | undefined> {
+  if (!supported) {
+    recordListing({ outcome: "unsupported" });
     return undefined;
   }
   const run = deps.readyRun(runId);
   if (run === undefined) {
-    settle({ outcome: "unavailable" });
+    recordListing({ outcome: "unavailable" });
     return undefined;
   }
   try {
-    const projection = projectCommands(await run.client.commands());
-    settle({
-      outcome: "listed",
-      commandCount: projection.commands.length,
-      skippedCount: projection.skippedCount,
-    });
-    return projection.commands;
+    const [value, listed] = await read(run);
+    recordListing(listed);
+    return value;
   } catch (error) {
-    recordCommandsListed(deps.activityLog, runId, { outcome: "failed", error }, correlationId);
+    recordListing({ outcome: "failed", error });
     return undefined;
   }
+}
+
+function listRunCommands(
+  deps: OpenCodeCommandsRunPortDeps,
+  runId: string,
+  correlationId: string | undefined,
+): Promise<readonly CodingWorkbenchCommand[] | undefined> {
+  return listForRun(
+    deps,
+    runId,
+    deps.capabilities.commands === true,
+    (settled: CommandsListedSettlement) => {
+      recordCommandsListed(deps.activityLog, runId, settled, correlationId);
+    },
+    async (run) => {
+      const projection = projectCommands(await run.client.commands());
+      const listed = {
+        outcome: "listed",
+        commandCount: projection.commands.length,
+        skippedCount: projection.skippedCount,
+      } as const;
+      return [projection.commands, listed] as const;
+    },
+  );
 }
 
 // An entry the browser's validation would refuse is first offered without its description, then
@@ -413,39 +440,32 @@ export function projectMentionables(
   };
 }
 
-async function listRunMentions(
+function listRunMentions(
   deps: OpenCodeCommandsRunPortDeps,
   runId: string,
   correlationId: string | undefined,
 ): Promise<CodingRuntimeMentionables | undefined> {
-  const settle = (settled: MentionsListedSettlement): void => {
-    recordMentionsListed(deps.activityLog, runId, settled, correlationId);
-  };
-  if (deps.capabilities.mentions !== true) {
-    settle({ outcome: "unsupported" });
-    return undefined;
-  }
-  const run = deps.readyRun(runId);
-  if (run === undefined) {
-    settle({ outcome: "unavailable" });
-    return undefined;
-  }
-  try {
-    // The skills are read once the location has loaded, which the agent listing shows.
-    const agents = await loadedAgents(deps, run);
-    const skills = await run.client.skills(run.workspaceRoot);
-    const projected = projectMentionables(agents, skills);
-    settle({
-      outcome: "listed",
-      agentCount: projected.agents.length,
-      skillCount: projected.skills.length,
-      skippedCount: projected.skippedCount,
-    });
-    return { agents: projected.agents, skills: projected.skills };
-  } catch (error) {
-    settle({ outcome: "failed", error });
-    return undefined;
-  }
+  return listForRun(
+    deps,
+    runId,
+    deps.capabilities.mentions === true,
+    (settled: MentionsListedSettlement) => {
+      recordMentionsListed(deps.activityLog, runId, settled, correlationId);
+    },
+    async (run) => {
+      // The skills are read once the location has loaded, which the agent listing shows.
+      const agents = await loadedAgents(deps, run);
+      const skills = await run.client.skills(run.workspaceRoot);
+      const projected = projectMentionables(agents, skills);
+      const listed = {
+        outcome: "listed",
+        agentCount: projected.agents.length,
+        skillCount: projected.skills.length,
+        skippedCount: projected.skippedCount,
+      } as const;
+      return [{ agents: projected.agents, skills: projected.skills }, listed] as const;
+    },
+  );
 }
 
 // Every mention must name an entry the runtime lists for the run's workspace right now, read once

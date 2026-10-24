@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   CodingWorkbenchCommand,
+  CodingWorkbenchMentionableAgent,
+  CodingWorkbenchMentionableSkill,
   CodingWorkbenchRuntimeCommandsChannelPayload,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
@@ -30,6 +32,9 @@ export interface UseCodingWorkbenchCommandsResult {
   readonly status: CodingWorkbenchCommandsStatus;
   /** The run's own listing; empty unless `status` is `ready`, and then only if the run offers none. */
   readonly commands: readonly CodingWorkbenchCommand[];
+  /** The subagents and skills a prompt may mention (#3906), from the same read; empty until ready. */
+  readonly agents: readonly CodingWorkbenchMentionableAgent[];
+  readonly skills: readonly CodingWorkbenchMentionableSkill[];
   /** Reads the listing again, the operator's recourse after a failed read. */
   readonly retry: () => void;
 }
@@ -37,12 +42,17 @@ export interface UseCodingWorkbenchCommandsResult {
 interface CommandsState {
   readonly status: CodingWorkbenchCommandsStatus;
   readonly commands: readonly CodingWorkbenchCommand[];
+  readonly agents: readonly CodingWorkbenchMentionableAgent[];
+  readonly skills: readonly CodingWorkbenchMentionableSkill[];
 }
 
 const NO_COMMANDS: readonly CodingWorkbenchCommand[] = Object.freeze([]);
-const IDLE: CommandsState = { status: "idle", commands: NO_COMMANDS };
-const LOADING: CommandsState = { status: "loading", commands: NO_COMMANDS };
-const FAILED: CommandsState = { status: "error", commands: NO_COMMANDS };
+const NO_AGENTS: readonly CodingWorkbenchMentionableAgent[] = Object.freeze([]);
+const NO_SKILLS: readonly CodingWorkbenchMentionableSkill[] = Object.freeze([]);
+const EMPTY = { commands: NO_COMMANDS, agents: NO_AGENTS, skills: NO_SKILLS } as const;
+const IDLE: CommandsState = { status: "idle", ...EMPTY };
+const LOADING: CommandsState = { status: "loading", ...EMPTY };
+const FAILED: CommandsState = { status: "error", ...EMPTY };
 
 interface ScopedCommands {
   readonly runId: string;
@@ -121,5 +131,10 @@ function startCommandsRead(runId: string, publish: (value: CommandsState) => voi
 /** An unpaired window has no listing to show; a paired one shows what the run lists, maybe none. */
 function projectCommands(payload: CodingWorkbenchRuntimeCommandsChannelPayload): CommandsState {
   if (payload.session === "unpaired") return FAILED;
-  return { status: "ready", commands: payload.commands ?? NO_COMMANDS };
+  return {
+    status: "ready",
+    commands: payload.commands ?? NO_COMMANDS,
+    agents: payload.agents ?? NO_AGENTS,
+    skills: payload.skills ?? NO_SKILLS,
+  };
 }

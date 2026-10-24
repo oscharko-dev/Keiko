@@ -453,18 +453,16 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
   });
 
   it.each([
-    ["an unlisted agent", { agents: [{ name: "reviewer" }] }, "mention-unknown"],
-    ["an unlisted skill", { skills: [{ id: "deploy-method" }] }, "mention-unknown"],
-  ] as const)("refuses %s before anything is sent", async (_label, mentions, reason) => {
+    ["an unlisted agent", { agents: [{ name: "reviewer" }] }, "mention-unknown", 1],
+    ["an unlisted skill", { skills: [{ id: "deploy-method" }] }, "mention-unknown", 0],
+  ] as const)("refuses %s before anything is sent", async (_label, mentions, reason, agents) => {
     const h = harness();
 
     await expect(h.port.admitCommand("run-1", mentioned(mentions))).resolves.toEqual({
       ok: false,
       reason,
     });
-    expect(lines(h)).toMatchObject([
-      { outcome: "refused", reason, agentMentionCount: expect.any(Number) },
-    ]);
+    expect(lines(h)).toMatchObject([{ outcome: "refused", reason, agentMentionCount: agents }]);
   });
 
   // The pinned 2.1.4 answers the first read of a location that is still loading with an empty

@@ -214,8 +214,34 @@ function requireRuntime(deps: UiHandlerDeps, correlationId?: string): RuntimeDep
   return { orchestrator: deps.codingRuntimeOrchestrator, eventHub: deps.codingRuntimeEventHub };
 }
 
-function isRouteResult(value: RuntimeDeps | RouteResult): value is RouteResult {
+function isRouteResult(value: RuntimeDeps | RunChannelRead | RouteResult): value is RouteResult {
   return "status" in value;
+}
+
+interface RunChannelRead {
+  readonly orchestrator: RuntimeDeps["orchestrator"];
+  readonly runId: string;
+}
+
+/**
+ * The live run a read of one of its Workbench channels addresses. An unpaired caller receives the
+ * channel's one constant payload BEFORE any run resolution, so no read is an existence oracle
+ * (ADR-0141 D6); an unknown run is not found. Reading consumes no revision and no request id.
+ */
+function runChannelRead(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  unpaired: () => unknown,
+): RunChannelRead | RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpaired() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  return { orchestrator: required.orchestrator, runId };
 }
 
 function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
@@ -733,15 +759,10 @@ export async function handleCodingRuntimeInbox(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeInboxChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const items = await required.orchestrator.listInbox(runId, ctx.correlationId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeInboxChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const items = await orchestrator.listInbox(runId, ctx.correlationId);
   const payload: CodingWorkbenchRuntimeInboxChannelPayload = {
     session: "active",
     ...(items === undefined ? {} : { items }),
@@ -758,15 +779,10 @@ export async function handleCodingRuntimeRevertState(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeRevertChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const revert = await required.orchestrator.revertState(runId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeRevertChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const revert = await orchestrator.revertState(runId);
   const payload: CodingWorkbenchRuntimeRevertChannelPayload = {
     session: "active",
     ...(revert === undefined ? {} : { revert }),
@@ -786,17 +802,12 @@ export async function handleCodingRuntimeCommands(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeCommandsChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeCommandsChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
   const [commands, mentionables] = await Promise.all([
-    required.orchestrator.listCommands(runId, ctx.correlationId),
-    required.orchestrator.listMentions(runId, ctx.correlationId),
+    orchestrator.listCommands(runId, ctx.correlationId),
+    orchestrator.listMentions(runId, ctx.correlationId),
   ]);
   const payload: CodingWorkbenchRuntimeCommandsChannelPayload = {
     session: "active",
@@ -868,22 +879,13 @@ export function handleCodingRuntimeQuestionList(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return Promise.resolve({
-      status: 200,
-      body: unpairedCodingWorkbenchRuntimeQuestionsChannelPayload(),
-    });
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return Promise.resolve(notFound(ctx.correlationId));
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return Promise.resolve(required);
-  if (!required.orchestrator.getSnapshot(runId))
-    return Promise.resolve(notFound(ctx.correlationId));
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeQuestionsChannelPayload);
+  if (isRouteResult(read)) return Promise.resolve(read);
+  const { orchestrator, runId } = read;
   return withBody(async () => {
     const body = await readBody(ctx.req);
     if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
-    const result = await required.orchestrator.listQuestions(runId, body, ctx.correlationId);
+    const result = await orchestrator.listQuestions(runId, body, ctx.correlationId);
     if (!result.ok) return failureResult(result.failureCode, ctx.correlationId);
     const payload: CodingWorkbenchRuntimeQuestionsChannelPayload = {
       session: "active",
@@ -900,16 +902,11 @@ export function handleCodingRuntimeQuestionList(
  * — never a distinct auth error or an existence oracle (ADR-0141 D6).
  */
 export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeResearchChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const pending = required.orchestrator.pendingResearchAsk(runId);
-  const grant = required.orchestrator.researchGrant(runId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeResearchChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const pending = orchestrator.pendingResearchAsk(runId);
+  const grant = orchestrator.researchGrant(runId);
   const payload: CodingWorkbenchRuntimeResearchChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),
@@ -926,15 +923,10 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
  * a composed runtime host simply carries no skills.
  */
 export function handleCodingRuntimeSkills(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeSkillsChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const skills = required.orchestrator.approvedSkills(runId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeSkillsChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const skills = orchestrator.approvedSkills(runId);
   const payload: CodingWorkbenchRuntimeSkillsChannelPayload = {
     session: "active",
     ...(skills === undefined ? {} : { skills }),
@@ -954,15 +946,14 @@ export function handleCodingRuntimeApprovalReview(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const pending = required.orchestrator.pendingApprovalReview(runId);
+  const read = runChannelRead(
+    ctx,
+    deps,
+    unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  );
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const pending = orchestrator.pendingApprovalReview(runId);
   const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),

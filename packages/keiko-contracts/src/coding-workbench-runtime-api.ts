@@ -270,6 +270,14 @@ export interface CodingWorkbenchMentionableSkill {
   readonly description?: string | undefined;
 }
 
+/**
+ * The subagents every native run starts with (`general`, `explore`), pinned by the original-runtime
+ * listing of 2.1.4. They let the composer of a new task offer `@` before any run exists to list
+ * them; the run's own listing is the authority once it does, and the server confirms every mention.
+ */
+export const CODING_WORKBENCH_BUILT_IN_SUBAGENTS: readonly CodingWorkbenchMentionableAgent[] =
+  Object.freeze([{ name: "general" }, { name: "explore" }]);
+
 /** At most this many agents or skills ride one listing, and this many mentions one prompt. */
 export const CODING_WORKBENCH_MENTIONABLES_MAX = 64;
 export const CODING_WORKBENCH_PROMPT_MENTIONS_MAX = 8;
@@ -369,8 +377,10 @@ export function parseCodingWorkbenchPromptMentions(
   if (value.agents === undefined && value.skills === undefined) {
     errors.push("mentions must name an agent or a skill");
   }
-  errors.push(...mentionListErrors(value.agents, "agents", "name"));
-  errors.push(...mentionListErrors(value.skills, "skills", "id"));
+  errors.push(
+    ...mentionListErrors(value.agents, "agents", "name"),
+    ...mentionListErrors(value.skills, "skills", "id"),
+  );
   return result(value, errors);
 }
 
@@ -458,9 +468,11 @@ export function validateCodingWorkbenchRuntimeCommandsChannelPayload(
   if (value.session === "unpaired" && listed) {
     errors.push("commandsChannelPayload listings must be absent when the session is unpaired");
   }
-  if (value.commands !== undefined) errors.push(...commandListErrors(value.commands));
-  errors.push(...mentionablesErrors(value.agents, "agents", ["name", "description"]));
-  errors.push(...mentionablesErrors(value.skills, "skills", ["id", "name", "description"]));
+  errors.push(
+    ...(value.commands === undefined ? [] : commandListErrors(value.commands)),
+    ...mentionablesErrors(value.agents, "agents", ["name", "description"]),
+    ...mentionablesErrors(value.skills, "skills", ["id", "name", "description"]),
+  );
   return result(value, errors);
 }
 

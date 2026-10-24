@@ -329,6 +329,18 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.references.picker.title": "Eine Aufgabendatei referenzieren",
   "codingWorkbench.composer.references.picker.results": "Passende Aufgabendateien",
   "codingWorkbench.composer.references.picker.option": "{path} referenzieren",
+  "codingWorkbench.composer.references.picker.agent": "Agent {name} erwähnen",
+  "codingWorkbench.composer.references.picker.agentKind": "Agent",
+  "codingWorkbench.composer.skills.title": "Einen Skill verwenden",
+  "codingWorkbench.composer.skills.results": "Skills dieser Aufgabe",
+  "codingWorkbench.composer.skills.option": "Skill {name} verwenden",
+  "codingWorkbench.composer.skills.found":
+    "Verfügbare Skills: {count}. Wähle mit den Pfeiltasten und bestätige mit Enter.",
+  "codingWorkbench.composer.skills.loading": "Skills werden geladen...",
+  "codingWorkbench.composer.skills.empty": "Keine passenden Skills.",
+  "codingWorkbench.composer.skills.none": "Diese Aufgabe bietet keine Skills an.",
+  "codingWorkbench.composer.skills.error": "Skills konnten nicht geladen werden.",
+  "codingWorkbench.composer.skills.retry": "Erneut versuchen",
   "codingWorkbench.composer.references.picker.active": "{name}, {position} von {total}",
   "codingWorkbench.composer.references.picker.hint":
     "Tippe, um die Dateien der Aufgabe zu durchsuchen.",

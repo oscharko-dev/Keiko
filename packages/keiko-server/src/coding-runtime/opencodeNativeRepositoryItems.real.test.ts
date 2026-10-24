@@ -863,6 +863,34 @@ describe("pinned native OpenCode repository items", () => {
     120_000,
   );
 
+  // S15 (#3906): a `$skill` mention is the runtime's own skill attachment. The pinned 2.1.4 puts the
+  // admitted SKILL.md, as Keiko copied it, ahead of the operator's text, exactly as its own interface
+  // does; its shell-looking text stays literal and nothing in it runs.
+  it.skipIf(skip)(
+    "a $skill mention puts the admitted skill's text ahead of the prompt, literal",
+    async () => {
+      await withRun({}, async (run) => {
+        await listedWhen(run, "/api/skill", "demo");
+        const before = run.gateway.requests.length;
+
+        await run.client.prompt(run.sessionId, "Use $demo now.", undefined, undefined, {
+          mentions: { skills: [{ id: "demo", mention: { start: 4, end: 9, text: "$demo" } }] },
+        });
+        await expect
+          .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+          .toBeGreaterThan(before);
+
+        const sent = lastUserContent(run.gateway.requests[before]);
+        expect(sent).toContain('<skill_content name="demo">');
+        expect(sent).toContain(SKILL_BODY_MARKER);
+        expect(sent).toContain("!`echo SKILL-SHELL");
+        expect(sent.trimEnd().endsWith("Use $demo now.")).toBe(true);
+        expect(existsSync(run.fixture.canaries.skill)).toBe(false);
+      });
+    },
+    120_000,
+  );
+
   it.skipIf(skip)(
     "loads the skill as text: its shell-looking text stays literal and the hook is asked for the skill",
     async () => {

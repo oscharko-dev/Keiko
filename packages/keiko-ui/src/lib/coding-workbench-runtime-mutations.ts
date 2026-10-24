@@ -12,6 +12,7 @@ import type {
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   CodingWorkbenchCommandRequest,
+  CodingWorkbenchPromptMentions,
   CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimeInboxAction,
   CodingWorkbenchRuntimeRevertAction,
@@ -76,12 +77,14 @@ function agentSelection(current: CodingWorkbenchRuntimeState): {
 function startPromptInputs(options: CodingWorkbenchStartOptions): {
   readonly references?: readonly CodingWorkbenchPromptReference[];
   readonly command?: CodingWorkbenchCommandRequest;
+  readonly mentions?: CodingWorkbenchPromptMentions;
   readonly fork?: CodingWorkbenchRuntimeForkRequest;
 } {
   const references = options.references ?? [];
   return {
     ...(references.length === 0 ? {} : { references }),
     ...(options.command === undefined ? {} : { command: options.command }),
+    ...(options.mentions === undefined ? {} : { mentions: options.mentions }),
     ...(options.fork === undefined ? {} : { fork: options.fork }),
   };
 }
@@ -234,6 +237,8 @@ export interface CodingWorkbenchFollowUpInputs {
    * and may be empty. A command starts a turn, so it is never a delivery.
    */
   readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /** The subagents and skills the message mentions (#3906); the server confirms each. */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
 }
 
 interface FollowUpTarget {
@@ -279,7 +284,7 @@ export function createFollowUpMutation(
 ): CodingWorkbenchMutationCommand {
   const { runId, snapshot } = followUpTarget(current.run.value, taskIntent, inputs);
   const id = newCodingWorkbenchRuntimeRequestId();
-  const { delivery, command } = inputs;
+  const { delivery, command, mentions } = inputs;
   const references = inputs.references ?? [];
   return {
     requestId: id,
@@ -294,6 +299,7 @@ export function createFollowUpMutation(
         ...(delivery === undefined ? agentSelection(current) : { delivery }),
         ...(references.length === 0 ? {} : { references }),
         ...(command === undefined ? {} : { command }),
+        ...(mentions === undefined ? {} : { mentions }),
       }),
   };
 }

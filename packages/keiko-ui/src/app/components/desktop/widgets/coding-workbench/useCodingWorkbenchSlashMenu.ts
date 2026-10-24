@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-  type KeyboardEvent,
-  type RefObject,
-} from "react";
+import { useCallback, useMemo, type KeyboardEvent, type RefObject } from "react";
 import {
   CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
   type CodingWorkbenchCommand,
@@ -20,7 +12,13 @@ import {
 } from "@/lib/useCodingWorkbenchCommands";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
-import { handleListboxKey, useCaretAfterInsert } from "./codingWorkbenchComposerListbox";
+import {
+  composerMenuStatus,
+  useComposerListbox,
+  useComposerToken,
+  useTokenPick,
+  type ComposerMenuStatus,
+} from "./codingWorkbenchComposerListbox";
 import {
   commandNameSet,
   filterCommands,
@@ -32,8 +30,6 @@ import {
   type SlashSubmission,
   type SlashToken,
 } from "./codingWorkbenchSlashCommands";
-
-type SlashMenuStatus = "loading" | "found" | "empty" | "none" | "error";
 
 export interface SlashMenuInput {
   /**
@@ -62,7 +58,7 @@ export interface DraftCommand {
 
 export interface SlashMenu {
   readonly open: boolean;
-  readonly status: SlashMenuStatus;
+  readonly status: ComposerMenuStatus;
   /** The options to choose from: those matching what was typed, none unless `status` is `found`. */
   readonly options: readonly CommandOption[];
   readonly highlighted: number;
@@ -150,79 +146,10 @@ function useCommandOptions(
   );
 }
 
-function menuStatus(offered: OfferedCommands, shown: number): SlashMenuStatus {
-  if (offered.status === "error") return "error";
-  if (offered.status !== "ready") return "loading";
-  if (offered.commands.length === 0) return "none";
-  return shown === 0 ? "empty" : "found";
-}
-
-interface SlashState {
-  readonly token: SlashToken | null;
-  readonly open: boolean;
-  readonly highlighted: number;
-  readonly setHighlighted: (update: (current: number) => number) => void;
-  readonly track: (cursor: number | null) => void;
-  readonly dismiss: () => void;
-  readonly close: () => void;
-}
-
-/**
- * The `/` token under the caret, read from the current draft: whether the menu is open, which option
- * is active, and Escape. Only the caret is remembered, so a draft that was cleared or replaced (a
- * task started) leaves no menu, and no Escape, behind for the next one.
- */
-function useSlashState(enabled: boolean, draft: string): SlashState {
-  const [cursor, setCursor] = useState<number | null>(null);
-  const [dismissed, setDismissed] = useState(false);
-  const [highlighted, setHighlighted] = useState(0);
-  const token = enabled && cursor !== null ? slashTokenAtCursor(draft, cursor) : null;
-  const query = token?.query ?? null;
-  // Narrowing the name starts again at the best match.
-  useEffect(() => {
-    setHighlighted(0);
-  }, [query]);
-  useEffect(() => {
-    if (query === null) setDismissed(false);
-  }, [query]);
-  useEffect(() => {
-    if (!enabled) setCursor(null);
-  }, [enabled]);
-  const track = useCallback((next: number | null): void => setCursor(next), []);
-  const dismiss = useCallback((): void => setDismissed(true), []);
-  const close = useCallback((): void => {
-    setCursor(null);
-    setDismissed(false);
-  }, []);
-  return {
-    token,
-    open: token !== null && !dismissed,
-    highlighted,
-    setHighlighted,
-    track,
-    dismiss,
-    close,
-  };
-}
-
-/** Choosing a command writes `/name ` into the draft and puts the caret behind the space. */
-function useSlashPick(input: SlashMenuInput, state: SlashState): (option: CommandOption) => void {
-  const { draft, onDraftChange, textareaRef } = input;
-  const { token, dismiss, close } = state;
-  const placeCaret = useCaretAfterInsert(textareaRef);
-  return useCallback(
-    (option: CommandOption): void => {
-      if (token === null) {
-        dismiss();
-        return;
-      }
-      const inserted = insertCommand(draft, token, option.name);
-      onDraftChange(inserted.value);
-      close();
-      placeCaret(inserted.cursor);
-    },
-    [close, dismiss, draft, onDraftChange, placeCaret, token],
-  );
+function insertSlashCommand(
+  draft: string,
+): (token: SlashToken, option: CommandOption) => ReturnType<typeof insertCommand> {
+  return (token, option) => insertCommand(draft, token, option.name);
 }
 
 /**
@@ -261,32 +188,30 @@ function useInspectDraft(
  * a `/name` that is not offered goes out as ordinary text.
  */
 export function useSlashCommandMenu(input: SlashMenuInput): SlashMenu {
-  const { enabled, runId, draft, t } = input;
-  const baseId = useId();
-  const state = useSlashState(enabled, draft);
+  const { enabled, runId, draft, t, onDraftChange, textareaRef } = input;
+  const state = useComposerToken(enabled, (cursor) => slashTokenAtCursor(draft, cursor));
   const { token, open, highlighted, setHighlighted, dismiss } = state;
   const offered = useOfferedCommands(enabled, runId, open || startsLikeCommand(draft));
   const matches = useCommandOptions(offered.commands, token?.query ?? "", t);
-  const status = menuStatus(offered, matches.length);
+  const status = composerMenuStatus(offered.status, offered.commands.length, matches.length);
   const options = status === "found" ? matches : NO_OPTIONS;
-  const pick = useSlashPick(input, state);
+  const insert = useMemo(() => insertSlashCommand(draft), [draft]);
+  const pick = useTokenPick({ onDraftChange, textareaRef, state, insert });
   const inspect = useInspectDraft(enabled, runId !== undefined, offered);
-  const listId = `${baseId}-slash-commands`;
-  const handleKey = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>): boolean =>
-      handleListboxKey({ open, options, highlighted, setHighlighted, dismiss, pick }, event),
-    [dismiss, highlighted, open, options, pick, setHighlighted],
-  );
+  const listbox = useComposerListbox("slash-command", status, {
+    open,
+    options,
+    highlighted,
+    setHighlighted,
+    dismiss,
+    pick,
+  });
   return {
+    ...listbox,
     open,
     status,
     options,
-    highlighted: Math.min(highlighted, Math.max(options.length - 1, 0)),
-    listId,
-    optionId: (index: number): string => `${baseId}-slash-command-${String(index)}`,
-    controls: open && status === "found" ? listId : undefined,
     track: state.track,
-    handleKey,
     pick,
     dismiss,
     retry: offered.retry,

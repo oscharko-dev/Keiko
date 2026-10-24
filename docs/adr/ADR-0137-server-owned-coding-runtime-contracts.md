@@ -1488,6 +1488,31 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   executable, that `command.list` returns exactly the two built-ins, that `review` runs a turn whose
   model request carries the producer's template and ends idle, that the built-in templates
   substitute no shell command, and that a start's referenced file reaches its first model request.
+- **A prompt may mention the runtime's subagents and skills (S15, #3906).** `GET /api/agent`
+  (`agent.list`) and `GET /api/skill` (`skill.list`) join the admitted surface (28 operations; the
+  structural digests moved and reproduce from the upstream, the live 2.1.4 and the live 2.0.10
+  documents). For the run's workspace the client keeps only visible subagents (mode `subagent` or
+  `all`, not hidden) by id and skills by id and name; an agent's system prompt and permissions and a
+  skill's path and content never leave it. The listing rides the commands channel (`agents`,
+  `skills`; absent means the run offers none), and a new task shows the pinned built-in subagents
+  (`CODING_WORKBENCH_BUILT_IN_SUBAGENTS`: `general`, `explore`). A start, a follow-up and a steered
+  or queued message may carry `mentions: { agents?: [{ name, mention? }], skills?: [{ id, mention? }]
+  }` (at most 8 each, a bounded name, the half-open span of the typed token in the text sent), the
+  native profile alone offering them (`promptInputs.mentions`). They travel as the prompt's or the
+  command's own `agents` and `skills` attachments; a hidden initial context that leads the sent text
+  moves every span by its length and separator. The pinned runtime stores any name it is given, so
+  the dispatcher confirms every mention against the run's listing ahead of any reservation, for a
+  turn and a delivery alike (`mention-unknown`, `mention-unavailable`, `mentions-unsupported`). The
+  runtime answers the first read of a location that is still loading with an empty listing; its
+  built-in subagents are always listed once it has loaded, so an empty agent listing is read again,
+  at most six times 250 ms apart. A mention grants nothing: an `@agent` reaches the model as typed
+  and the model may then launch that subagent under the run's policy, and a `$skill` puts the
+  admitted SKILL.md ahead of the operator's text, literal. Evidence is body-free:
+  `coding-runtime.prompt-inputs.settled` counts the mentions (`agentMentionCount`,
+  `skillMentionCount`) and each listing is one `coding-runtime.mentions.listed` line (counts, or the
+  closed error kind, frames and causes). `opencodeNativePromptInputs.real.test.ts` and
+  `opencodeNativeRepositoryItems.real.test.ts` prove the mention, its refusal and the skill text on
+  the original executable.
 - **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
   plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
   (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`

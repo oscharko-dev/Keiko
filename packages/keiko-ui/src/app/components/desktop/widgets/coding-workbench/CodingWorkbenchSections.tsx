@@ -20,13 +20,17 @@ import type {
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { CodingWorkbenchCommandRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchCommandRequest,
+  CodingWorkbenchPromptMentions,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
 import { CodingWorkbenchAgentToggle } from "./CodingWorkbenchAgentToggle";
 import { FileReferenceChips, FileReferencePopover } from "./CodingWorkbenchFileReferences";
 import promptStyles from "./CodingWorkbenchPromptInputs.module.css";
-import { SlashCommandPopover } from "./CodingWorkbenchSlashMenu";
+import { SkillMentionPopover, SlashCommandPopover } from "./CodingWorkbenchComposerMenu";
+import { useComposerMentions, type ComposerMentions } from "./useComposerMentions";
 import type { PromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { activeRunState } from "./codingWorkbenchLabels";
 import type { SlashSubmission } from "./codingWorkbenchSlashCommands";
@@ -98,6 +102,8 @@ export interface TaskStartInputs {
   readonly references: readonly CodingWorkbenchPromptReference[];
   /** The slash command the task starts with; the text is then its arguments. */
   readonly command?: CodingWorkbenchCommandRequest;
+  /** The `@agent` and `$skill` mentions of the text the task starts with (#3906). */
+  readonly mentions?: CodingWorkbenchPromptMentions;
 }
 
 export interface TaskComposerActions {
@@ -113,6 +119,7 @@ export interface TaskComposerActions {
     draft: string,
     references?: readonly CodingWorkbenchPromptReference[],
     command?: CodingWorkbenchCommandRequest,
+    mentions?: CodingWorkbenchPromptMentions,
   ) => void;
   /**
    * A message for the turn that is running: sent into it (`steer`) or behind it (`queue`)
@@ -123,9 +130,16 @@ export interface TaskComposerActions {
         draft: string,
         delivery: CodingWorkbenchPromptDelivery,
         references: readonly CodingWorkbenchPromptReference[],
+        mentions?: CodingWorkbenchPromptMentions,
       ) => void)
     | undefined;
   readonly onStop: () => void;
+}
+
+/** What a prompt carries beside its text and command: its `@` files and its mentions. */
+interface PromptAttachments {
+  readonly references: readonly CodingWorkbenchPromptReference[];
+  readonly mentions: CodingWorkbenchPromptMentions | undefined;
 }
 
 function runtimePreferenceOptions(
@@ -230,6 +244,8 @@ interface TaskComposerController {
   readonly picker: FileReferencePicker;
   /** The `/` command menu; inert unless the runtime offers commands and no turn is running. */
   readonly menu: SlashMenu;
+  /** The `$` skill menu; inert unless the run's runtime takes mentions (#3906). */
+  readonly skillMenu: ComposerMentions["skillMenu"];
   /** Whether Send now and Queue are offered: a turn is running and the runtime takes messages. */
   readonly deliveryEnabled: boolean;
   /** True while a message cannot be sent now: an action is pending or the draft is empty. */
@@ -302,11 +318,13 @@ function canDeliver(input: TaskStartSectionProps): boolean {
 function sendFollowUp(
   input: TaskStartSectionProps,
   draft: string,
-  references: readonly CodingWorkbenchPromptReference[],
+  attachments: PromptAttachments,
   command: CodingWorkbenchCommandRequest | undefined,
 ): void {
+  const { references, mentions } = attachments;
   // The historical call stays exactly as it was when the draft references no file and names no command.
-  if (command !== undefined) input.actions.onSend(draft, references, command);
+  if (mentions !== undefined) input.actions.onSend(draft, references, command, mentions);
+  else if (command !== undefined) input.actions.onSend(draft, references, command);
   else if (references.length === 0) input.actions.onSend(draft);
   else input.actions.onSend(draft, references);
 }
@@ -314,11 +332,19 @@ function sendFollowUp(
 function sendStart(
   input: TaskStartSectionProps,
   draft: string,
-  references: readonly CodingWorkbenchPromptReference[],
+  attachments: PromptAttachments,
   command: CodingWorkbenchCommandRequest | undefined,
 ): void {
-  if (command === undefined && references.length === 0) input.actions.onStart(draft);
-  else input.actions.onStart(draft, { references, ...(command === undefined ? {} : { command }) });
+  const { references, mentions } = attachments;
+  if (command === undefined && references.length === 0 && mentions === undefined) {
+    input.actions.onStart(draft);
+    return;
+  }
+  input.actions.onStart(draft, {
+    references,
+    ...(command === undefined ? {} : { command }),
+    ...(mentions === undefined ? {} : { mentions }),
+  });
 }
 
 // A running turn takes a message when the runtime offers it and there is one; Enter on an empty
@@ -327,7 +353,7 @@ function submitRunning(
   input: TaskStartSectionProps,
   draft: string,
   mode: CodingWorkbenchPromptDelivery | undefined,
-  references: readonly CodingWorkbenchPromptReference[],
+  attachments: PromptAttachments,
 ): void {
   if (!canDeliver(input) || draft.trim().length === 0) {
     input.actions.onPause();
@@ -335,32 +361,35 @@ function submitRunning(
   }
   // A delivered message is a follow-up to the person typing it; the diagnostic kind is the same.
   reportTaskSubmission(draft, input.taskIntent, "follow-up");
-  input.actions.onDeliver?.(draft, mode ?? "steer", references);
+  const { references, mentions } = attachments;
+  if (mentions === undefined) input.actions.onDeliver?.(draft, mode ?? "steer", references);
+  else input.actions.onDeliver?.(draft, mode ?? "steer", references, mentions);
 }
 
 function submitTask(
   input: TaskStartSectionProps,
   displayedDraft: string,
   mode: CodingWorkbenchPromptDelivery | undefined,
-  references: readonly CodingWorkbenchPromptReference[],
+  attachments: PromptAttachments,
   slash: SlashSubmission | null,
 ): void {
   if (input.runState === "running") {
-    submitRunning(input, displayedDraft, mode, references);
+    submitRunning(input, displayedDraft, mode, attachments);
     return;
   }
   const kind = input.runState === "paused" ? "follow-up" : "start";
   reportTaskSubmission(displayedDraft, input.taskIntent, kind);
   // A recognized command sends its name and the text after it instead of the raw draft.
   const text = slash?.text ?? displayedDraft;
-  if (kind === "follow-up") sendFollowUp(input, text, references, slash?.command);
-  else sendStart(input, text, references, slash?.command);
+  if (kind === "follow-up") sendFollowUp(input, text, attachments, slash?.command);
+  else sendStart(input, text, attachments, slash?.command);
 }
 
-/** The two pop-up lists the textarea drives: `@` files and `/` commands. */
+/** The pop-up lists the textarea drives: `@` files and subagents, `/` commands, `$` skills. */
 interface ComposerLists {
   readonly picker: FileReferencePicker;
   readonly menu: SlashMenu;
+  readonly mentions: ComposerMentions;
 }
 
 interface ComposerSubmit {
@@ -393,8 +422,14 @@ function useComposerSubmit(
       return;
     }
     setBlockedSubmitAttempted(false);
-    const references = picker.referencesFor(displayedDraft);
-    submitTask(input, displayedDraft, mode, references, draftCommand.submission);
+    // The mentions name the tokens of exactly the text that is sent: the command's arguments for a
+    // command, the draft otherwise, trimmed as the request trims it.
+    const sent = (draftCommand.submission?.text ?? displayedDraft).trim();
+    const attachments: PromptAttachments = {
+      references: picker.referencesFor(displayedDraft),
+      mentions: lists.mentions.mentionsFor(displayedDraft, sent, picker.agentsFor(displayedDraft)),
+    };
+    submitTask(input, displayedDraft, mode, attachments, draftCommand.submission);
   };
   const feedbackShown = feedbackReason !== null;
   useEffect(() => {
@@ -425,13 +460,31 @@ function referencesOffered(runState: CodingWorkbenchRuntimeStateName | undefined
 function useComposerPicker(
   input: TaskStartSectionProps,
   textareaRef: RefObject<HTMLTextAreaElement | null>,
+  mentions: ComposerMentions,
 ): FileReferencePicker {
+  // Files need the run's root; the subagents a prompt may mention need none (#3906).
+  const files = input.promptInputs?.references === true && typeof input.referenceRoot === "string";
   return useFileReferencePicker({
-    enabled:
-      input.promptInputs?.references === true &&
-      typeof input.referenceRoot === "string" &&
-      referencesOffered(input.runState),
-    root: input.referenceRoot ?? null,
+    enabled: referencesOffered(input.runState) && (files || mentions.agents.length > 0),
+    agents: mentions.agents,
+    root: files ? (input.referenceRoot ?? null) : null,
+    draft: input.taskIntent,
+    onDraftChange: input.onTaskIntentChange,
+    textareaRef,
+  });
+}
+
+// `@agent` and `$skill` are offered where a prompt can carry them (#3906): to a turn that takes a
+// message and to a paused run's follow-up, both from the run's own listing, and to a new task,
+// offered the built-in subagents before any run exists to list more.
+function useMentions(
+  input: TaskStartSectionProps,
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+): ComposerMentions {
+  const live = input.runState === "running" || input.runState === "paused";
+  return useComposerMentions({
+    enabled: input.promptInputs?.mentions === true && referencesOffered(input.runState),
+    runId: live ? input.runId : undefined,
     draft: input.taskIntent,
     onDraftChange: input.onTaskIntentChange,
     textareaRef,
@@ -468,7 +521,12 @@ function useComposerKeys(
   submit: (mode?: CodingWorkbenchPromptDelivery) => void,
 ): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
   return (event): void => {
-    if (lists.picker.handleKey(event) || lists.menu.handleKey(event)) return;
+    if (
+      lists.picker.handleKey(event) ||
+      lists.menu.handleKey(event) ||
+      lists.mentions.skillMenu.handleKey(event)
+    )
+      return;
     if (deliveryEnabled && isQueueChord(event)) {
       event.preventDefault();
       submit("queue");
@@ -498,14 +556,13 @@ function useTaskComposerController(
   const dictation = useDictation({
     onInsert: insertTranscript,
   });
-  const picker = useComposerPicker(input, textareaRef);
+  const mentions = useMentions(input, textareaRef);
+  const picker = useComposerPicker(input, textareaRef, mentions);
   const menu = useComposerMenu(input, t, textareaRef);
-  const { submit, submitBlocked, submitFeedback } = useComposerSubmit(input, t, textareaRef, {
-    picker,
-    menu,
-  });
+  const lists: ComposerLists = { picker, menu, mentions };
+  const { submit, submitBlocked, submitFeedback } = useComposerSubmit(input, t, textareaRef, lists);
   const deliveryEnabled = canDeliver(input);
-  const onKeyDown = useComposerKeys({ picker, menu }, deliveryEnabled, submit);
+  const onKeyDown = useComposerKeys(lists, deliveryEnabled, submit);
   useComposerAutoGrow(textareaRef, taskIntent);
   return {
     textareaRef,
@@ -518,12 +575,14 @@ function useTaskComposerController(
     submit,
     picker,
     menu,
+    skillMenu: mentions.skillMenu,
     deliveryEnabled,
     deliveryBlocked: input.mutationPending || taskIntent.trim().length === 0,
     onKeyDown,
     onTextChange: (value, cursor): void => {
       picker.track(value, cursor);
       menu.track(cursor);
+      mentions.skillMenu.track(cursor);
     },
   };
 }
@@ -593,7 +652,9 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         textareaRef={controller.textareaRef}
         maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
         disabled={input.mutationPending}
-        ariaControls={controller.picker.controls ?? controller.menu.controls}
+        ariaControls={
+          controller.picker.controls ?? controller.menu.controls ?? controller.skillMenu.controls
+        }
         onChange={(event): void => {
           input.onTaskIntentChange(event.target.value);
           controller.onTextChange(event.target.value, event.target.selectionStart);
@@ -623,6 +684,7 @@ function FileReferences({ controller, t }: Pick<ComposerViewProps, "controller" 
   return (
     <>
       <SlashCommandPopover menu={controller.menu} t={t} />
+      <SkillMentionPopover menu={controller.skillMenu} t={t} />
       <FileReferencePopover picker={controller.picker} t={t} />
       <FileReferenceChips picker={controller.picker} t={t} />
     </>

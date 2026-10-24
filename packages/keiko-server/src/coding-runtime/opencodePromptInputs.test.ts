@@ -41,6 +41,7 @@ import {
   recordPromptInputs,
   resolvePromptReferences,
   runtimePromptInputs,
+  type AdmittedPromptInputs,
   type PromptInputsRefusal,
   type PromptInputsRun,
 } from "./opencodePromptInputs.js";
@@ -90,7 +91,7 @@ describe("the runtime inputs of an admitted prompt (#3906)", () => {
     agents: [{ name: "general", mention: { start: 4, end: 12, text: "@general" } }],
     skills: [{ id: "review-method" }],
   };
-  const admittedWith = (files: readonly { uri: string; name: string }[]) => ({
+  const admittedWith = (files: readonly { uri: string; name: string }[]): AdmittedPromptInputs => ({
     referenceCount: files.length,
     files,
     fileBytes: 0,

@@ -44,11 +44,12 @@ interface LastStart {
 /** What the first prompt carries beside its text; both fields are absent for the ordinary start. */
 function startPromptInputs(
   inputs: TaskStartInputs | undefined,
-): Pick<CodingWorkbenchStartOptions, "references" | "command"> {
+): Pick<CodingWorkbenchStartOptions, "references" | "command" | "mentions"> {
   const references = inputs?.references ?? [];
   return {
     ...(references.length === 0 ? {} : { references }),
     ...(inputs?.command === undefined ? {} : { command: inputs.command }),
+    ...(inputs?.mentions === undefined ? {} : { mentions: inputs.mentions }),
   };
 }
 
@@ -125,14 +126,19 @@ export function useTaskComposerActions(input: TaskActionsInput): TaskActions {
     onResume: () => {
       if (resumeMode !== null) void actions.resume(resumeMode);
     },
-    onSend: (draft, references, command): void =>
+    onSend: (draft, references, command, mentions): void =>
       sendFollowUp(actions, draft, {
         ...(references === undefined ? {} : { references }),
         ...(command === undefined ? {} : { command }),
+        ...(mentions === undefined ? {} : { mentions }),
       }),
-    onDeliver: (draft, delivery, references): void => {
+    onDeliver: (draft, delivery, references, mentions): void => {
       promptDelivery.begin(delivery);
-      void actions.submitFollowUp(draft.trim(), { delivery, references });
+      void actions.submitFollowUp(draft.trim(), {
+        delivery,
+        references,
+        ...(mentions === undefined ? {} : { mentions }),
+      });
     },
   };
   return { composer, retryStart };

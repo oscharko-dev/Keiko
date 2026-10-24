@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import { CODING_WORKBENCH_PROMPT_REFERENCES_MAX } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { useActiveOptionInView } from "./CodingWorkbenchComposerMenu";
 import styles from "./CodingWorkbenchPromptInputs.module.css";
-import type { FileReferencePicker } from "./useCodingWorkbenchFileReferences";
+import type { FileReferenceOption } from "./codingWorkbenchPromptReferences";
+import {
+  isAgentOption,
+  type FileReferencePicker,
+  type ReferenceOption,
+} from "./useCodingWorkbenchFileReferences";
 
 const CloseIcon = Icons.close;
 
@@ -39,28 +45,99 @@ function pickerStatus(picker: FileReferencePicker, t: CodingWorkbenchTranslate):
   }
 }
 
+/** The entries in list order: the subagents first, then the files while files can be added. */
+function listedOptions(picker: FileReferencePicker): readonly ReferenceOption[] {
+  return [...picker.agentOptions, ...(picker.atLimit ? [] : picker.options)];
+}
+
 /** The option the arrow keys are on, announced politely because focus stays in the textarea. */
 function activeOptionAnnouncement(
   picker: FileReferencePicker,
   t: CodingWorkbenchTranslate,
 ): string {
-  const option = picker.options[picker.highlighted];
-  if (picker.atLimit || option === undefined) return "";
+  const listed = listedOptions(picker);
+  const option = listed[picker.highlighted];
+  if (option === undefined) return "";
   return t("codingWorkbench.composer.references.picker.active", {
-    name: option.path,
+    name: isAgentOption(option) ? `@${option.agent}` : option.path,
     position: picker.highlighted + 1,
-    total: picker.options.length,
+    total: listed.length,
   });
 }
 
+function AgentOptionRow({
+  picker,
+  option,
+  index,
+  t,
+}: PickerViewProps & {
+  readonly option: Extract<ReferenceOption, { readonly agent: string }>;
+  readonly index: number;
+}): ReactNode {
+  return (
+    <li>
+      <button
+        type="button"
+        id={picker.optionId(index)}
+        tabIndex={-1}
+        className={styles.cmpOption}
+        data-highlighted={index === picker.highlighted ? "true" : "false"}
+        aria-label={t("codingWorkbench.composer.references.picker.agent", { name: option.agent })}
+        // Keep the caret in the textarea: a pointer press must not move focus to the option.
+        onMouseDown={(event): void => event.preventDefault()}
+        onClick={(): void => picker.pick(option)}
+      >
+        <span className={styles.cmpOptionIcon} aria-hidden="true">
+          @
+        </span>
+        <span className={styles.cmpOptionText} aria-hidden="true">
+          <span className={styles.cmpOptionName}>{option.agent}</span>
+          <span className={styles.cmpOptionDirectory}>
+            {option.description ?? t("codingWorkbench.composer.references.picker.agentKind")}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function FileOptionRow({
+  picker,
+  option,
+  index,
+  t,
+}: PickerViewProps & { readonly option: FileReferenceOption; readonly index: number }): ReactNode {
+  return (
+    <li>
+      <button
+        type="button"
+        id={picker.optionId(index)}
+        tabIndex={-1}
+        className={styles.cmpOption}
+        data-highlighted={index === picker.highlighted ? "true" : "false"}
+        aria-label={t("codingWorkbench.composer.references.picker.option", {
+          path: option.path,
+        })}
+        // Keep the caret in the textarea: a pointer press must not move focus to the option.
+        onMouseDown={(event): void => event.preventDefault()}
+        onClick={(): void => picker.pick(option)}
+      >
+        <span className={styles.cmpOptionIcon} aria-hidden="true">
+          <FileIcon name={option.name} />
+        </span>
+        <span className={styles.cmpOptionText} aria-hidden="true">
+          <span className={styles.cmpOptionName}>{option.name}</span>
+          {option.directory.length === 0 ? null : (
+            <span className={styles.cmpOptionDirectory}>{option.directory}</span>
+          )}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 function PickerOptions({ picker, t }: PickerViewProps): ReactNode {
-  const listRef = useRef<HTMLUListElement | null>(null);
-  // The active option stays visible while the arrow keys move through a long list.
-  useEffect(() => {
-    listRef.current
-      ?.querySelector<HTMLElement>('[data-highlighted="true"]')
-      ?.scrollIntoView?.({ block: "nearest" });
-  }, [picker.highlighted, picker.options]);
+  const listRef = useActiveOptionInView(picker.highlighted, picker.options);
   return (
     <ul
       className={styles.cmpPickerList}
@@ -68,32 +145,23 @@ function PickerOptions({ picker, t }: PickerViewProps): ReactNode {
       ref={listRef}
       aria-label={t("codingWorkbench.composer.references.picker.results")}
     >
-      {picker.options.map((option, index) => (
-        <li key={option.path}>
-          <button
-            type="button"
-            id={picker.optionId(index)}
-            tabIndex={-1}
-            className={styles.cmpOption}
-            data-highlighted={index === picker.highlighted ? "true" : "false"}
-            aria-label={t("codingWorkbench.composer.references.picker.option", {
-              path: option.path,
-            })}
-            // Keep the caret in the textarea: a pointer press must not move focus to the option.
-            onMouseDown={(event): void => event.preventDefault()}
-            onClick={(): void => picker.pick(option)}
-          >
-            <span className={styles.cmpOptionIcon} aria-hidden="true">
-              <FileIcon name={option.name} />
-            </span>
-            <span className={styles.cmpOptionText} aria-hidden="true">
-              <span className={styles.cmpOptionName}>{option.name}</span>
-              {option.directory.length === 0 ? null : (
-                <span className={styles.cmpOptionDirectory}>{option.directory}</span>
-              )}
-            </span>
-          </button>
-        </li>
+      {picker.agentOptions.map((option, index) => (
+        <AgentOptionRow
+          key={`@${option.agent}`}
+          picker={picker}
+          option={option}
+          index={index}
+          t={t}
+        />
+      ))}
+      {(picker.atLimit ? [] : picker.options).map((option, fileIndex) => (
+        <FileOptionRow
+          key={option.path}
+          picker={picker}
+          option={option}
+          index={picker.agentOptions.length + fileIndex}
+          t={t}
+        />
       ))}
     </ul>
   );
@@ -106,18 +174,22 @@ function PickerOptions({ picker, t }: PickerViewProps): ReactNode {
  */
 export function FileReferencePopover({ picker, t }: PickerViewProps): ReactNode {
   if (!picker.open) return null;
-  const showList = picker.status === "found" && !picker.atLimit && picker.options.length > 0;
+  const showList =
+    picker.agentOptions.length > 0 ||
+    (picker.status === "found" && !picker.atLimit && picker.options.length > 0);
   return (
     <fieldset
       className={styles.cmpPicker}
       aria-label={t("codingWorkbench.composer.references.picker.title")}
     >
-      <output
-        className={styles.cmpPickerStatus}
-        data-state={picker.status === "error" ? "error" : "info"}
-      >
-        {pickerStatus(picker, t)}
-      </output>
+      {picker.filesOffered ? (
+        <output
+          className={styles.cmpPickerStatus}
+          data-state={picker.status === "error" ? "error" : "info"}
+        >
+          {pickerStatus(picker, t)}
+        </output>
+      ) : null}
       {showList ? <PickerOptions picker={picker} t={t} /> : null}
       <output className="sr-only" aria-live="polite">
         {activeOptionAnnouncement(picker, t)}
