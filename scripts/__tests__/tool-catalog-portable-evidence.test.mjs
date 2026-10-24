@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -77,7 +77,7 @@ function pairDependencies(overrides = {}) {
 
 describe("portable tool-catalog reference", () => {
   it("keeps the ruler workspace while loading a separate producer root in a real child", async () => {
-    const scratch = mkdtempSync(join(tmpdir(), "keiko-portable-child-test-"));
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "keiko-portable-child-test-")));
     const harness = join(scratch, "harness");
     const producer = join(scratch, "producer");
     mkdirSync(join(harness, "scripts"), { recursive: true });
