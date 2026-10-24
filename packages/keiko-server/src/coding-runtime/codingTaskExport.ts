@@ -284,12 +284,13 @@ function renderMarkdownMessage(message: CodingTaskExportMessage): string {
 
 function renderMarkdown(document: CodingTaskExportDocument): string {
   const { task, generator } = document;
+  const schema = `${document.schema} v${String(document.schemaVersion)}`;
   const header = [
     "# Keiko coding task export",
     "",
     `> ${UNTRUSTED_NOTICE}`,
     "",
-    `- Schema: ${inlineCode(`${document.schema} v${String(document.schemaVersion)}`)}`,
+    `- Schema: ${inlineCode(schema)}`,
     `- Keiko version: ${inlineCode(generator.keikoVersion)}`,
     `- OpenCode runtime pinned by this build: ${inlineCode(generator.opencodeRuntimePinnedVersion)}`,
     `- Exported: ${document.exportedAt}`,
