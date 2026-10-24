@@ -22,7 +22,11 @@ import {
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import type { NpmLaneRuntimeApproval } from "./npmLaneRuntimeApprovals.js";
+import {
+  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
+  NPM_LANE_RUNTIME_APPROVALS,
+  type NpmLaneRuntimeApproval,
+} from "./npmLaneRuntimeApprovals.js";
 
 // Field defect 1.1.1 (#3577). The customer installs Keiko from npm because a desktop package needs
 // admin rights and an infrastructure approval they cannot get. The npm package carried no coding
@@ -171,6 +175,33 @@ describe("npm-lane OpenCode discovery", () => {
       signatureVerified: false,
       qualificationVerified: false,
     });
+  });
+
+  // #3897 review (P1): the helper of every current runtime approval implements the native
+  // KSR3/KSS3 protocol, so its verified binding declares it and repository items can be listed;
+  // a helper of any other source, the published 1.1.3 one included, keeps text IO only.
+  it("declares the native protocol for a helper of the current approved source and no other", () => {
+    const install = globalInstall();
+    const currentSource = NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
+    const previousSource =
+      NPM_LANE_PREVIOUS_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
+    for (const [sourceTreeSha256, expected] of [
+      [currentSource, "KSR3/KSS3"],
+      [previousSource, undefined],
+      ["c".repeat(64), undefined],
+    ] as const) {
+      const discovery = discoverNpmLaneOpenCode({
+        env: install.env,
+        platform: "darwin",
+        arch: "arm64",
+        npmLaneApprovals: {
+          "macos-arm64": { ...install.approval, helperSourceTreeSha256: sourceTreeSha256 },
+        },
+      });
+      expect(discovery.outcome).toBe("activated");
+      if (discovery.outcome !== "activated") continue;
+      expect(discovery.runtime.secureRead.artifact.nativeProtocol).toBe(expected);
+    }
   });
 
   it("stays inactive while no runtime package is installed, so other lanes still decide", () => {

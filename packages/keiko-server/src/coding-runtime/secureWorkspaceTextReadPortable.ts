@@ -3,6 +3,7 @@ import { isAbsolute, resolve, win32 } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  secureWorkspaceReadNativeProtocol,
   secureWorkspaceReadTargetFor,
   type SecureWorkspaceTextReadArtifact,
   type SecureWorkspaceTextReadArtifactVerifier,
@@ -121,6 +122,7 @@ function parsePortableBinding(
       protocol: "KSR1/KSS1",
       sourceCommit: String(source.commitSha),
       sourceTreeSha256: String(source.treeSha256),
+      ...secureWorkspaceReadNativeProtocol(String(source.treeSha256), target.artifactTarget),
       // STRUCTURAL ARTIFACT-SHAPE LITERAL, NOT A PLATFORM-SIGNATURE CLAIM. It means "this record
       // is the verified artifact identity". `isValidSecureWorkspaceTextReadArtifact` hard-requires
       // it to be truthy before the point-of-use verifier ever runs, and the node process compares

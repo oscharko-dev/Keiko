@@ -557,8 +557,12 @@ Private controls use genuine authority/Manager admission with hermetic endpoint 
 readiness; they do not qualify the fixed service host as ready or activate its native advertisement.
 The existing rejection operation records the closed `native-read-refused` reason without bodies.
 
-A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
-immediate directory entries to original native file consumers. Its collected output limit is
+A separately pinned `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and immediate
+directory entries to original native file consumers. A verified helper declares it only when its
+verified source is the helper source of a current runtime approval
+(`secureWorkspaceReadNativeProtocol`, never on Windows); the published 1.1.3 helper keeps text IO
+only, so the repository-item loader reports `listing-unavailable` there until the replacement
+runtime packages are published (#3897 review, #3898). Its collected output limit is
 64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused
 without partial entries. Existing public text/snapshot limits and consumers retain their contracts.
 The existing read/edit port owns its private primitive forwarding, with the same current producer,

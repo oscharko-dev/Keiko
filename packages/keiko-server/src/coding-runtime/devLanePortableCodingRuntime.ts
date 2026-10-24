@@ -30,7 +30,10 @@ import {
 import { ripgrepBinaryName, ripgrepTargetKeyForPortableTarget } from "./ripgrepRuntime.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM } from "./opencodeProtocolSurface.js";
-import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
+import {
+  secureWorkspaceReadNativeProtocol,
+  type SecureWorkspaceTextReadArtifact,
+} from "./secureWorkspaceTextReadArtifact.js";
 
 export const KEIKO_CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE";
 export const DEV_LANE_STAGED_PAYLOADS_DIR = ".portable-sidecar-payloads";
@@ -259,6 +262,7 @@ function discoverNpmLanePackage(
       sourceCommit: helper.helperSourceCommit,
       sourceTreeSha256: helper.helperSourceTreeSha256,
       byteCap: helper.helperMaxBytes ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      ...secureWorkspaceReadNativeProtocol(helper.helperSourceTreeSha256, secureReadTarget(target)),
       // Verified by its content digest against the server's own pin, never by a signature chain.
       signed: true,
     },
@@ -693,6 +697,7 @@ function verifiedSecureRead(
         protocol: "KSR1/KSS1",
         sourceCommit: manifest.sourceCommit,
         sourceTreeSha256: manifest.sourceTreeSha256,
+        ...secureWorkspaceReadNativeProtocol(manifest.sourceTreeSha256, secureReadTarget(target)),
         // The dev-lane helper is verified by its content digest, never by a release signature chain.
         signed: true,
       },
