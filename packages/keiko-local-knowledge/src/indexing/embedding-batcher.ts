@@ -571,7 +571,7 @@ async function embedArrayBatchWithRetry(
   };
   const attemptOnce = async (): Promise<TimedOutcome<OpenAIEmbeddingBatchOutcome>> => {
     state.attempts += 1;
-    return timedAttempt(() => requestBatch(batchRequestFor(options, state.remaining)));
+    return timedAttempt(async () => await requestBatch(batchRequestFor(options, state.remaining)));
   };
   let attempted = await attemptOnce();
   while (state.zeroProgressRetries < retry.maxRetries) {

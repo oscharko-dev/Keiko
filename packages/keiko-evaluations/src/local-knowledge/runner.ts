@@ -210,8 +210,8 @@ function topicRoutingAdapter(
 ): ReturnType<typeof createScriptedEmbeddingAdapter> {
   return {
     ...adapter,
-    request: (req) =>
-      adapter.request(
+    request: async (req) =>
+      await adapter.request(
         req.input.includes("[[topic:") ? req : { ...req, input: withTopicMarker(req.input, topic) },
       ),
   };

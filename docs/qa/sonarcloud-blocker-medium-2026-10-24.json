@@ -5277,11 +5277,7 @@
     "designSystemGitPrototype": {
       "artifact": "docs/design-system/evidence/sonarcloud-2026-10-24/git-prototype-proof.json",
       "producer": "node docs/design-system/evidence/sonarcloud-2026-10-24/git-prototype-preservation.mjs",
-      "states": [
-        "changes",
-        "history",
-        "empty"
-      ],
+      "states": ["changes", "history", "empty"],
       "stateNodeCount": 9,
       "computedValueComparisons": 360,
       "differences": 0,
@@ -5329,11 +5325,12 @@
       "typecheck": "passed on governed Node 24.18.0/npm 11.16.0",
       "nativeMacos": "passed complete npm run check:native:macos; original startup bound unchanged",
       "nativeServiceHost": {
-        "passedTests": 70,
+        "passedTests": 71,
         "failedTests": 0,
         "additionalCompatibilityCases": [
           "Patched Zod rejects oversized arrays before per-item preprocessing.",
-          "Actual GitLab SDK validates string-valued header records and rejects invalid numeric values."
+          "Actual GitLab SDK validates string-valued header records and rejects invalid numeric values.",
+          "Actual GitLab OAuth schema preserves optional refresh tokens, strips unrelated fields and rejects nonnumeric expiry."
         ]
       },
       "osv": {
@@ -5349,7 +5346,8 @@
         "currentJsonFiles": 9,
         "currentJsonFindings": 0,
         "syntheticNegativeControlFindings": 1,
-        "syntheticNegativeControlExit": 1
+        "syntheticNegativeControlExit": 1,
+        "futureCommitMatchingOldFieldShapeDetected": true
       },
       "fixtureParser": {
         "actualOriginalProducerCasesFailed": 3,
@@ -5375,32 +5373,34 @@
         "newParallelRehydrationStatements": "all executed, with positive V8 line counts",
         "scope": "Real fixed corpus, ordered scenario results, three excluded-file round trips, preserved compaction records and detected mutation. Standalone performance budgets remain unchanged and outside coverage-instrumented shared tests."
       },
-      "architecture": "Dependency/import/contract boundaries, vector index, governed-tool contract and catalog conformance pass. Full aggregate is blocked by the expected stale lockfile binding in the existing tool-catalog performance evidence; regenerate only the candidate measurement in its pinned Linux ARM64 reference container after a clean signed snapshot."
+      "architecture": "Dependency/import/contract boundaries, vector index, governed-tool contract and catalog conformance pass. Full aggregate is blocked by the expected stale lockfile binding in the existing tool-catalog performance evidence; regenerate only the candidate measurement in its pinned Linux ARM64 reference container after a clean signed snapshot.",
+      "promiseDelegation": {
+        "change": "Restore both original async callback wrappers and await their actual delegates; preserve Promise rejection even for synchronous evaluation failures.",
+        "files": [
+          "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+          "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts"
+        ],
+        "passedTests": 101,
+        "testFiles": 4
+      }
     }
   },
   "lowerSeverityTriage": [
     {
-      "rules": [
-        "typescript:S9382",
-        "javascript:S9382"
-      ],
+      "rules": ["typescript:S9382", "javascript:S9382"],
       "issueCount": 177,
       "assessment": "177 individually reviewed: four QA-fixture code corrections, 112 evidenced false positives and 61 explicitly owner-accepted serial designs. All 173 retained loops preserve exact original source.",
       "audit": "docs/qa/sonarcloud-await-in-loop-2026-10-24.json"
     },
     {
-      "rules": [
-        "Web:ImgWithoutAltCheck"
-      ],
+      "rules": ["Web:ImgWithoutAltCheck"],
       "issueCount": 57,
       "assessment": "57 static SVG accessible-name findings across ten design-system reference pages. Inspect each SVG role: name meaningful visual content and explicitly hide decorative icons from accessibility. These are SVG findings, not missing alt text on screenshots.",
       "fileCount": 10,
       "disposition": "All 57 findings corrected under the subsequently authorized SVG scope."
     },
     {
-      "rules": [
-        "typescript:S1077"
-      ],
+      "rules": ["typescript:S1077"],
       "issueCount": 1,
       "assessment": "The connection SVG contains non-interactive line/particle/preview geometry. Connection semantics and localized native controls live in the separate badge layer. Only the decorative SVG is hidden; Tab/Enter/Space removal and the arm-before-confirm behavior remain covered.",
       "disposition": "Corrected under the subsequently authorized SVG scope; only the non-interactive SVG is hidden."
@@ -5415,10 +5415,7 @@
       "changes": [
         {
           "rule": "javascript:S2486",
-          "files": [
-            "design-system/git-window.html",
-            "design-system/motion.html"
-          ],
+          "files": ["design-system/git-window.html", "design-system/motion.html"],
           "change": "Use optional catch bindings for the deliberate, unchanged restricted-storage theme fallback."
         },
         {
@@ -5478,10 +5475,7 @@
       "status": "completed"
     },
     "deferBlanketChange": {
-      "rules": [
-        "typescript:S9382",
-        "javascript:S9382"
-      ],
+      "rules": ["typescript:S9382", "javascript:S9382"],
       "issueCount": 177,
       "reason": "Review loop dependencies before changing ordering or concurrency.",
       "status": "Individual review complete; no blanket concurrency change."

@@ -638,9 +638,12 @@ This repair reuses the bounded dependency versions already prepared in PR #4050:
 No OpenCode, Effect or other native package version changes. The native graph removes the three
 nested Zod copies while retaining the existing fixed host, model binding and authority profile.
 
-All 70 native host tests pass, including original issuer-bound MCP refresh, guarded provider
+All 71 native host tests pass, including original issuer-bound MCP refresh, guarded provider
 transport, PTY behavior, the original GitLab direct-access client with valid and malformed header
-records, and an early-rejection control for oversized constrained Zod arrays. This is evidence
+records, the original GitLab OAuth schema's optional refresh-token and invalid-expiry paths, and an
+early-rejection control for oversized constrained Zod arrays. The GitLab consumer previously resolved
+Zod 3.25.76; the advisory also covers that version. Both of its actual schema families are exercised
+against the patched runtime rather than assuming compatibility from version numbers. This is evidence
 for the tested product/SDK paths rather than a claim of exhaustive upstream API equivalence.
 The same OSV container then reports no unwaived issue; the existing, unchanged, time-boxed
 build-only braces disposition remains recorded in osv-scanner.toml. No advisory waiver, gate
