@@ -5159,7 +5159,7 @@
       "computedValueComparisons": 34944,
       "differences": 0
     },
-    "requiredGates": "The previous scoped validation applies to a34e60bda and is recorded below. The follow-up CI repairs and dependency updates are undergoing fresh local validation; no final green claim is made for the current uncommitted wave.",
+    "requiredGates": "Current-source scoped local typechecking, root/UI lint, formatting, full root tests plus current-source scoped rechecks, UI coverage, architecture/negative checks, local Sonar, native host/macOS, dependency scans and reference measurement pass. The unchanged required Fallow semantic-clone gate remains red with 94 reviewed groups. The owner selected a separate planning scope; no final CI, integration or complete release-coverage-chain result is claimed.",
     "localSonar": {
       "status": "passed",
       "findingCount": 0,
@@ -5205,40 +5205,22 @@
     "updateUi": "9 Chromium cases passed; freshness passed",
     "globalCssUnitTests": "280 passed",
     "unitSuite": {
-      "status": "failed",
-      "runtime": "Node 24.22.0 / npm 11.19.1",
+      "status": "passed",
+      "runtime": "Node 24.18.0 / npm 11.16.0",
+      "command": "npm test",
       "testFiles": {
-        "passed": 2594,
-        "failed": 3,
+        "passed": 2598,
+        "failed": 0,
         "skipped": 8
       },
       "tests": {
-        "passed": 57343,
-        "failed": 3,
-        "skipped": 62
+        "passed": 57350,
+        "failed": 0,
+        "skipped": 64
       },
-      "durationSeconds": 2688.71,
-      "failures": [
-        {
-          "file": "packages/keiko-server/src/grounded-excerpt-scale.test.ts",
-          "reason": "15-second timeout under concurrent UI coverage; complete affected suite passed separately."
-        },
-        {
-          "file": "packages/keiko-server/src/grounded-metadata-cache.test.ts",
-          "reason": "15-second timeout under concurrent UI coverage; complete affected suite passed separately."
-        },
-        {
-          "file": "packages/keiko-tools/src/debug-launch-policy.test.ts",
-          "reason": "The unchanged exact-runtime precondition correctly rejects the host Node 24.22.0/npm 11.19.1 pair. The complete suite passes with the governed Node 24.18.0/npm 11.16.0 pair."
-        }
-      ],
-      "targetedRecheck": {
-        "runtime": "Node 24.18.0 / npm 11.16.0 (governed exact pair)",
-        "testFiles": 3,
-        "passedTests": 62,
-        "failedTests": 0,
-        "durationSeconds": 15.07
-      }
+      "durationSeconds": 2085.59,
+      "scope": "Full root suite during the local repair wave. Subsequent executable edits also have current-source scoped rechecks: 101 delegation tests, 67 context tests with V8 coverage and all 71 native host tests. This does not substitute for required CI on the final published head.",
+      "newSkipAnnotations": 0
     },
     "uiCoverage": {
       "status": "passed",
@@ -5246,7 +5228,7 @@
       "testFiles": 564,
       "passedTests": 10873,
       "existingSkippedTests": 1,
-      "durationSeconds": 166.61
+      "durationSeconds": 71.91
     },
     "editorReleaseEvidence": "Passed after the final SVG adjustment: npm run build:ui, the original --json producer and check:editor-release-evidence ran successfully on the CI-pinned Node 24.18.0/npm 11.16.0 pair. The committed bundle evidence remains reproducible and unchanged.",
     "editorBrowserSmoke": {
@@ -5322,7 +5304,7 @@
     },
     "ciFollowUp": {
       "state": "Local revalidation in progress; required semantic-duplication gate remains red after the necessary security update.",
-      "typecheck": "passed on governed Node 24.18.0/npm 11.16.0",
+      "typecheck": "passed on governed Node 24.18.0/npm 11.16.0, including the final async-delegation edits",
       "nativeMacos": "passed complete npm run check:native:macos; original startup bound unchanged",
       "nativeServiceHost": {
         "passedTests": 71,
@@ -5367,13 +5349,13 @@
       },
       "localSonar": "passed with zero unresolved changed-file findings",
       "fallowAudit": "docs/qa/sonarcloud-fallow-upgrade-audit-2026-10-24.json",
-      "fullRootTest": "running with governed runtime and provisioned USearch; no concurrent UI coverage",
+      "fullRootTest": "passed: 57,350 tests, zero failed, 64 skipped; governed exact runtime, provisioned USearch, no concurrent UI coverage",
       "contextIntegrationCoverage": {
         "passedTests": 67,
         "newParallelRehydrationStatements": "all executed, with positive V8 line counts",
         "scope": "Real fixed corpus, ordered scenario results, three excluded-file round trips, preserved compaction records and detected mutation. Standalone performance budgets remain unchanged and outside coverage-instrumented shared tests."
       },
-      "architecture": "Dependency/import/contract boundaries, vector index, governed-tool contract and catalog conformance pass. Full aggregate is blocked by the expected stale lockfile binding in the existing tool-catalog performance evidence; regenerate only the candidate measurement in its pinned Linux ARM64 reference container after a clean signed snapshot.",
+      "architecture": "Passed full npm run arch:check after the fresh lock-bound reference measurement; negative fixtures also passed. Existing budgets/calibration/ruler/environment are unchanged.",
       "promiseDelegation": {
         "change": "Restore both original async callback wrappers and await their actual delegates; preserve Promise rejection even for synchronous evaluation failures.",
         "files": [
@@ -5383,7 +5365,65 @@
         "passedTests": 101,
         "testFiles": 4
       },
-      "fallowOwnerDirection": "Separate low-risk follow-up scope selected by owner on 2026-10-24; planning only, no broad clone refactor or gate exception authorized."
+      "fallowOwnerDirection": "Separate low-risk follow-up scope selected by owner on 2026-10-24; planning only, no broad clone refactor or gate exception authorized.",
+      "catalogPerformance": {
+        "command": "npm run perf:evidence:regen:tool-catalog",
+        "status": "passed",
+        "mode": "candidate measurement only",
+        "sameEnvironment": true,
+        "sameProducerSourceTree": true,
+        "sameMeasurementRuler": true,
+        "sameCalibration": true,
+        "changedBudgetOrCeiling": false,
+        "reason": "Bind fresh independent candidate measurements to the patched lockfile in the existing pinned Linux ARM64 reference container."
+      },
+      "uiCoverage": "passed: 564 files, 10,873 tests, one existing skip",
+      "finalLocalSonar": "passed after all executable follow-up changes; zero unresolved changed-file findings",
+      "deferredReleaseChecks": "The complete test:coverage:quality chain and fresh required CI on a published final head remain pending settlement of the independently reviewed Fallow blocker; no release-green claim is made.",
+      "packageSurface": {
+        "status": "passed",
+        "command": "npm run check:package-surface:assembled",
+        "files": 6621,
+        "editorOwnCodeGzipBytes": 78238,
+        "editorOwnCodeGzipCeilingBytes": 102400,
+        "monacoVersion": "0.57.0"
+      }
+    },
+    "historicalUnitSuite": {
+      "status": "failed",
+      "runtime": "Node 24.22.0 / npm 11.19.1",
+      "testFiles": {
+        "passed": 2594,
+        "failed": 3,
+        "skipped": 8
+      },
+      "tests": {
+        "passed": 57343,
+        "failed": 3,
+        "skipped": 62
+      },
+      "durationSeconds": 2688.71,
+      "failures": [
+        {
+          "file": "packages/keiko-server/src/grounded-excerpt-scale.test.ts",
+          "reason": "15-second timeout under concurrent UI coverage; complete affected suite passed separately."
+        },
+        {
+          "file": "packages/keiko-server/src/grounded-metadata-cache.test.ts",
+          "reason": "15-second timeout under concurrent UI coverage; complete affected suite passed separately."
+        },
+        {
+          "file": "packages/keiko-tools/src/debug-launch-policy.test.ts",
+          "reason": "The unchanged exact-runtime precondition correctly rejects the host Node 24.22.0/npm 11.19.1 pair. The complete suite passes with the governed Node 24.18.0/npm 11.16.0 pair."
+        }
+      ],
+      "targetedRecheck": {
+        "runtime": "Node 24.18.0 / npm 11.16.0 (governed exact pair)",
+        "testFiles": 3,
+        "passedTests": 62,
+        "failedTests": 0,
+        "durationSeconds": 15.07
+      }
     }
   },
   "lowerSeverityTriage": [
