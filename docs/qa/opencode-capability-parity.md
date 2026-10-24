@@ -559,7 +559,11 @@ The order is by developer impact, not a schedule.
   decision for `khroma@2.1.0` in `check-workspace-supply-chain.mjs` (exact version, integrity and
   URL; its manifest declares no license, its own `license` file is the MIT text, SHA-256
   `66b333b0…1b49`), which also feeds the dependency-review exclusion list, and an `overrides` entry
-  that keeps Mermaid's nested `katex` on the UI's 0.19.0.
+  that keeps Mermaid's nested `katex` on the UI's 0.19.0. `robust-predicates@3.0.3` (through
+  `d3-delaunay`) declares Unlicense, which is approved; GitHub's scanner reads its Unlicense text as
+  `LicenseRef-scancode-public-domain AND Unlicense`, so it has the same exact-artifact decision for
+  the dependency-review exclusion list only. The browser-baseline gate resolves import-only package
+  exports such as `@mermaid-js/parser` the way the bundler does.
 
 ## 6. Documentation drift found while building this matrix
 
@@ -896,7 +900,7 @@ Repository files read or searched for this refresh (paths relative to the reposi
   `packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/`,
   `CodingWorkbenchRichContent.tsx`, `codingWorkbenchMath.ts`, `CodingWorkbenchTimeline.tsx`,
   `CodingTaskSessionBar.tsx`, `codingWorkbenchDiagram.ts`; `scripts/check-workspace-supply-chain.mjs`
-  for the reviewed `khroma` decision.
+  for the reviewed `khroma` and `robust-predicates` decisions.
 - Workbench UI (`packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/`):
   `CodingWorkbenchAgentToggle.tsx`, `CodingWorkbenchSections.tsx`,
   `CodingWorkbenchNativeActionReview.tsx`, `CodingWorkbenchTimeline.tsx`,

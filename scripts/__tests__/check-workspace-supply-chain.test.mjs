@@ -383,7 +383,7 @@ describe("required GitHub license exclusion preflight", () => {
     const result = runLicensePreflight(locks);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "pkg:npm/spdx-exceptions, pkg:npm/bowser, pkg:npm/khroma, pkg:npm/json-schema",
+      "pkg:npm/spdx-exceptions, pkg:npm/bowser, pkg:npm/khroma, pkg:npm/robust-predicates, pkg:npm/json-schema",
     );
     expect(result.stderr).toBe("");
     locks[1].packages["node_modules/bowser"].version = "99.0.0";

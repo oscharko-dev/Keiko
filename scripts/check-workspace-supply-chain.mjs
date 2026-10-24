@@ -82,6 +82,22 @@ const COMPONENT_LICENSE_DECISIONS = new Map([
     },
   ],
   [
+    // Mermaid's geometry predicates, through d3-delaunay (#3906, owner decision of 2026-10-24). The
+    // manifest declares Unlicense and the artifact's LICENSE is the Unlicense text (SHA-256
+    // 88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd); GitHub's scanner reads the
+    // same text as `LicenseRef-scancode-public-domain AND Unlicense`. No other license is admitted.
+    "pkg:npm/robust-predicates@3.0.3",
+    {
+      name: "robust-predicates",
+      version: "3.0.3",
+      integrity:
+        "sha512-NS3levdsRIUOmiJ8FZWCP7LG3QpJyrs/TE0Zpf1yvZu8cAJJ6QMW92H1c7kWpdIHo8RvmLxN/o2JXTKHp74lUA==",
+      resolved: "https://registry.npmjs.org/robust-predicates/-/robust-predicates-3.0.3.tgz",
+      declaredLicense: "Unlicense",
+      licenses: [],
+    },
+  ],
+  [
     "pkg:npm/json-schema@0.4.0",
     {
       name: "json-schema",
