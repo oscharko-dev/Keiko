@@ -1,3 +1,5 @@
+import { percentile } from "./lib/percentile.mjs";
+export { percentile } from "./lib/percentile.mjs";
 // Deterministic, OFFLINE context-quality gate (ADR-0052/ADR-0053, context-engineering PR1+PR2). It
 // evaluates the keiko-workflows lane allocator over a fixed corpus of long agentic-coding-session
 // SCENARIOS and gates CI on a set of HARD context-quality invariants (critical-fact preservation,
@@ -103,15 +105,6 @@ const CALIBRATED_CONTEXT_PROFILE = deriveContextProfile({
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 // Nearest-rank percentile over a copy of `samples` (ascending). `p` is 0..100. Empty => 0.
-export function percentile(samples, p) {
-  if (samples.length === 0) {
-    return 0;
-  }
-  const sorted = [...samples].sort((a, b) => a - b);
-  const rank = Math.ceil((p / 100) * sorted.length);
-  const index = Math.min(sorted.length - 1, Math.max(0, rank - 1));
-  return sorted[index];
-}
 
 function fraction(hits, total) {
   return total === 0 ? 1 : hits / total;
@@ -797,10 +790,15 @@ async function rehydrateScenario(scenario) {
   const excludedMetas = excludedRepoFileMetas(result, scenario.repoMetas);
   const { fs, scope } = buildRepoFs();
   const provenance = buildProvenanceMap(excludedMetas);
-  const fileHashes = new Map();
-  for (const meta of excludedMetas) {
-    fileHashes.set(meta.scopePath, await fileContentHash(fs, corpusAbsolutePath(meta.scopePath)));
-  }
+  // These reads share an immutable in-memory snapshot and have no inter-file dependencies.
+  const fileHashes = new Map(
+    await Promise.all(
+      excludedMetas.map(async (meta) => [
+        meta.scopePath,
+        await fileContentHash(fs, corpusAbsolutePath(meta.scopePath)),
+      ]),
+    ),
+  );
   const records = buildCompactionRecords({
     result,
     lanes: redacted,
@@ -809,11 +807,12 @@ async function rehydrateScenario(scenario) {
     fileHashes,
   });
   const enrichedById = enrichedSpanIndex(records);
-  const roundTrips = [];
-  for (const meta of excludedMetas) {
-    const ref = enrichedById.get(meta.id) ?? provenance.get(meta.id);
-    roundTrips.push(await rehydrateProvenanceRef(ref, scope, fs));
-  }
+  const roundTrips = await Promise.all(
+    excludedMetas.map((meta) => {
+      const ref = enrichedById.get(meta.id) ?? provenance.get(meta.id);
+      return rehydrateProvenanceRef(ref, scope, fs);
+    }),
+  );
   const mutatedResult = await probeInvalidation(excludedMetas, enrichedById, provenance);
   return { id: scenario.id, excludedMetas, records, roundTrips, mutatedResult };
 }
@@ -989,145 +988,55 @@ function buildChatLatencySummary(chatLatencySamples) {
 // Declarative spec: each row names the metric, how to read its observed value + threshold off the
 // summary/budget, and the comparison direction ("min" => observed >= threshold; "max" => observed
 // <= threshold; "flag" => threshold falsy OR observed === true). Keeps the evaluator a tight loop.
+function measuredBudgetCheck(metric, thresholdField, kind) {
+  return {
+    metric,
+    observed: (summary) => summary.measured[metric],
+    threshold: (budget) => budget[thresholdField],
+    kind,
+  };
+}
+
 const BUDGET_CHECKS = [
-  {
-    metric: "budgetOverflowRate",
-    observed: (s) => s.measured.budgetOverflowRate,
-    threshold: (b) => b.maxBudgetOverflowRate,
-    kind: "max",
-  },
-  {
-    metric: "criticalFactPreservationRecall",
-    observed: (s) => s.measured.criticalFactPreservationRecall,
-    threshold: (b) => b.minCriticalFactPreservationRecall,
-    kind: "min",
-  },
-  {
-    metric: "userInstructionPreservation",
-    observed: (s) => s.measured.userInstructionPreservation,
-    threshold: (b) => b.minUserInstructionPreservation,
-    kind: "min",
-  },
-  {
-    metric: "currentDiffPreservation",
-    observed: (s) => s.measured.currentDiffPreservation,
-    threshold: (b) => b.minCurrentDiffPreservation,
-    kind: "min",
-  },
-  {
-    metric: "failingTestPreservation",
-    observed: (s) => s.measured.failingTestPreservation,
-    threshold: (b) => b.minFailingTestPreservation,
-    kind: "min",
-  },
-  {
-    metric: "repoEvidenceLineRefAccuracy",
-    observed: (s) => s.measured.repoEvidenceLineRefAccuracy,
-    threshold: (b) => b.minRepoEvidenceLineRefAccuracy,
-    kind: "min",
-  },
-  {
-    metric: "promptInjectionIsolationRate",
-    observed: (s) => s.measured.promptInjectionIsolationRate,
-    threshold: (b) => b.minPromptInjectionIsolationRate,
-    kind: "min",
-  },
-  {
-    metric: "redactionCorrectness",
-    observed: (s) => s.measured.redactionCorrectness,
-    threshold: (b) => b.minRedactionCorrectness,
-    kind: "min",
-  },
-  {
-    metric: "pathFreeComplianceRate",
-    observed: (s) => s.measured.pathFreeComplianceRate,
-    threshold: (b) => b.minPathFreeComplianceRate,
-    kind: "min",
-  },
-  {
-    metric: "determinism",
-    observed: (s) => s.measured.determinism,
-    threshold: (b) => b.determinismRequired,
-    kind: "flag",
-  },
-  {
-    metric: "rehydrationReadiness",
-    observed: (s) => s.measured.rehydrationReadiness,
-    threshold: (b) => b.minRehydrationReadiness,
-    kind: "min",
-  },
-  {
-    metric: "compactionPreservation",
-    observed: (s) => s.measured.compactionPreservation,
-    threshold: (b) => b.minCompactionPreservation,
-    kind: "min",
-  },
-  {
-    metric: "invalidationDetected",
-    observed: (s) => s.measured.invalidationDetected,
-    threshold: (b) => b.requireInvalidationDetected,
-    kind: "flag",
-  },
-  {
-    metric: "toolObservationShapingFidelity",
-    observed: (s) => s.measured.toolObservationShapingFidelity,
-    threshold: (b) => b.minToolObservationShapingFidelity,
-    kind: "min",
-  },
-  {
-    metric: "shapingRedactionClean",
-    observed: (s) => s.measured.shapingRedactionClean,
-    threshold: (b) => b.requireShapingRedactionClean,
-    kind: "flag",
-  },
-  {
-    metric: "shapingInjectionFlagged",
-    observed: (s) => s.measured.shapingInjectionFlagged,
-    threshold: (b) => b.requireShapingInjectionFlagged,
-    kind: "flag",
-  },
-  {
-    metric: "calibratedTokenAccounting",
-    observed: (s) => s.measured.calibratedTokenAccounting,
-    threshold: (b) => b.requireCalibratedTokenAccounting,
-    kind: "flag",
-  },
-  {
-    metric: "chatLongSessionCompaction",
-    observed: (s) => s.measured.chatLongSessionCompaction,
-    threshold: (b) => b.requireChatLongSessionCompaction,
-    kind: "flag",
-  },
-  {
-    metric: "chatManyShortBudgetSafeUnchanged",
-    observed: (s) => s.measured.chatManyShortBudgetSafeUnchanged,
-    threshold: (b) => b.requireChatManyShortBudgetSafeUnchanged,
-    kind: "flag",
-  },
-  {
-    metric: "chatCurrentInstructionPreserved",
-    observed: (s) => s.measured.chatCurrentInstructionPreserved,
-    threshold: (b) => b.requireChatCurrentInstructionPreserved,
-    kind: "flag",
-  },
-  {
-    metric: "chatShortSessionByteIdentical",
-    observed: (s) => s.measured.chatShortSessionByteIdentical,
-    threshold: (b) => b.requireChatShortSessionByteIdentical,
-    kind: "flag",
-  },
-  {
-    metric: "chatNoProfileUnchanged",
-    observed: (s) => s.measured.chatNoProfileUnchanged,
-    threshold: (b) => b.requireChatNoProfileUnchanged,
-    kind: "flag",
-  },
-  {
-    metric: "chatNoProfileOverflowCompaction",
-    observed: (s) => s.measured.chatNoProfileOverflowCompaction,
-    threshold: (b) => b.requireChatNoProfileOverflowCompaction,
-    kind: "flag",
-  },
+  measuredBudgetCheck("budgetOverflowRate", "maxBudgetOverflowRate", "max"),
+  measuredBudgetCheck("criticalFactPreservationRecall", "minCriticalFactPreservationRecall", "min"),
+  measuredBudgetCheck("userInstructionPreservation", "minUserInstructionPreservation", "min"),
+  measuredBudgetCheck("currentDiffPreservation", "minCurrentDiffPreservation", "min"),
+  measuredBudgetCheck("failingTestPreservation", "minFailingTestPreservation", "min"),
+  measuredBudgetCheck("repoEvidenceLineRefAccuracy", "minRepoEvidenceLineRefAccuracy", "min"),
+  measuredBudgetCheck("promptInjectionIsolationRate", "minPromptInjectionIsolationRate", "min"),
+  measuredBudgetCheck("redactionCorrectness", "minRedactionCorrectness", "min"),
+  measuredBudgetCheck("pathFreeComplianceRate", "minPathFreeComplianceRate", "min"),
+  measuredBudgetCheck("determinism", "determinismRequired", "flag"),
+  measuredBudgetCheck("rehydrationReadiness", "minRehydrationReadiness", "min"),
+  measuredBudgetCheck("compactionPreservation", "minCompactionPreservation", "min"),
+  measuredBudgetCheck("invalidationDetected", "requireInvalidationDetected", "flag"),
+  measuredBudgetCheck("toolObservationShapingFidelity", "minToolObservationShapingFidelity", "min"),
+  measuredBudgetCheck("shapingRedactionClean", "requireShapingRedactionClean", "flag"),
+  measuredBudgetCheck("shapingInjectionFlagged", "requireShapingInjectionFlagged", "flag"),
+  measuredBudgetCheck("calibratedTokenAccounting", "requireCalibratedTokenAccounting", "flag"),
+  measuredBudgetCheck("chatLongSessionCompaction", "requireChatLongSessionCompaction", "flag"),
+  measuredBudgetCheck(
+    "chatManyShortBudgetSafeUnchanged",
+    "requireChatManyShortBudgetSafeUnchanged",
+    "flag",
+  ),
+  measuredBudgetCheck(
+    "chatCurrentInstructionPreserved",
+    "requireChatCurrentInstructionPreserved",
+    "flag",
+  ),
+  measuredBudgetCheck(
+    "chatShortSessionByteIdentical",
+    "requireChatShortSessionByteIdentical",
+    "flag",
+  ),
+  measuredBudgetCheck("chatNoProfileUnchanged", "requireChatNoProfileUnchanged", "flag"),
+  measuredBudgetCheck(
+    "chatNoProfileOverflowCompaction",
+    "requireChatNoProfileOverflowCompaction",
+    "flag",
+  ),
   {
     metric: "chatCompactionLatencyP95Ms",
     observed: (s) => s.chatLatency.p95Ms,
@@ -1249,12 +1158,9 @@ function reportFailures(onFail, vacuity, budgetResult) {
   }
 }
 
-async function rehydrateScenarios(scenarios) {
-  const rehydrations = [];
-  for (const scenario of scenarios) {
-    rehydrations.push(await rehydrateScenario(scenario));
-  }
-  return rehydrations;
+export function rehydrateScenarios(scenarios) {
+  // Each fixed scenario owns its file systems, allocation and invalidation probe.
+  return Promise.all(scenarios.map(rehydrateScenario));
 }
 
 export async function runContextQualityCheck({ budgetPath = DEFAULT_BUDGET_PATH, log, fail } = {}) {

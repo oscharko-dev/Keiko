@@ -1,3 +1,7 @@
+import {
+  memoryInputEmbeddingIdentity as inputIdentity,
+  memoryStoredEmbeddingIdentity as rowIdentity,
+} from "./memory-embedding-identity.js";
 // Shared conversation-retrieval signal builder (#204, O-F4).
 //
 // Both conversation retrieval surfaces — the desktop chat path (chat-handlers) and the BFF
@@ -226,25 +230,6 @@ function gatherCandidateIds(
 // the ranker. A candidate whose stored vector is missing is omitted (semantic subscore 0 for it).
 // Query-cosine scores for the candidate set, computed from the already-fetched embeddings. Gated by
 // the egress check (it embeds the query). Returns undefined when no model / no query embedding.
-function inputIdentity(input: MemoryEmbeddingInput): EmbeddingModelIdentity {
-  return {
-    provider: input.provider,
-    modelId: input.modelId,
-    ...(input.modelRevision !== undefined ? { modelRevision: input.modelRevision } : {}),
-    vectorDimensions: input.vector.length,
-    vectorMetric: input.metric,
-  };
-}
-
-function rowIdentity(row: MemoryEmbeddingRow): EmbeddingModelIdentity {
-  return {
-    provider: row.provider,
-    modelId: row.modelId,
-    ...(row.modelRevision !== undefined ? { modelRevision: row.modelRevision } : {}),
-    vectorDimensions: row.dimensions,
-    vectorMetric: row.metric,
-  };
-}
 
 function compatibleMemoryEntries(
   queryEmbedding: MemoryEmbeddingInput,

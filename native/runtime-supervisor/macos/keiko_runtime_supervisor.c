@@ -114,7 +114,8 @@ static void consume_control(void) {
 
 static int child_reap_time(uint64_t *value) {
   struct timespec now;
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0 ||
+  /* Wire deadlines use Node/libuv's continuous, unadjusted clock, as does the launcher. */
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &now) != 0 || now.tv_sec < 0 ||
       now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
       (uint64_t)now.tv_sec > (UINT64_MAX - 999u) / 1000u) return 0;
   *value = (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;

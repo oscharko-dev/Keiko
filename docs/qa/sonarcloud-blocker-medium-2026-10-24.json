@@ -1,0 +1,5556 @@
+{
+  "project": "oscharko-dev_Keiko",
+  "reviewDate": "2026-10-24",
+  "analysedRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "source": "https://sonarcloud.io/api/issues/search?componentKeys=oscharko-dev_Keiko&resolved=false&ps=500",
+  "scope": {
+    "openIssueCount": 354,
+    "blockerCount": 2,
+    "mediumIssueCount": 117,
+    "correctedInCode": 161,
+    "documentedExceptions": 193,
+    "originalBlockerMediumCorrectedInCode": 99,
+    "selectedLowFindings": 58,
+    "remainingOutsideRequestedFixScope": 0,
+    "reviewedAwaitExceptionsPendingAnalyzerDisposition": 0,
+    "liveUnresolvedOnOriginalDev": 161,
+    "ownerAcceptedDesigns": 61,
+    "evidencedFalsePositives": 132
+  },
+  "ownerDirection": "Preserve functionality and document evidenced exceptions (confirmed in this chat on 2026-10-24).",
+  "limits": [
+    "The initial 354-issue inventory is retained. Individually evidenced dispositions now record 132 false positives and 61 owner-accepted designs; 161 code corrections still require integrated-source analysis.",
+    "All 177 await-in-loop findings have individual source reviews: four immutable QA-fixture cases corrected, 112 evidenced serial false positives and 61 owner-accepted designs. All 173 retained loops preserve exact original source.",
+    "The fixture-owned Chromium cascade comparison covers 32 representative global and module CSS fixtures in dark/light, ordinary/high contrast and pointer/keyboard modality, including hover/disabled states and pseudo-elements. Finite transitions are completed before comparison. This is not a full-product functional proof."
+  ],
+  "corrections": {
+    "css:S9423": "Replace unnecessary importance with the existing owning component selector, preserving declaration values and required cascade overrides.",
+    "css:S9424": "Use explicit CSS pixel lengths for SVG circle radius without changing the numeric radius.",
+    "css:S9440": "Enable the reported transform transition or animation only when reduced motion is not requested; retain the static state and existing reduced-motion treatment.",
+    "typescript:S7503": "Await the actual delegated asynchronous operation while preserving Promise rejection and synchronous guards, or remove an internal synchronous wrapper without changing the public Promise contract.",
+    "Web:ImgWithoutAltCheck": "Name ten meaningful SVGs and hide 47 decorative companions, preserving all geometry, labels on controls and visible layout.",
+    "typescript:S1077": "Mark only the non-interactive connection-line SVG as decorative. The separately layered, localized connection controls retain accessible names and native two-stage keyboard removal.",
+    "javascript:S9382": "Collect four independent fixed in-memory QA-fixture computations in parallel, preserving input/result order and phase dependencies. The other 173 loops retain exact original source and have individual reviews."
+  },
+  "exceptions": [
+    {
+      "issueId": "AaDwTGl-da_cdHSoS7Uk",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/agent-run-governance.ts",
+      "analysedLine": 338,
+      "category": "async-generator-delegation",
+      "reason": "The async generator delegates to an AsyncIterable with yield*. This awaits asynchronous iteration and forwards next/throw/return with lazy budget admission. Removing async invalidates async iteration; rewriting as for-await changes consumer-error delegation.",
+      "evidence": [
+        "packages/keiko-server/src/agent-run-governance.test.ts",
+        "https://tc39.es/ecma262/multipage/control-abstraction-objects.html#sec-generator-function-definitions-runtime-semantics-evaluation"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGQKda_cdHSoS7T-",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
+      "analysedLine": 226,
+      "category": "async-generator-delegation",
+      "reason": "The async generator delegates to an AsyncIterable with yield*. This awaits asynchronous iteration and forwards next/throw/return with lazy budget admission. Removing async invalidates async iteration; rewriting as for-await changes consumer-error delegation.",
+      "evidence": [
+        "packages/keiko-server/src/agent-run-governance.test.ts",
+        "https://tc39.es/ecma262/multipage/control-abstraction-objects.html#sec-generator-function-definitions-runtime-semantics-evaluation"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92lTNud5JuSxb0cpD",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.module.css",
+      "analysedLine": 85,
+      "category": "focus-modality",
+      "reason": "The focusable root treeitem intentionally retains its focus outline in pointer mode. Its important declaration overrides the central important pointer-outline suppression; a normal declaration loses regardless of selector specificity.",
+      "evidence": [
+        "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.tsx",
+        "packages/keiko-ui/src/app/globals.css"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92lIpud5JuSxb0cpB",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "analysedLine": 10,
+      "category": "monaco-inline-display",
+      "reason": "Monaco GlyphMargin writes inline display:block/none on glyph widgets. The important flex display preserves centered staging/blame glyphs; normal stylesheet specificity cannot override inline display.",
+      "evidence": [
+        "node_modules/monaco-editor/esm/vs/editor/browser/viewParts/glyphMargin/glyphMargin.js",
+        "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92lIpud5JuSxb0cpC",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "analysedLine": 44,
+      "category": "monaco-inline-display",
+      "reason": "Monaco GlyphMargin writes inline display:block/none on glyph widgets. The important flex display preserves centered staging/blame glyphs; normal stylesheet specificity cannot override inline display.",
+      "evidence": [
+        "node_modules/monaco-editor/esm/vs/editor/browser/viewParts/glyphMargin/glyphMargin.js",
+        "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpb",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 8532,
+      "category": "drag-cursor",
+      "reason": "Monaco and file controls set descendant cursors. The active tab-drag cursor must override child and inline cursor declarations.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpc",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 8977,
+      "category": "focus-modality",
+      "reason": "The central pointer-modality box-shadow suppression is deliberately important. This more specific important declaration preserves the save/reload button bottom-edge mask while removing pointer focus rings.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpj",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9368,
+      "category": "monaco-inline-width",
+      "reason": "Monaco ContentHoverWidget._applyMaxDimensions writes inline maxWidth on the hover container. Normal selector specificity cannot override an inline declaration; the existing important clamp keeps hovers inside the editor and viewport.",
+      "evidence": [
+        "node_modules/monaco-editor/esm/vs/editor/contrib/hover/browser/contentHoverWidget.js",
+        "tests/e2e/editor-fidelity-1295.spec.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpv",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9402,
+      "category": "monaco-inline-width",
+      "reason": "Monaco ContentHoverWidget._applyMaxDimensions also writes inline maxWidth on the scrollable content and inner contents. The same editor/viewport clamp must apply to those descendants.",
+      "evidence": [
+        "node_modules/monaco-editor/esm/vs/editor/contrib/hover/browser/contentHoverWidget.js",
+        "tests/e2e/editor-fidelity-1295.spec.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp2",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9460,
+      "category": "monaco-inline-width",
+      "reason": "Workbench hover layout writes inline maximum dimensions. The existing 220px/viewport clamp must override those inline dimensions.",
+      "evidence": [
+        "node_modules/monaco-editor/esm/vs/editor/contrib/hover/browser/contentHoverWidget.js",
+        "tests/e2e/editor-fidelity-1295.spec.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpJ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 624,
+      "category": "focus-modality",
+      "reason": "Pointer focus suppression is the central modality policy and must override component and inline outlines. Keyboard focus remains outside this selector.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpK",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 634,
+      "category": "focus-modality",
+      "reason": "Pointer focus suppression must override component and inline focus shadows while preserving the explicit selected/pressed/checked exceptions.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpR",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 2317,
+      "category": "drag-cursor",
+      "reason": "The workspace hand tool must override descendant and inline cursor declarations while it is active.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqY",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 332,
+      "category": "global-reduced-motion",
+      "reason": "This shared reduced-motion policy must override all component and inline durations, iteration counts and smooth scrolling, including later-loaded reference styles. A normal universal selector loses that cascade competition.",
+      "evidence": [
+        "design-system/keiko-tokens.css",
+        "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqZ",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 333,
+      "category": "global-reduced-motion",
+      "reason": "This shared reduced-motion policy must override all component and inline durations, iteration counts and smooth scrolling, including later-loaded reference styles. A normal universal selector loses that cascade competition.",
+      "evidence": [
+        "design-system/keiko-tokens.css",
+        "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqa",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 334,
+      "category": "global-reduced-motion",
+      "reason": "This shared reduced-motion policy must override all component and inline durations, iteration counts and smooth scrolling, including later-loaded reference styles. A normal universal selector loses that cascade competition.",
+      "evidence": [
+        "design-system/keiko-tokens.css",
+        "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqb",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 335,
+      "category": "global-reduced-motion",
+      "reason": "This shared reduced-motion policy must override all component and inline durations, iteration counts and smooth scrolling, including later-loaded reference styles. A normal universal selector loses that cascade competition.",
+      "evidence": [
+        "design-system/keiko-tokens.css",
+        "docs/design-system/evidence/1300/a11y/axe-proof.mjs"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpS",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 2322,
+      "category": "drag-cursor",
+      "reason": "Active workspace panning must override descendant and inline cursor declarations for consistent grabbing feedback.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpU",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 5337,
+      "category": "drag-cursor",
+      "reason": "Active window dragging must override descendant and inline cursor declarations for consistent grabbing feedback.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqG",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 14479,
+      "category": "consolidation-inline-radius",
+      "reason": "MemoryConsolidation renders section/article panels with inline borderRadius: 14. This scoped rule intentionally resolves their runtime radius to 8px. Removing priority restores 14px.",
+      "evidence": [
+        "packages/keiko-ui/src/app/globals.css",
+        "packages/keiko-ui/src/app/globals.css.test.ts"
+      ],
+      "sonarCloudStatus": "FALSE_POSITIVE"
+    }
+  ],
+  "inventory": [
+    {
+      "issueId": "AaDwTGm3da_cdHSoS7Um",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/chat-prompt-compaction.ts",
+      "analysedLine": 180,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHC-da_cdHSoS7VL",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-model-gateway/src/gateway.ts",
+      "analysedLine": 2126,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFz8da_cdHSoS7Tb",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
+      "analysedLine": 365,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFyUda_cdHSoS7TY",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-ui/src/lib/memory-session-api.ts",
+      "analysedLine": 72,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHCrda_cdHSoS7VK",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts",
+      "analysedLine": 1563,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcxda_cdHSoS7V9",
+      "rule": "javascript:S9382",
+      "file": "scripts/assemble-portable-release-assets.mjs",
+      "analysedLine": 686,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHcxda_cdHSoS7V-",
+      "rule": "javascript:S9382",
+      "file": "scripts/assemble-portable-release-assets.mjs",
+      "analysedLine": 688,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaE92ldsud5JuSxb0cpH",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
+      "analysedLine": 378,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGSPda_cdHSoS7UA",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
+      "analysedLine": 1406,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGYPda_cdHSoS7UH",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts",
+      "analysedLine": 427,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTG9Kda_cdHSoS7U-",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/git-stage-node.ts",
+      "analysedLine": 53,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHOAda_cdHSoS7Vd",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-verification/src/orchestrator.ts",
+      "analysedLine": 787,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHKjda_cdHSoS7Va",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-security/src/portable-tree-attestation.ts",
+      "analysedLine": 771,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHKjda_cdHSoS7Vb",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-security/src/portable-tree-attestation.ts",
+      "analysedLine": 777,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGooda_cdHSoS7Uq",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/update-portable-handoff-native-verification.ts",
+      "analysedLine": 108,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGinda_cdHSoS7Uc",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/update-portable-handoff-tree.ts",
+      "analysedLine": 109,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGpgda_cdHSoS7Uv",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/update-preflight-portable-shared.ts",
+      "analysedLine": 264,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGfbda_cdHSoS7UT",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/gitChangeSnapshotBinary.ts",
+      "analysedLine": 40,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGfbda_cdHSoS7UU",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/gitChangeSnapshotBinary.ts",
+      "analysedLine": 41,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGY3da_cdHSoS7UI",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/gitDelivery/prDescriptionPreparation.ts",
+      "analysedLine": 171,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTG9cda_cdHSoS7VB",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/git-ci-failure-context.ts",
+      "analysedLine": 136,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG72da_cdHSoS7U9",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/git-raw-worktree-node.ts",
+      "analysedLine": 167,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG9Kda_cdHSoS7U_",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/git-stage-node.ts",
+      "analysedLine": 76,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTG9Kda_cdHSoS7VA",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-tools/src/git-stage-node.ts",
+      "analysedLine": 104,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHfida_cdHSoS7WV",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-tool-catalog-conformance.mjs",
+      "analysedLine": 1274,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHbsda_cdHSoS7Vv",
+      "rule": "javascript:S9382",
+      "file": "scripts/coding-runtime-performance-harness.mjs",
+      "analysedLine": 264,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHdVda_cdHSoS7WC",
+      "rule": "javascript:S9382",
+      "file": "scripts/coding-runtime-performance-producer.mjs",
+      "analysedLine": 84,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHZKda_cdHSoS7Vp",
+      "rule": "javascript:S9382",
+      "file": "scripts/run-npm-audit-with-retry.mjs",
+      "analysedLine": 110,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGZ6da_cdHSoS7UL",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/health.ts",
+      "analysedLine": 292,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGZ6da_cdHSoS7UN",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/health.ts",
+      "analysedLine": 469,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGZ6da_cdHSoS7UO",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/health.ts",
+      "analysedLine": 476,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGZrda_cdHSoS7UJ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/reconciliation.ts",
+      "analysedLine": 610,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGZrda_cdHSoS7UK",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/reconciliation.ts",
+      "analysedLine": 685,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGL_da_cdHSoS7T5",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/codingContextProviders.ts",
+      "analysedLine": 738,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGKUda_cdHSoS7T3",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/workspaceSearchRoutes.ts",
+      "analysedLine": 264,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGkUda_cdHSoS7Uf",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/grounded-document-evidence.ts",
+      "analysedLine": 701,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGZ6da_cdHSoS7UM",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/health.ts",
+      "analysedLine": 410,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTG2Bda_cdHSoS7U3",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-workspace/src/discovery.ts",
+      "analysedLine": 551,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG_pda_cdHSoS7VH",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/ui-process-stop.ts",
+      "analysedLine": 165,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHAada_cdHSoS7VJ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/runner.ts",
+      "analysedLine": 205,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGaJda_cdHSoS7UQ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/cleanup.ts",
+      "analysedLine": 726,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGZ6da_cdHSoS7UP",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/task-workspace/health.ts",
+      "analysedLine": 494,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHaEda_cdHSoS7Vs",
+      "rule": "javascript:S9382",
+      "file": "scripts/dev-start.mjs",
+      "analysedLine": 675,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHAKda_cdHSoS7VI",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/update.ts",
+      "analysedLine": 355,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGPyda_cdHSoS7T9",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/coding-runtime/researchEgressPort.ts",
+      "analysedLine": 387,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGj2da_cdHSoS7Ue",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/voice-recap.ts",
+      "analysedLine": 344,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaFcmF6hKA4ddiRM6TZi",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/Keiko Icon System.html",
+      "analysedLine": 382,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6hKA4ddiRM6TZj",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/Keiko Icon System.html",
+      "analysedLine": 400,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHInda_cdHSoS7VY",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-connectors/src/atlassian-write-http.ts",
+      "analysedLine": 211,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHbgda_cdHSoS7Vu",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-error-observability.mjs",
+      "analysedLine": 1634,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGlFda_cdHSoS7Ui",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/memory-conflict-advisory.ts",
+      "analysedLine": 491,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTF_zda_cdHSoS7Th",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
+      "analysedLine": 363,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTF_zda_cdHSoS7Ti",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
+      "analysedLine": 574,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTF_zda_cdHSoS7Tj",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
+      "analysedLine": 587,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHXLda_cdHSoS7Vi",
+      "rule": "javascript:S9382",
+      "file": "scripts/installable-package-smoke.mjs",
+      "analysedLine": 617,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGJBda_cdHSoS7Ty",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
+      "analysedLine": 1183,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG_Gda_cdHSoS7VE",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/memory.ts",
+      "analysedLine": 389,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG_dda_cdHSoS7VF",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/task-workspace.ts",
+      "analysedLine": 220,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG_dda_cdHSoS7VG",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/task-workspace.ts",
+      "analysedLine": 224,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpf",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9274,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGl-da_cdHSoS7Uk",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/agent-run-governance.ts",
+      "analysedLine": 338,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGQKda_cdHSoS7T-",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
+      "analysedLine": 226,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFmeda_cdHSoS7TV",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/app/components/desktop/hooks/documentContext.ts",
+      "analysedLine": 236,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFqRda_cdHSoS7TW",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/app/components/desktop/shellRecovery.ts",
+      "analysedLine": 79,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHaSda_cdHSoS7Vt",
+      "rule": "javascript:S9382",
+      "file": "scripts/dev-stop.mjs",
+      "analysedLine": 59,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpQ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 1273,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTFxrda_cdHSoS7TX",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/lib/useCodingWorkbenchEditorBridge.ts",
+      "analysedLine": 152,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTF02da_cdHSoS7Tc",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-ui/src/lib/clipboard.ts",
+      "analysedLine": 29,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHFrda_cdHSoS7VV",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+      "analysedLine": 398,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGDDda_cdHSoS7Tn",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.ts",
+      "analysedLine": 2477,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHYRda_cdHSoS7Vl",
+      "rule": "javascript:S9382",
+      "file": "scripts/lib/knowledge-m2-closeout.mjs",
+      "analysedLine": 638,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHYRda_cdHSoS7Vm",
+      "rule": "javascript:S9382",
+      "file": "scripts/lib/knowledge-m2-closeout.mjs",
+      "analysedLine": 687,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHYRda_cdHSoS7Vn",
+      "rule": "javascript:S9382",
+      "file": "scripts/lib/knowledge-m2-closeout.mjs",
+      "analysedLine": 752,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92lTNud5JuSxb0cpD",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.module.css",
+      "analysedLine": 85,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGhOda_cdHSoS7UZ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/workspace-manifest-routes.ts",
+      "analysedLine": 230,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHfSda_cdHSoS7WP",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-editor-m11-closeout.mjs",
+      "analysedLine": 72,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHfSda_cdHSoS7WQ",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-editor-m11-closeout.mjs",
+      "analysedLine": 73,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHfSda_cdHSoS7WR",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-editor-m11-closeout.mjs",
+      "analysedLine": 106,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHfSda_cdHSoS7WS",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-editor-m11-closeout.mjs",
+      "analysedLine": 161,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHfSda_cdHSoS7WT",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-editor-m11-closeout.mjs",
+      "analysedLine": 162,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHfSda_cdHSoS7WU",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-editor-m11-closeout.mjs",
+      "analysedLine": 201,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG0Vda_cdHSoS7U0",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-workspace/src/workspaceIndex.ts",
+      "analysedLine": 1482,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTG0Vda_cdHSoS7U1",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-workspace/src/workspaceIndex.ts",
+      "analysedLine": 1497,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFy1da_cdHSoS7TZ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/lib/useCodingWorkbenchQuestions.ts",
+      "analysedLine": 370,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHHGda_cdHSoS7VW",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-evaluations/src/quality-helpers.ts",
+      "analysedLine": 78,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGBEda_cdHSoS7Tm",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/indexing/repository-fingerprints.ts",
+      "analysedLine": 463,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHYRda_cdHSoS7Vo",
+      "rule": "javascript:S9382",
+      "file": "scripts/lib/knowledge-m2-closeout.mjs",
+      "analysedLine": 1366,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGsZda_cdHSoS7Uz",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/memory-salience.ts",
+      "analysedLine": 674,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGo9da_cdHSoS7Ur",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
+      "analysedLine": 317,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGo9da_cdHSoS7Us",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
+      "analysedLine": 330,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGo9da_cdHSoS7Ut",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
+      "analysedLine": 347,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGo9da_cdHSoS7Uu",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/grounded-entailment-eval.ts",
+      "analysedLine": 360,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGPJda_cdHSoS7T8",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
+      "analysedLine": 891,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V0",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 59,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V1",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 60,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V2",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 83,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V6",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 184,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V7",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 185,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V8",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 218,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGItda_cdHSoS7Tw",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapNodeCapsuleLauncher.ts",
+      "analysedLine": 401,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGPJda_cdHSoS7T7",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
+      "analysedLine": 586,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGQzda_cdHSoS7T_",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
+      "analysedLine": 555,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHeada_cdHSoS7WJ",
+      "rule": "javascript:S9382",
+      "file": "scripts/portable-secure-read-smoke.mjs",
+      "analysedLine": 138,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHeada_cdHSoS7WK",
+      "rule": "javascript:S9382",
+      "file": "scripts/portable-secure-read-smoke.mjs",
+      "analysedLine": 163,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHeada_cdHSoS7WL",
+      "rule": "javascript:S9382",
+      "file": "scripts/portable-secure-read-smoke.mjs",
+      "analysedLine": 197,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHeada_cdHSoS7WM",
+      "rule": "javascript:S9382",
+      "file": "scripts/portable-secure-read-smoke.mjs",
+      "analysedLine": 211,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHeada_cdHSoS7WN",
+      "rule": "javascript:S9382",
+      "file": "scripts/portable-secure-read-smoke.mjs",
+      "analysedLine": 211,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHWzda_cdHSoS7Vh",
+      "rule": "javascript:S9382",
+      "file": "scripts/update-portable-runtime-approvals.mjs",
+      "analysedLine": 138,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGJBda_cdHSoS7Tx",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
+      "analysedLine": 526,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGJBda_cdHSoS7Tz",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
+      "analysedLine": 1422,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGJBda_cdHSoS7T0",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
+      "analysedLine": 1425,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGJWda_cdHSoS7T1",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapPrivateEndpoint.ts",
+      "analysedLine": 213,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGHXda_cdHSoS7Ts",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapProcessManager.ts",
+      "analysedLine": 766,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGIEda_cdHSoS7Tv",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/dapProtocolClient.ts",
+      "analysedLine": 302,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGH4da_cdHSoS7Tt",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts",
+      "analysedLine": 913,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGH4da_cdHSoS7Tu",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts",
+      "analysedLine": 1045,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTFYAda_cdHSoS7TS",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useDebugSession.ts",
+      "analysedLine": 1062,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFYAda_cdHSoS7TT",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useDebugSession.ts",
+      "analysedLine": 1068,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaFqKbwW_dZV_EiBOVCP",
+      "rule": "css:S9440",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/panels/DebuggingSettings.module.css",
+      "analysedLine": 105,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHDqda_cdHSoS7VO",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-model-gateway/src/http.ts",
+      "analysedLine": 1808,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHDqda_cdHSoS7VQ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-model-gateway/src/http.ts",
+      "analysedLine": 1847,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGJvda_cdHSoS7T2",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
+      "analysedLine": 794,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V3",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 128,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V4",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 131,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcjda_cdHSoS7V5",
+      "rule": "javascript:S9382",
+      "file": "scripts/measure-managed-lsp-closeout.mjs",
+      "analysedLine": 143,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHJAda_cdHSoS7VZ",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-connectors/src/atlassian-sync-lane.ts",
+      "analysedLine": 252,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcxda_cdHSoS7V_",
+      "rule": "javascript:S9382",
+      "file": "scripts/assemble-portable-release-assets.mjs",
+      "analysedLine": 700,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGmmda_cdHSoS7Ul",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/gitRoutes.ts",
+      "analysedLine": 1582,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92lIpud5JuSxb0cpB",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "analysedLine": 10,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92lIpud5JuSxb0cpC",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "analysedLine": 44,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG6Uda_cdHSoS7U5",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/editor-agent-client.ts",
+      "analysedLine": 349,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHhJda_cdHSoS7Wf",
+      "rule": "javascript:S9382",
+      "file": "scripts/prepare-approved-sidecar-payloads.mjs",
+      "analysedLine": 421,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGbOda_cdHSoS7UR",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/coding-context/codeContextConnector.ts",
+      "analysedLine": 280,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHZ0da_cdHSoS7Vq",
+      "rule": "javascript:S9382",
+      "file": "scripts/portable-launch-setup-smoke.mjs",
+      "analysedLine": 497,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTFgkda_cdHSoS7TU",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchPanel.tsx",
+      "analysedLine": 454,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGlpda_cdHSoS7Uj",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/native-file-dialog/route.ts",
+      "analysedLine": 233,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHFrda_cdHSoS7VT",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+      "analysedLine": 213,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGEMda_cdHSoS7Tq",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/crawl/crawl-runner.ts",
+      "analysedLine": 227,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHdJda_cdHSoS7WB",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-retrieval-quality.mjs",
+      "analysedLine": 747,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGgOda_cdHSoS7UY",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/voice-live-dictation.ts",
+      "analysedLine": 625,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTG0_da_cdHSoS7U2",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-workspace/src/repoSearch.ts",
+      "analysedLine": 1858,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGnpda_cdHSoS7Un",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/files.ts",
+      "analysedLine": 787,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGnpda_cdHSoS7Uo",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/files.ts",
+      "analysedLine": 1814,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92lWaud5JuSxb0cpE",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
+      "analysedLine": 53,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92lWaud5JuSxb0cpF",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
+      "analysedLine": 54,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92lWaud5JuSxb0cpG",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
+      "analysedLine": 55,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGq9da_cdHSoS7Uy",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/local-knowledge-handlers.ts",
+      "analysedLine": 1212,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGDvda_cdHSoS7Tp",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/discovery/extract.ts",
+      "analysedLine": 1293,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGAyda_cdHSoS7Tl",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/indexing/bounded-indexing.ts",
+      "analysedLine": 392,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGAcda_cdHSoS7Tk",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts",
+      "analysedLine": 772,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGjlda_cdHSoS7Ud",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/local-knowledge-remediation.ts",
+      "analysedLine": 288,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTGDvda_cdHSoS7To",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/discovery/extract.ts",
+      "analysedLine": 1009,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY5",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 57,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY6",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 79,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY7",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 119,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY8",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 140,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY9",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 173,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY-",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 238,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TY_",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 271,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF2sKA4ddiRM6TZA",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/ai-components.html",
+      "analysedLine": 303,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKcMi_dZV_EiBOVCZ",
+      "rule": "css:S9440",
+      "file": "design-system/components.css",
+      "analysedLine": 65,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6RKA4ddiRM6TZW",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 71,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6RKA4ddiRM6TZX",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 98,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6RKA4ddiRM6TZY",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 119,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6RKA4ddiRM6TZZ",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 152,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6RKA4ddiRM6TZa",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/data-grid.html",
+      "analysedLine": 267,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKcK-_dZV_EiBOVCV",
+      "rule": "css:S9440",
+      "file": "design-system/ds.css",
+      "analysedLine": 357,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92rYkud5JuSxb0cqc",
+      "rule": "css:S9423",
+      "file": "design-system/ds.css",
+      "analysedLine": 743,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF64KA4ddiRM6TZt",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 164,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF64KA4ddiRM6TZu",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 191,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF64KA4ddiRM6TZv",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 235,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF64KA4ddiRM6TZw",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 365,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF64KA4ddiRM6TZx",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/flows.html",
+      "analysedLine": 388,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92rodud5JuSxb0cqe",
+      "rule": "css:S9423",
+      "file": "design-system/git-window.html",
+      "analysedLine": 46,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZB",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 90,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZC",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 115,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZD",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 137,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZE",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 162,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZF",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 184,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZG",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 205,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZH",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 226,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZI",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 248,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZJ",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 271,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZK",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 294,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZL",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 318,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZM",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 341,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZN",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 366,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZO",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 391,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZP",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 415,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZQ",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 442,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZR",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 462,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF5CKA4ddiRM6TZS",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/index.html",
+      "analysedLine": 483,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZk",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 63,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZl",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 76,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZm",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 89,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZn",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 163,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZo",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 182,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZp",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 228,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZq",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 283,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZr",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 301,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6pKA4ddiRM6TZs",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/inputs.html",
+      "analysedLine": 354,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92rnIud5JuSxb0cqd",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-data.css",
+      "analysedLine": 142,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKcLi_dZV_EiBOVCW",
+      "rule": "css:S9440",
+      "file": "design-system/keiko-inputs.css",
+      "analysedLine": 175,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKcMG_dZV_EiBOVCX",
+      "rule": "css:S9440",
+      "file": "design-system/motion.html",
+      "analysedLine": 37,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKcMG_dZV_EiBOVCY",
+      "rule": "css:S9440",
+      "file": "design-system/motion.html",
+      "analysedLine": 56,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6EKA4ddiRM6TZV",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/motion.html",
+      "analysedLine": 258,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZb",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 60,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZc",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 112,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZd",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 131,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZe",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 169,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZf",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 184,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZg",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 204,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFcmF6XKA4ddiRM6TZh",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/nav-components.html",
+      "analysedLine": 221,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpb",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 8532,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpc",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 8977,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaFqKb1k_dZV_EiBOVCQ",
+      "rule": "css:S9440",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 3168,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKb1k_dZV_EiBOVCR",
+      "rule": "css:S9440",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 3174,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGhvda_cdHSoS7Ua",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/voice-realtime.ts",
+      "analysedLine": 916,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHDqda_cdHSoS7VR",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-model-gateway/src/http.ts",
+      "analysedLine": 1853,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGHBda_cdHSoS7Tr",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts",
+      "analysedLine": 470,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpd",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9272,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpe",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9273,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpg",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9279,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cph",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9282,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpi",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9285,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpj",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9368,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpk",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9369,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpl",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9374,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpm",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9375,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpn",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9376,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpo",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9380,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpp",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9381,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpq",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9382,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpr",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9383,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cps",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9389,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpt",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9390,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpu",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9395,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpv",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9402,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpw",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9412,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpx",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9418,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpy",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9428,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpz",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9443,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp0",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9446,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp1",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9453,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp2",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9460,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp3",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9461,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp4",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9462,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp5",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9463,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp6",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9464,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp7",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9465,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp8",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9473,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp9",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9474,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp-",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 9475,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqD",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 13226,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqE",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 13231,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqF",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 13235,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHcDda_cdHSoS7Vw",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-context-quality.mjs",
+      "analysedLine": 802,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHcDda_cdHSoS7Vx",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-context-quality.mjs",
+      "analysedLine": 815,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHcDda_cdHSoS7Vy",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-context-quality.mjs",
+      "analysedLine": 1255,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHgfda_cdHSoS7WY",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-retrieval-latency.mjs",
+      "analysedLine": 213,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHgfda_cdHSoS7WZ",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-retrieval-latency.mjs",
+      "analysedLine": 218,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHdJda_cdHSoS7WA",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-retrieval-quality.mjs",
+      "analysedLine": 652,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHeQda_cdHSoS7WH",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-ui-static-js-compat.mjs",
+      "analysedLine": 54,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHeQda_cdHSoS7WI",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-ui-static-js-compat.mjs",
+      "analysedLine": 127,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHXxda_cdHSoS7Vk",
+      "rule": "javascript:S9382",
+      "file": "scripts/lib/context-quality-corpus.mjs",
+      "analysedLine": 250,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHeCda_cdHSoS7WF",
+      "rule": "javascript:S9382",
+      "file": "scripts/transpile-ui-static-js.mjs",
+      "analysedLine": 47,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHeCda_cdHSoS7WG",
+      "rule": "javascript:S9382",
+      "file": "scripts/transpile-ui-static-js.mjs",
+      "analysedLine": 94,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHesda_cdHSoS7WO",
+      "rule": "javascript:S9382",
+      "file": "scripts/verify-release-required-checks.mjs",
+      "analysedLine": 572,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaFcmF5jKA4ddiRM6TZU",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/dataviz.html",
+      "analysedLine": 142,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTG-jda_cdHSoS7VC",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-cli/src/ui.ts",
+      "analysedLine": 366,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTF-8da_cdHSoS7Td",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/parsers/large-document/progressive-pdf.ts",
+      "analysedLine": 203,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTF_Kda_cdHSoS7Te",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/parsers/large-document/synthetic-source.ts",
+      "analysedLine": 93,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGKtda_cdHSoS7T4",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/assuredPreFilter.ts",
+      "analysedLine": 147,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGL_da_cdHSoS7T6",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/editor/codingContextProviders.ts",
+      "analysedLine": 772,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGkUda_cdHSoS7Ug",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/grounded-document-evidence.ts",
+      "analysedLine": 858,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGiLda_cdHSoS7Ub",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/load-csp.ts",
+      "analysedLine": 34,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpJ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 624,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpK",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 634,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpL",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 722,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpM",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 805,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpN",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 806,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpO",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 810,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpP",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 811,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpW",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 7248,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpX",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 7249,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpY",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 7250,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpZ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 8102,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpa",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 8103,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp_",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 10272,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqA",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 11040,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqB",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 11041,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqC",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 12226,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqH",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 15448,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqI",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 15449,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqJ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 15450,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqK",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 15973,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqL",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 15974,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqM",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 17446,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqN",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 17447,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqO",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 17448,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqP",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 18427,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqQ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 18428,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqR",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 19919,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqS",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 19920,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqT",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 21807,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqU",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 21808,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqV",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 21809,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqW",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 22348,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqX",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 22349,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpR",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 2317,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqY",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 332,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqZ",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 333,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqa",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 334,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqb",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "analysedLine": 335,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaFcmF5PKA4ddiRM6TZT",
+      "rule": "Web:ImgWithoutAltCheck",
+      "file": "design-system/patterns.html",
+      "analysedLine": 262,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpS",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 2322,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpU",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 5337,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaFqKb1k_dZV_EiBOVCS",
+      "rule": "css:S9440",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 10137,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTGU5da_cdHSoS7UD",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
+      "analysedLine": 220,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGU5da_cdHSoS7UE",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
+      "analysedLine": 240,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqG",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 14479,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "documented-exception",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGWfda_cdHSoS7UG",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/qualityIntelligence/runIngestion.ts",
+      "analysedLine": 2292,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG4dda_cdHSoS7U4",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts",
+      "analysedLine": 912,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHg2da_cdHSoS7We",
+      "rule": "javascript:S9382",
+      "file": "scripts/build-ui.mjs",
+      "analysedLine": 84,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHWYda_cdHSoS7Ve",
+      "rule": "javascript:S9382",
+      "file": "scripts/dev-runner.mjs",
+      "analysedLine": 645,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGVFda_cdHSoS7UF",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaRenderPort.ts",
+      "analysedLine": 71,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTH5ida_cdHSoS7Wg",
+      "rule": "javascript:S9382",
+      "file": "sandbox/scripts/stop.mjs",
+      "analysedLine": 43,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHaEda_cdHSoS7Vr",
+      "rule": "javascript:S9382",
+      "file": "scripts/dev-start.mjs",
+      "analysedLine": 484,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTGUoda_cdHSoS7UC",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-server/src/qualityIntelligence/figma/figmaRetry.ts",
+      "analysedLine": 88,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpV",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 5612,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHgsda_cdHSoS7Wa",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-import-policy.mjs",
+      "analysedLine": 434,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHgsda_cdHSoS7Wb",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-import-policy.mjs",
+      "analysedLine": 452,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHgsda_cdHSoS7Wc",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-import-policy.mjs",
+      "analysedLine": 615,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHXLda_cdHSoS7Vj",
+      "rule": "javascript:S9382",
+      "file": "scripts/installable-package-smoke.mjs",
+      "analysedLine": 2619,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHcQda_cdHSoS7Vz",
+      "rule": "javascript:S9382",
+      "file": "scripts/check-package-graph.mjs",
+      "analysedLine": 414,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHf7da_cdHSoS7WW",
+      "rule": "javascript:S9382",
+      "file": "scripts/clean.mjs",
+      "analysedLine": 64,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHd4da_cdHSoS7WD",
+      "rule": "javascript:S9382",
+      "file": "scripts/workspace-graph.mjs",
+      "analysedLine": 88,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHd4da_cdHSoS7WE",
+      "rule": "javascript:S9382",
+      "file": "scripts/workspace-graph.mjs",
+      "analysedLine": 95,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHgMda_cdHSoS7WX",
+      "rule": "javascript:S9382",
+      "file": "scripts/installable-memory-smoke.mjs",
+      "analysedLine": 204,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHFrda_cdHSoS7VU",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+      "analysedLine": 287,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHFrda_cdHSoS7VS",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+      "analysedLine": 139,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTF_zda_cdHSoS7Tf",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
+      "analysedLine": 204,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTF_zda_cdHSoS7Tg",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts",
+      "analysedLine": 221,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        },
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpT",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 2677,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKb1k_dZV_EiBOVCT",
+      "rule": "css:S9424",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 5545,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "BLOCKER"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaFqKb1k_dZV_EiBOVCU",
+      "rule": "css:S9424",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "analysedLine": 5549,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "BLOCKER"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHLdda_cdHSoS7Vc",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-harness/src/loop.ts",
+      "analysedLine": 281,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG7gda_cdHSoS7U6",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/browser/session.ts",
+      "analysedLine": 427,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG7gda_cdHSoS7U7",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/browser/session.ts",
+      "analysedLine": 870,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTG7gda_cdHSoS7U8",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-tools/src/browser/session.ts",
+      "analysedLine": 1029,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    },
+    {
+      "issueId": "AaDwTHDqda_cdHSoS7VP",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-model-gateway/src/http.ts",
+      "analysedLine": 1814,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaE92ltnud5JuSxb0cpI",
+      "rule": "typescript:S1077",
+      "file": "packages/keiko-ui/src/app/components/desktop/windows/ConnectionsLayer.tsx",
+      "analysedLine": 539,
+      "impacts": [
+        {
+          "softwareQuality": "RELIABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "corrected-in-code"
+    },
+    {
+      "issueId": "AaDwTHHVda_cdHSoS7VX",
+      "rule": "typescript:S9382",
+      "file": "packages/keiko-evaluations/src/runner.ts",
+      "analysedLine": 372,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "FALSE_POSITIVE"
+    },
+    {
+      "issueId": "AaDwTHg2da_cdHSoS7Wd",
+      "rule": "javascript:S9382",
+      "file": "scripts/build-ui.mjs",
+      "analysedLine": 59,
+      "impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "resolution": "reviewed-preserve-sequencing",
+      "cloudStatus": "ACCEPTED"
+    }
+  ],
+  "verification": {
+    "chromiumCascadeComparison": {
+      "artifact": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation-proof.json",
+      "producer": "node docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+      "fixtureCount": 32,
+      "computedValueComparisons": 34944,
+      "differences": 0
+    },
+    "requiredGates": "Current-source scoped local typechecking, root/UI lint, formatting, full root tests plus current-source scoped rechecks, UI coverage, architecture/negative checks, local Sonar, native host/macOS, dependency scans and reference measurement pass. The unchanged required Fallow semantic-clone gate remains red with 94 reviewed groups. The owner selected a separate planning scope; no final CI, integration or complete release-coverage-chain result is claimed.",
+    "localSonar": {
+      "status": "passed",
+      "findingCount": 0,
+      "scope": "Additional findings addressed under the owner-authorized scope extension; global rules and gate thresholds are unchanged. Two deprecated-call/signature findings use the explicitly approved compatibility annotation.",
+      "finalRun": "The final complete changed-file sweep passed with no unresolved finding, including all SVG reference pages, the application connection layer, the Editor corrections and all three reproduction producers. Global rules and thresholds are unchanged; the clipboard call carries only the explicitly owner-approved compatibility annotation.",
+      "initialFindingCount": 5,
+      "initialFindings": [
+        {
+          "rule": "javascript:S2486",
+          "file": "design-system/git-window.html",
+          "analysedLine": 12,
+          "reason": "The unchanged localStorage exception fallback explicitly selects the default theme. Static showcase scripts have no product logging sink.",
+          "disposition": "corrected in code"
+        },
+        {
+          "rule": "Web:S6819",
+          "file": "design-system/git-window.html",
+          "analysedLine": 1042,
+          "reason": "The unchanged accessible preview-state control group uses role=group with aria-label. The local built-in profile recommends a native grouping element; the supplied Cloud inventory contains no open finding at this site.",
+          "finalLine": 1050,
+          "disposition": "corrected in code"
+        },
+        {
+          "rule": "javascript:S2486",
+          "file": "design-system/motion.html",
+          "analysedLine": 13,
+          "reason": "The unchanged localStorage exception fallback explicitly selects the default theme. Static showcase scripts have no product logging sink.",
+          "disposition": "corrected in code"
+        },
+        {
+          "rule": "typescript:S1874",
+          "file": "packages/keiko-ui/src/lib/clipboard.ts",
+          "analysedLine": 49,
+          "reason": "The unchanged document.execCommand fallback remains necessary where the asynchronous Clipboard API is absent or denied. Removing it removes supported copying behavior. The local analyzer reports both the deprecated call and its signature.",
+          "disposition": "owner-approved compatibility annotation"
+        }
+      ]
+    },
+    "typecheck": "passed",
+    "lint": "passed, including final changed-test lint",
+    "architecture": "passed, including negative fixtures",
+    "activityLog": "passed over the complete registered inventory",
+    "updateUi": "9 Chromium cases passed; freshness passed",
+    "globalCssUnitTests": "280 passed",
+    "unitSuite": {
+      "status": "passed",
+      "runtime": "Node 24.18.0 / npm 11.16.0",
+      "command": "npm test",
+      "testFiles": {
+        "passed": 2598,
+        "failed": 0,
+        "skipped": 8
+      },
+      "tests": {
+        "passed": 57350,
+        "failed": 0,
+        "skipped": 64
+      },
+      "durationSeconds": 2085.59,
+      "scope": "Full root suite during the local repair wave. Subsequent executable edits also have current-source scoped rechecks: 101 delegation tests, 67 context tests with V8 coverage and all 71 native host tests. This does not substitute for required CI on the final published head.",
+      "newSkipAnnotations": 0
+    },
+    "uiCoverage": {
+      "status": "passed",
+      "runtime": "Node 24.18.0 / npm 11.16.0",
+      "testFiles": 564,
+      "passedTests": 10873,
+      "existingSkippedTests": 1,
+      "durationSeconds": 71.91
+    },
+    "editorReleaseEvidence": "Passed after the final SVG adjustment: npm run build:ui, the original --json producer and check:editor-release-evidence ran successfully on the CI-pinned Node 24.18.0/npm 11.16.0 pair. The committed bundle evidence remains reproducible and unchanged.",
+    "editorBrowserSmoke": {
+      "status": "passed",
+      "command": "npm run test:e2e:editor-fidelity-1295",
+      "runtime": "Node 24.18.0 / npm 11.16.0",
+      "testCount": 5,
+      "passedTests": 5,
+      "failedTests": 0,
+      "durationSeconds": 46.8,
+      "originalFailureControl": {
+        "selectedTests": 2,
+        "failedTests": 2,
+        "stylesheetRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+        "method": "An isolated copy of the unchanged two selected Playwright journeys additionally installs the original globals.css in the page. The same menu-selection and desktop-hover failures reproduce. This isolates the CSS override changes, not all runtime source changes."
+      },
+      "artifacts": "All 16 editor screenshots and the complete manifest were regenerated by the corrected original producer. The manifest is written only after the strict page-error assertion passes."
+    },
+    "retrieval": "all three retrieval quality, grounded retrieval quality and grounded faithfulness gates passed",
+    "fullUiCapture": {
+      "screenshots": 108,
+      "unexpectedApiRequests": 0,
+      "pageErrors": 0,
+      "missingRequiredSelectors": 0
+    },
+    "cloudAnalysis": "PR #4069 at a34e60bda reports zero unresolved code issues. Its quality gate fails new-code coverage (77.3% versus 80%); this is being reproduced and repaired. Main still analyses c8fb7e2d: 161 unresolved after 193 individually documented dispositions. No source repair was manually marked resolved.",
+    "format": "passed",
+    "designSystemGitPrototype": {
+      "artifact": "docs/design-system/evidence/sonarcloud-2026-10-24/git-prototype-proof.json",
+      "producer": "node docs/design-system/evidence/sonarcloud-2026-10-24/git-prototype-preservation.mjs",
+      "states": ["changes", "history", "empty"],
+      "stateNodeCount": 9,
+      "computedValueComparisons": 360,
+      "differences": 0,
+      "failureFirstControl": "Removing importance while retaining inline display reproduced two visibility regressions (history and empty). Moving the same four inline layout declarations into the owning class restores identical visibility and layout in all three states.",
+      "switcherNodeCount": 1,
+      "accessibleSwitcherGroup": true
+    },
+    "svgAccessibility": {
+      "status": "passed",
+      "staticTargets": 57,
+      "geometryDifferences": 0,
+      "pixelComparisons": 40,
+      "themeContrastModes": 4,
+      "pixelDifferences": 0,
+      "targetedAxeViolations": 0,
+      "targetedAxeIncomplete": 0,
+      "dataGridKeyboardBehavior": "Identical to the baseline; native table semantics are now used.",
+      "styleSourcesHashed": 11,
+      "connectionKeyboardTestsPassed": 20
+    },
+    "awaitInLoopPhase": {
+      "audit": "docs/qa/sonarcloud-await-in-loop-2026-10-24.json",
+      "contextQualityTests": 66,
+      "fixtureProof": "docs/design-system/evidence/sonarcloud-2026-10-24/context-loop-preservation.json",
+      "productFilesByteIdenticalToBeforeThisPhase": 5717,
+      "rootTypecheck": "passed",
+      "rootAndUiLint": "passed",
+      "architecture": "passed including negative fixtures",
+      "localSonar": "passed with zero unresolved changed-file findings; S9382 supplemented with targeted ESLint verification",
+      "format": "passed",
+      "contextQualityCli": "passed"
+    },
+    "cloudDispositions": {
+      "falsePositives": 132,
+      "ownerAcceptedDesigns": 61,
+      "receipts": [
+        "docs/qa/sonarcloud-approved-exceptions-cloud-2026-10-24.json",
+        "docs/qa/sonarcloud-sequential-exceptions-cloud-2026-10-24.json",
+        "docs/qa/sonarcloud-accepted-designs-cloud-2026-10-24.json"
+      ],
+      "globalRulesOrGatesChanged": false
+    },
+    "ciFollowUp": {
+      "state": "Local revalidation in progress; required semantic-duplication gate remains red after the necessary security update.",
+      "typecheck": "passed on governed Node 24.18.0/npm 11.16.0, including the final async-delegation edits",
+      "nativeMacos": "passed complete npm run check:native:macos; original startup bound unchanged",
+      "nativeServiceHost": {
+        "passedTests": 71,
+        "failedTests": 0,
+        "additionalCompatibilityCases": [
+          "Patched Zod rejects oversized arrays before per-item preprocessing.",
+          "Actual GitLab SDK validates string-valued header records and rejects invalid numeric values.",
+          "Actual GitLab OAuth schema preserves optional refresh tokens, strips unrelated fields and rejects nonnumeric expiry."
+        ]
+      },
+      "osv": {
+        "image": "ghcr.io/google/osv-scanner-action@sha256:d54770fe0b09493894e76a02aaed9f51a0513fa57c5186452a755d257b0068a6",
+        "beforeUnwaivedFindings": 17,
+        "afterUnwaivedFindings": 0,
+        "waiversAdded": 0
+      },
+      "gitleaks": {
+        "version": "8.30.1",
+        "firstCommitFalsePositives": 602,
+        "historyRangeAfterPreciseNonsecretAllowance": 0,
+        "currentJsonFiles": 9,
+        "currentJsonFindings": 0,
+        "syntheticNegativeControlFindings": 1,
+        "syntheticNegativeControlExit": 1,
+        "futureCommitMatchingOldFieldShapeDetected": true
+      },
+      "fixtureParser": {
+        "actualOriginalProducerCasesFailed": 3,
+        "actualCurrentProducerCasesPassed": 3,
+        "regressionTests": 5,
+        "gitComputedComparisons": 360,
+        "gitStylesheetInputs": 10,
+        "svgPixelComparisons": 40,
+        "svgTargets": 57,
+        "svgStylesheetInputs": 11,
+        "comparisonDifferences": 0
+      },
+      "targetedTests": {
+        "files": 4,
+        "passed": 108,
+        "failed": 0
+      },
+      "localSonar": "passed with zero unresolved changed-file findings",
+      "fallowAudit": "docs/qa/sonarcloud-fallow-upgrade-audit-2026-10-24.json",
+      "fullRootTest": "passed: 57,350 tests, zero failed, 64 skipped; governed exact runtime, provisioned USearch, no concurrent UI coverage",
+      "contextIntegrationCoverage": {
+        "passedTests": 67,
+        "newParallelRehydrationStatements": "all executed, with positive V8 line counts",
+        "scope": "Real fixed corpus, ordered scenario results, three excluded-file round trips, preserved compaction records and detected mutation. Standalone performance budgets remain unchanged and outside coverage-instrumented shared tests."
+      },
+      "architecture": "Passed full npm run arch:check after the fresh lock-bound reference measurement; negative fixtures also passed. Existing budgets/calibration/ruler/environment are unchanged.",
+      "promiseDelegation": {
+        "change": "Restore both original async callback wrappers and await their actual delegates; preserve Promise rejection even for synchronous evaluation failures.",
+        "files": [
+          "packages/keiko-evaluations/src/local-knowledge/runner.ts",
+          "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts"
+        ],
+        "passedTests": 101,
+        "testFiles": 4
+      },
+      "fallowOwnerDirection": "Separate low-risk follow-up scope selected by owner on 2026-10-24; planning only, no broad clone refactor or gate exception authorized.",
+      "catalogPerformance": {
+        "command": "npm run perf:evidence:regen:tool-catalog",
+        "status": "passed",
+        "mode": "candidate measurement only",
+        "sameEnvironment": true,
+        "sameProducerSourceTree": true,
+        "sameMeasurementRuler": true,
+        "sameCalibration": true,
+        "changedBudgetOrCeiling": false,
+        "reason": "Bind fresh independent candidate measurements to the patched lockfile in the existing pinned Linux ARM64 reference container."
+      },
+      "uiCoverage": "passed: 564 files, 10,873 tests, one existing skip",
+      "finalLocalSonar": "passed after all executable follow-up changes; zero unresolved changed-file findings",
+      "deferredReleaseChecks": "The complete test:coverage:quality chain and fresh required CI on a published final head remain pending settlement of the independently reviewed Fallow blocker; no release-green claim is made.",
+      "packageSurface": {
+        "status": "passed",
+        "command": "npm run check:package-surface:assembled",
+        "files": 6621,
+        "editorOwnCodeGzipBytes": 78238,
+        "editorOwnCodeGzipCeilingBytes": 102400,
+        "monacoVersion": "0.57.0"
+      }
+    },
+    "historicalUnitSuite": {
+      "status": "failed",
+      "runtime": "Node 24.22.0 / npm 11.19.1",
+      "testFiles": {
+        "passed": 2594,
+        "failed": 3,
+        "skipped": 8
+      },
+      "tests": {
+        "passed": 57343,
+        "failed": 3,
+        "skipped": 62
+      },
+      "durationSeconds": 2688.71,
+      "failures": [
+        {
+          "file": "packages/keiko-server/src/grounded-excerpt-scale.test.ts",
+          "reason": "15-second timeout under concurrent UI coverage; complete affected suite passed separately."
+        },
+        {
+          "file": "packages/keiko-server/src/grounded-metadata-cache.test.ts",
+          "reason": "15-second timeout under concurrent UI coverage; complete affected suite passed separately."
+        },
+        {
+          "file": "packages/keiko-tools/src/debug-launch-policy.test.ts",
+          "reason": "The unchanged exact-runtime precondition correctly rejects the host Node 24.22.0/npm 11.19.1 pair. The complete suite passes with the governed Node 24.18.0/npm 11.16.0 pair."
+        }
+      ],
+      "targetedRecheck": {
+        "runtime": "Node 24.18.0 / npm 11.16.0 (governed exact pair)",
+        "testFiles": 3,
+        "passedTests": 62,
+        "failedTests": 0,
+        "durationSeconds": 15.07
+      }
+    }
+  },
+  "lowerSeverityTriage": [
+    {
+      "rules": ["typescript:S9382", "javascript:S9382"],
+      "issueCount": 177,
+      "assessment": "177 individually reviewed: four QA-fixture code corrections, 112 evidenced false positives and 61 explicitly owner-accepted serial designs. All 173 retained loops preserve exact original source.",
+      "audit": "docs/qa/sonarcloud-await-in-loop-2026-10-24.json"
+    },
+    {
+      "rules": ["Web:ImgWithoutAltCheck"],
+      "issueCount": 57,
+      "assessment": "57 static SVG accessible-name findings across ten design-system reference pages. Inspect each SVG role: name meaningful visual content and explicitly hide decorative icons from accessibility. These are SVG findings, not missing alt text on screenshots.",
+      "fileCount": 10,
+      "disposition": "All 57 findings corrected under the subsequently authorized SVG scope."
+    },
+    {
+      "rules": ["typescript:S1077"],
+      "issueCount": 1,
+      "assessment": "The connection SVG contains non-interactive line/particle/preview geometry. Connection semantics and localized native controls live in the separate badge layer. Only the decorative SVG is hidden; Tab/Enter/Space removal and the arm-before-confirm behavior remain covered.",
+      "disposition": "Corrected under the subsequently authorized SVG scope; only the non-interactive SVG is hidden."
+    }
+  ],
+  "additionalScope": {
+    "ownerDirection": "Owner explicitly authorized repairing the five additional local Sonar findings and existing Editor smoke failures. The owner separately approved the evidenced NOSONAR compatibility exception at the clipboard call.",
+    "localSonar": {
+      "initialFindings": 5,
+      "correctedInCode": 3,
+      "approvedCompatibilityFindings": 2,
+      "changes": [
+        {
+          "rule": "javascript:S2486",
+          "files": ["design-system/git-window.html", "design-system/motion.html"],
+          "change": "Use optional catch bindings for the deliberate, unchanged restricted-storage theme fallback."
+        },
+        {
+          "rule": "Web:S6819",
+          "file": "design-system/git-window.html",
+          "change": "Use a native named fieldset for the preview state controls, with owning margin and minimum-size resets preserving layout."
+        },
+        {
+          "rule": "typescript:S1874",
+          "file": "packages/keiko-ui/src/lib/clipboard.ts",
+          "change": "Retain the selection-backed copy fallback, with the owner-approved, narrowly located NOSONAR comment and its evidence reference.",
+          "findingCount": 2,
+          "evidence": [
+            "packages/keiko-ui/src/lib/clipboard.test.ts",
+            "https://developer.mozilla.org/en-US/docs/Web/API/Document/execCommand",
+            "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.tsx (existing beforeunload compatibility precedent)"
+          ],
+          "passedTests": 11
+        }
+      ]
+    },
+    "editorChanges": [
+      "Reserve four pixels inside the owning Editor host so window resize chrome no longer intercepts the centre of diagnostic markers; no resize handle is removed or shrunk. The class uses the required cmp prefix without growing the styling exception register.",
+      "Open diagnostic hover through a real marker click and its native editor keyboard chord, with a web-first visibility assertion; remove forced clicks and the broken multi-fallback command search.",
+      "Canonicalize temporary project paths before seeding the workspace, matching the shared Editor fixtures and the server-selected root.",
+      "Register each fixture project and grant its bounded trust through the existing project/trust APIs, matching explicit human project selection; retain console-error assertions and buffer-safety ownership checks.",
+      "Scope overflow-menu assertions to the tablist-owned chooser, use the actual separator role for the tree resize control, and select the split source through its tree row when compact layout hides the inactive tab.",
+      "Preserve expanded tree folders while opening paths, and write the evidence manifest only after the page-error assertion succeeds."
+    ],
+    "newlyExposedLocalFindings": {
+      "findingCount": 8,
+      "correctedInCode": 8,
+      "details": [
+        "Seven S2486 findings in the newly touched reference pages use optional catch bindings while retaining the same restricted-storage theme fallback.",
+        "S6842 in data-grid.html: use native table/cell semantics, matching docs/design-system/data-display-migration.md; this showcase has sortable headers and native checkbox controls, not grid arrow-key navigation. Existing sorting and selection handlers remain intact."
+      ],
+      "evidence": "The SVG proof includes a baseline/current browser comparison of Enter-key sorting, Space-key select-all/clear, single selection and the mixed selection state."
+    }
+  },
+  "lowHangingFruitRecommendation": {
+    "remainingLowerSeverityIssues": 62,
+    "firstBatch": {
+      "issueCount": 58,
+      "groups": [
+        {
+          "rule": "Web:ImgWithoutAltCheck",
+          "issueCount": 57,
+          "fileCount": 10
+        },
+        {
+          "rule": "typescript:S1077",
+          "issueCount": 1,
+          "file": "packages/keiko-ui/src/app/components/desktop/windows/ConnectionsLayer.tsx"
+        }
+      ],
+      "reason": "Accessible SVG naming/decorative treatment is a small, bounded candidate. Preserve interactive connection semantics and test accessibility; do not blindly hide every SVG.",
+      "status": "completed"
+    },
+    "deferBlanketChange": {
+      "rules": ["typescript:S9382", "javascript:S9382"],
+      "issueCount": 177,
+      "reason": "Review loop dependencies before changing ordering or concurrency.",
+      "status": "Individual review complete; no blanket concurrency change."
+    },
+    "cloudRefresh": "The public unresolved issue inventory still reports 354 because these local changes have not been published or analysed by SonarCloud.",
+    "remainingUnreviewedLowerSeverityIssues": 0
+  },
+  "additionalSvgScope": {
+    "ownerDirection": "Owner explicitly requested all 57 reference-page SVG findings and the ConnectionsLayer SVG finding.",
+    "correctedInCode": 58,
+    "referencePages": 10,
+    "namedReferenceImages": 10,
+    "decorativeReferenceImages": 47,
+    "decorativeProductSvg": 1,
+    "proof": "docs/design-system/evidence/sonarcloud-2026-10-24/svg-accessibility-proof.json",
+    "producer": "node docs/design-system/evidence/sonarcloud-2026-10-24/svg-accessibility.mjs",
+    "connectionTests": {
+      "testFiles": 2,
+      "passedTests": 20,
+      "failedTests": 0,
+      "coverage": "Includes native Tab/Enter/Space activation of named connection controls outside the decorative SVG; arm-before-confirm removal remains required."
+    }
+  },
+  "additionalAwaitScope": {
+    "ownerRequest": "Review all 177 await-in-loop findings incrementally; functionality preservation takes priority over the zero-issue objective.",
+    "audit": "docs/qa/sonarcloud-await-in-loop-2026-10-24.json",
+    "correctedInCode": 4,
+    "preservedWithIndividualReview": 173,
+    "productFilesUnchangedForThisPhase": true,
+    "cloudDispositions": {
+      "falsePositives": 112,
+      "ownerAcceptedDesigns": 61,
+      "pending": 0
+    }
+  },
+  "schemaVersion": 2
+}

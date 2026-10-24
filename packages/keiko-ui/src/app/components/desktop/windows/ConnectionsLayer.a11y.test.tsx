@@ -4,6 +4,7 @@
 // and ONLY the timeout revert path drives it (a user-initiated confirm/blur disarm stays silent).
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionsLayer } from "./ConnectionsLayer";
 import type { AppWindow, Connection } from "./types";
@@ -95,6 +96,24 @@ describe("ConnectionsLayer — GEN-UI-A11Y-015 auto-disarm announcement", () => 
     });
     expect(status?.textContent).toBe("");
   });
+});
+
+it("keeps named connection controls keyboard accessible beside the decorative SVG", async () => {
+  const value = api();
+  const user = userEvent.setup();
+  const { container } = render(
+    <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={value} />,
+  );
+  expect(container.querySelector(".conn-svg")).toHaveAttribute("aria-hidden", "true");
+  const badge = removeBadge();
+  expect(badge.closest('[aria-hidden="true"]')).toBeNull();
+  await user.tab();
+  expect(badge).toHaveFocus();
+  await user.keyboard("{Enter}");
+  expect(badge).toHaveAccessibleName(/confirm removal/iu);
+  expect(value.removeConn).not.toHaveBeenCalled();
+  await user.keyboard(" ");
+  expect(value.removeConn).toHaveBeenCalledExactlyOnceWith("c-1");
 });
 
 function ChatActivity({

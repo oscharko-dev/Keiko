@@ -1,3 +1,4 @@
+import { createUiStaticFixtureServer, listenUiStaticFixtureServer, loadThemedUiFixture } from "../../../../../scripts/lib/ui-browser-evidence.mjs";
 // Issue #1295 — running-app browser evidence.
 // Serves the Next.js STATIC EXPORT (packages/keiko-ui/out, ADR-0011 D1 — self-contained, no
 // backend) and captures the live product routes across the theme/contrast/motion matrix at
@@ -8,9 +9,8 @@
 //   node docs/design-system/evidence/1295/browser/capture.mjs   # writes PNGs into the OUT_DIR below
 //
 import { chromium } from "playwright";
-import { createServer } from "node:http";
-import { readFile, stat, mkdir, realpath } from "node:fs/promises";
-import { join, extname, resolve, dirname, normalize, sep } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -18,82 +18,8 @@ const REPO = resolve(HERE, "../../../../..");
 const ROOT = resolve(REPO, "packages/keiko-ui/out");
 const OUT_DIR = resolve(REPO, "docs/design-system/evidence/1295/browser");
 await mkdir(OUT_DIR, { recursive: true });
-const ROOT_REAL = await realpath(ROOT);
-
-const MIME = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".webmanifest": "application/manifest+json",
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".txt": "text/plain",
-  ".map": "application/json",
-};
-const server = createServer(async (req, res) => {
-  try {
-    const requested = decodeURIComponent((req.url ?? "/").split("?")[0]);
-    // Confine every request to ROOT: prefixing "/" then normalize() collapses any
-    // ".." segment so the resolved path can never escape the served directory, and
-    // the startsWith guard is a belt-and-braces check (CodeQL path-injection hardening).
-    const safe = normalize("/" + (requested === "/" ? "index.html" : requested));
-    let fp = join(ROOT_REAL, safe);
-    if (fp !== ROOT_REAL && !fp.startsWith(ROOT_REAL + sep)) {
-      res.writeHead(403, { "content-type": "text/plain" });
-      return res.end("forbidden");
-    }
-    try {
-      if ((await stat(fp)).isDirectory()) fp = join(fp, "index.html");
-    } catch {}
-    let buf;
-    try {
-      // realpath containment mirrors #1300/browser/capture.mjs: even if a symlink slipped past the
-      // string-prefix guard, the file that would actually be read cannot escape ROOT_REAL.
-      const realFile = await realpath(fp);
-      if (realFile !== ROOT_REAL && !realFile.startsWith(ROOT_REAL + sep)) {
-        res.writeHead(403, { "content-type": "text/plain" });
-        return res.end("forbidden");
-      }
-      buf = await readFile(fp);
-    } catch {
-      try {
-        fp += ".html";
-        const realFile = await realpath(fp);
-        if (realFile !== ROOT_REAL && !realFile.startsWith(ROOT_REAL + sep)) {
-          res.writeHead(403, { "content-type": "text/plain" });
-          return res.end("forbidden");
-        }
-        buf = await readFile(fp);
-      } catch {
-        res.writeHead(404, { "content-type": "text/plain" });
-        return res.end("not found");
-      }
-    }
-    res.writeHead(200, {
-      "content-type": MIME[extname(fp)] || "application/octet-stream",
-      "cache-control": "no-store",
-    });
-    res.end(buf);
-  } catch {
-    // Never reflect the error/stack to the client (CodeQL: stack-trace exposure /
-    // exception-text reinterpreted as HTML). Fail with a fixed, plain-text message.
-    res.writeHead(500, { "content-type": "text/plain" });
-    res.end("internal error");
-  }
-});
-// Fail fast on a bound-port collision instead of silently deadlocking the harness on the pending
-// listen() promise. #1300/browser/capture.mjs uses the same shape.
-await new Promise((resolveListen, rejectListen) => {
-  server.once("error", rejectListen);
-  server.listen(4611, "127.0.0.1", () => {
-    server.off("error", rejectListen);
-    resolveListen();
-  });
-});
+const server = await createUiStaticFixtureServer(ROOT);
+await listenUiStaticFixtureServer(server, 4611);
 const BASE = "http://127.0.0.1:4611";
 
 // theme/contrast/motion modes (mirror the equivalence-harness 7-mode matrix)
@@ -155,17 +81,7 @@ for (const vp of VIEWPORTS) {
       // mobile/tablet only need the primary surfaces to bound shot count
       if (vp.id !== "desktop" && route.id !== "home") continue;
       errs.length = 0;
-      await page.goto(BASE + route.path, { waitUntil: "networkidle", timeout: 30000 });
-      await page.evaluate(
-        ({ theme, hc }) => {
-          const r = document.documentElement;
-          r.dataset.theme = theme;
-          delete r.dataset.hc;
-          if (hc) r.dataset.hc = hc;
-        },
-        { theme: mode.theme, hc: mode.hc },
-      );
-      await page.waitForTimeout(900);
+      await loadThemedUiFixture(page, BASE + route.path, mode);
       const name = `${vp.id}__${route.id}__${mode.id}.png`;
       await page.screenshot({ path: join(OUT_DIR, name), fullPage: false });
       const info = await page.evaluate(() => ({

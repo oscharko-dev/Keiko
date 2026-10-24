@@ -1,5 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -336,7 +344,7 @@ function writeRootOverflowFixtures(root: string): void {
 }
 
 function createProjectFixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-1295-editor-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-1295-editor-")));
   tempProjects.push(root);
   mkdirSync(join(root, "src"), { recursive: true });
   writeSourceFixture(root);
@@ -345,6 +353,20 @@ function createProjectFixture(): string {
   writeLargeFixture(root);
   writeRootOverflowFixtures(root);
   return root;
+}
+
+async function registerProjectFixture(page: Page, root: string): Promise<void> {
+  const headers = { "X-Keiko-CSRF": "1" };
+  const project = await page.request.post("/api/projects", {
+    headers,
+    data: { path: root, name: "Editor fidelity fixture" },
+  });
+  expect(project.ok(), await project.text()).toBe(true);
+  const trust = await page.request.post("/api/editor/verification/trust", {
+    headers,
+    data: { projectId: root },
+  });
+  expect(trust.status(), await trust.text()).toBe(200);
 }
 
 // F6: a plain `.click()` on `.monaco-editor` can leave Firefox's fallback `textarea.inputarea`
@@ -623,7 +645,7 @@ async function openEmbeddedPath(editorWindow: Locator, path: string): Promise<vo
     current = current.length === 0 ? part : `${current}/${part}`;
     const row = editorWindow.locator(`[role="treeitem"].tr-row[data-path="${current}"]`);
     await expect(row).toBeVisible();
-    await row.click();
+    if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
   }
 }
 
@@ -845,48 +867,17 @@ async function assertEditorProblemStatus(editorWindow: Locator): Promise<void> {
   ).toBeVisible({ timeout: 60_000 });
 }
 
-async function openDiagnosticHover(
-  page: Page,
-  diagnosticLine: Locator,
-  diagnosticLineBox: BoundingBox,
-  needle: string,
-): Promise<Locator> {
+async function openDiagnosticHover(page: Page, needle: string): Promise<Locator> {
   const hoverFrame = page
     .locator(".monaco-resizable-hover:has(.monaco-hover), .monaco-hover")
     .first();
   const diagnosticAction = page
     .getByRole("button", { name: new RegExp(`diagnostic.*${escapeRegExp(needle)}`, "u") })
     .first();
-  if (await diagnosticAction.isVisible({ timeout: 1_000 }).catch(() => false)) {
-    await diagnosticAction.click({ force: true });
-    await waitForAnimationFrames(page);
-    const modifier = await editorModifier(page);
-    await page.keyboard.press(`${modifier}+K`);
-    await page.keyboard.press(`${modifier}+I`);
-    if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;
-    await page.keyboard.press("F1");
-    const commandInput = page.locator(".quick-input-widget input").first();
-    if (await commandInput.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      await commandInput.fill("Show Hover");
-      await page.keyboard.press("Enter");
-      if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;
-    }
-  }
-  const diagnosticToken = diagnosticLine.locator("span").filter({ hasText: needle }).last();
-  if ((await diagnosticToken.count()) > 0) {
-    await diagnosticToken.hover({ force: true });
-    if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;
-  }
-  const hoverY = diagnosticLineBox.y + diagnosticLineBox.height / 2;
-  for (const xOffset of [84, 132, 184, 236]) {
-    await page.mouse.move(
-      diagnosticLineBox.x + Math.min(xOffset, Math.max(8, diagnosticLineBox.width - 8)),
-      hoverY,
-    );
-    if (await hoverFrame.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      break;
-    }
-  }
+  await diagnosticAction.click();
+  const modifier = await editorModifier(page);
+  await page.keyboard.press(`${modifier}+K`);
+  await page.keyboard.press(`${modifier}+I`);
   await expect(hoverFrame).toBeVisible();
   return hoverFrame;
 }
@@ -1015,7 +1006,7 @@ async function exerciseResponsiveDiagnosticHover(
     await diagnosticLine.boundingBox(),
     `Diagnostic probe line should be measurable in ${viewportCase.name}`,
   );
-  const hoverFrame = await openDiagnosticHover(page, diagnosticLine, diagnosticLineBox, needle);
+  const hoverFrame = await openDiagnosticHover(page, needle);
   await expect(hoverFrame).toContainText(new RegExp(escapeRegExp(needle), "u"));
 
   const hoverBox = requireBoundingBox(
@@ -1060,7 +1051,11 @@ async function triggerFindWidget(page: Page, editorWindow: Locator): Promise<voi
 
 async function makeSplitPane(editorWindow: Locator): Promise<void> {
   await openEmbeddedPath(editorWindow, "README.md");
-  await editorWindow.getByRole("tab", { name: /src\/App\.tsx/u }).click();
+  await openEmbeddedPath(editorWindow, "src/App.tsx");
+  await expect(editorWindow.getByRole("tab", { name: /src\/App\.tsx/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   const splitRight = editorWindow.getByRole("button", { name: "Split src/App.tsx right" });
   await expect(splitRight).not.toHaveAttribute("data-tip");
   await expect(splitRight).not.toHaveAttribute("title");
@@ -1083,7 +1078,7 @@ async function exerciseCompactOverflow(editorWindow: Locator): Promise<void> {
   for (const path of overflowFiles) {
     await openEmbeddedPath(editorWindow, path);
   }
-  const summaryMenu = editorWindow.locator("details.ed-tab-summary-menu");
+  const summaryMenu = editorWindow.locator(".ed-tablist > details.ed-tab-summary-menu");
   const summary = summaryMenu.locator("summary.ed-tab-summary");
   await expect(summary).toBeVisible();
   await summary.hover();
@@ -1203,7 +1198,9 @@ async function exerciseEditorInternalSizingMatrix(
   await waitForAnimationFrames(page);
   await expect(editorWindow.locator(".ed-pane")).toHaveCount(2);
 
-  const sidebarResizer = editorWindow.getByRole("button", { name: "Resize project tree" }).first();
+  const sidebarResizer = editorWindow
+    .getByRole("separator", { name: "Resize project tree" })
+    .first();
   await dragLocator(page, sidebarResizer, 80, 0);
   await dragLocator(page, sidebarResizer, -180, 0);
   await sidebarResizer.focus();
@@ -1214,7 +1211,8 @@ async function exerciseEditorInternalSizingMatrix(
 }
 
 async function exerciseCompactTabChooser(editorWindow: Locator): Promise<void> {
-  const summary = editorWindow.locator("summary.ed-tab-summary").first();
+  const summaryMenu = editorWindow.locator(".ed-tablist > details.ed-tab-summary-menu").first();
+  const summary = summaryMenu.locator("summary.ed-tab-summary");
   await expect(summary).toBeVisible();
   await summary.hover();
   await expect(summary).toHaveAttribute("aria-label", /^\d+ more open documents$/u);
@@ -1222,7 +1220,7 @@ async function exerciseCompactTabChooser(editorWindow: Locator): Promise<void> {
   await expect(summary).not.toHaveAttribute("title");
   await summary.click();
 
-  const summaryPanel = editorWindow.locator(".ed-tab-summary-panel").first();
+  const summaryPanel = summaryMenu.locator(".ed-tab-summary-panel");
   await expect(summaryPanel).toBeVisible();
   const hiddenItems = summaryPanel.locator(".ed-tab-summary-item");
   expect(await hiddenItems.count()).toBeGreaterThan(0);
@@ -1350,6 +1348,7 @@ test("records Issue #1295 running-editor fidelity evidence", async ({ page }) =>
   test.setTimeout(300_000);
   ensureEvidenceDir();
   const projectPath = createProjectFixture();
+  await registerProjectFixture(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
   const inlineCompletion = await stubInlineCompletionRoutes(page);
   const run = await capturePrimaryThemeEvidence(page, projectPath);
@@ -1357,8 +1356,8 @@ test("records Issue #1295 running-editor fidelity evidence", async ({ page }) =>
   const themes = [...run.themes, reducedMotion];
   const artifacts = [...run.artifacts, ...reducedMotion.screenshots];
   const manifest = await buildManifest(run.darkEditorWindow, themes, artifacts, inlineCompletion);
-  writeFileSync(artifactPath("manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   assertNoPageErrors();
+  writeFileSync(artifactPath("manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 });
 
 for (const viewportCase of EDITOR_RESIZE_VIEWPORTS) {
@@ -1367,6 +1366,7 @@ for (const viewportCase of EDITOR_RESIZE_VIEWPORTS) {
   }) => {
     test.setTimeout(180_000);
     const projectPath = createProjectFixture();
+    await registerProjectFixture(page, projectPath);
     const assertNoPageErrors = collectPageErrors(page);
     const editorWindow = await openSeededEditor(page, projectPath, viewportCase);
 

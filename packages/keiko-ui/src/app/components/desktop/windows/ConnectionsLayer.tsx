@@ -538,6 +538,7 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
           1:1 world↔pixel mapping. No <marker>: links are symmetric, not flows. */}
         <svg
           className="conn-svg"
+          aria-hidden="true"
           viewBox="-10000 -10000 20000 20000"
           preserveAspectRatio="xMidYMid meet"
         >

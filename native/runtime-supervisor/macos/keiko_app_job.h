@@ -189,7 +189,7 @@ static int keiko_job_plist(const char *path, const char *label,
     "<plist version=\"1.0\"><dict><key>Label</key>";
   const char arguments[] = "<key>ProgramArguments</key><array>";
   const char suffix[] = "</array><key>RunAtLoad</key><true/>"
-    "<key>KeepAlive</key><false/><key>ProcessType</key><string>Background</string>"
+    "<key>KeepAlive</key><false/><key>ProcessType</key><string>Interactive</string>"
     "<key>ExitTimeOut</key><integer>5</integer></dict></plist>";
   int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (descriptor < 0) return 0;
