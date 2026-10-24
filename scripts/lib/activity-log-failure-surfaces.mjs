@@ -83,6 +83,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "coding-app-session", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-context", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-runtime", surface: "tools-workflows" },
+  // The operator's MCP server registry (#3903): admitted MCP tools are governed tool surfaces.
+  { owner: "keiko-server", emitterPrefix: "mcp", surface: "tools-workflows" },
   {
     owner: "keiko-server",
     emitterPrefix: "coding-runtime.productionDraftDeliveryDependencies",

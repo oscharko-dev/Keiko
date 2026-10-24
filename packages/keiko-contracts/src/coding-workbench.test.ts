@@ -18,6 +18,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   decideCodingWorkbenchActionForMode,
+  isNativeActionPermissionRequest,
   permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
   supervisedCodingActionRequiresApproval,
@@ -646,6 +647,25 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
         "governed-assist",
       );
     }
+  });
+});
+
+describe("isNativeActionPermissionRequest", () => {
+  it("recognizes a native ask by its OpenCode permission, for edits as well as commands", () => {
+    expect(isNativeActionPermissionRequest({ nativePermission: "shell" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "edit" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "webfetch" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "" })).toBe(false);
+    // A command label alone is not the discriminator (#3897 review: edits carry none).
+    expect(isNativeActionPermissionRequest({ commandLabel: "native-shell" })).toBe(false);
+    expect(
+      isNativeActionPermissionRequest({
+        actionKind: "verification-command",
+        nativePermission: "shell",
+      }),
+    ).toBe(false);
+    expect(isNativeActionPermissionRequest({})).toBe(false);
+    expect(isNativeActionPermissionRequest(undefined)).toBe(false);
   });
 });
 

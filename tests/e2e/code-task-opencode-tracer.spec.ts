@@ -122,6 +122,7 @@ test("#2385 tracer: the workbench readiness surface is live, not static", async 
         effectiveMode: "governed-assist",
         runtimeAvailable: false,
         runtimeUnavailableReason: "platform-unqualified",
+        selectableAgents: ["build"],
       }),
     }),
   );

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
@@ -14,6 +14,9 @@ function session(): CodingTaskSession {
     error: false,
     newTask: vi.fn(async () => undefined),
     finish: vi.fn(async () => undefined),
+    fork: null,
+    beginFork: vi.fn(),
+    cancelFork: vi.fn(),
   };
 }
 
@@ -110,6 +113,54 @@ describe("CodingTaskTranscript", () => {
 
     rerender(<CodingTaskTranscript session={sessionWith(messages, true)} shownRun={wholeRun} />);
     expect(screen.getByText("Only the most recent saved messages are shown.")).toBeVisible();
+  });
+});
+
+// S03 (#3904): forking is the person's own request, from a settled task or from one of its user
+// messages. Nothing offers it while a run is active, and it never changes the task it forks.
+describe("forking from the task chrome", () => {
+  it("forks the loaded task as it ended", () => {
+    const forked = sessionWith([historyMessage("m-1", "run-6", "Earlier request")]);
+    render(<CodingTaskSessionBar session={forked} active={false} onHistory={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork task" }));
+
+    expect(forked.beginFork).toHaveBeenCalledOnce();
+    expect(forked.beginFork).toHaveBeenCalledWith();
+  });
+
+  it.each([
+    ["a run is active", sessionWith([]), true],
+    ["the task is still loading", { ...sessionWith([]), pending: true }, false],
+    [
+      "a fork is already pending",
+      { ...sessionWith([]), fork: { taskId: "task-7", title: "t" } },
+      false,
+    ],
+  ])("cannot fork while %s", (_name, current, active) => {
+    render(<CodingTaskSessionBar session={current} active={active} onHistory={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Fork task" })).toBeDisabled();
+  });
+
+  it("offers a fork before each user message, and only to a caller that can fork", () => {
+    const assistant = {
+      ...historyMessage("m-2", "run-6", "An answer"),
+      role: "assistant" as const,
+    };
+    const current = sessionWith([historyMessage("m-1", "run-6", "Earlier request"), assistant]);
+    const onFork = vi.fn();
+    const { rerender } = render(
+      <CodingTaskTranscript session={current} shownRun={undefined} onFork={onFork} />,
+    );
+
+    const forks = screen.getAllByRole("button", { name: "Fork from here" });
+    expect(forks).toHaveLength(1);
+    fireEvent.click(forks[0] as HTMLElement);
+    expect(onFork).toHaveBeenCalledExactlyOnceWith("m-1");
+
+    rerender(<CodingTaskTranscript session={current} shownRun={undefined} />);
+    expect(screen.queryByRole("button", { name: "Fork from here" })).toBeNull();
   });
 });
 

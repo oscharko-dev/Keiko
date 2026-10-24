@@ -5,6 +5,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { requireCatalog, ToolCatalogError } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+
+/** A whole native tool advertisement is captured with its own budget, never a call's (#3897). */
+const MAX_ADVERTISEMENT_COPY_BYTES = GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES;
 
 const ENCODER = new TextEncoder();
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -121,7 +125,7 @@ export function copyCatalogJson(
   requireCatalog(
     Number.isSafeInteger(maxBytes) &&
       maxBytes > 0 &&
-      maxBytes <= TOOL_CATALOG_LIMITS.maxResultBytes,
+      maxBytes <= Math.max(TOOL_CATALOG_LIMITS.maxResultBytes, MAX_ADVERTISEMENT_COPY_BYTES),
     "input-bound",
   );
   try {

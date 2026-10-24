@@ -79,6 +79,8 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingToolNativeVerificationHooks,
+  CodingToolNativeVerificationResult,
   CodingVerificationBlockedReason,
   CodingVerificationExecutedObserver,
 } from "./codingToolFacadePorts.js";
@@ -797,6 +799,7 @@ export function createProductionManagedWorktreeToolFacade(
       ...(input.observeEditOutcome === undefined
         ? {}
         : { observeEditOutcome: input.observeEditOutcome }),
+      nativeVerification: nativeVerificationHooks(input),
     },
   );
   const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
@@ -2519,6 +2522,67 @@ function publishVerification(
   };
   if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
     throw new Error("runtime-verification-event-invalid");
+  }
+  input.onRuntimeEvent(event);
+}
+
+/**
+ * Native verification commands reach the same verification owner as the governed verifier (#3897
+ * review, #3901): the edit revision and admission observer are captured when the policy admits the
+ * command, and its exit status becomes the same summary event, so the run's ledger, its settlement
+ * and the Workbench's verification card treat both alike.
+ */
+function nativeVerificationHooks(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolNativeVerificationHooks {
+  let sequence = 0;
+  return {
+    revision: input.verificationRevision,
+    admitted: input.verificationAdmitted,
+    blocked: input.verificationBlocked,
+    publish: (result): void => {
+      sequence += 1;
+      publishNativeVerification(input, sequence, result);
+    },
+  };
+}
+
+function publishNativeVerification(
+  input: ProductionManagedWorktreeToolInput,
+  sequence: number,
+  result: CodingToolNativeVerificationResult,
+): void {
+  const targetDigest = codingVerificationTargetDigest(result.kind);
+  result.executed?.(targetDigest);
+  const status = result.passed ? "passed" : "failed";
+  const passedCount = result.passed ? 1 : 0;
+  const failedCount = result.passed ? 0 : 1;
+  const event: CodingWorkbenchRuntimeEvent = {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    eventId: `event-native-verification-${String(sequence)}`,
+    runId: input.authorityRef.runId,
+    occurredAt: new Date().toISOString(),
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    ...(result.editRevision === undefined ? {} : { verificationEditRevision: result.editRevision }),
+    verificationStatus: status,
+    verificationSummary: {
+      verifierId: result.kind,
+      status,
+      passedCount,
+      failedCount,
+      skippedCount: 0,
+      durationMs: result.durationMs,
+    },
+    passedCount,
+    failedCount,
+    skippedCount: 0,
+    failureLocationCount: 0,
+    failureLocationsTruncated: false,
+    verificationTargetDigest: targetDigest,
+  };
+  if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
+    throw new Error("runtime-native-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
 }

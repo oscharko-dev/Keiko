@@ -37,8 +37,8 @@ rules:
       - ci.yml:712
       - ci.yml:783
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:903
-      - ci.yml:1001
+      - ci.yml:898
+      - ci.yml:996
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and
@@ -68,4 +68,4 @@ rules:
       # bootstrapping npm is inherently outside the lockfile since it changes the binary that
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:202
+      - release.yml:204

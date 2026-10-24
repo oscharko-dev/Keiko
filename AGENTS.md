@@ -120,6 +120,7 @@ This shapes the product _and_ how you work on it:
 ```bash
 npm install               # installs all workspaces from the single root lockfile
 npm run provision:usearch # ONCE per checkout — see below; without it `npm test` is red
+npm run provision:ripgrep # ONCE per checkout for the OpenCode coding runtime's search tools — see below
 npm run build             # build:packages (tsc -b) then the root build
 npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
@@ -136,6 +137,22 @@ runs it as a setup step before every test lane. `npm test` does **not** run it f
 fresh checkout the two Knowledge-M2 proof suites — `knowledge-m2-closeout` (its `ann-active` proof)
 and `knowledge-m2-clean-checkout-demo` — fail until you have run it once. They fail rather than skip
 on purpose: a missing runtime must never quietly mask a real ANN regression.
+
+**`provision:ripgrep` is the same pattern for the OpenCode coding runtime (#3897).** OpenCode's
+`glob` and `grep` tools and its file finder run ripgrep. Left alone, the runtime downloads it from
+GitHub on first use, which a firewalled customer and the loopback-only runtime lane forbid, and
+search then fails silently. Keiko ships the identical upstream release (15.1.0) pinned and
+SHA-256-verified in `packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`: the script fetches
+the one approved archive for the host, extracts only `rg` and `LICENSE-MIT` into the gitignored
+`.ripgrep/<version>/<target>/`, and verifies both again. Portable staging copies those verified files
+to `runtime/native/rg` (`rg.exe` on Windows). The npm runtime package builder
+(`scripts/build-coding-runtime-npm-package.mjs`) stages the same verified `rg`, its `LICENSE-MIT` and a
+component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same paths, provisioning the
+TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
+`<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
+remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
+customer-shape qualification, the portable stage jobs and the npm runtime package build do, and CI runs
+it as a setup step there.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.
@@ -1003,6 +1020,15 @@ messages cut to the per-message bound and `historyTruncated` says Coding History
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
 truncated.". Counts only — never a message, path or run name.
 
+`coding-runtime.history.export` records the human's local export of a Coding History task (Export
+JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
+`completed` or `refused` under the request's correlation. A refusal carries one closed reason
+(`unauthenticated`, `unavailable`, `invalid-format`, `too-large`, `failed`; a failure also its error
+class, frames and cause chain), a completion the format, message, omitted and redacted-message
+counts and the byte size. Message text is stored as the runtime produced it, so the export redacts
+every string again with the evidence redactor and masks absolute host paths; no text, title, branch
+or path ever enters the line (ADR-0137 D4).
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
@@ -1027,9 +1053,10 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 

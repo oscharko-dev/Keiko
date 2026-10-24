@@ -1,0 +1,90 @@
+/* S07: the messages waiting for the running turn, above the composer. Component-scoped, so
+   globals.css and its pinned visual proof (#1300) stay untouched (AGENTS.md §9). */
+
+.cmpInbox {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmpInboxSummary {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cmpInboxList {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cmpInboxItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-inset);
+}
+
+.cmpInboxBadge {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cmpInboxBadge[data-delivery="steer"] {
+  border-color: var(--accent-line);
+}
+
+.cmpInboxText {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.cmpInboxText[data-empty="true"] {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.cmpInboxActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.cmpInboxError {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.cmpInboxErrorText {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  color: var(--feedback-danger);
+  overflow-wrap: anywhere;
+}

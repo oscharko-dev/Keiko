@@ -5,6 +5,11 @@ import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/kei
 
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import {
+  openCodeNativeFormatterDisposition,
+  openCodeNativeFormatterSetting,
+  type OpenCodeNativeFormatterDisposition,
+} from "./opencodeNativeFormatter.js";
+import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
@@ -23,10 +28,41 @@ const OPENCODE_COMPACTION_TAIL_TURNS = 2;
 const OPENCODE_COMPACTION_MIN_RECENT_TOKENS = 2_000;
 const OPENCODE_COMPACTION_MAX_RECENT_TOKENS = 8_000;
 
+/**
+ * The one definition of the directory OpenCode loads Keiko's generated plugins and private
+ * configuration from. The environment names it, and the native kernel boundary protects exactly
+ * this path from writes, so the two cannot drift apart.
+ */
+export function openCodeConfigDirectory(stateRoot: string): string {
+  return join(stateRoot, "config", "opencode");
+}
+
+/**
+ * Where OpenCode's plan agent keeps its plan: `~/.opencode/plan` under the run's private home. The
+ * native config admits exactly this external directory, and the native policy admits reads and
+ * edits inside it as planning (#3897).
+ */
+export function openCodePlanDirectory(stateRoot: string): string {
+  return join(stateRoot, "home", ".opencode", "plan");
+}
+
 export interface OpenCodeContextGeometry {
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
+  /**
+   * The admitted model declares image input (`CodingWorkbenchSidecarGatewayRunMetadata.
+   * supportsImageInput`). Only the native profile acts on it (#3897 S14): it then declares image
+   * input on its one provider model so the runtime hands a read image to the model; absent or
+   * false keeps the text-only declaration, and the runtime tells the model it cannot see images.
+   */
+  readonly imageInput?: boolean | undefined;
+  /**
+   * The admitted model takes PDF documents (`CodingWorkbenchSidecarGatewayRunMetadata.
+   * supportsDocumentInput`, #3906). The native profile then declares `pdf` input, so the runtime
+   * hands a read PDF to the model as a document; otherwise the runtime refuses to read one for it.
+   */
+  readonly documentInput?: boolean | undefined;
 }
 
 export interface OpenCodeLaunchProfileInput {
@@ -46,12 +82,42 @@ export interface OpenCodeLaunchProfileInput {
    * which does not yet thread it through).
    */
   readonly unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName> | undefined;
+  /**
+   * The run's launch autonomy mode (`KEIKO_CODING_MODE`). Only the native profile acts on it: it
+   * decides whether the producer's built-in formatters may run (`openCodeNativeFormatterDisposition`).
+   * Absent or unrecognized fails closed to formatters off.
+   */
+  readonly mode?: string | undefined;
+  /**
+   * The native run's admitted MCP servers (`openCodeNativeMcpAdmission`), written on the
+   * server-owned binding. Absent means none: the binding still names an empty set, so no other
+   * configuration layer can add a server.
+   */
+  readonly mcp?: { readonly servers: Readonly<Record<string, unknown>> } | undefined;
 }
 
 /** The optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
 export type OpenCodeOptionalToolName =
   "keiko_research_fetch" | "keiko_skill_discover" | "keiko_skill" | "keiko_child_agent";
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
+
+/** The one provider of every OpenCode run: the Model Gateway binding below. */
+export const OPENCODE_RUNTIME_PROVIDER_ID = "keiko-runtime";
+
+/**
+ * The producer's own provider policy, fixed on every V2 profile: only the gateway-bound provider may
+ * be used. Without it the pinned 2.1.4 runtime lists OpenCode's hosted free models and discovers
+ * local servers such as Ollama on their default loopback ports (original executable), each a model
+ * route that bypasses the Model Gateway. Statements are ordered; the last match wins.
+ */
+export const OPENCODE_GATEWAY_PROVIDER_POLICIES = Object.freeze([
+  Object.freeze({ action: "provider.use", resource: "*", effect: "deny" }),
+  Object.freeze({
+    action: "provider.use",
+    resource: OPENCODE_RUNTIME_PROVIDER_ID,
+    effect: "allow",
+  }),
+]);
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
@@ -91,6 +157,8 @@ export type OpenCodeLaunchProfileResult =
       readonly env: Readonly<Record<string, string>>;
       readonly config: string;
       readonly configValue: ReturnType<typeof createFixedOpenCodeV2Config>;
+      /** What the native binding decided for the built-in formatters; absent on mapped profiles. */
+      readonly formatter?: OpenCodeNativeFormatterDisposition;
     }
   | { readonly ok: false; readonly reason: "invalid-launch-input" | "secret-generation-failed" };
 
@@ -106,10 +174,14 @@ export function buildOpenCodeLaunchProfile(
   const secret = (input.randomBytes ?? nodeRandomBytes)(32);
   if (secret.length < 32) return { ok: false, reason: "secret-generation-failed" };
   const home = join(input.stateRoot, "home");
+  const formatter = openCodeNativeFormatterDisposition(input.mode);
   const configValue = createFixedOpenCodeV2Config(
     input.contextGeometry,
     input.unavailableOptionalTools,
     input.toolProfile,
+    input.stateRoot,
+    formatter,
+    input.mcp,
   );
   return {
     ok: true,
@@ -123,17 +195,36 @@ export function buildOpenCodeLaunchProfile(
       TMPDIR: join(input.stateRoot, "tmp"),
       TEMP: join(input.stateRoot, "tmp"),
       TMP: join(input.stateRoot, "tmp"),
-      OPENCODE_CONFIG_DIR: join(input.stateRoot, "config", "opencode"),
+      OPENCODE_CONFIG_DIR: openCodeConfigDirectory(input.stateRoot),
+      // Repository configuration is data until the operator admits its executable effects
+      // (#3903). The pinned runtime offers no per-item admission: its project layer discovers
+      // `opencode.json`, `.opencode/` agents, commands, skills and `plugins/` modules together,
+      // imports a plugin's top-level code before any permission is evaluated, and merges a
+      // project `providers` entry above Keiko's private file. Every profile therefore keeps the
+      // whole layer off. The native profile still reads the workspace-root AGENTS.md, which Keiko
+      // attaches to the first message through its own bounded loader, and admits the Markdown-only
+      // items (custom agents, commands and skills) one by one as sanitized copies in this run's
+      // private discovery directory (`codingRuntimeRepositoryItems.ts`), which this switch does
+      // not touch.
       OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+      ...(input.toolProfile === "native"
+        ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
+        : {}),
       // The pinned runtime checks plugin dependencies before loading even dependency-free custom
       // tools. Registry retries cannot succeed inside the gateway-only network boundary. Keep its
       // package manager offline so absent optional packages fail promptly, without registry egress.
       npm_config_offline: "true",
+      // Keeps OpenCode's hosted free models out of the catalog (proven on the original executable);
+      // the provider policy above refuses them too. The model catalog is never fetched from
+      // models.dev: the one model is the gateway's, and a firewalled customer has no route there.
+      OPENCODE_DISABLE_FREE_MODELS: "1",
+      OPENCODE_DISABLE_MODELS_FETCH: "1",
       OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
       OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
     }),
     config: JSON.stringify(configValue),
     configValue,
+    ...(input.toolProfile === "native" ? { formatter } : {}),
   };
 }
 
@@ -165,6 +256,8 @@ export function resolveOpenCodeContextGeometry(
     contextWindowTokens: maxInputTokens + maxOutputTokens,
     maxInputTokens,
     maxOutputTokens,
+    ...(metadata.supportsImageInput === true ? { imageInput: true } : {}),
+    ...(metadata.supportsDocumentInput === true ? { documentInput: true } : {}),
   };
 }
 
@@ -292,13 +385,23 @@ export function createFixedOpenCodeConfig(
   };
 }
 
+/** The MCP binding of a native run that admits no server: still written, so no layer adds one. */
+const NO_MCP_SERVERS: { readonly servers: Readonly<Record<string, unknown>> } = Object.freeze({
+  servers: Object.freeze({}),
+});
+
 /** Original V2 execution with exactly the server-selected governed tool profile. */
 export function createFixedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
   profile: OpenCodeToolProfile = "direct",
+  stateRoot?: string,
+  formatter: OpenCodeNativeFormatterDisposition = "disabled-unknown-mode",
+  mcp: { readonly servers: Readonly<Record<string, unknown>> } = NO_MCP_SERVERS,
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
+  if (profile === "native")
+    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, formatter, mcp);
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -320,26 +423,141 @@ export function createFixedOpenCodeV2Config(
     update: "disable",
     share: "disabled",
     snapshots: false,
-    model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    providers: fixedOpenCodeV2Provider(contextGeometry),
+    providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
+    policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     permissions,
   };
 }
 
+/**
+ * Standalone-equivalent configuration (#3897): every ordinary native tool, agent and command stays
+ * enabled. The repository's own OpenCode configuration layer stays off until #3903 admits its
+ * executable effects (plugins would load before any permission); the workspace AGENTS.md reaches
+ * the model through Keiko's bounded loader. The only fixed rules are the ones Keiko owns regardless
+ * of mode: no self-update, no sharing, one provider reached through the Model Gateway, and the
+ * mode-independent hard denial of external directories.
+ *
+ * Every built-in agent keeps the producer's own rules (https://opencode.ai/v2/docs/agents/#builtins):
+ * Plan and Explore stay unable to edit project files, General stays unable to launch subagents.
+ * Keiko never widens them, because the producer appends configured rules after an agent's own and
+ * the last match wins, so any global rule naming an action would replace the agent's denial
+ * (#3897 review). The Keiko policy hook (`keiko.native-policy`) then narrows whatever a rule allows
+ * or asks, and an agent's own denial stays final.
+ *
+ * No configured rule can stand in for that hook, so the hook is not optional: a native run whose
+ * policy plugin the producer does not report `active` never becomes ready (readiness checks
+ * `GET /api/plugin`), which keeps the fail-closed property without rewriting any agent's rules.
+ *
+ * Code Mode (the `execute` tool and the `opencode` management tools behind it) stays available for
+ * standalone parity (owner decision, 2026-10-23); its governance is the policy plugin's concern.
+ */
+function createNativeOpenCodeV2Config(
+  contextGeometry: OpenCodeContextGeometry,
+  stateRoot: string | undefined,
+  formatter: OpenCodeNativeFormatterDisposition,
+  mcp: { readonly servers: Readonly<Record<string, unknown>> },
+): Readonly<Record<string, unknown>> {
+  const reserved = Math.min(
+    OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
+    contextGeometry.maxOutputTokens,
+  );
+  const recent = Math.min(
+    OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
+    Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, contextGeometry.maxInputTokens - reserved),
+  );
+  return {
+    update: "disable",
+    share: "disabled",
+    snapshots: true,
+    // Always explicit: the producer's own default is off, and a disabled run must stay off even if
+    // a later layer or release changes that default.
+    formatter: openCodeNativeFormatterSetting(formatter),
+    model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    default_agent: "build",
+    providers: fixedOpenCodeV2Provider(contextGeometry, {
+      image: contextGeometry.imageInput === true,
+      pdf: contextGeometry.documentInput === true,
+    }),
+    policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
+    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
+    // update as a read in every mode and projects it as the plan card (parity row T19, owner
+    // decision of 2026-10-24).
+    experimental: { todo: true },
+    // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
+    mcp,
+    permissions: [
+      { action: "external_directory", resource: "*", effect: "deny" },
+      // Last match wins: the plan agent's own plan directory is the one admitted external path.
+      ...(stateRoot === undefined
+        ? []
+        : [
+            {
+              action: "external_directory",
+              resource: `${openCodePlanDirectory(stateRoot)}/*`,
+              effect: "allow",
+            },
+          ]),
+    ],
+  };
+}
+
+/**
+ * The fields no layer below Keiko may change: the single gateway-bound provider and model, the
+ * provider policy that admits no other provider, the mode-independent permission floor, the self-update and sharing switches, and the built-in
+ * formatter setting (a child process the permission hook never sees, so no layer may turn it on
+ * for a mode that must not run it; see `openCodeNativeFormatterDisposition`), and the MCP servers
+ * (an MCP server is a process or a remote endpoint, so only the operator's registry names one;
+ * see `opencodeNativeMcp.ts`). The pinned runtime
+ * merges `OPENCODE_CONFIG_CONTENT` after the private file and after every discovered project
+ * document, so this subset is the last word if a project layer is ever admitted (#3903). Only
+ * `{env:…}` placeholders appear in it; the gateway address and capability stay in the child
+ * environment.
+ */
+const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
+  "update",
+  "share",
+  "formatter",
+  "mcp",
+  "model",
+  "default_agent",
+  "providers",
+  "policies",
+  "permissions",
+] as const;
+
+function nativeServerOwnedBinding(
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(OPENCODE_NATIVE_SERVER_OWNED_KEYS.map((key) => [key, config[key]]));
+}
+
+/**
+ * The input modalities are what varies per admitted model: the native `read` of an image or a PDF
+ * becomes model-visible media only when the provider model declares it, exactly as in standalone
+ * OpenCode (https://opencode.ai/v2/docs/tools/). The direct and Code Mode profiles never pass them.
+ */
 function fixedOpenCodeV2Provider(
   geometry: OpenCodeContextGeometry,
+  media: { readonly image: boolean; readonly pdf: boolean },
 ): Readonly<Record<string, unknown>> {
   return {
-    "keiko-runtime": {
+    [OPENCODE_RUNTIME_PROVIDER_ID]: {
       name: "Keiko Governed Coding Gateway",
       package: "@opencode/ai/providers/openai-compatible",
       models: {
         [OPENCODE_RUNTIME_MODEL_ALIAS]: {
           name: "Keiko Governed Coding",
-          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          capabilities: {
+            tools: true,
+            input: ["text", ...(media.image ? ["image"] : []), ...(media.pdf ? ["pdf"] : [])],
+            output: ["text"],
+          },
           limit: {
             context: geometry.contextWindowTokens,
             input: geometry.maxInputTokens,

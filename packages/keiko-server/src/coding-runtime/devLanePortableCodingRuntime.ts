@@ -21,17 +21,19 @@ import { productionUpdateFacts } from "../update-install-mode.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
+import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   NPM_LANE_RUNTIME_APPROVALS,
   NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
+import { ripgrepBinaryName, ripgrepTargetKeyForPortableTarget } from "./ripgrepRuntime.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
+import { OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM } from "./opencodeProtocolSurface.js";
 import {
-  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
-} from "./opencodeProtocolSurface.js";
-import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
+  secureWorkspaceReadNativeProtocol,
+  type SecureWorkspaceTextReadArtifact,
+} from "./secureWorkspaceTextReadArtifact.js";
 
 export const KEIKO_CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE";
 export const DEV_LANE_STAGED_PAYLOADS_DIR = ".portable-sidecar-payloads";
@@ -241,15 +243,12 @@ function discoverNpmLanePackage(
   approval: NpmLaneRuntimeApproval,
   previous: NpmLaneRuntimeApproval | undefined,
 ): DevLaneOpenCodeDiscovery {
-  const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval);
-  if (!payload.ok) return refused(payload.refusal);
-  const helperPath = join(runtimeRoot, helperRelativePath(target));
-  if (!isRegularFile(helperPath)) return refused("secure-read-helper-missing");
-  const helper = matchingNpmHelperApproval(helperPath, approval, previous);
-  if (helper === undefined) {
-    return refused("secure-read-helper-stale");
-  }
-  if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
+  const selected = selectNpmLanePackage(runtimeRoot, target, approval, previous);
+  if (!selected.ok) return refused(selected.refusal);
+  const { helper, helperPath, payload } = selected;
+  // The pinned ripgrep (#3897) ships beside the helper. Its name is admitted here; its bytes are
+  // judged at launch against the pinned digest, which degrades search instead of refusing the lane.
+  if (!trustedNativeHelperDirectory(runtimeRoot, target, [npmLaneRipgrepName(target)])) {
     return refused("native-helper-directory-untrusted");
   }
   const secureRead: DevLaneSecureReadBinding = {
@@ -263,6 +262,7 @@ function discoverNpmLanePackage(
       sourceCommit: helper.helperSourceCommit,
       sourceTreeSha256: helper.helperSourceTreeSha256,
       byteCap: helper.helperMaxBytes ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      ...secureWorkspaceReadNativeProtocol(helper.helperSourceTreeSha256, secureReadTarget(target)),
       // Verified by its content digest against the server's own pin, never by a signature chain.
       signed: true,
     },
@@ -275,6 +275,47 @@ function discoverNpmLanePackage(
     secureRead,
     undefined,
   );
+}
+
+type SelectedNpmLanePackage =
+  | {
+      readonly ok: true;
+      readonly payload: Extract<VerifiedDevLanePayload, { readonly ok: true }>;
+      readonly helper: NpmLaneRuntimeApproval;
+      readonly helperPath: string;
+    }
+  | { readonly ok: false; readonly refusal: DevLaneOpenCodeRefusalReason };
+
+/**
+ * An installed package is accepted only as one coherent approved identity: the current pin, or
+ * the previously published one, each with its own payload AND helper digests. Mixing a current
+ * payload with a previous helper, or the reverse, is not an approved package.
+ */
+function selectNpmLanePackage(
+  runtimeRoot: string,
+  target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
+  approval: NpmLaneRuntimeApproval,
+  previous: NpmLaneRuntimeApproval | undefined,
+): SelectedNpmLanePackage {
+  const candidates = previous === undefined ? [approval] : [approval, previous];
+  const helperPath = join(runtimeRoot, helperRelativePath(target));
+  const payloads = candidates.map((candidate) => ({
+    candidate,
+    payload: verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, candidate),
+  }));
+  const verified = payloads.flatMap((entry) =>
+    entry.payload.ok ? [{ candidate: entry.candidate, payload: entry.payload }] : [],
+  );
+  if (verified.length === 0) {
+    const first = payloads[0]?.payload;
+    return { ok: false, refusal: first?.ok === false ? first.refusal : "payload-tampered" };
+  }
+  if (!isRegularFile(helperPath)) return { ok: false, refusal: "secure-read-helper-missing" };
+  for (const entry of verified) {
+    const helper = matchingNpmHelperApproval(helperPath, entry.candidate, undefined);
+    if (helper !== undefined) return { ok: true, payload: entry.payload, helper, helperPath };
+  }
+  return { ok: false, refusal: "secure-read-helper-stale" };
 }
 
 function matchingNpmHelperApproval(
@@ -322,6 +363,40 @@ function activatedDevLaneRuntime(
       nativeHelperSha256: runtimeSupervisor.sha256,
     },
   };
+}
+
+/**
+ * The repository checkout a dev-checkout runtime was staged from, or `undefined` for any other lane.
+ * Derived from the one place that composes `installRoot` (`activatedDevLaneRuntime`:
+ * `<checkout>/.portable-sidecar-payloads/<target>/opencode-compatible`), so the layout stays with
+ * its owner. The pinned ripgrep executable provisioned for development lives under this root.
+ */
+export function devLaneCheckoutRoot(
+  runtime: Pick<DevLanePortableOpenCodeRuntime, "lane" | "installRoot">,
+): string | undefined {
+  if (runtime.lane !== "dev-checkout") return undefined;
+  const stagedPayloads = dirname(dirname(runtime.installRoot));
+  return basename(stagedPayloads) === DEV_LANE_STAGED_PAYLOADS_DIR
+    ? dirname(stagedPayloads)
+    : undefined;
+}
+
+/**
+ * The installed npm runtime package a runtime was activated from, or `undefined` for any other lane.
+ * Derived from the one place that composes `installRoot` (`discoverNpmLaneOpenCode`:
+ * `<package>/runtime/opencode-compatible`), so the layout stays with its owner. The pinned ripgrep
+ * executable the package ships lives under this root, at `runtime/native/rg`.
+ */
+export function npmLanePackageRoot(
+  runtime: Pick<DevLanePortableOpenCodeRuntime, "lane" | "installRoot">,
+): string | undefined {
+  if (runtime.lane !== "npm-runtime-package") return undefined;
+  const runtimeRoot = dirname(runtime.installRoot);
+  return basename(runtimeRoot) === NPM_LANE_RUNTIME_DIR ? dirname(runtimeRoot) : undefined;
+}
+
+function npmLaneRipgrepName(target: Exclude<DevLaneOpenCodeTarget, "windows-x64">): string {
+  return ripgrepBinaryName(ripgrepTargetKeyForPortableTarget(target));
 }
 
 function refused(reason: DevLaneOpenCodeRefusalReason): DevLaneOpenCodeDiscovery {
@@ -471,6 +546,10 @@ function verifiedPayload(
   ) {
     return { ok: false, refusal: "payload-tampered" };
   }
+  // The approved version selects its own producer-derived handshake identity (#3908); the raw
+  // schema digest stays the catalog's, which the approvals validator pins to the same version.
+  const pin = openCodeRuntimeVersionPin(approved.upstreamVersion);
+  if (pin === undefined) return { ok: false, refusal: "payload-unapproved" };
   return {
     ok: true,
     sidecar: {
@@ -482,9 +561,7 @@ function verifiedPayload(
       licenseEvidenceSha256,
       sbomEvidencePath: sbomPath,
       sbomEvidenceSha256,
-      protocolSchemaRawSha256: approved.protocolSchemaSha256,
-      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
+      ...verifiedProtocolIdentity(approved, pin.protocolSurfaceSha256),
       availability: devLaneAvailability(),
       summary: devLaneSummary(
         target,
@@ -493,6 +570,20 @@ function verifiedPayload(
         join(installRoot, executablePath),
       ),
     },
+  };
+}
+
+function verifiedProtocolIdentity(
+  approved: ApprovedDevLaneSidecar,
+  protocolHandshakeDigest: string,
+): Pick<
+  PortableSidecarRuntimeVerification,
+  "protocolSchemaRawSha256" | "protocolHandshakeDigest" | "protocolHandshakeAlgorithm"
+> {
+  return {
+    protocolSchemaRawSha256: approved.protocolSchemaSha256,
+    protocolHandshakeDigest,
+    protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
   };
 }
 
@@ -606,6 +697,7 @@ function verifiedSecureRead(
         protocol: "KSR1/KSS1",
         sourceCommit: manifest.sourceCommit,
         sourceTreeSha256: manifest.sourceTreeSha256,
+        ...secureWorkspaceReadNativeProtocol(manifest.sourceTreeSha256, secureReadTarget(target)),
         // The dev-lane helper is verified by its content digest, never by a release signature chain.
         signed: true,
       },
@@ -651,15 +743,20 @@ function verifiedRuntimeSupervisor(
 function trustedNativeHelperDirectory(
   stagedTargetRoot: string,
   target: DevLaneOpenCodeTarget,
+  optionalNames: readonly string[] = [],
 ): boolean {
   const nativeDirectory = join(stagedTargetRoot, "native");
   const expected = new Set([basename(helperRelativePath(target))]);
   if (target === "windows-x64") expected.add(basename(runtimeSupervisorRelativePath(target)));
   try {
-    const entries = readdirSync(nativeDirectory);
+    const entries = new Set(readdirSync(nativeDirectory));
     return (
-      entries.length === expected.size &&
-      entries.every((entry) => expected.has(entry) && isRegularFile(join(nativeDirectory, entry)))
+      [...expected].every((name) => entries.has(name)) &&
+      [...entries].every((entry) =>
+        expected.has(entry)
+          ? isRegularFile(join(nativeDirectory, entry))
+          : optionalNames.includes(entry),
+      )
     );
   } catch {
     return false;

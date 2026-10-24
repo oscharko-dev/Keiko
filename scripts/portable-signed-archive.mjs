@@ -3,6 +3,8 @@ import { basename, join, posix, relative, resolve } from "node:path";
 
 import {
   hashDirectoryTree,
+  isSafePortableRelativePath,
+  nativeToolProvenance,
   portableTargetByName,
   sha256File,
   windowsGenerationBindingValidationFailures,
@@ -152,6 +154,51 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
+// A pinned third-party tool such as ripgrep is signed with the payload it ships in, so its shipped
+// bytes change while `unsignedSha256` keeps the approved upstream identity. Rebinding it is the
+// same discipline as the addon: contained regular single-link file, fresh digest and size, and the
+// one matching SBOM component.
+function rebindNativeTools(stageRoot, manifest, resourceRoot) {
+  if (manifest.nativeTools === undefined) return;
+  if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
+    fail("signed payload must contain exactly one native tool");
+  }
+  const tool = manifest.nativeTools[0];
+  const executable = containedToolPath(resourceRoot, tool);
+  const entry = lstatSync(executable);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("native tool is not a regular single-link file");
+  }
+  tool.shippedSha256 = sha256(readFileSync(executable));
+  tool.sizeBytes = entry.size;
+  rebindToolSbomHash(stageRoot, tool);
+}
+
+// A tool path is a fixed literal; `..` segments are canonical to containedResourcePath but never
+// legitimate here, so they are refused before the path is resolved.
+function containedToolPath(resourceRoot, tool) {
+  if (typeof tool.executablePath !== "string" || !isSafePortableRelativePath(tool.executablePath)) {
+    fail("native tool path is not canonical");
+  }
+  return containedResourcePath(resourceRoot, tool.executablePath);
+}
+
+function rebindToolSbomHash(stageRoot, tool) {
+  const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
+  let sbom;
+  try {
+    sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+  } catch {
+    fail("portable SBOM is invalid");
+  }
+  const matches = (sbom.components ?? []).filter(
+    (component) => component?.["bom-ref"] === tool.sbomBomRef,
+  );
+  if (matches.length !== 1) fail("native tool CycloneDX component is missing or ambiguous");
+  matches[0].hashes = [{ alg: "SHA-256", content: tool.shippedSha256 }];
+  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
+}
+
 function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {
   if (sidecar.executableTreeAlgorithm !== "keiko-directory-tree-sha256-v1") {
     fail("sidecar executable tree algorithm is unsupported");
@@ -244,6 +291,7 @@ export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelpers(stageRoot, manifest, resourceRoot);
   rebindNativeAddon(stageRoot, manifest, resourceRoot);
+  rebindNativeTools(stageRoot, manifest, resourceRoot);
   if (manifest.runtimeActivation !== undefined) {
     writeRuntimeActivationManifest(resourceRoot, manifest);
   }
@@ -265,6 +313,9 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   }
   if (manifest.nativeAddons !== undefined) {
     binding.nativeAddons = globalThis.structuredClone(manifest.nativeAddons);
+  }
+  if (manifest.nativeTools !== undefined) {
+    binding.nativeTools = globalThis.structuredClone(manifest.nativeTools);
   }
   if (manifest.runtimeAttestation !== undefined) {
     binding.runtimeAttestation = globalThis.structuredClone(manifest.runtimeAttestation);
@@ -321,6 +372,9 @@ function rebindProvenance(stageRoot, manifest, archiveSha256) {
   }
   if (manifest.nativeAddons !== undefined) {
     provenance.nativeAddons = manifest.nativeAddons.map(nativeAddonProvenance);
+  }
+  if (manifest.nativeTools !== undefined) {
+    provenance.nativeTools = manifest.nativeTools.map(nativeToolProvenance);
   }
   if (manifest.runtimeAttestation !== undefined) {
     provenance.runtimeAttestation = {

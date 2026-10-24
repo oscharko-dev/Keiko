@@ -67,6 +67,29 @@ the root and native OpenCode host lockfiles to `ip-address` 10.7.4 within their 
 The exact local OSV Scanner 2.6.0 invocation reproduces all five findings before the updates and
 reports no open findings afterward. The two existing waivers are unchanged.
 
+On 2026-10-24 the required OSV scan newly matched the dev-only `fast-uri` 3.1.8 against
+[GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp),
+[GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg),
+[GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr) and
+[GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h), and the dev-only `fallow`
+3.9.1 against [GHSA-h4fr-cmh5-qr62](https://github.com/advisories/GHSA-h4fr-cmh5-qr62) and
+[GHSA-jfwm-3p3c-6hx5](https://github.com/advisories/GHSA-jfwm-3p3c-6hx5). PR #4064 moves the
+existing `fast-uri` override to the patched 3.1.9. `fallow` moves to the patched 3.35.0 by the
+owner's gate decision of the same day: the patched line makes `dupes --fail-on-issues` fail on every
+clone group, so generated files, the translation catalogs and the failure-class contract table are
+excluded (`.fallowrc.json`) and the remaining 1,032 groups are frozen in a shrink-only baseline
+(`docs/qa/fallow/dupes-baseline.json`, enforced by
+`scripts/check-semantic-duplication.mjs`). A change fails on the clone groups it introduces, and the
+two time-boxed OSV waivers are removed.
+
+The same day, [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685),
+[GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472) and
+[GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c) were published for
+`undici` before 6.29.1, 7.30.1 and 8.12.2. PR #4064 moves the root jsdom override to 8.12.2 and the
+separate root override to 7.30.1, and adds version-scoped overrides to the native OpenCode service
+host (`undici@6.29.0` to 6.29.1, `undici@8.11.2` to 8.12.2). The exact OSV Scanner 2.7.0 action
+image reports no open finding afterward.
+
 On 2026-10-02 GitHub reviewed
 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (braces through 3.0.3)
 and [GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) (http-cache-semantics
@@ -202,8 +225,8 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fast-uri`                    | root                  | 3.1.9   | current        | Patch for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h; recursive OSV 2.7.0 scan passes. PR #4050.                                                                                                                                                                                                  |
-| `undici`                      | root                  | 8.12.2  | current        | Security patch for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The separate major-7 override advances to 7.30.1; the private host retains patched major-6 and major-8 consumers. PR #4050.                                                                                                                             |
+| `fast-uri`                    | root                  | 3.1.9   | current        | Patch for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h (2026-10-24); earlier GHSA-hrr3-gc8f-f4qj via PR #3676.                                                                                                                                                                                      |
+| `undici`                      | root                  | 8.12.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c (2026-10-24; earlier GHSA-3wwx-pv8p-q78v, PR #3675); the separate override, now 7.30.1, remains scoped to other consumers.                                                                           |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                                                       |
@@ -226,6 +249,7 @@ or peer graph).
 | `prosemirror-schema-list`     | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
 | `prosemirror-state`           | keiko-ui              | 1.4.4   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
 | `prosemirror-view`            | keiko-ui              | 1.42.6  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `katex`                       | keiko-ui              | 0.19.0  | patch-deferred | MIT; typesets math in Coding Workbench answers as MathML, imported lazily (#3906). 0.19.0 is the newest release at least two weeks old: it carries the fix for GHSA-238p-pmpm-9mq7 (below 0.18.2) and replaces the deprecated 0.18.11. 0.19.1 (2026-10-23) is not taken yet.                                                                 |
 | `monaco-editor`               | root                  | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `monaco-editor`               | keiko-ui              | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `monaco-editor`               | keiko-editor          | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
@@ -249,7 +273,7 @@ or peer graph).
 | `prettier`                    | root                  | 3.9.10  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `knip`                        | root                  | 6.41.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                                                       |
-| `fallow`                      | root                  | 3.34.0  | current        | Security patch for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5; semantic duplication keeps its existing command, thresholds and failure behavior. PR #4050.                                                                                                                                                                                  |
+| `fallow`                      | root                  | 3.35.0  | current        | Patch for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5 (2026-10-24). Backs `check:semantic-duplication` through `scripts/check-semantic-duplication.mjs`: generated files excluded, the rest a shrink-only baseline.                                                                                                                          |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.11  | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.30  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                                                         |
@@ -660,6 +684,11 @@ The private host retains its existing major-version boundaries with undici 6.29.
 Fallow advances to 3.34.0 for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5; its exact-version
 configuration contract moves with the dependency. The semantic duplication command, thresholds,
 changed-file scope and failure behavior remain unchanged.
+
+PR #4064 (#3897, #3898) carries this forward: fallow is at 3.35.0 behind
+`scripts/check-semantic-duplication.mjs` (generated files excluded, a shrink-only baseline), and
+the private OpenCode service host is removed together with its lockfile and overrides, so the
+service-host Zod, undici 6 and undici 8 boundaries described here no longer exist in the tree.
 
 With these updates the same recursive OSV scan reports no issues. The complete 70-test native
 service-host suite, 46 dependency-currency and external-quality configuration tests, and 11

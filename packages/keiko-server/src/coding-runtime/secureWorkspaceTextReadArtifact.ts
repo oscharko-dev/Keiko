@@ -1,3 +1,4 @@
+import { NPM_LANE_RUNTIME_APPROVALS } from "./npmLaneRuntimeApprovals.js";
 import type { SecureWorkspaceReadPlatform } from "./secureWorkspaceTextReadProcess.js";
 import {
   isSecureWorkspaceReadByteCap,
@@ -19,7 +20,11 @@ export interface SecureWorkspaceTextReadArtifact {
   readonly byteCap?: number;
   /** Server-pinned, digest-bound optional capability; absent on every current shipped helper. */
   readonly snapshotProtocol?: "KSR2/KSS2";
-  /** Separately digest-bound private bytes/range/stat/list capability. Never implied by text IO. */
+  /**
+   * Separately digest-bound private bytes/range/stat/list capability. Never implied by text IO:
+   * declared only for a helper whose verified source implements it
+   * (`secureWorkspaceReadNativeProtocol`).
+   */
   readonly nativeProtocol?: "KSR3/KSS3";
 }
 
@@ -50,6 +55,26 @@ export function secureWorkspaceReadTargetFor(
   if (platform.os === "darwin" && platform.arch === "arm64") return "darwin-arm64";
   if (platform.os === "darwin" && platform.arch === "x64") return "darwin-x64";
   return undefined;
+}
+
+/**
+ * The helper source trees whose shipped bytes speak the native KSR3/KSS3 protocol: the helper of
+ * every current runtime approval (`native/secure-workspace-read` at the approved commit). A helper
+ * of any other source, the published 1.1.3 helper included, keeps text IO only, and the Windows
+ * helper never declares it (#3897 review: repository items need its listing).
+ */
+const NATIVE_PROTOCOL_HELPER_SOURCE_TREES: ReadonlySet<string> = new Set(
+  Object.values(NPM_LANE_RUNTIME_APPROVALS).map((approval) => approval.helperSourceTreeSha256),
+);
+
+/** The native protocol a verified helper of this source and target implements, if any. */
+export function secureWorkspaceReadNativeProtocol(
+  sourceTreeSha256: string,
+  target: SecureWorkspaceReadTarget,
+): { readonly nativeProtocol?: "KSR3/KSS3" } {
+  return target !== "win32-x64" && NATIVE_PROTOCOL_HELPER_SOURCE_TREES.has(sourceTreeSha256)
+    ? { nativeProtocol: "KSR3/KSS3" }
+    : {};
 }
 
 /** Validates static manifest metadata before the point-of-use verifier is invoked. */

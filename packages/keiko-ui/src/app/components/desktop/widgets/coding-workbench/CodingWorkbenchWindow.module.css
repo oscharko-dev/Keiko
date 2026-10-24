@@ -1219,6 +1219,14 @@
   overflow-wrap: anywhere;
 }
 
+/* #3897: the entries of a native ask are model-selected text (a multi-line command, long paths).
+   Their list shares the bounded, scrollable commit-message block; this only tells them apart. */
+.cmp-approval-native-resource + .cmp-approval-native-resource {
+  margin-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border-subtle);
+  padding-block-start: var(--space-2);
+}
+
 /* One content column; compact disclosures share a 32px baseline. */
 .timeline {
   display: flex;

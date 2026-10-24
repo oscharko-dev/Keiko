@@ -1,4 +1,9 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import {
+  createStateCodingSessionContinuity,
+  KEIKO_CODING_SESSION_RETENTION_ENV,
+  type CodingSessionContinuity,
+} from "./coding-runtime/codingSessionContinuity.js";
 import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
@@ -463,6 +468,19 @@ import {
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
+import type { OpenCodeToolProfile } from "./coding-runtime/opencodeToolSchemas.js";
+
+/**
+ * The one production selection of the OpenCode tool profile (#3897). The native service runs where
+ * its kernel boundary is qualified, macOS (Seatbelt read allowlist, credential denials, egress by
+ * mode). Linux and Windows keep the governed mapped profile: the audited Linux mount plan still
+ * let a shell child read a workspace `.env`, and Windows has no native filesystem boundary yet.
+ */
+export function productionOpenCodeToolProfile(
+  platform: NodeJS.Platform = process.platform,
+): OpenCodeToolProfile {
+  return platform === "darwin" ? "native" : "direct";
+}
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -661,6 +679,12 @@ export interface GatewayDiscoveredModelMetadata {
   readonly contextWindowUndeclared?: boolean | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
+  /**
+   * Digest of the deployment(s) the gateway reported behind this alias (#3905). Absent when the
+   * discovery source states none (the serving list, a group summary), which never clears an
+   * identity recorded earlier. A change withdraws the alias's tool-calling proof.
+   */
+  readonly deploymentIdentitySha256?: string | undefined;
   readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
   /**
    * True when the discovery payload explicitly declared a chat-compatible mode for this model
@@ -788,6 +812,8 @@ export interface UiHandlerDeps {
     ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
+        /** Server-owned tool profile the runtime was composed with; read by the readiness route. */
+        readonly toolProfile?: OpenCodeToolProfile;
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;
@@ -1254,6 +1280,13 @@ export interface BuildHandlerDepsOptions {
    */
   readonly codingRuntimeResearchEgressEnabled?: boolean | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
+  /**
+   * Test seam for the gateway readiness probes (the same field as `UiHandlerDeps`), accepted at
+   * build time because the configured-conversation readiness starts during construction and
+   * derives its own dependency views before a caller could set the field on the result (#3897,
+   * coding performance fixture). Production never sets it.
+   */
+  readonly gatewayReadinessFetch?: typeof fetch | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
@@ -1829,6 +1862,25 @@ export function currentConversationReadinessObservation(
   if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
   const ageMs = conversationReadinessAgeMs(observation);
   return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
+}
+
+/**
+ * True when the CURRENT generation holds a successful basic-chat observation that has aged past
+ * `CONVERSATION_READINESS_MAX_AGE_MS`. `currentConversationReadinessObservation` folds that case
+ * into `undefined`, exactly like a model nobody probed; this is the one place that tells them apart
+ * (#3905), and the models wire carries it as `conversationReadinessStale`. A failed observation
+ * never goes stale, and a malformed or future timestamp stays unknown.
+ */
+export function currentConversationReadinessStale(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation()) return false;
+  if (observation.fields.conversationReady !== true) return false;
+  return conversationReadinessAgeMs(observation) >= CONVERSATION_READINESS_MAX_AGE_MS;
 }
 
 function configuredChatContextProfile(
@@ -4397,6 +4449,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
   readonly bootstrapCorrelationId: string;
+  /** The one native session continuity service the runtime host and the orchestrator share. */
+  readonly codingSessionContinuity: CodingSessionContinuity;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4807,6 +4861,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
+    ...(args.options.gatewayReadinessFetch === undefined
+      ? {}
+      : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -4966,6 +5023,7 @@ function buildUiCodingRuntimeControlPlane(
   );
   return createCodingRuntimeControlPlane({
     historyStore: args.bundle.uiStore,
+    sessionContinuity: args.codingSessionContinuity,
     issueIntake: createProductionCodingRuntimeIssueIntake({
       store: args.bundle.uiStore,
       env: args.options.env,
@@ -5947,6 +6005,7 @@ function resolveProductionRuntimePorts(
   }
   const activation = resolveProductionOpenCodeActivation({
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
+    sessionContinuity: args.codingSessionContinuity,
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
@@ -6060,7 +6119,9 @@ function productionRuntimeResolver(
     return unqualifiedComposition("runtime-unqualified");
   }
   const envelopeBounds = configuredRuntimeEnvelopeBounds(args.options.env);
-  const readiness = createOpenCodeGatewayReadinessRegistry();
+  // The Coding Workbench runs the original OpenCode service with its native tools (#3897); the
+  // mapped `direct`/`code-mode` profiles remain selectable only through this server-owned value.
+  const readiness = createOpenCodeGatewayReadinessRegistry(productionOpenCodeToolProfile());
   const resolution = resolveProductionRuntimePorts(
     args,
     runtimeEvidence,
@@ -6277,6 +6338,20 @@ function buildInitialGatewayState(
   };
 }
 
+/** The one native session continuity service of this server, over the state directory (S02/S03). */
+function buildCodingSessionContinuity(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  bundle: PersistenceBundle,
+): CodingSessionContinuity {
+  return createStateCodingSessionContinuity({
+    stateDir: dirname(resolvedUiDbPath),
+    retention: options.env[KEIKO_CODING_SESSION_RETENTION_ENV],
+    history: bundle.uiStore.codingHistory,
+    activityLog: processServerLogSink(),
+  });
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
@@ -6306,6 +6381,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
+  const codingSessionContinuity = buildCodingSessionContinuity(options, resolvedUiDbPath, bundle);
   const deps = assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
@@ -6322,6 +6398,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
     bootstrapCorrelationId,
+    codingSessionContinuity,
   });
   return deps;
 }

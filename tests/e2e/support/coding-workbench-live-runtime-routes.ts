@@ -315,6 +315,8 @@ async function handleReadinessRoute(
     deploymentCeiling: options.deploymentCeiling,
     effectiveMode: effectiveMode(requestedMode, options.deploymentCeiling),
     runtimeAvailable: options.runtimeAvailable,
+    // #3897: the fixture runtime is a mapped profile, which offers the default agent only.
+    selectableAgents: ["build"],
     // #2475: an unavailable runtime must name its reason; the fixture mirrors the server.
     // ADR-0163 D9: and an AVAILABLE runtime must name how strong its evidence is.
     ...(options.runtimeAvailable

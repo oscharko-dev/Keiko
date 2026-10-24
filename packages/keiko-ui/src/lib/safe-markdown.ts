@@ -10,6 +10,8 @@
  *   (javascript:, data:, vbscript:, file:, etc.) falls through to plain text.
  */
 
+import { scanMathSpan } from "./safe-markdown-math";
+
 // SM-1: bound on recursive descent (blockquote → block parse, nested lists,
 // nested inline emphasis). Past this depth the remaining content is emitted as a
 // plain text/paragraph node instead of recursing, so an adversarial assistant
@@ -40,7 +42,8 @@ export interface SafeMarkdownNode {
     | "td"
     | "strong"
     | "em"
-    | "hr";
+    | "hr"
+    | "math";
   readonly children?: readonly SafeMarkdownNode[];
   readonly text?: string;
   readonly level?: 1 | 2 | 3 | 4 | 5 | 6;
@@ -48,6 +51,25 @@ export interface SafeMarkdownNode {
   readonly start?: number;
   readonly href?: string;
   readonly align?: SafeMarkdownAlignment;
+  /** `math` only: true for display math (`$$…$$`, `\[…\]`), false for inline math. */
+  readonly display?: boolean;
+  /** `math` only: the verbatim source including its delimiters, for the plain-text fallback. */
+  readonly raw?: string;
+  /**
+   * `code-block` only: true when the source ended before the closing fence arrived. A streamed
+   * answer shows exactly this state until its fence closes; a closed fence never carries the flag.
+   */
+  readonly unterminated?: boolean;
+}
+
+/** Parser switches. Everything is off by default so existing callers keep their exact output. */
+export interface SafeMarkdownParseOptions {
+  /**
+   * Claim `$…$`, `$$…$$`, `\(…\)` and `\[…\]` spans as `math` nodes before emphasis and links see
+   * them, so `$a_b * c_d$` is not split into italics. Only complete spans are claimed: a delimiter
+   * whose partner has not arrived stays prose, which is what a streamed answer shows meanwhile.
+   */
+  readonly math?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +209,24 @@ function tryInlineCode(
   return closeIdx + 1;
 }
 
+/**
+ * Try to claim a math span (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) starting at pos. Returns new pos or -1.
+ * A backslash-escaped dollar is the way to write a literal one in math mode, so it is consumed here
+ * as a plain `$`; only the renderer decides what the TeX inside a span means.
+ */
+function tryMath(nodes: SafeMarkdownNode[], raw: string, pos: number, textStart: number): number {
+  if (raw[pos] === "\\" && raw[pos + 1] === "$") {
+    flushText(nodes, raw, textStart, pos);
+    nodes.push({ kind: "text", text: "$" });
+    return pos + 2;
+  }
+  const found = scanMathSpan(raw, pos);
+  if (found === null) return -1;
+  flushText(nodes, raw, textStart, pos);
+  nodes.push({ kind: "math", text: found.text, raw: found.raw, display: found.display });
+  return found.end;
+}
+
 /** Try to parse **bold** or __bold__ starting at pos. Returns new pos or -1. */
 function tryBold(
   nodes: SafeMarkdownNode[],
@@ -194,6 +234,7 @@ function tryBold(
   pos: number,
   textStart: number,
   depth: number,
+  math: boolean,
 ): number {
   const ch = raw[pos];
   const next = raw[pos + 1];
@@ -204,7 +245,7 @@ function tryBold(
   if (closeIdx === -1) return -1;
   flushText(nodes, raw, textStart, pos);
   const inner = raw.slice(pos + 2, closeIdx);
-  nodes.push({ kind: "strong", children: parseInline(inner, depth + 1) });
+  nodes.push({ kind: "strong", children: parseInline(inner, depth + 1, math) });
   return closeIdx + 2;
 }
 
@@ -232,6 +273,7 @@ function tryItalic(
   pos: number,
   textStart: number,
   depth: number,
+  math: boolean,
 ): number {
   const ch = raw[pos];
   if (ch !== "*" && ch !== "_") return -1;
@@ -242,7 +284,10 @@ function tryItalic(
   if (closeIdx === -1) return -1;
   if (ch === "_" && isWordChar(raw[closeIdx - 1]) && isWordChar(raw[closeIdx + 1])) return -1;
   flushText(nodes, raw, textStart, pos);
-  nodes.push({ kind: "em", children: parseInline(raw.slice(pos + 1, closeIdx), depth + 1) });
+  nodes.push({
+    kind: "em",
+    children: parseInline(raw.slice(pos + 1, closeIdx), depth + 1, math),
+  });
   return closeIdx + 1;
 }
 
@@ -336,7 +381,35 @@ function tryAutoLink(
   return end;
 }
 
-function parseInline(raw: string, depth = 0): readonly SafeMarkdownNode[] {
+/**
+ * The inline construct that opens at `pos`, as the position just after it, or -1 when none does.
+ * The scan is left to right and a claimed span is skipped whole, so a math span such as
+ * `$a_b * c_d$` is taken at its opening `$` before the `_` and `*` inside it are ever looked at;
+ * that is why it can no longer be split into italics.
+ */
+function tryInlineAt(
+  nodes: SafeMarkdownNode[],
+  raw: string,
+  pos: number,
+  textStart: number,
+  depth: number,
+  math: boolean,
+  linkDelimiters: LinkDelimiterIndex,
+): number {
+  const code = tryInlineCode(nodes, raw, pos, textStart);
+  if (code !== -1) return code;
+  const mathEnd = math ? tryMath(nodes, raw, pos, textStart) : -1;
+  if (mathEnd !== -1) return mathEnd;
+  const bold = tryBold(nodes, raw, pos, textStart, depth, math);
+  if (bold !== -1) return bold;
+  const italic = tryItalic(nodes, raw, pos, textStart, depth, math);
+  if (italic !== -1) return italic;
+  const link = tryLink(nodes, raw, pos, textStart, linkDelimiters);
+  if (link !== -1) return link;
+  return tryAutoLink(nodes, raw, pos, textStart);
+}
+
+function parseInline(raw: string, depth = 0, math = false): readonly SafeMarkdownNode[] {
   // SM-1: past the cap, stop recursing into nested emphasis and emit the rest as
   // a single plain-text node so deeply nested *_*_… cannot blow the stack.
   if (depth >= MAX_MARKDOWN_DEPTH) {
@@ -348,42 +421,13 @@ function parseInline(raw: string, depth = 0): readonly SafeMarkdownNode[] {
   let textStart = 0;
 
   while (pos < raw.length) {
-    let newPos = tryInlineCode(nodes, raw, pos, textStart);
-    if (newPos !== -1) {
+    const newPos = tryInlineAt(nodes, raw, pos, textStart, depth, math, linkDelimiters);
+    if (newPos === -1) {
+      pos++;
+    } else {
       textStart = newPos;
       pos = newPos;
-      continue;
     }
-
-    newPos = tryBold(nodes, raw, pos, textStart, depth);
-    if (newPos !== -1) {
-      textStart = newPos;
-      pos = newPos;
-      continue;
-    }
-
-    newPos = tryItalic(nodes, raw, pos, textStart, depth);
-    if (newPos !== -1) {
-      textStart = newPos;
-      pos = newPos;
-      continue;
-    }
-
-    newPos = tryLink(nodes, raw, pos, textStart, linkDelimiters);
-    if (newPos !== -1) {
-      textStart = newPos;
-      pos = newPos;
-      continue;
-    }
-
-    newPos = tryAutoLink(nodes, raw, pos, textStart);
-    if (newPos !== -1) {
-      textStart = newPos;
-      pos = newPos;
-      continue;
-    }
-
-    pos++;
   }
 
   flushText(nodes, raw, textStart, raw.length);
@@ -420,13 +464,21 @@ function isSeparatorRow(cells: string[]): boolean {
   return true;
 }
 
-function makeThNode(cell: string, align: SafeMarkdownAlignment | undefined): SafeMarkdownNode {
-  const base: SafeMarkdownNode = { kind: "th", children: parseInline(cell.trim()) };
+function makeThNode(
+  cell: string,
+  align: SafeMarkdownAlignment | undefined,
+  math: boolean,
+): SafeMarkdownNode {
+  const base: SafeMarkdownNode = { kind: "th", children: parseInline(cell.trim(), 0, math) };
   return align !== undefined ? { ...base, align } : base;
 }
 
-function makeTdNode(cell: string, align: SafeMarkdownAlignment | undefined): SafeMarkdownNode {
-  const base: SafeMarkdownNode = { kind: "td", children: parseInline(cell.trim()) };
+function makeTdNode(
+  cell: string,
+  align: SafeMarkdownAlignment | undefined,
+  math: boolean,
+): SafeMarkdownNode {
+  const base: SafeMarkdownNode = { kind: "td", children: parseInline(cell.trim(), 0, math) };
   return align !== undefined ? { ...base, align } : base;
 }
 
@@ -434,12 +486,13 @@ function parseTable(
   headerLine: string,
   separatorLine: string,
   bodyLines: string[],
+  math: boolean,
 ): SafeMarkdownNode {
   const headerCells = splitTableRow(headerLine);
   const sepCells = splitTableRow(separatorLine);
   const alignments = sepCells.map(parseAlignment);
 
-  const thNodes = headerCells.map((cell, ci) => makeThNode(cell, alignments[ci]));
+  const thNodes = headerCells.map((cell, ci) => makeThNode(cell, alignments[ci], math));
   const theadNode: SafeMarkdownNode = {
     kind: "thead",
     children: [{ kind: "tr", children: thNodes }],
@@ -447,7 +500,7 @@ function parseTable(
 
   const trNodes = bodyLines.map((line) => {
     const cells = splitTableRow(line);
-    const tdNodes = cells.map((cell, ci) => makeTdNode(cell, alignments[ci]));
+    const tdNodes = cells.map((cell, ci) => makeTdNode(cell, alignments[ci], math));
     return { kind: "tr" as const, children: tdNodes };
   });
 
@@ -485,7 +538,12 @@ function listStartAttributes(
   return ordered ? { start: items[0]?.start ?? 1 } : {};
 }
 
-function buildListNodes(items: ListItemRaw[], ordered: boolean, depth: number): SafeMarkdownNode {
+function buildListNodes(
+  items: ListItemRaw[],
+  ordered: boolean,
+  depth: number,
+  math: boolean,
+): SafeMarkdownNode {
   const listKind = ordered ? ("ol" as const) : ("ul" as const);
   const children: SafeMarkdownNode[] = [];
   let i = 0;
@@ -507,11 +565,11 @@ function buildListNodes(items: ListItemRaw[], ordered: boolean, depth: number): 
       i++;
     }
 
-    const liChildren: SafeMarkdownNode[] = [...(parseInline(item.text) as SafeMarkdownNode[])];
+    const liChildren: SafeMarkdownNode[] = [...parseInline(item.text, 0, math)];
     // SM-1: only descend into a nested list while under the depth cap; otherwise
     // flatten the nested items into this item's text so we stop recursing.
     if (nestedItems.length > 0 && depth < MAX_MARKDOWN_DEPTH) {
-      liChildren.push(buildListNodes(nestedItems, ordered, depth + 1));
+      liChildren.push(buildListNodes(nestedItems, ordered, depth + 1, math));
     } else if (nestedItems.length > 0) {
       liChildren.push({ kind: "text", text: nestedItems.map((n) => n.text).join("\n") });
     }
@@ -540,6 +598,8 @@ interface ParseContext {
   // SM-1: recursive descent depth (incremented when a blockquote re-enters the
   // block parser). Bounds stack growth on adversarial nested input.
   depth: number;
+  // Whether inline parsing claims math spans (see SafeMarkdownParseOptions).
+  math: boolean;
 }
 
 function consumeCodeBlock(
@@ -548,6 +608,7 @@ function consumeCodeBlock(
   lang: string | undefined,
 ): SafeMarkdownNode {
   const codeLines: string[] = [];
+  let closed = false;
   ctx.i++;
   while (ctx.i < ctx.lines.length) {
     const codeLine = ctx.lines[ctx.i] ?? "";
@@ -556,6 +617,7 @@ function consumeCodeBlock(
       const closer = closeFence[1] ?? "";
       if (closer.startsWith(fence[0] ?? "") && closer.length >= fence.length) {
         ctx.i++;
+        closed = true;
         break;
       }
     }
@@ -563,7 +625,9 @@ function consumeCodeBlock(
     ctx.i++;
   }
   const codeText = codeLines.join("\n");
-  const base: SafeMarkdownNode = { kind: "code-block", text: codeText };
+  const base: SafeMarkdownNode = closed
+    ? { kind: "code-block", text: codeText }
+    : { kind: "code-block", text: codeText, unterminated: true };
   return lang !== undefined ? { ...base, language: lang } : base;
 }
 
@@ -587,7 +651,7 @@ function consumeBlockquote(ctx: ParseContext): SafeMarkdownNode {
       children: [{ kind: "paragraph", children: [{ kind: "text", text: inner }] }],
     };
   }
-  const innerNodes = parseBlocks(inner, ctx.depth + 1);
+  const innerNodes = parseBlocks(inner, ctx.depth + 1, ctx.math);
   return { kind: "blockquote", children: [...innerNodes] };
 }
 
@@ -603,7 +667,7 @@ function consumeTable(ctx: ParseContext, headerLine: string): SafeMarkdownNode {
     bodyLines.push(tl);
     ctx.i++;
   }
-  return parseTable(headerLine, separatorLine, bodyLines);
+  return parseTable(headerLine, separatorLine, bodyLines, ctx.math);
 }
 
 function consumeList(ctx: ParseContext, ordered: boolean): SafeMarkdownNode {
@@ -625,7 +689,7 @@ function consumeList(ctx: ParseContext, ordered: boolean): SafeMarkdownNode {
       break;
     }
   }
-  return buildListNodes(items, ordered, ctx.depth);
+  return buildListNodes(items, ordered, ctx.depth, ctx.math);
 }
 
 function isBlockStarter(line: string): boolean {
@@ -648,7 +712,7 @@ function consumeParagraph(ctx: ParseContext): SafeMarkdownNode | null {
     ctx.i++;
   }
   if (paraLines.length === 0) return null;
-  return { kind: "paragraph", children: parseInline(paraLines.join("\n")) };
+  return { kind: "paragraph", children: parseInline(paraLines.join("\n"), 0, ctx.math) };
 }
 
 // ---------------------------------------------------------------------------
@@ -671,7 +735,7 @@ function tryConsumeHeading(ctx: ParseContext, line: string, nodes: SafeMarkdownN
   const hashes = headingMatch[1] ?? "";
   const level = Math.min(hashes.length, 6) as 1 | 2 | 3 | 4 | 5 | 6;
   const text = headingMatch[2] ?? "";
-  nodes.push({ kind: "heading", level, children: parseInline(text) });
+  nodes.push({ kind: "heading", level, children: parseInline(text, 0, ctx.math) });
   ctx.i++;
   return true;
 }
@@ -730,23 +794,26 @@ function dispatchBlock(ctx: ParseContext, nodes: SafeMarkdownNode[]): void {
 
 // SM-1: depth-aware block parser. `parseSafeMarkdown` is the public depth-0 entry;
 // `consumeBlockquote` re-enters here with an incremented depth.
-function parseBlocks(source: string, depth: number): readonly SafeMarkdownNode[] {
+function parseBlocks(source: string, depth: number, math: boolean): readonly SafeMarkdownNode[] {
   const nodes: SafeMarkdownNode[] = [];
-  const ctx: ParseContext = { lines: source.split("\n"), i: 0, depth };
+  const ctx: ParseContext = { lines: source.split("\n"), i: 0, depth, math };
   while (ctx.i < ctx.lines.length) {
     dispatchBlock(ctx, nodes);
   }
   return nodes;
 }
 
-export function parseSafeMarkdown(source: string): readonly SafeMarkdownNode[] {
-  return parseBlocks(source, 0);
+export function parseSafeMarkdown(
+  source: string,
+  options: SafeMarkdownParseOptions = {},
+): readonly SafeMarkdownNode[] {
+  return parseBlocks(source, 0, options.math === true);
 }
 
 /** User prose stays literal; only fenced code enters the existing safe code renderer. */
 export function parseSafeUserInput(source: string): readonly SafeMarkdownNode[] {
   const nodes: SafeMarkdownNode[] = [];
-  const ctx: ParseContext = { lines: source.split("\n"), i: 0, depth: 0 };
+  const ctx: ParseContext = { lines: source.split("\n"), i: 0, depth: 0, math: false };
   let prose: string[] = [];
   const flush = (): void => {
     if (prose.length > 0)

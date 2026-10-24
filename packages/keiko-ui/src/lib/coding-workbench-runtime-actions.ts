@@ -1,17 +1,27 @@
 import { useMemo, type Dispatch, type RefObject } from "react";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeResearchGrant,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  CodingWorkbenchCommandRequest,
+  CodingWorkbenchPromptMentions,
+  CodingWorkbenchRuntimeForkRequest,
+  CodingWorkbenchRuntimeInboxAction,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
 import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbench-runtime-hooks";
+import type { CodingWorkbenchFollowUpInputs } from "./coding-workbench-runtime-mutations";
 
 export interface CodingWorkbenchIssueStartIntent {
   readonly issueRef: string;
@@ -22,10 +32,25 @@ export interface CodingWorkbenchStartOptions {
   readonly conversationId?: string | undefined;
   readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
   readonly projectMemoryEnabled: boolean;
+  /**
+   * Workspace files the first prompt references with `@`, by path relative to the workspace the run
+   * starts in (ADR-0137 D10). The server resolves them when the first turn is dispatched.
+   */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /** Starts the first turn with a slash command; the text is then the command's arguments. */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /** The subagents and skills the first prompt mentions (#3906); the server confirms each. */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+  /**
+   * Starts a NEW task forked from another task (S03): from the task as it ended, or just before one
+   * of its user messages. Never together with `conversationId`.
+   */
+  readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
 }
 
 export interface CodingWorkbenchRuntimeActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
+  readonly setAgent: (agent: CodingWorkbenchAgent) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
   readonly setSelectedModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
@@ -42,7 +67,17 @@ export interface CodingWorkbenchRuntimeActions {
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
-  readonly submitFollowUp: (taskIntent: string) => Promise<void>;
+  readonly submitFollowUp: (
+    taskIntent: string,
+    inputs?: CodingWorkbenchFollowUpInputs,
+  ) => Promise<void>;
+  /** Undo the run's newest turn or restore an undo (B3, S04). */
+  readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
+  /** Withdraw a message waiting for the running turn, or change a queued one to Send now (S07). */
+  readonly inboxAction: (
+    action: CodingWorkbenchRuntimeInboxAction,
+    itemId: string,
+  ) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
@@ -73,7 +108,9 @@ function createCodingWorkbenchRuntimeActions({
     decideApproval,
     pause,
     resume,
+    inboxAction,
     retry,
+    revert,
     revokeResearchGrant,
     start,
     stop,
@@ -82,6 +119,7 @@ function createCodingWorkbenchRuntimeActions({
   } = mutations;
   return {
     setRequestedMode: (mode) => dispatch({ kind: "select-mode", mode }),
+    setAgent: (agent) => dispatch({ kind: "select-agent", agent }),
     setRuntimePreference: (preference) => {
       if (stateRef.current.runtimePreference === preference) return;
       profileSequence.current += 1;
@@ -104,6 +142,8 @@ function createCodingWorkbenchRuntimeActions({
     pause,
     resume,
     submitFollowUp,
+    revert,
+    inboxAction,
     revokeResearchGrant,
   };
 }
@@ -126,7 +166,9 @@ export function useCodingWorkbenchRuntimeActions(
     decideApproval,
     pause,
     resume,
+    inboxAction,
     retry,
+    revert,
     revokeResearchGrant,
     start,
     stop,
@@ -153,6 +195,8 @@ export function useCodingWorkbenchRuntimeActions(
           pause,
           resume,
           retry,
+          revert,
+          inboxAction,
           revokeResearchGrant,
           start,
           stop,
@@ -164,6 +208,7 @@ export function useCodingWorkbenchRuntimeActions(
       acknowledgeRecovery,
       decideApproval,
       dispatch,
+      inboxAction,
       pause,
       prepareCodexSetup,
       profileSequence,
@@ -173,6 +218,7 @@ export function useCodingWorkbenchRuntimeActions(
       refreshSource,
       resume,
       retry,
+      revert,
       revokeResearchGrant,
       sourceSequence,
       start,

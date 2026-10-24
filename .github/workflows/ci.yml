@@ -790,14 +790,9 @@ jobs:
       # packages by bare specifier, which resolve to `dist`.
       - name: Build internal packages so workspace dist resolves
         run: npm run build:packages
-      - name: Install locked original OpenCode host dependencies
-        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
       - name: Measure script coverage
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:scripts
-      - name: Add measured original host coverage to the script report
-        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:opencode-service-host
       - name: Upload script coverage evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1121,12 +1116,6 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
-      - name: Build workspace producers for the original OpenCode host
-        run: npm run build:packages
-      - name: Install the locked private OpenCode host graph
-        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
-      - name: Qualify the original OpenCode service, transport and process lifecycle
-        run: npm run test:opencode-service-host
       - name: Compile and functionally qualify the real secure-read helper
         run: node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}
 

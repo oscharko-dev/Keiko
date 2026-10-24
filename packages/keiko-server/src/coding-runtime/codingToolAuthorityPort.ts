@@ -43,9 +43,14 @@ import type {
   CodingToolNativeReadListResult,
   CodingToolMutationGuard,
   CodingToolProducerBinding,
+  CodingToolNativeVerificationHooks,
   MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import {
+  createCodingToolNativeEffectFacet,
+  createCodingToolNativeSettlementFacet,
+} from "./codingToolNativeEffect.js";
 import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
 import {
   createCodingToolGovernedDelegate,
@@ -176,6 +181,8 @@ interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly catalogBudget?: CatalogToolBudgetPort | undefined;
   readonly unavailableOptionalTools?: (() => ReadonlySet<OpenCodeOptionalToolName>) | undefined;
   readonly disableCatalogBridge?: boolean | undefined;
+  /** The run's verification owner for native verification commands (#3901). */
+  readonly nativeVerification?: CodingToolNativeVerificationHooks | undefined;
 }
 
 export type CodingToolAuthorityAvailability =
@@ -595,13 +602,7 @@ export function createRuntimeCodingToolFacade(
 ): CodingToolFacade {
   const configuration = { ...options };
   const activityLog = configuration.catalogActivityLog ?? processServerLogSink();
-  const nativeOptions = {
-    ...configuration,
-    invocationContext: context,
-    invocationRegistry:
-      configuration.invocationRegistry ??
-      createCodingToolInvocationRegistry({ now: lazyContextClock(context) }),
-  };
+  const nativeOptions = withInvocationContext(configuration, context);
   const authorityPort = createCodingToolAuthorityPort(authority, context, {
     approvalProofVerifier: configuration.approvalProofVerifier,
     activityLog,
@@ -629,7 +630,43 @@ export function createRuntimeCodingToolFacade(
     nativeOptions,
     activityLog,
   );
-  return nativeTextRead === undefined ? facade : { ...facade, nativeTextRead };
+  return {
+    ...facade,
+    ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
+    ...nativeExecutionFacets(authority, context, configuration),
+  };
+}
+
+function withInvocationContext(
+  configuration: RuntimeCodingToolFacadeOptions,
+  context: CodingToolAuthorityContextProvider,
+): NativeReadFacadeOptions {
+  return {
+    ...configuration,
+    invocationContext: context,
+    invocationRegistry:
+      configuration.invocationRegistry ??
+      createCodingToolInvocationRegistry({ now: lazyContextClock(context) }),
+  };
+}
+
+// Native OpenCode calls execute outside `execute()`: the same live authority and budget owner admits
+// their permission checks, and the same run-effort owner counts their terminal calls.
+function nativeExecutionFacets(
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
+  context: CodingToolAuthorityContextProvider,
+  configuration: RuntimeCodingToolFacadeOptions,
+): Pick<CodingToolFacade, "nativeEffect" | "nativeSettlement"> {
+  return {
+    nativeEffect: createCodingToolNativeEffectFacet(authority, context),
+    nativeSettlement: createCodingToolNativeSettlementFacet(configuration.onToolSettled, {
+      observeEditOutcome: configuration.observeEditOutcome,
+      verification: configuration.nativeVerification,
+    }),
+  };
 }
 
 /** F8 (#3413): the production CatalogToolBinder-backed bridge for the facade's covered actions

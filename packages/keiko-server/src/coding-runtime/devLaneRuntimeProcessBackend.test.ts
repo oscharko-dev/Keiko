@@ -210,6 +210,64 @@ describe("dev-lane runtime process backend", () => {
     );
   });
 
+  // #3897 lab (T7): the agent's shell answered "command not found: npm" because the child saw only
+  // the attested Git directory. The native profile keeps the launcher's allowlisted PATH behind
+  // that directory; the gateway profile still sees Git alone.
+  it("gives a native-profile child the launcher's PATH behind the attested Git directory", () => {
+    const fixture = stageFixture();
+    const privateStateRoot = join(dirname(fixture.cwd), "state", "run-2475");
+    mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+    const nativePolicy = createRuntimeGatewayConfinement({
+      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      runId: "run-2475",
+      treeBindingId: "f".repeat(64),
+      envelopeDigest: "a".repeat(64),
+      runtimeArtifactDigest: "b".repeat(64),
+      modelProfileDigest: "c".repeat(64),
+      profile: "keiko-native",
+      filesystem: {
+        workspaceRoot: fixture.cwd,
+        workspaceAccess: "read-write",
+        privateStateRoot,
+        runtimeReadRoot: fixture.runtimeRoot,
+      },
+    });
+    const request = {
+      ...launchRequest(fixture),
+      env: { PATH: "/opt/toolchain/bin:/usr/bin", OPENCODE_DISABLE_PROJECT_CONFIG: "true" },
+    };
+    const spawnWith = (policy: ReturnType<typeof gatewayConfinement>): string => {
+      const spawn = vi.fn<DevLaneRuntimeSpawn>(() => fakeChild(4711));
+      const activityLog = createBufferedServerLogSink();
+      const supervisor = createRuntimeProcessSupervisor({
+        backend: createDevLaneRuntimeProcessBackend({
+          identity: IDENTITY,
+          runtimeRoot: fixture.runtimeRoot,
+          gatewayConfinement: policy,
+          activityLog,
+          spawnRuntime: spawn,
+        }),
+        qualifications: [request.qualification],
+        planSandbox: (sandboxRequest): ReturnType<typeof planLongLivedRuntimeSandbox> =>
+          planLongLivedRuntimeSandbox(
+            sandboxRequest,
+            { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+            "darwin",
+          ),
+      });
+      expect(supervisor.spawnOwnedTree(request)).toMatchObject({ ok: true });
+      expect(
+        activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
+      ).toEqual([]);
+      return spawn.mock.calls[0]?.[2].env.PATH ?? "";
+    };
+    const nativePath = spawnWith(nativePolicy).split(":");
+    expect(nativePath.slice(1)).toEqual(["/opt/toolchain/bin", "/usr/bin"]);
+    expect(nativePath[0]?.startsWith("/")).toBe(true);
+    const gatewayPath = spawnWith(gatewayConfinement()).split(":");
+    expect(gatewayPath).toEqual([nativePath[0]]);
+  });
+
   it("does not mistake a live child's error event for a completed process tree", async () => {
     const fixture = stageFixture();
     const child = fakeChild(4711);

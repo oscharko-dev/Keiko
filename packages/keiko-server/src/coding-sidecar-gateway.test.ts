@@ -1,3 +1,4 @@
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -8,7 +9,9 @@ import {
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +92,15 @@ import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
+import {
+  CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
+  CODING_SIDECAR_MAX_IMAGE_PARTS,
+} from "./coding-sidecar-image-parts.js";
+import {
+  CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES,
+  CODING_SIDECAR_MAX_DOCUMENT_PARTS,
+} from "./coding-sidecar-document-parts.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
 import { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import {
@@ -658,6 +670,74 @@ describe("coding-sidecar gateway", () => {
       expect(typeof remaining).toBe("number");
       expect(remaining as number).toBeGreaterThan(deadline);
       expect(remaining as number).toBeLessThanOrEqual(opencodeGatewayOfferLifetimeMs(deadline));
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // #3897 lab (T7): a native run forwards OpenCode's own tool definitions; the mapped handler
+  // coverage neither applies nor is advertised, so its availability line (which named `keiko_*`
+  // tools the run never offered) must not be written. `gateway.tool-catalog.projected` records the
+  // native contract instead.
+  it("forwards native tool definitions without a mapped tool-availability line", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-native" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-native" }),
+        unavailableOptionalTools: () => new Set(["keiko_research_fetch"]),
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry("native"),
+    } as unknown as UiHandlerDeps;
+    const nativeTools = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+      type: "function" as const,
+      function: { name, description: "", parameters: { type: "object", properties: {} } },
+    }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "continue" }],
+            tools: nativeTools,
+          }),
+          correlationId: "correlation-native-tools",
+        },
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect((requestBody?.tools ?? []).map((tool) => tool.function.name)).toEqual([
+        "read",
+        "glob",
+        "grep",
+        "edit",
+        "shell",
+        "todo",
+      ]);
+      expect(
+        sink.events.filter((event) => event.op === "coding-sidecar.gateway.tool-availability"),
+      ).toEqual([]);
+      const projected = sink.events.find((event) => event.op === "gateway.tool-catalog.projected");
+      expect(projected?.extra).toMatchObject({ compatibility: "native", toolCount: 6 });
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
@@ -4012,7 +4092,7 @@ describe("coding-sidecar gateway", () => {
     );
     expect(validated?.correlationId).toEqual(expect.any(String));
     expect(validated?.extra).toMatchObject({
-      maxRequestBytes: 1_048_576,
+      maxRequestBytes: 4_194_304,
       inputMessageCount: 1,
       offeredToolCount: 0,
       completeness: "complete",
@@ -4029,7 +4109,7 @@ describe("coding-sidecar gateway", () => {
       "coding-sidecar.gateway.request-validated.line",
       formatActivityLogProofLine(validated ?? {}),
     );
-    expect(persistedValidated).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(persistedValidated).toMatchObject({ maxRequestBytes: 4_194_304, inputMessageCount: 1 });
   });
 
   it("rejects an over-limit assistant tool-call continuation before provider dispatch or spend", async () => {
@@ -4105,7 +4185,7 @@ describe("coding-sidecar gateway", () => {
       } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
     } as UiHandlerDeps;
     const result = await handleCodingSidecarGatewayChatCompletions(
-      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(100_000) }] }),
+      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(300_000) }] }),
       deps,
     );
     assertRouteResult(result);
@@ -9105,13 +9185,14 @@ describe("inactive Code Mode readiness selection", () => {
     expect(result).toMatchObject({ status: 200 });
     const request = chat.mock.calls[0]?.[0];
     expect(request).not.toHaveProperty("tools");
-    expect(request?.toolCatalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
+    const catalog = boundGatewayToolCatalog(request?.toolCatalog);
+    expect(catalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
       "execute",
       "question",
     ]);
-    expect(request?.toolCatalog?.projection.tools).toHaveLength(17);
-    expect(request?.toolCatalog?.offered.toolRefs).toHaveLength(17);
-    expect(request?.toolCatalog?.projection.profile).toEqual({
+    expect(catalog?.projection.tools).toHaveLength(17);
+    expect(catalog?.offered.toolRefs).toHaveLength(17);
+    expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,
     });
@@ -9560,4 +9641,807 @@ describe("pending readiness original cause evidence", () => {
       }
     },
   );
+});
+
+// #3897 S14 (review P2): the native `read` of a workspace image reaches the model as an
+// OpenAI-compatible user message holding one `image_url` data-URL part. The route admits it only
+// for the native profile and a model whose configuration declares image input, hands it to the
+// existing gateway content-part path (token accounting, admission evidence, provider projection),
+// and refuses everything else under a closed, body-free reason.
+describe("coding-sidecar gateway native image input", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+  });
+
+  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const NATIVE_TOOLS = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+    type: "function" as const,
+    function: { name, description: "", parameters: { type: "object", properties: {} } },
+  }));
+
+  function pngDataUrl(extraBytes = 56): string {
+    const bytes = Buffer.concat([PNG_SIGNATURE, Buffer.alloc(extraBytes, 7)]);
+    return `data:image/png;base64,${bytes.toString("base64")}`;
+  }
+
+  // The shape the pinned OpenCode 2.1.4 sends after a native `read` of an image: the tool result
+  // text, then the image alone in a user message (captured by opencodeNativeMediaInput.real.test).
+  function readImageMessages(url: string): readonly Record<string, unknown>[] {
+    return [
+      { role: "user", content: "Look at pixel.png" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_image_1",
+            type: "function",
+            function: { name: "read", arguments: '{"path":"pixel.png"}' },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call_image_1", content: "Image read successfully" },
+      { role: "user", content: [{ type: "image_url", image_url: { url } }] },
+    ];
+  }
+
+  function nativeDeps(
+    options: {
+      readonly imageInput?: boolean;
+      readonly documentInput?: boolean;
+      readonly toolProfile?: "direct" | "code-mode" | "native";
+      readonly contextWindow?: number;
+      readonly chatFactory?: UiHandlerDeps["codingSidecarGatewayChatFactory"];
+    } = {},
+  ): UiHandlerDeps {
+    return {
+      ...depsValue(
+        configValue(
+          provider(),
+          capability({
+            supportsImageInput: options.imageInput ?? true,
+            supportsDocumentInput: options.documentInput ?? false,
+            ...(options.contextWindow === undefined
+              ? {}
+              : { contextWindow: options.contextWindow }),
+          }),
+        ),
+        options.chatFactory,
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-native-image" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-native-image" }),
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(
+        options.toolProfile ?? "native",
+      ),
+    };
+  }
+
+  function send(
+    messages: readonly Record<string, unknown>[],
+    deps: UiHandlerDeps,
+  ): Promise<RouteResult | typeof STREAMING> {
+    return handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "coding", messages, tools: NATIVE_TOOLS }),
+      deps,
+    );
+  }
+
+  function stubProvider(): { readonly bodies: Record<string, unknown>[] } {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        bodies.push(
+          JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>,
+        );
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    return { bodies };
+  }
+
+  function rejectionLine(sink: BufferedServerLogSink): ServerLogEvent | undefined {
+    return sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+  }
+
+  it("forwards a read image to the provider as one image_url part through the gateway path", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const provider = stubProvider();
+    const url = pngDataUrl();
+
+    const result = await send(readImageMessages(url), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(provider.bodies).toHaveLength(1);
+    const sent = provider.bodies[0]?.messages as readonly { content: unknown }[];
+    expect(sent[0]?.content).toBe("Look at pixel.png");
+    expect(sent[3]?.content).toEqual([{ type: "image_url", image_url: { url } }]);
+    // The existing gateway admission path accounted for the image and logged it without bytes.
+    const admission = sink.events.find((event) => event.op === "gateway.prompt.admission");
+    expect(admission?.extra).toMatchObject({
+      imageCount: 1,
+      imageAccounting: "fallback-estimated",
+    });
+    expect(Number(admission?.extra?.imageReserveTokens)).toBeGreaterThan(0);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.extra).toMatchObject({ runId: "run-native-image", imageCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain(url.slice(30));
+  });
+
+  it("charges the gateway's image allowance and keeps the part list beside the joined text", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+    const url = pngDataUrl();
+    const deps = nativeDeps({
+      chatFactory:
+        (_config, modelId) =>
+        (request): Promise<NormalizedResponse> => {
+          seen.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        },
+    });
+
+    const result = await send(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "first" },
+            { type: "image_url", image_url: { url, detail: "low" } },
+            { type: "text", text: "second" },
+          ],
+        },
+      ],
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seen[0]?.messages).toEqual([
+      {
+        role: "user",
+        content: "first\n\nsecond",
+        contentParts: [
+          { type: "text", text: "first" },
+          { type: "image_url", image_url: { url } },
+          { type: "text", text: "second" },
+        ],
+      },
+    ]);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    const withoutImage = countGatewayPromptTokens({
+      messages: [{ role: "user", content: "first\n\nsecond" }],
+    });
+    const estimated = Number(validated?.extra?.estimatedPromptTokens);
+    // The estimate is the shared gateway counter over the complete projection, image included.
+    expect(estimated).toBe(
+      countGatewayPromptTokens({
+        messages: seen[0]?.messages ?? [],
+        tools: NATIVE_TOOLS.map(({ function: tool }) => tool),
+      }),
+    );
+    expect(estimated).toBeGreaterThan(withoutImage);
+  });
+
+  it.each([
+    { label: "a text-only model", options: { imageInput: false } },
+    { label: "the direct (mapped) profile", options: { toolProfile: "direct" as const } },
+    { label: "the Code Mode (mapped) profile", options: { toolProfile: "code-mode" as const } },
+  ])("refuses image input for $label before any provider call", async ({ options }) => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    const url = pngDataUrl();
+
+    const result = await send(readImageMessages(url), nativeDeps(options));
+
+    assertRouteResult(result);
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-input-unsupported"],
+        },
+      },
+    });
+    expect(provider.bodies).toHaveLength(0);
+    expect(rejectionLine(sink)).toMatchObject({
+      level: "warn",
+      status: 400,
+      errorKind: "invalid-request",
+      extra: { reason: "image-input-unsupported", runId: "run-native-image" },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(url.slice(30));
+  });
+
+  it.each([
+    { reason: "image-part-invalid", url: "data:image/png;base64,@@@@" },
+    { reason: "image-part-invalid", url: "data:image/png;base64,AAAAA" },
+    { reason: "image-part-invalid", url: "data:image/png;base64," },
+    { reason: "image-part-invalid", url: "data:image/png;base64,AA=A" },
+    { reason: "image-part-invalid", url: "data:image/png,AAAA" },
+    { reason: "image-part-invalid", url: "data:image/png;charset=utf-8;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:image/svg+xml;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:image/svg;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:application/pdf;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:text/plain;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:;base64,AAAA" },
+  ])("refuses the image part $url with $reason", async ({ reason, url }) => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+
+    const result = await send(readImageMessages(url), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({
+      error: {
+        code: "BAD_REQUEST",
+        message:
+          CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[
+            reason as keyof typeof CODING_SIDECAR_IMAGE_REJECTION_MESSAGES
+          ],
+      },
+    });
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason });
+    expect(provider.bodies).toHaveLength(0);
+  });
+
+  it.each(["assistant", "system", "tool"])(
+    "refuses an image part on a %s message, which providers never accept",
+    async (role) => {
+      resetGatewayInstanceCacheForTests();
+      const sink = captureServerLog("warn");
+      const message =
+        role === "tool"
+          ? {
+              role,
+              tool_call_id: "call_1",
+              content: [{ type: "image_url", image_url: { url: pngDataUrl() } }],
+            }
+          : { role, content: [{ type: "image_url", image_url: { url: pngDataUrl() } }] };
+
+      const result = await send([{ role: "user", content: "go" }, message], nativeDeps());
+
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+      expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "image-part-invalid" });
+    },
+  );
+
+  it("refuses more image parts than one request may carry, and admits exactly that many", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    stubProvider();
+    const images = (count: number): Record<string, unknown> => ({
+      role: "user",
+      content: Array.from({ length: count }, () => ({
+        type: "image_url",
+        image_url: { url: pngDataUrl(0) },
+      })),
+    });
+    // A large declared window keeps the prompt-token bound out of the way of the count bound.
+    const deps = nativeDeps({ contextWindow: 4_000_000 });
+
+    const admitted = await send([images(CODING_SIDECAR_MAX_IMAGE_PARTS)], deps);
+    assertRouteResult(admitted);
+    expect(admitted.status).toBe(200);
+
+    const refused = await send([images(CODING_SIDECAR_MAX_IMAGE_PARTS + 1)], deps);
+    assertRouteResult(refused);
+    expect(refused.status).toBe(400);
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "image-count-exceeded" });
+  });
+
+  it("refuses an image that exceeds the request-body ceiling under the existing size reason", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    const oversized = `data:image/png;base64,${"A".repeat(5 * 1_048_576)}`;
+
+    const result = await send(readImageMessages(oversized), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(413);
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "request-too-large" });
+    expect(provider.bodies).toHaveLength(0);
+  });
+
+  it("keeps a remote or file image reference an unsupported content part", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    for (const url of [
+      "https://example.invalid/x.png",
+      "file:///etc/passwd",
+      "http://127.0.0.1/x",
+    ]) {
+      const result = await send(readImageMessages(url), nativeDeps());
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+    }
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["content-part-unsupported", "content-part-unsupported", "content-part-unsupported"]);
+  });
+
+  // #3906: the shape OpenCode's OpenAI-chat serializer sends for a read PDF.
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n1 0 obj << >> endobj\n%%EOF\n", "latin1");
+  const pdfDataUrl = `data:application/pdf;base64,${PDF_BYTES.toString("base64")}`;
+  const readDocumentMessages = (fileData: string): readonly Record<string, unknown>[] => [
+    { role: "user", content: "Summarize spec.pdf" },
+    {
+      role: "user",
+      content: [{ type: "file", file: { filename: "spec.pdf", file_data: fileData } }],
+    },
+  ];
+
+  it("forwards a read PDF to a document-capable model as one file part (#3906)", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const provider = stubProvider();
+
+    const result = await send(
+      readDocumentMessages(pdfDataUrl),
+      nativeDeps({ documentInput: true }),
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    const sent = provider.bodies[0]?.messages as readonly { content: unknown }[];
+    expect(sent[1]?.content).toEqual([
+      { type: "file", file: { filename: "spec.pdf", file_data: pdfDataUrl } },
+    ]);
+    const admission = sink.events.find((event) => event.op === "gateway.prompt.admission");
+    expect(admission?.extra).toMatchObject({
+      imageCount: 0,
+      documentCount: 1,
+      imageAccounting: "fallback-estimated",
+    });
+    expect(Number(admission?.extra?.imageReserveTokens)).toBeGreaterThan(0);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.extra).toMatchObject({ documentCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain(PDF_BYTES.toString("base64").slice(4));
+  });
+
+  it("refuses PDF input openly for a model or profile that does not declare it (#3906)", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    for (const deps of [
+      nativeDeps({ documentInput: false }),
+      nativeDeps({ documentInput: true, toolProfile: "direct" }),
+    ]) {
+      const result = await send(readDocumentMessages(pdfDataUrl), deps);
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+    }
+    expect(provider.bodies).toHaveLength(0);
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["document-input-unsupported", "document-input-unsupported"]);
+  });
+
+  it("refuses a non-PDF or remote file part and more documents than one request may carry", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    stubProvider();
+    const deps = nativeDeps({ documentInput: true, contextWindow: 4_000_000 });
+    const documents = (count: number): Record<string, unknown> => ({
+      role: "user",
+      content: Array.from({ length: count }, () => ({
+        type: "file",
+        file: { filename: "spec.pdf", file_data: pdfDataUrl },
+      })),
+    });
+    const admitted = await send([documents(CODING_SIDECAR_MAX_DOCUMENT_PARTS)], deps);
+    assertRouteResult(admitted);
+    expect(admitted.status).toBe(200);
+    for (const messages of [
+      [documents(CODING_SIDECAR_MAX_DOCUMENT_PARTS + 1)],
+      readDocumentMessages(`data:text/html;base64,${PDF_BYTES.toString("base64")}`),
+      readDocumentMessages("https://example.invalid/spec.pdf"),
+    ]) {
+      const refused = await send(messages, deps);
+      assertRouteResult(refused);
+      expect(refused.status).toBe(400);
+    }
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["document-count-exceeded", "document-mime-unsupported", "content-part-unsupported"]);
+  });
+
+  it("classifies each document refusal message under its own closed reason", () => {
+    for (const [reason, message] of Object.entries(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES)) {
+      expect(
+        _classifyBadRequestReasonForTests({
+          status: 400,
+          body: { error: { code: "BAD_REQUEST", message } },
+        }),
+      ).toBe(reason);
+    }
+  });
+
+  it("classifies each image refusal message under its own closed reason", () => {
+    for (const [reason, message] of Object.entries(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES)) {
+      expect(
+        _classifyBadRequestReasonForTests({
+          status: 400,
+          body: { error: { code: "BAD_REQUEST", message } },
+        }),
+      ).toBe(reason);
+    }
+  });
+});
+
+describe("coding sidecar gateway carries the run's bound private skill (#4025, #3897 review)", () => {
+  afterEach(resetServerLogger);
+  const RUN_ID = "run-gateway-test";
+  const MARKER = "AUDIT_SKILL_RECEIPT_4064";
+  const BODY = `# Audit method\nFor the audit receipt task, include ${MARKER} in the reply.\n`;
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** A Coding History task whose run began with `body` selected (or nothing selected). */
+  function runStore(body?: string): {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly skill?: { readonly id: string; readonly revision: number; readonly digest: string };
+  } {
+    const root = mkdtempSync(join(tmpdir(), "keiko-gateway-skill-"));
+    roots.push(root);
+    const store = createInMemoryUiStore();
+    const history = store.codingHistory;
+    if (history === undefined) throw new Error("Coding History store missing");
+    const task = {
+      projectPath: root,
+      title: "Audit receipt",
+      modelId: "coding",
+      workspaceId: "ws_skill",
+      taskId: "task_skill",
+      branch: "keiko/task/skill",
+      operatorDigest: "a".repeat(64),
+    };
+    const created = history.create(task);
+    const imported =
+      body === undefined
+        ? undefined
+        : store.markdownSkills.import({
+            fileName: "audit.md",
+            contentBase64: Buffer.from(body).toString("base64"),
+          });
+    const skill =
+      imported === undefined
+        ? undefined
+        : { id: imported.id, revision: imported.revision, digest: imported.digest };
+    if (skill !== undefined) store.markdownSkills.select(created.id, skill, 0);
+    history.begin({
+      ...task,
+      conversationId: created.id,
+      runId: RUN_ID,
+      intent: "Give a receipt.",
+    });
+    return { store, ...(skill === undefined ? {} : { skill }) };
+  }
+
+  async function dispatch(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    contextWindow = 128_000,
+  ): Promise<{ readonly result: RouteResult; readonly sent: GatewayCallRequest[] }> {
+    resetGatewayInstanceCacheForTests();
+    const sent: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      sent.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [
+            { role: "system", content: "You are the coding runtime." },
+            { role: "user", content: "Give a receipt." },
+            { role: "assistant", content: "Reading." },
+            { role: "user", content: "Continue." },
+          ],
+          tools: [],
+        }),
+        { ...depsValue(configValue(provider(), capability({ contextWindow }))), store },
+      );
+      assertRouteResult(result);
+      return { result, sent };
+    } finally {
+      chat.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  }
+
+  const occurrences = (request: GatewayCallRequest | undefined, text: string): number =>
+    JSON.stringify(request?.messages ?? []).split(text).length - 1;
+
+  it("sends the selected skill exactly once, in the task turn, and records only its identity", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(occurrences(sent[0], MARKER)).toBe(1);
+    const messages = sent[0]?.messages ?? [];
+    expect(JSON.stringify(messages[1])).toContain(MARKER);
+    expect(JSON.stringify(messages[1])).toContain("Give a receipt.");
+    expect(JSON.stringify(messages[3])).not.toContain(MARKER);
+    const attached = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.skill-attached",
+    );
+    expect(attached?.extra).toMatchObject({
+      runId: RUN_ID,
+      skillRevision: skill?.revision,
+      skillDigest: skill?.digest,
+      skillByteCount: Buffer.byteLength(BODY),
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+    expectActivityLogProof(
+      "coding-sidecar.gateway.skill-attached.line",
+      formatActivityLogProofLine(attached ?? {}),
+    );
+  });
+
+  it("sends no skill text and records no attachment for a run that began without a selection", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore();
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(200);
+    expect(occurrences(sent[0], "Selected skill instructions")).toBe(0);
+    expect(sink.events.some((event) => event.op === "coding-sidecar.gateway.skill-attached")).toBe(
+      false,
+    );
+  });
+
+  it("keeps the revision the run was bound to when the skill is replaced afterwards", async () => {
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+    store.markdownSkills.replace(skill.id, skill.revision, {
+      fileName: "audit.md",
+      contentBase64: Buffer.from("# Audit method\nA REPLACED METHOD.\n").toString("base64"),
+    });
+
+    const { sent } = await dispatch(store);
+
+    expect(occurrences(sent[0], MARKER)).toBe(1);
+    expect(occurrences(sent[0], "A REPLACED METHOD")).toBe(0);
+  });
+
+  it("refuses the dispatch once the bound skill was deleted, before any provider call", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+    store.markdownSkills.delete(skill.id, skill.revision);
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(409);
+    expect(sent).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+  });
+
+  /**
+   * The real gateway and its retry, with only the provider's HTTP replaced: the first attempt is
+   * answered 503, `between` runs before that answer returns, and the retry is answered 200, as one
+   * JSON answer or, for a streamed turn, as a stream.
+   */
+  async function dispatchWithRetry(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    between: () => void,
+    stream = false,
+  ): Promise<{
+    readonly result: RouteResult | typeof STREAMING;
+    readonly bodies: string[];
+    readonly streamed: string;
+  }> {
+    resetGatewayInstanceCacheForTests();
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit): Promise<Response> => {
+        bodies.push(typeof init?.body === "string" ? init.body : "");
+        if (bodies.length === 1) {
+          between();
+          return Promise.resolve(new Response("{}", { status: 503 }));
+        }
+        return Promise.resolve(
+          stream
+            ? providerSse([
+                sseDelta({ content: "Receipt." }),
+                sseFinish("stop"),
+                "data: [DONE]\n\n",
+              ])
+            : new Response(
+                JSON.stringify({
+                  choices: [{ finish_reason: "stop", message: { content: "Receipt." } }],
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+    try {
+      const config = configValue(provider({ maxRetries: 1, retryBaseDelayMs: 1 }), capability());
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "azure-coding-model",
+            messages: [{ role: "user", content: "Give a receipt." }],
+            tools: [],
+            stream,
+          }),
+          res: response.res,
+        },
+        { ...depsValue(config), store },
+      );
+      return { result, bodies, streamed: response.body() };
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  }
+
+  it.each([
+    ["a buffered", false],
+    ["a streamed", true],
+  ])(
+    "sends the bound skill once in every physical attempt of %s turn, a retry included",
+    async (_label, stream) => {
+      const { store } = runStore(BODY);
+
+      const { result, bodies, streamed } = await dispatchWithRetry(store, () => undefined, stream);
+
+      expect(bodies.map((body) => body.split(MARKER).length - 1)).toEqual([1, 1]);
+      if (stream) {
+        expect(result).toBe(STREAMING);
+        expect(frameDeltas(streamed)).toContainEqual({ content: "Receipt." });
+      } else {
+        expect(result).toMatchObject({ status: 200 });
+      }
+    },
+  );
+
+  it("refuses the retry when the bound skill was deleted after the first attempt", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+
+    const { result, bodies } = await dispatchWithRetry(store, () => {
+      store.markdownSkills.delete(skill.id, skill.revision);
+    });
+
+    // The skill was current when the first attempt was sent; the retry is checked again and never
+    // reaches the provider.
+    expect(bodies).toHaveLength(1);
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+  });
+
+  it("ends a streamed turn as rejected when the bound skill was deleted before its retry", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+
+    const { result, bodies, streamed } = await dispatchWithRetry(
+      store,
+      () => {
+        store.markdownSkills.delete(skill.id, skill.revision);
+      },
+      true,
+    );
+
+    expect(bodies).toHaveLength(1);
+    expect(result).toBe(STREAMING);
+    // A rejection, not a retryable fault: the runtime does not resend a turn the skill check refuses.
+    expect(streamed).toContain("invalid_request_error");
+    expect(streamed).not.toContain("Receipt.");
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+  });
+
+  it("sends no further attempt once the run's capability is revoked", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore(BODY);
+    let revoked = false;
+    const deps = (config: GatewayConfig): UiHandlerDeps => {
+      const base = depsValue(config);
+      const authenticator = base.runtimeCapabilityAuthenticator;
+      return {
+        ...base,
+        store,
+        runtimeCapabilityAuthenticator: {
+          ...authenticator,
+          authenticate: (capability: string, audience: "model-gateway" | "tool-facade") =>
+            revoked ? { ok: false } : authenticator?.authenticate(capability, audience),
+        },
+      };
+    };
+    resetGatewayInstanceCacheForTests();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        calls += 1;
+        revoked = true;
+        return Promise.resolve(new Response("{}", { status: 503 }));
+      }),
+    );
+    try {
+      const config = configValue(provider({ maxRetries: 1, retryBaseDelayMs: 1 }), capability());
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [{ role: "user", content: "Give a receipt." }],
+          tools: [],
+        }),
+        deps(config),
+      );
+      expect(calls).toBe(1);
+      expect(result).toMatchObject({ status: 401 });
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+      ).toMatchObject({ reason: "capability-invalid", runId: RUN_ID });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  it("counts the skill against the prompt bound: a skill that does not fit refuses as overflow", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore(`${BODY}${"Keep every step of this method in mind. ".repeat(600)}`);
+
+    const { result, sent } = await dispatch(store, 8_192);
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "context_length_exceeded" } });
+    expect(sent).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "prompt-tokens-exceeded" });
+  });
 });

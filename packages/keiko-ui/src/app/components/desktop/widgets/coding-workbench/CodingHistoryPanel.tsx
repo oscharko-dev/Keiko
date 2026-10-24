@@ -1,9 +1,14 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { CodingHistoryTask } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  CodingHistoryTask,
+  CodingTaskExportFormat,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CODING_HISTORY_CHANGED,
+  exportCodingTask,
   fetchCodingHistory,
+  saveCodingTaskExport,
   updateCodingTask,
 } from "@/lib/coding-history-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -15,6 +20,12 @@ import type { WindowRenderContext } from "../../windows/WindowsRegistry";
 
 function historyError(error: unknown): void {
   reportClientDiagnostic(`[keiko] coding history request failed: ${clientErrorSummary(error)}`, {
+    correlationId: correlationIdOf(error),
+  });
+}
+
+function exportError(error: unknown): void {
+  reportClientDiagnostic(`[keiko] coding task export failed: ${clientErrorSummary(error)}`, {
     correlationId: correlationIdOf(error),
   });
 }
@@ -187,7 +198,53 @@ function HistoryItem({
         </time>
       </button>
       <RenameTask task={task} />
+      <ExportTask task={task} />
     </li>
+  );
+}
+
+const EXPORT_FORMATS = [
+  { format: "json", label: "codingWorkbench.history.exportJson" },
+  { format: "markdown", label: "codingWorkbench.history.exportMarkdown" },
+] as const;
+
+// The human asks for the file; it is built by the local server, redacted, and saved through the
+// browser's own download path. Nothing is uploaded (#3904).
+function ExportTask({ task }: { readonly task: CodingHistoryTask }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const run = async (format: CodingTaskExportFormat): Promise<void> => {
+    setBusy(true);
+    setError(false);
+    try {
+      saveCodingTaskExport(await exportCodingTask(task.id, format));
+    } catch (cause) {
+      exportError(cause);
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className={styles.cmpExport}>
+        {EXPORT_FORMATS.map(({ format, label }) => (
+          <button
+            key={format}
+            className={styles.cmpSecondary}
+            type="button"
+            title={t("codingWorkbench.history.exportHint")}
+            disabled={busy}
+            onClick={() => void run(format)}
+          >
+            {t(label)}
+          </button>
+        ))}
+      </div>
+      {busy ? <output>{t("codingWorkbench.history.exporting")}</output> : null}
+      {error ? <p role="alert">{t("codingWorkbench.history.exportError")}</p> : null}
+    </>
   );
 }
 

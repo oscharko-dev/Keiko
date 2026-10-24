@@ -558,6 +558,18 @@ export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxOutputTokens: number;
   readonly maxInputMessages: number;
   readonly maxRequestBytes: number;
+  /**
+   * The admitted model's declared image input (`ModelCapability.supportsImageInput`), carried from
+   * the same projection to both the native runtime's provider binding and the sidecar gateway's
+   * content-part admission so they cannot disagree (#3897 S14). Absent means text only.
+   */
+  readonly supportsImageInput?: boolean | undefined;
+  /**
+   * The admitted model's PDF document input (`ModelCapability.supportsDocumentInput`, the
+   * capability the `document_input` readiness probe verifies), carried the same way to the native
+   * provider binding and to the gateway's document-part admission (#3906). Absent means no PDFs.
+   */
+  readonly supportsDocumentInput?: boolean | undefined;
 }
 
 export interface CodingWorkbenchSidecarGatewayProjection {
@@ -639,7 +651,34 @@ export interface CodingWorkbenchPermissionRequest {
   readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  /**
+   * The OpenCode permission a native policy ask waits on (`edit`, `shell`, `webfetch`, …): the
+   * explicit discriminator of a native ask, present for every native action, not only commands.
+   */
+  readonly nativePermission?: string | undefined;
   readonly expiresAt: string;
+}
+
+/**
+ * A native OpenCode policy ask (#3897) is the one permission request that names no supervised
+ * action kind: the runtime's own action is evaluated by the server-owned native policy, and the
+ * ask carries that action's OpenCode permission name. Commands additionally carry the closed
+ * `native-*` command label. The orchestrator pauses the run for it and settles it through the
+ * permission port alone; no Keiko authority is minted for it, and the Workbench enables Approve
+ * only once the authenticated review channel shows the action's own resources.
+ */
+export const CODING_WORKBENCH_NATIVE_ACTION_LABEL_PREFIX = "native-";
+
+export function isNativeActionPermissionRequest(
+  request:
+    | Pick<CodingWorkbenchPermissionRequest, "actionKind" | "nativePermission" | "commandLabel">
+    | undefined,
+): boolean {
+  return (
+    request?.actionKind === undefined &&
+    typeof request?.nativePermission === "string" &&
+    request.nativePermission.length > 0
+  );
 }
 
 /** Body-free verifier step outcomes, never test or assertion counts. */

@@ -6,8 +6,10 @@ import {
   createFixedOpenCodeV2Config,
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
+  openCodeConfigDirectory,
   resolveOpenCodeContextGeometry,
   type OpenCodeLaunchProfileInput,
+  openCodePlanDirectory,
 } from "./opencodeLaunchProfile.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
@@ -30,13 +32,20 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
   return value as Readonly<Record<string, unknown>>;
 }
 
+// The effect OpenCode resolves for `tool` on a generic resource: last match wins, and a rule naming
+// a specific resource (the plan directory) does not decide a generic one.
 function finalPermissionAction(
-  rules: readonly { readonly action: string; readonly effect: string }[],
+  rules: readonly {
+    readonly action: string;
+    readonly effect: string;
+    readonly resource?: string;
+  }[],
   tool: string,
 ): string | undefined {
   for (let index = rules.length - 1; index >= 0; index -= 1) {
     const rule = rules[index];
-    if (rule !== undefined && (rule.action === "*" || rule.action === tool)) {
+    const generic = rule?.resource === undefined || rule.resource === "*";
+    if (rule !== undefined && generic && (rule.action === "*" || rule.action === tool)) {
       return rule.effect;
     }
   }
@@ -133,6 +142,400 @@ describe("OpenCode launch profile", () => {
     );
     expect(finalPermissionAction(config.permissions, "keiko_repository_read")).toBe("deny");
     expect(finalPermissionAction(config.permissions, "keiko_submit_changeset")).toBe("deny");
+  });
+
+  // #3897: the native profile is standalone OpenCode under Keiko's policy hook. Nothing is
+  // denied statically except the mode-independent external-directory escape; every other action
+  // is decided per call by the server-owned policy. Repository configuration is data until the
+  // operator admits its executable effects (#3903), so the project layer stays switched off.
+  it("emits the standalone-equivalent native configuration with the project layer off", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      toolProfile: "native",
+      ...CONTEXT_INPUT,
+      randomBytes: () => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected native launch profile");
+    const config = JSON.parse(profile.config) as {
+      readonly snapshots: boolean;
+      readonly update: string;
+      readonly share: string;
+      readonly model: string;
+      readonly default_agent: string;
+      readonly providers: Readonly<Record<string, unknown>>;
+      readonly permissions: readonly { readonly action: string; readonly effect: string }[];
+    };
+    expect(config).toMatchObject({
+      snapshots: true,
+      update: "disable",
+      share: "disabled",
+      model: "keiko-runtime/coding",
+      default_agent: "build",
+    });
+    expect(config).not.toHaveProperty("tools");
+    expect(Object.keys(record(config.providers))).toEqual(["keiko-runtime"]);
+    // #3897 review (P1): no global rule names an ordinary action, because the producer appends
+    // configured rules after each built-in agent's own and the last match wins; Plan's edit denial,
+    // Explore's read-only floor and General's subagent restriction stay the producer's. Every
+    // external directory stays denied except the run's own plan directory (last match wins).
+    expect(config.permissions).toEqual([
+      { action: "external_directory", resource: "*", effect: "deny" },
+      {
+        action: "external_directory",
+        resource: `${openCodePlanDirectory("/private/run")}/*`,
+        effect: "allow",
+      },
+    ]);
+    for (const tool of ["read", "edit", "shell", "webfetch", "subagent", "execute", "future"]) {
+      expect(finalPermissionAction(config.permissions, tool)).toBeUndefined();
+    }
+    expect(finalPermissionAction(config.permissions, "external_directory")).toBe("deny");
+    // Keiko configures no agent: the producer's built-in agents keep their own rules, and the
+    // fail-closed property lives in readiness (an inactive policy plugin never becomes ready).
+    expect(config).not.toHaveProperty("agents");
+    expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+    expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+    // The one definition of the directory: the kernel boundary protects exactly what OpenCode loads.
+    expect(openCodeConfigDirectory("/private/run")).toBe(profile.env.OPENCODE_CONFIG_DIR);
+    expect(profile.env.npm_config_offline).toBe("true");
+    const mapped = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
+      randomBytes: () => Buffer.alloc(32, 7),
+    });
+    if (!mapped.ok) throw new Error("expected mapped launch profile");
+    expect(mapped.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+    expect(mapped.config).not.toBe(profile.config);
+  });
+
+  // #3897 review (P1): the repository must not be able to execute plugin modules or select a
+  // different model route. The producer has no per-plugin admission, so the whole project layer
+  // (opencode.json, .opencode/ agents, commands, skills and plugins) is off until #3903 admits
+  // individual items, and the server-owned binding rides the highest layer a repository cannot
+  // reach: OPENCODE_CONFIG_CONTENT is merged after every discovered project document.
+  describe("native repository-configuration boundary", () => {
+    function nativeProfile(): Extract<ReturnType<typeof buildOpenCodeLaunchProfile>, { ok: true }> {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        ...CONTEXT_INPUT,
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      return profile;
+    }
+
+    it("switches the repository's executable configuration layer off", () => {
+      const { env } = nativeProfile();
+      expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+      // Only the private discovery directory feeds plugins and agents; no second file layer.
+      expect(env).not.toHaveProperty("OPENCODE_CONFIG");
+      expect(env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+    });
+
+    it("re-asserts the server-owned binding on the highest layer", () => {
+      const profile = nativeProfile();
+      const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as Record<
+        string,
+        unknown
+      >;
+      const file = JSON.parse(profile.config) as Record<string, unknown>;
+      expect(Object.keys(content).sort()).toEqual([
+        "default_agent",
+        "formatter",
+        "mcp",
+        "model",
+        "permissions",
+        "policies",
+        "providers",
+        "share",
+        "update",
+      ]);
+      for (const key of Object.keys(content)) expect(content[key]).toEqual(file[key]);
+      const provider = record(record(content.providers)["keiko-runtime"]);
+      expect(record(provider.settings).baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
+      expect(provider.headers).toEqual({
+        Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}",
+      });
+      expect(content.model).toBe("keiko-runtime/coding");
+    });
+
+    // The pinned runtime lists OpenCode's hosted free models and discovers local model servers on
+    // their default loopback ports unless told otherwise (original executable, real-binary test in
+    // `opencodeNativeProjectBoundary.real.test.ts`). The last statement admits only the gateway.
+    it("admits only the gateway-bound provider on every profile and keeps the free models off", () => {
+      const expected = [
+        { action: "provider.use", resource: "*", effect: "deny" },
+        { action: "provider.use", resource: "keiko-runtime", effect: "allow" },
+      ];
+      const native = nativeProfile();
+      const content = JSON.parse(native.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly policies?: unknown;
+      };
+      expect(content.policies).toEqual(expected);
+      for (const toolProfile of ["direct", "code-mode", "native"] as const) {
+        const launched = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile,
+          ...CONTEXT_INPUT,
+        });
+        if (!launched.ok) throw new Error("profile-invalid");
+        expect(record(JSON.parse(launched.config)).policies, toolProfile).toEqual(expected);
+        expect(launched.env.OPENCODE_DISABLE_FREE_MODELS, toolProfile).toBe("1");
+        expect(launched.env.OPENCODE_DISABLE_MODELS_FETCH, toolProfile).toBe("1");
+      }
+    });
+
+    it("re-asserts only Keiko's own permission rules on the highest layer", () => {
+      const content = JSON.parse(nativeProfile().env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly permissions: readonly { readonly action: string; readonly effect: string }[];
+      };
+      // No rule names an ordinary action: the highest layer cannot replace an agent's own denial.
+      for (const action of ["edit", "shell", "execute", "read"])
+        expect(finalPermissionAction(content.permissions, action)).toBeUndefined();
+      expect(content).not.toHaveProperty("agents");
+      // The generic external directory stays denied on the highest layer; the one allow names
+      // exactly the run's plan directory.
+      expect(content.permissions).toEqual([
+        { action: "external_directory", resource: "*", effect: "deny" },
+        {
+          action: "external_directory",
+          resource: `${openCodePlanDirectory("/private/run")}/*`,
+          effect: "allow",
+        },
+      ]);
+    });
+
+    it("keeps credentials and repository text out of the highest layer", () => {
+      const { env } = nativeProfile();
+      const content = env.OPENCODE_CONFIG_CONTENT ?? "";
+      expect(content).not.toContain(env.OPENCODE_SERVER_PASSWORD ?? "unset");
+      expect(content).not.toMatch(/https?:\/\//u);
+      expect(content).not.toContain("plugin");
+      expect(content).not.toContain("instructions");
+    });
+
+    it("leaves the mapped profiles without a configuration-content layer", () => {
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        const mapped = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile,
+          ...CONTEXT_INPUT,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!mapped.ok) throw new Error("expected mapped launch profile");
+        expect(mapped.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+        expect(mapped.env).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
+      }
+    });
+  });
+
+  // #3897 (parity row C07): the pinned producer runs a built-in formatter after its own edits as a
+  // plain child process no permission sees, and only when the configuration says `formatter: true`.
+  // The setting is therefore explicit in every native launch and follows the launch mode: only Full
+  // access enables it, because the formatter cannot follow an in-place narrowing and a Full access
+  // tree cannot be narrowed in place.
+  describe("native built-in formatter binding", () => {
+    function formatterFor(mode: string | undefined): {
+      readonly content: unknown;
+      readonly file: unknown;
+      readonly disposition: unknown;
+    } {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        ...CONTEXT_INPUT,
+        ...(mode === undefined ? {} : { mode }),
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as Record<
+        string,
+        unknown
+      >;
+      const file = JSON.parse(profile.config) as Record<string, unknown>;
+      return { content: content.formatter, file: file.formatter, disposition: profile.formatter };
+    }
+
+    it.each([
+      ["autonomous-delivery", true, "enabled"],
+      ["supervised-coding", false, "disabled-supervised-mode"],
+      ["governed-assist", false, "disabled-ask-mode"],
+    ] as const)("binds %s to formatter=%s on both configuration layers", (mode, on, why) => {
+      expect(formatterFor(mode)).toEqual({ content: on, file: on, disposition: why });
+    });
+
+    it("fails closed to an explicit false for an absent or unrecognized mode", () => {
+      for (const mode of [undefined, "", "Autonomous-Delivery", "full-access", "unknown"])
+        expect(formatterFor(mode)).toEqual({
+          content: false,
+          file: false,
+          disposition: "disabled-unknown-mode",
+        });
+    });
+
+    it("never gives the mapped profiles a formatter setting or a disposition", () => {
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        const mapped = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile,
+          mode: "autonomous-delivery",
+          ...CONTEXT_INPUT,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!mapped.ok) throw new Error("expected mapped launch profile");
+        expect(mapped.config).not.toContain("formatter");
+        expect(mapped).not.toHaveProperty("formatter");
+      }
+    });
+
+    it("changes nothing but the formatter setting between modes", () => {
+      const rest = (mode: string): string => {
+        const profile = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile: "native",
+          ...CONTEXT_INPUT,
+          mode,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!profile.ok) throw new Error("expected native launch profile");
+        const config = JSON.parse(profile.config) as Record<string, unknown>;
+        delete config.formatter;
+        return JSON.stringify(config);
+      };
+      expect(rest("governed-assist")).toBe(rest("autonomous-delivery"));
+      expect(rest("supervised-coding")).toBe(rest("autonomous-delivery"));
+    });
+  });
+
+  // #3897 S14 (review P2): the native `read` of an image reaches the model only when the provider
+  // model declares image input, exactly as in standalone OpenCode. The declaration follows the
+  // admitted model's own capability; the mapped profiles never declare it.
+  describe("image input declaration", () => {
+    const TEXT_ONLY = { tools: true, input: ["text"], output: ["text"] };
+    const WITH_IMAGE = { tools: true, input: ["text", "image"], output: ["text"] };
+
+    function capabilitiesFor(
+      toolProfile: "direct" | "code-mode" | "native",
+      imageInput: boolean | undefined,
+    ): unknown {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile,
+        contextGeometry: {
+          ...CONTEXT_GEOMETRY,
+          ...(imageInput === undefined ? {} : { imageInput }),
+        },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected launch profile");
+      const config = JSON.parse(profile.config) as { providers: Record<string, unknown> };
+      const provider = record(config.providers["keiko-runtime"]);
+      return record(record(provider.models).coding).capabilities;
+    }
+
+    it("declares image input on the native model only when the admitted model declares it", () => {
+      expect(capabilitiesFor("native", true)).toEqual(WITH_IMAGE);
+      expect(capabilitiesFor("native", false)).toEqual(TEXT_ONLY);
+      expect(capabilitiesFor("native", undefined)).toEqual(TEXT_ONLY);
+    });
+
+    it("never declares image input on the mapped profiles", () => {
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        expect(capabilitiesFor(toolProfile, true)).toEqual(TEXT_ONLY);
+      }
+    });
+
+    it("re-asserts the declaration on the highest configuration layer", () => {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        contextGeometry: { ...CONTEXT_GEOMETRY, imageInput: true },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly providers: Record<string, unknown>;
+      };
+      const provider = record(content.providers["keiko-runtime"]);
+      expect(record(record(provider.models).coding).capabilities).toEqual(WITH_IMAGE);
+    });
+
+    it("keeps the text-only configuration byte-identical when no image input is declared", () => {
+      const declared = (imageInput: boolean | undefined): string => {
+        const profile = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile: "native",
+          contextGeometry: {
+            ...CONTEXT_GEOMETRY,
+            ...(imageInput === undefined ? {} : { imageInput }),
+          },
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!profile.ok) throw new Error("expected native launch profile");
+        return profile.config;
+      };
+      expect(declared(false)).toBe(declared(undefined));
+      expect(declared(true)).not.toBe(declared(undefined));
+    });
+  });
+
+  // #3906: a PDF the native `read` admits reaches the model as a document only when the provider
+  // model declares `pdf` input, which follows the admitted model's document capability.
+  describe("PDF document input declaration", () => {
+    function inputFor(
+      toolProfile: "direct" | "code-mode" | "native",
+      media: { readonly imageInput?: boolean; readonly documentInput?: boolean },
+    ): unknown {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile,
+        contextGeometry: { ...CONTEXT_GEOMETRY, ...media },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected launch profile");
+      const config = JSON.parse(profile.config) as { providers: Record<string, unknown> };
+      const provider = record(config.providers["keiko-runtime"]);
+      return record(record(record(provider.models).coding).capabilities).input;
+    }
+
+    it("declares pdf input on the native model only when the admitted model takes documents", () => {
+      expect(inputFor("native", { documentInput: true })).toEqual(["text", "pdf"]);
+      expect(inputFor("native", { imageInput: true, documentInput: true })).toEqual([
+        "text",
+        "image",
+        "pdf",
+      ]);
+      expect(inputFor("native", { documentInput: false })).toEqual(["text"]);
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        expect(inputFor(toolProfile, { documentInput: true })).toEqual(["text"]);
+      }
+    });
+
+    it("carries the admitted model's document capability into the context geometry", () => {
+      const metadata = {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 8_000,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      };
+      expect(
+        resolveOpenCodeContextGeometry({ ...metadata, supportsDocumentInput: true }),
+      ).toMatchObject({ documentInput: true });
+      expect(resolveOpenCodeContextGeometry(metadata)).not.toHaveProperty("documentInput");
+    });
   });
 
   it("preserves the V1 compatibility prompt's digest-bound edit and instruction guidance", () => {
@@ -365,6 +768,23 @@ describe("OpenCode launch profile", () => {
     });
   });
 
+  it("carries the admitted model's declared image input into the context geometry", () => {
+    const metadata = {
+      maxPromptTokens: 128_000,
+      maxOutputTokens: 8_000,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
+    };
+    expect(resolveOpenCodeContextGeometry({ ...metadata, supportsImageInput: true })).toMatchObject(
+      { imageInput: true },
+    );
+    for (const declared of [{}, { supportsImageInput: false }]) {
+      const geometry = resolveOpenCodeContextGeometry({ ...metadata, ...declared });
+      expect(geometry).toBeDefined();
+      expect(geometry).not.toHaveProperty("imageInput");
+    }
+  });
+
   it("derives model-specific limits below the raw JSON transport ceiling", () => {
     const smaller = resolveOpenCodeContextGeometry({
       maxPromptTokens: 64_000,
@@ -448,4 +868,21 @@ it("threads the selected profile into the actual launch configuration", () => {
   if (!profile.ok) throw new Error("expected selected managed profile");
   expect(finalPermissionAction(v2Rules(profile.configValue), "execute")).toBe("allow");
   expect(profile.config).toBe(JSON.stringify(profile.configValue));
+});
+
+describe("plan agent directory (#3897)", () => {
+  it("admits exactly the run's plan directory after the external-directory denial", () => {
+    const fixed = createFixedOpenCodeV2Config;
+    const config = fixed(CONTEXT_GEOMETRY, undefined, "native", "/state/run-1");
+    expect(config.permissions).toEqual([
+      { action: "external_directory", resource: "*", effect: "deny" },
+      {
+        action: "external_directory",
+        resource: `${openCodePlanDirectory("/state/run-1")}/*`,
+        effect: "allow",
+      },
+    ]);
+    expect(openCodePlanDirectory("/state/run-1")).toBe("/state/run-1/home/.opencode/plan");
+    expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(1);
+  });
 });

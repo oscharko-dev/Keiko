@@ -22,6 +22,10 @@ export interface GatewayPromptTokenInput {
 type ProviderMessageContentParts = readonly (
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
+  | {
+      readonly type: "file";
+      readonly file: { readonly filename: string; readonly file_data: string };
+    }
 )[];
 
 export interface OpenAiCompatiblePromptMessage {
@@ -40,11 +44,15 @@ export interface OpenAiCompatiblePromptMessage {
 function providerContentParts(
   parts: readonly ChatMessageContentPart[],
 ): ProviderMessageContentParts {
-  return parts.map((part) =>
-    part.type === "text"
-      ? { type: "text" as const, text: part.text }
-      : { type: "image_url" as const, image_url: { url: part.image_url.url } },
-  );
+  return parts.map((part) => {
+    if (part.type === "text") return { type: "text" as const, text: part.text };
+    if (part.type === "file")
+      return {
+        type: "file" as const,
+        file: { filename: part.file.filename, file_data: part.file.file_data },
+      };
+    return { type: "image_url" as const, image_url: { url: part.image_url.url } };
+  });
 }
 
 function providerContent(
@@ -88,7 +96,10 @@ export function openAiCompatiblePromptTools(
 
 export interface GatewayPromptTokenOptions {
   readonly contextWindow?: number | undefined;
-  /** A positive provider count already includes the image contribution. Keep the local text floor. */
+  /**
+   * A positive provider count already includes the media contribution (images and PDF documents).
+   * Keep the local text floor.
+   */
   readonly imageTokensMeasured?: boolean | undefined;
 }
 
@@ -112,10 +123,10 @@ function countMessageTokens(
     typeof projected.content === "string" || projected.content === null
       ? undefined
       : projected.content;
-  const imageCount = parts?.filter((part) => part.type === "image_url").length ?? 0;
+  // Media bytes are never text tokens: an image or a PDF document takes the media reserve instead.
+  const mediaCount = parts?.filter((part) => part.type !== "text").length ?? 0;
   const content =
-    parts?.map((part) => (part.type === "text" ? part : { type: "image_url" })) ??
-    projected.content;
+    parts?.map((part) => (part.type === "text" ? part : { type: part.type })) ?? projected.content;
   const text =
     parts
       ?.filter((part) => part.type === "text")
@@ -127,7 +138,7 @@ function countMessageTokens(
       countContextTokens(text, accounting),
       countContextTokens(JSON.stringify({ ...projected, content }), accounting),
     ) +
-    imageCount * fallbackImageTokens(options)
+    mediaCount * fallbackImageTokens(options)
   );
 }
 

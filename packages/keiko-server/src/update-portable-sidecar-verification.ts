@@ -1,8 +1,3 @@
-import {
-  copyOpenCodeServiceHostApprovals,
-  type OpenCodeServiceHostApproval,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
-
 import type {
   UpdatePortableSidecarFailureCode,
   UpdatePortableSidecarSummary,
@@ -15,11 +10,8 @@ import {
   recordAt,
   signatureKind,
 } from "./update-portable-staging-shared.js";
-import {
-  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
-} from "./coding-runtime/opencodeProtocolSurface.js";
-import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeToolSchemas.js";
+import { OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM } from "./coding-runtime/opencodeProtocolSurface.js";
+import { openCodeRuntimeVersionPin } from "./coding-runtime/opencodeRuntimeVersions.js";
 import {
   evaluationAttestationDeclaredNegative,
   platformCheckKeys,
@@ -35,8 +27,6 @@ export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
   readonly payloadRootPath: string;
   readonly executablePath: string;
-  /** Declared host metadata only; existing CLI availability does not qualify or select this host. */
-  readonly serviceHost?: OpenCodeServiceHostApproval;
   readonly shippedExecutableSha256: string;
   readonly executableTreeSha256: string;
   readonly licenseEvidencePath: string;
@@ -125,8 +115,6 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const OPENCODE_COMMIT = "b8cedc1a7a5e2916bbb65dc1d4b620729c261638";
-const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const SIGNING_KEYS = [
   "notarizationRequired",
   "notarizationVerified",
@@ -362,20 +350,23 @@ function portableProvenanceVerified(
   const schema = recordAt(runtime, "protocolSchema");
   const approval = recordAt(recordAt(runtime, "releaseApproval"), "redistribution");
   const archive = recordAt(runtime, "archive");
+  // Producer-derived identity: the declared version selects its own pinned tag, commit and
+  // schema digest (#3908); an unpinned version has no identity to verify against.
+  const pin = openCodeRuntimeVersionPin(upstream?.version);
+  if (pin === undefined) return false;
   return [
     runtime.approvalSchemaVersion === 2,
     runtime.kind === "coding-runtime",
     fieldEquals(upstream, "owner", "anomalyco"),
     fieldEquals(upstream, "repository", "opencode"),
     fieldEquals(upstream, "name", "opencode"),
-    fieldEquals(upstream, "version", OPENCODE_PINNED_VERSION),
-    fieldEquals(upstream, "tag", `v${OPENCODE_PINNED_VERSION}`),
-    fieldEquals(upstream, "commit", OPENCODE_COMMIT),
+    fieldEquals(upstream, "tag", pin.tag),
+    fieldEquals(upstream, "commit", pin.commit),
     fieldEquals(adapter, "adapterName", "keiko-coding-sidecar"),
     fieldEquals(adapter, "adapterVersion", "2"),
     fieldEquals(adapter, "transport", "http-sse"),
     fieldEquals(schema, "path", "packages/protocol/openapi.json"),
-    fieldEquals(schema, "sha256", OPENCODE_SCHEMA_SHA256),
+    fieldEquals(schema, "sha256", pin.rawSchemaSha256),
     fieldEquals(schema, "hashAlgorithm", "sha256"),
     fieldEquals(schema, "hashEncoding", "lowercase-hex"),
     fieldEquals(schema, "digestInput", "upstream-raw-bytes"),
@@ -503,18 +494,6 @@ function requiredEvidence(
   return evidence;
 }
 
-function supplementalServiceHost(
-  runtime: Record<string, unknown>,
-  target: UpdatePortableTarget,
-): OpenCodeServiceHostApproval | undefined {
-  if (!Object.hasOwn(runtime, "serviceHost")) return undefined;
-  const hosts = copyOpenCodeServiceHostApprovals(runtime.serviceHost);
-  if (hosts === undefined) {
-    fail("sidecar-metadata-malformed", "sidecar service-host metadata is incomplete");
-  }
-  return hosts[target];
-}
-
 function parseNamedRuntime(
   runtime: Record<string, unknown>,
   target: UpdatePortableTarget,
@@ -524,7 +503,6 @@ function parseNamedRuntime(
   if (runtime.platformTarget !== target)
     fail("sidecar-platform-mismatch", "sidecar target mismatch");
   const payload = parsePayload(runtime, name);
-  const serviceHost = supplementalServiceHost(runtime, target);
   if (!portableProvenanceVerified(runtime, target)) {
     fail("sidecar-metadata-malformed", "sidecar portable provenance is incomplete");
   }
@@ -536,19 +514,20 @@ function parseNamedRuntime(
   const shipped = requiredShippedExecutableDigests(runtime, target, lane);
   const summary = baseSummary(runtime, target, payload.payloadSha256, payload.sizeBytes);
   if (summary === undefined) fail("sidecar-metadata-malformed", "sidecar metadata is incomplete");
+  const pin = openCodeRuntimeVersionPin(summary.upstreamVersion);
+  if (pin === undefined) fail("sidecar-metadata-malformed", "sidecar runtime version is unpinned");
   return {
     summary,
     payloadRootPath: payload.payloadRootPath,
     executablePath: payload.executablePath,
-    ...(serviceHost === undefined ? {} : { serviceHost }),
     shippedExecutableSha256: shipped.sha256,
     executableTreeSha256: shipped.treeSha256,
     licenseEvidencePath: evidence.license.path,
     licenseEvidenceSha256: evidence.license.sha256,
     sbomEvidencePath: evidence.sbom.path,
     sbomEvidenceSha256: evidence.sbom.sha256,
-    protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolSchemaRawSha256: pin.rawSchemaSha256,
+    protocolHandshakeDigest: pin.protocolSurfaceSha256,
     protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
     availability: laneAvailability(lane),
   };

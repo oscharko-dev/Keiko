@@ -5,6 +5,12 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import {
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  ripgrepPortableExecutablePath,
+  ripgrepRuntimeApproval,
+  ripgrepRuntimeTargetKey,
+} from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { sha256 } from "./lib/digest.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
@@ -272,6 +278,28 @@ const NATIVE_ADDON_KEYS = Object.freeze([
   "sizeBytes",
   "sbomBomRef",
   "signing",
+]);
+const NATIVE_TOOL_KEYS = Object.freeze([
+  "name",
+  "kind",
+  "version",
+  "platformTarget",
+  "architecture",
+  "executablePath",
+  "licensePath",
+  "source",
+  "unsignedSha256",
+  "shippedSha256",
+  "sizeBytes",
+  "sbomBomRef",
+  "signing",
+]);
+const NATIVE_TOOL_SOURCE_KEYS = Object.freeze([
+  "commitSha",
+  "archiveUrl",
+  "archiveSha256",
+  "binarySha256",
+  "licenseSha256",
 ]);
 const REQUIRED_NATIVE_HELPER_NAMES = Object.freeze([
   "keiko-secure-workspace-read",
@@ -943,6 +971,114 @@ function validateNativeAddons(manifest, failures, options) {
   digestAt(addon, "shippedSha256", path, failures, options);
   positiveNumberAt(addon, "sizeBytes", path, failures);
   validateNativeHelperSigning(addon, target, path, failures, options);
+}
+
+/**
+ * The pinned third-party executables a portable payload ships beside the Keiko-built helpers
+ * (Epic #3897): today exactly ripgrep, the search dependency of the OpenCode coding runtime. A tool
+ * is not a Node addon and not Keiko-built, so it has its own closed section rather than a second
+ * `nativeAddons` entry, which every signing and qualification consumer pins to exactly one.
+ * Absence stays parseable for artifacts produced before the tool shipped; a producer asks for
+ * presence with `requireNativeTools`, and any consumer that finds a tool validates it fully.
+ */
+function validateNativeTools(manifest, failures, options) {
+  const tools = manifest.nativeTools;
+  if (tools === undefined) {
+    if (options.requireNativeTools === true) {
+      push(
+        failures,
+        "nativeTools",
+        "must contain the pinned ripgrep tool for newly produced artifacts",
+      );
+    }
+    return;
+  }
+  if (!Array.isArray(tools) || tools.length !== 1) {
+    push(failures, "nativeTools", "must contain exactly one tool when present");
+    return;
+  }
+  const tool = tools[0];
+  const path = "nativeTools[0]";
+  if (!isRecord(tool)) {
+    push(failures, path, "must be an object");
+    return;
+  }
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const approval = ripgrepApprovalForPortableTarget(target);
+  exactKeysAt(tool, NATIVE_TOOL_KEYS, path, failures);
+  validateNativeToolIdentity(tool, target, approval, path, failures);
+  validateNativeToolSource(tool, approval, path, failures, options);
+  digestAt(tool, "unsignedSha256", path, failures, options);
+  literalAt(tool, "unsignedSha256", approval?.binarySha256, path, failures);
+  digestAt(tool, "shippedSha256", path, failures, options);
+  positiveNumberAt(tool, "sizeBytes", path, failures);
+  validateNativeHelperSigning(tool, target, path, failures, options);
+}
+
+export function ripgrepApprovalForPortableTarget(target) {
+  if (target === undefined) return undefined;
+  return ripgrepRuntimeApproval(
+    ripgrepRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture),
+  );
+}
+
+/** The CycloneDX reference of the shipped tool. One definition for the producer and the validator. */
+export function nativeToolSbomBomRef(approval, platformTarget) {
+  return `pkg:github/burntsushi/ripgrep@${approval?.version ?? ""}?platform=${platformTarget ?? ""}`;
+}
+
+/**
+ * The provenance projection of a manifest tool. Shared by the producer and by the signed-archive
+ * rebind so the statement both write is, by construction, the same statement.
+ */
+export function nativeToolProvenance(tool) {
+  return {
+    architecture: tool.architecture,
+    executablePath: tool.executablePath,
+    name: tool.name,
+    shippedSha256: tool.shippedSha256,
+    signatureKind: tool.signing.signatureKind,
+    signatureVerified: tool.signing.signatureVerified,
+    notarizationVerified: tool.signing.notarizationVerified,
+    sourceCommitSha: tool.source.commitSha,
+    archiveSha256: tool.source.archiveSha256,
+    unsignedSha256: tool.unsignedSha256,
+    version: tool.version,
+  };
+}
+
+function validateNativeToolIdentity(tool, target, approval, path, failures) {
+  literalAt(tool, "name", "ripgrep", path, failures);
+  literalAt(tool, "kind", "native-tool", path, failures);
+  literalAt(tool, "version", approval?.version, path, failures);
+  literalAt(tool, "platformTarget", target?.platformTarget, path, failures);
+  literalAt(tool, "architecture", target?.nodeArchitecture, path, failures);
+  literalAt(
+    tool,
+    "executablePath",
+    approval === undefined ? undefined : ripgrepPortableExecutablePath(approval.targetKey),
+    path,
+    failures,
+  );
+  literalAt(tool, "licensePath", RIPGREP_PORTABLE_LICENSE_PATH, path, failures);
+  literalAt(
+    tool,
+    "sbomBomRef",
+    nativeToolSbomBomRef(approval, target?.platformTarget),
+    path,
+    failures,
+  );
+}
+
+function validateNativeToolSource(tool, approval, path, failures, options) {
+  const source = recordAt(tool, "source", path, failures);
+  exactKeysAt(source, NATIVE_TOOL_SOURCE_KEYS, `${path}.source`, failures);
+  literalAt(source, "commitSha", approval?.sourceCommit, `${path}.source`, failures);
+  literalAt(source, "archiveUrl", approval?.archiveUrl, `${path}.source`, failures);
+  literalAt(source, "archiveSha256", approval?.archiveSha256, `${path}.source`, failures);
+  literalAt(source, "binarySha256", approval?.binarySha256, `${path}.source`, failures);
+  literalAt(source, "licenseSha256", approval?.licenseSha256, `${path}.source`, failures);
+  digestAt(source, "binarySha256", `${path}.source`, failures, options);
 }
 
 function usearchApprovalForPortableTarget(target) {
@@ -1989,6 +2125,7 @@ function reviewedBindingChecks(manifest) {
     ...sidecarBindingChecks(manifest),
     ...nativeHelperBindingChecks(manifest),
     ...nativeAddonBindingChecks(manifest),
+    ...nativeToolBindingChecks(manifest),
     ...runtimeAttestationBindingChecks(manifest),
     ...runtimeQualificationBindingChecks(manifest),
   ];
@@ -2044,6 +2181,10 @@ function nativeHelperBindingChecks(manifest) {
 
 function nativeAddonBindingChecks(manifest) {
   return Array.isArray(manifest.nativeAddons) ? [["nativeAddons", manifest.nativeAddons]] : [];
+}
+
+function nativeToolBindingChecks(manifest) {
+  return Array.isArray(manifest.nativeTools) ? [["nativeTools", manifest.nativeTools]] : [];
 }
 
 function runtimeAttestationBindingChecks(manifest) {
@@ -2317,6 +2458,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
   validateNativeAddons(manifest, failures, normalized);
+  validateNativeTools(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
@@ -2429,6 +2571,7 @@ export function portableVerificationSummaryForManifest(manifest) {
     reasonCodes: security.verificationReasonCodes ?? [],
     nativeHelpers: nativeHelperVerificationSummaries(manifest),
     nativeAddons: nativeAddonVerificationSummaries(manifest),
+    ...nativeToolSummaryEntry(manifest),
     sidecarRuntimes: sidecarVerificationSummaries(manifest),
     verificationChecks: security.verificationChecks ?? {},
   };
@@ -2449,6 +2592,27 @@ function nativeAddonVerificationSummaries(manifest) {
     notarizationRequired: addon.signing?.notarizationRequired,
     notarizationVerified: addon.signing?.notarizationVerified,
   }));
+}
+
+// Present only when the manifest carries tools, so the summary of an artifact produced before the
+// tool shipped keeps its exact historical shape.
+function nativeToolSummaryEntry(manifest) {
+  if (!Array.isArray(manifest.nativeTools)) return {};
+  return {
+    nativeTools: manifest.nativeTools.map((tool) => ({
+      name: tool.name,
+      version: tool.version,
+      platformTarget: tool.platformTarget,
+      architecture: tool.architecture,
+      executablePath: tool.executablePath,
+      shippedSha256: tool.shippedSha256,
+      signingStatus: tool.signing?.verificationStatus,
+      signatureKind: tool.signing?.signatureKind,
+      signatureVerified: tool.signing?.signatureVerified,
+      notarizationRequired: tool.signing?.notarizationRequired,
+      notarizationVerified: tool.signing?.notarizationVerified,
+    })),
+  };
 }
 
 function nativeHelperVerificationSummaries(manifest) {

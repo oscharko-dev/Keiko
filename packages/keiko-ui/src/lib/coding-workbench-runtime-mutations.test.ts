@@ -170,6 +170,40 @@ describe("createStartMutation", () => {
     });
   });
 
+  // S03 (#3904): a fork starts a NEW task from another task, optionally just before one of its
+  // user messages; the request names the task and the message and nothing about the saved session.
+  it("sends the task to fork and the message to fork before, without a conversation id", async () => {
+    const mutation = createStartMutation(
+      "try another approach",
+      stateWithRun(null, { canStart: true }),
+      {
+        projectMemoryEnabled: true,
+        fork: { taskId: "task-source", beforeMessageId: "message-3" },
+      },
+    );
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "try another approach",
+      requestedMode: "supervised-coding",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
+      fork: { taskId: "task-source", beforeMessageId: "message-3" },
+    });
+  });
+
+  it("refuses to send a fork that also continues a task", () => {
+    expect(() =>
+      createStartMutation("task", stateWithRun(null, { canStart: true }), {
+        projectMemoryEnabled: true,
+        conversationId: "task-source",
+        fork: { taskId: "task-source" },
+      }),
+    ).toThrowError("A fork cannot continue a task.");
+  });
+
   it("does not leak stale gateway model settings into a Codex subscription start", async () => {
     const state = stateWithRun(null, {
       canStart: true,
@@ -379,6 +413,71 @@ describe("createFollowUpMutation", () => {
   });
 });
 
+describe("primary agent on the mutations (#3897)", () => {
+  const offered = { selectableAgents: ["build", "plan"] } as const;
+
+  it("sends the selected agent on start and retry only where the server offers a choice", async () => {
+    for (const agent of ["plan", "build"] as const) {
+      const started = createStartMutation(
+        "outline the change",
+        stateWithRun(null, { canStart: true, ...offered, agent }),
+        { projectMemoryEnabled: true },
+      );
+      await started.run();
+      expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent }),
+      );
+      const retried = createRetryMutation(
+        "outline the change",
+        stateWithRun(snapshot(), { canRetry: true, ...offered, agent }),
+      );
+      await retried.run();
+      expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ agent }),
+      );
+    }
+  });
+
+  it("omits the agent when only the default is offered, even if the selection says plan", async () => {
+    const stale = { selectableAgents: ["build"], agent: "plan" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...stale }), {
+      projectMemoryEnabled: true,
+    }).run();
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
+    await createRetryMutation("task", stateWithRun(snapshot(), { canRetry: true, ...stale })).run();
+    expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).not.toHaveProperty("agent");
+    await createFollowUpMutation("task", stateWithRun(snapshot({ state: "paused" }), stale)).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).not.toHaveProperty(
+      "agent",
+    );
+  });
+
+  it("never sends the selected agent for a source without an agent concept", async () => {
+    const codex = { ...offered, agent: "plan", runtimePreference: "codex-subscription" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...codex }), {
+      projectMemoryEnabled: true,
+    }).run();
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
+  });
+
+  it("sends the agent with a follow-up, including a switch back to build", async () => {
+    for (const agent of ["plan", "build"] as const) {
+      const mutation = createFollowUpMutation(
+        "now implement it",
+        stateWithRun(snapshot({ state: "paused" }), { ...offered, agent }),
+      );
+      await mutation.run();
+      expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "now implement it",
+        agent,
+      });
+    }
+  });
+});
+
 describe("createResearchRevokeMutation", () => {
   const grant = { grantId: "grant-1", domains: ["nodejs.org"], expiresAt: UPDATED_AT } as const;
 
@@ -417,5 +516,261 @@ describe("createRecoveryAcknowledgementMutation", () => {
       requestId: "run-1",
       acknowledged: true,
     });
+  });
+});
+
+// ADR-0137 D10: a message sent while a turn runs and the workspace files a prompt references ride on
+// the follow-up request; the browser authors the intent and the server decides.
+describe("prompt inputs on the follow-up mutation", () => {
+  const offered = { selectableAgents: ["build", "plan"], agent: "plan" } as const;
+
+  it.each(["steer", "queue"] as const)(
+    "sends a %s message to a running turn bound to the current revision, without an agent",
+    async (delivery) => {
+      const mutation = createFollowUpMutation(
+        "also cover the empty case",
+        stateWithRun(snapshot({ state: "running" }), offered),
+        { delivery },
+      );
+      expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+      expect(mutation.mayInstallNewRun).toBe(false);
+      await mutation.run();
+      // The turn in flight keeps its agent: a delivery never names one, even where a choice exists.
+      expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "also cover the empty case",
+        delivery,
+      });
+    },
+  );
+
+  it("admits a delivery only against a running run with a non-empty message", () => {
+    for (const state of ["paused", "idle", "awaiting-approval", "succeeded", "stopping"] as const) {
+      expect(() =>
+        createFollowUpMutation("ping", stateWithRun(snapshot({ state })), { delivery: "steer" }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(snapshot({ state: "running" })), {
+        delivery: "queue",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(null), { delivery: "steer" }),
+    ).toThrow();
+  });
+
+  it("keeps an ordinary follow-up to a paused run, whatever references it carries", async () => {
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(snapshot({ state: "running" })), {
+        references: [{ path: "src/app.ts" }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    const mutation = createFollowUpMutation(
+      "look at the file",
+      stateWithRun(snapshot({ state: "paused" }), offered),
+      { references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }] },
+    );
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "look at the file",
+      agent: "plan",
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+    });
+  });
+
+  it("sends the references of a delivery beside it, and omits an empty list", async () => {
+    const running = stateWithRun(snapshot({ state: "running" }));
+    await createFollowUpMutation("see @a.ts", running, {
+      delivery: "steer",
+      references: [{ path: "a.ts" }],
+    }).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).toMatchObject({
+      delivery: "steer",
+      references: [{ path: "a.ts" }],
+    });
+    await createFollowUpMutation("plain", running, { delivery: "queue", references: [] }).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).not.toHaveProperty(
+      "references",
+    );
+  });
+});
+
+// ADR-0137 D10: the first prompt carries the files it references with `@` exactly as a follow-up
+// does, and a start or a follow-up may run as one of the runtime's slash commands, its text then
+// being the command's arguments (and empty for a bare command).
+describe("references and a slash command on the start mutation", () => {
+  const ready = { canStart: true } as const;
+
+  it("sends the first prompt's references and the command beside its text", async () => {
+    const mutation = createStartMutation("the last commit", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+      command: { name: "review" },
+    });
+    expect(mutation.mayInstallNewRun).toBe(true);
+    expect(mutation.expected).toBeUndefined();
+    await mutation.run();
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "the last commit",
+      requestedMode: "supervised-coding",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+      command: { name: "review" },
+    });
+  });
+
+  it("starts a bare command with an empty text", async () => {
+    const mutation = createStartMutation("", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      command: { name: "init" },
+    });
+    await mutation.run();
+    const body = apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0] as Record<string, unknown>;
+    expect(body).toMatchObject({ taskIntent: "", command: { name: "init" } });
+    expect(body).not.toHaveProperty("references");
+  });
+
+  it("keeps the ordinary start body exactly as it was, whatever empty inputs ride along", async () => {
+    const plain = createStartMutation("fix it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+    });
+    await plain.run();
+    const empty = createStartMutation("fix it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      references: [],
+      command: undefined,
+    });
+    await empty.run();
+    const [first, second] = apiMocks.startCodingWorkbenchRuntime.mock.calls.map(
+      (call) => call[0] as Record<string, unknown>,
+    );
+    expect(second).toEqual({ ...first, requestId: empty.requestId });
+    expect(second).not.toHaveProperty("references");
+    expect(second).not.toHaveProperty("command");
+  });
+
+  it("sends references beside an accepted issue, but never a command beside one", async () => {
+    const issue = {
+      issueRef: "https://github.com/owner/repo/issues/42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    };
+    const withFiles = createStartMutation("implement it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      issue,
+      references: [{ path: "src/app.ts" }],
+    });
+    await withFiles.run();
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ...issue, references: [{ path: "src/app.ts" }] }),
+    );
+    apiMocks.startCodingWorkbenchRuntime.mockClear();
+    expect(() =>
+      createStartMutation("implement it", stateWithRun(null, ready), {
+        projectMemoryEnabled: true,
+        issue,
+        command: { name: "review" },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+  });
+
+  it("still refuses to start while the readiness gate is closed, command or not", () => {
+    expect(() =>
+      createStartMutation("", stateWithRun(null), {
+        projectMemoryEnabled: true,
+        command: { name: "init" },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("gives each mutation its own request id and keeps it when the same mutation runs again", async () => {
+    const options = {
+      projectMemoryEnabled: true,
+      references: [{ path: "a.ts" }],
+      command: { name: "review" },
+    };
+    const first = createStartMutation("x", stateWithRun(null, ready), options);
+    const second = createStartMutation("x", stateWithRun(null, ready), options);
+    expect(first.requestId).not.toBe(second.requestId);
+    await first.run();
+    await first.run();
+    const calls = apiMocks.startCodingWorkbenchRuntime.mock.calls.map(
+      (call) => (call[0] as { requestId: string }).requestId,
+    );
+    expect(calls).toEqual([first.requestId, first.requestId]);
+  });
+});
+
+describe("a slash command on the follow-up mutation", () => {
+  const paused = stateWithRun(snapshot({ state: "paused" }));
+
+  it("sends the command with an empty text, bound to the current revision", async () => {
+    const mutation = createFollowUpMutation("", paused, { command: { name: "review" } });
+    expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+    expect(mutation.mayInstallNewRun).toBe(false);
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "",
+      command: { name: "review" },
+    });
+  });
+
+  it("sends the command's arguments and the files they reference together with the agent", async () => {
+    const offered = stateWithRun(snapshot({ state: "paused" }), {
+      selectableAgents: ["build", "plan"],
+      agent: "plan",
+    });
+    const mutation = createFollowUpMutation("branch main", offered, {
+      command: { name: "review" },
+      references: [{ path: "src/app.ts" }],
+    });
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "branch main",
+      agent: "plan",
+      references: [{ path: "src/app.ts" }],
+      command: { name: "review" },
+    });
+  });
+
+  it("keeps an empty text refused for everything that is not a command", () => {
+    expect(() => createFollowUpMutation("", paused)).toThrowError(
+      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+    );
+    expect(() =>
+      createFollowUpMutation("", paused, { references: [{ path: "a.ts" }] }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("is admitted only against a paused run, and is never a delivery", () => {
+    for (const state of ["running", "idle", "awaiting-approval", "succeeded"] as const) {
+      expect(() =>
+        createFollowUpMutation("", stateWithRun(snapshot({ state })), {
+          command: { name: "init" },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(null), { command: { name: "init" } }),
+    ).toThrow();
+    for (const delivery of ["steer", "queue"] as const) {
+      expect(() =>
+        createFollowUpMutation("go", stateWithRun(snapshot({ state: "running" })), {
+          delivery,
+          command: { name: "init" },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).not.toHaveBeenCalled();
   });
 });

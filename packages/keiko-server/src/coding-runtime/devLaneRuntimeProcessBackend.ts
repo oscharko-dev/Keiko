@@ -234,7 +234,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     setLaunchPhase("process-spawn");
     const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
-      env: runtimeEnvironment(request.env, gitExecutable),
+      env: runtimeEnvironment(request.env, gitExecutable, policy.profile),
       detached: true,
       launcherDiagnostics: linuxGatewayLauncherBackend(decision.attestation.backend),
       shell: false,
@@ -368,10 +368,18 @@ function platformGitExecutable(
 function runtimeEnvironment(
   environment: Readonly<Record<string, string>>,
   gitExecutable: AttestedDarwinGitExecutable | undefined,
+  profile: RuntimeGatewayConfinement["profile"] = "keiko-gateway",
 ): Readonly<Record<string, string>> {
-  return gitExecutable === undefined
-    ? { ...environment }
-    : { ...environment, PATH: dirname(gitExecutable.path) };
+  if (gitExecutable === undefined) return { ...environment };
+  // The native profile (#3897) keeps the launcher's allowlisted PATH so the agent's shell finds
+  // the project's toolchains, with the attested Git first; the gateway profile sees Git only.
+  const gitDirectory = dirname(gitExecutable.path);
+  const inherited = environment.PATH;
+  const path =
+    profile === "keiko-native" && inherited !== undefined && inherited.length > 0
+      ? `${gitDirectory}:${inherited}`
+      : gitDirectory;
+  return { ...environment, PATH: path };
 }
 
 function recordConfinementFailure(

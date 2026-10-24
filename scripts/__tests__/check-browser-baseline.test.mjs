@@ -712,6 +712,46 @@ describe("main", () => {
     expect(mixedExportEntries).toHaveLength(1);
   });
 
+  // CI on PR #4064: Mermaid's `@mermaid-js/parser` exports only the `import` condition, which the
+  // browser bundler resolves and `require` resolution rejects, so the closure could not be derived.
+  it("resolves an import-only package export the way the browser bundler does", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-browser-baseline-esm-"));
+    try {
+      const importer = join(root, "node_modules", "host", "dist", "chunk.mjs");
+      const parser = join(root, "node_modules", "@scope", "parser");
+      mkdirSync(dirname(importer), { recursive: true });
+      mkdirSync(join(parser, "dist"), { recursive: true });
+      writeFileSync(importer, 'import "@scope/parser";\n');
+      writeFileSync(join(parser, "dist", "core.mjs"), "export const parse = 1;\n");
+      writeFileSync(join(parser, "dist", "extra.mjs"), "export const extra = 1;\n");
+      writeFileSync(
+        join(parser, "package.json"),
+        JSON.stringify({
+          type: "module",
+          exports: {
+            ".": { import: "./dist/core.mjs", types: "./dist/core.d.ts" },
+            "./extra": { browser: { import: "./dist/extra.mjs" } },
+            "./node-only": { require: "./dist/core.cjs" },
+          },
+        }),
+      );
+
+      expect(resolveRuntimeSpecifier(importer, "@scope/parser")).toBe(
+        join(parser, "dist", "core.mjs"),
+      );
+      expect(resolveRuntimeSpecifier(importer, "@scope/parser/extra")).toBe(
+        join(parser, "dist", "extra.mjs"),
+      );
+      // A subpath with no browser target, or a package nobody installed, still fails closed.
+      expect(() => resolveRuntimeSpecifier(importer, "@scope/parser/node-only")).toThrow(
+        /cannot resolve/u,
+      );
+      expect(() => resolveRuntimeSpecifier(importer, "@scope/missing")).toThrow(/cannot resolve/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts value imports and worker URLs but excludes type-only imports", () => {
     const source =
       'import type { Hidden } from "hidden";\n' +
@@ -726,7 +766,9 @@ describe("main", () => {
       const result = run({});
       expect(result.exitCode).toBeUndefined();
       expect(result.logs.join("\n")).toContain("browser-baseline: PASS");
-      expect(result.logs.join("\n")).toMatch(/1\d{3} bundled dependency source files/u);
+      // The real closure spans Monaco, PDF.js and Mermaid: well over a thousand source files.
+      const bundled = /(\d+) bundled dependency source files/u.exec(result.logs.join("\n"));
+      expect(Number(bundled?.[1])).toBeGreaterThan(1000);
     },
     REAL_DEPENDENCY_CLOSURE_TIMEOUT_MS,
   );

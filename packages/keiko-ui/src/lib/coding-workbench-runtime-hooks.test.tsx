@@ -22,6 +22,7 @@ import {
   stopCodingWorkbenchRuntime,
   takeOverCodingWorkbenchRuntime,
   acknowledgeCodingWorkbenchRuntimeRecovery,
+  submitCodingWorkbenchRuntimeInboxAction,
 } from "./coding-workbench-runtime-api";
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -59,6 +60,7 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => {
     stopCodingWorkbenchRuntime: vi.fn(),
     takeOverCodingWorkbenchRuntime: vi.fn(),
     acknowledgeCodingWorkbenchRuntimeRecovery: vi.fn(),
+    submitCodingWorkbenchRuntimeInboxAction: vi.fn(),
   };
 });
 
@@ -520,6 +522,7 @@ describe("useCodingWorkbenchRuntimeResources runtime and run refresh", () => {
       deploymentCeiling: "autonomous-delivery",
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
+      selectableAgents: ["build"],
     } as const;
     vi.mocked(getCodingWorkbenchRuntimeReadiness).mockResolvedValueOnce(readiness);
     const { resources, dispatch } = renderResources(runtimeState());
@@ -633,6 +636,41 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     await act(() => mutations.stop());
     expect(refreshRun).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+  });
+
+  it("routes a waiting-message action through the queue, bound to the observed revision", async () => {
+    vi.mocked(submitCodingWorkbenchRuntimeInboxAction).mockResolvedValue(snapshot({ revision: 5 }));
+    const { mutations, dispatch } = renderMutations(
+      readyRunState(snapshot({ state: "running", revision: 4 })),
+    );
+
+    await act(() => mutations.inboxAction("promote", "msg_16b08469d001DaT0xxHG2PAKe6"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "mutation-start", mutation: "inbox" }),
+    );
+    expect(submitCodingWorkbenchRuntimeInboxAction).toHaveBeenCalledWith("run-1", {
+      requestId: expect.any(String) as unknown,
+      expectedRevision: 4,
+      action: "promote",
+      itemId: "msg_16b08469d001DaT0xxHG2PAKe6",
+    });
+    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+  });
+
+  it("reports a waiting-message action against a run that is not running without sending it", async () => {
+    vi.mocked(submitCodingWorkbenchRuntimeInboxAction).mockClear();
+    const { mutations, dispatch } = renderMutations(readyRunState(snapshot({ state: "paused" })));
+
+    await act(() => mutations.inboxAction("cancel", "msg_16b08469d001DaT0xxHG2PAKe6"));
+
+    expect(submitCodingWorkbenchRuntimeInboxAction).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mutation-failed",
+        error: expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+      }),
+    );
   });
 
   it("routes takeover, retry and recovery acknowledgement through the queue", async () => {

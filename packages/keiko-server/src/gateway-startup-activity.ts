@@ -46,7 +46,14 @@ const AUTOMATIC_CATALOG_OPERATION = defineActivityLogOperation({
     // Absolute epoch milliseconds observed by the existing timer/cache owner, not a timeout bound.
     retryDeadlineMs: { type: "integer", dataClass: "count", required: false },
     configuredModelCount: { type: "integer", dataClass: "count", required: true },
+    // Every model whose record differs after the reconciliation, the added and removed included.
     updatedModelCount: { type: "integer", dataClass: "count", required: true },
+    // Models the catalog listed that were not configured, and configured ones it no longer lists.
+    addedModelCount: { type: "integer", dataClass: "count", required: true },
+    removedModelCount: { type: "integer", dataClass: "count", required: true },
+    // Models whose observed deployment identity was first recorded or replaced (#3905); each one
+    // withdrew the tool-calling proof it carried until the readiness queue renews it.
+    deploymentChangedModelCount: { type: "integer", dataClass: "count", required: true },
     elapsedMs: { type: "integer", dataClass: "duration", required: true },
     retryable: { type: "boolean", dataClass: "closed-enum", required: true },
   },
@@ -86,6 +93,9 @@ export function logStartupRetryDecision(
     phase: "retry-decision",
     outcome: "retry-decision",
     updatedModelCount: 0,
+    addedModelCount: 0,
+    removedModelCount: 0,
+    deploymentChangedModelCount: 0,
     elapsedMs: Math.max(0, Date.now() - startedAt),
     retryable:
       input.retryDisposition !== "exhausted" &&
@@ -107,6 +117,9 @@ export function logAutomaticCatalog(
     readonly retryDeadlineMs?: number;
     readonly configuredModelCount: number;
     readonly updatedModelCount: number;
+    readonly addedModelCount: number;
+    readonly removedModelCount: number;
+    readonly deploymentChangedModelCount: number;
     readonly elapsedMs: number;
     readonly retryable: boolean;
     readonly errorKind?: ActivityLogErrorKind;

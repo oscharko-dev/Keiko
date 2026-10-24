@@ -19,6 +19,8 @@ function mutations(): RuntimeMutationActions {
     pause: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
+    revert: vi.fn(() => Promise.resolve()),
+    inboxAction: vi.fn(() => Promise.resolve()),
     revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
@@ -58,6 +60,13 @@ describe("useCodingWorkbenchRuntimeActions", () => {
     const { actions } = renderActions(dispatch);
     actions.setRequestedMode("supervised-coding");
     expect(dispatch).toHaveBeenCalledWith({ kind: "select-mode", mode: "supervised-coding" });
+  });
+
+  it("dispatches a primary agent selection intent", () => {
+    const dispatch = vi.fn();
+    const { actions } = renderActions(dispatch);
+    actions.setAgent("plan");
+    expect(dispatch).toHaveBeenCalledWith({ kind: "select-agent", agent: "plan" });
   });
 
   it("dispatches model and reasoning selections", () => {

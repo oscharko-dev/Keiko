@@ -1,10 +1,5 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import {
-  OPENCODE_TOOL_PROFILES,
-  type OpenCodeToolProfile,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
-export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -12,8 +7,14 @@ import {
   createKeikoToolCatalog,
   opencodeRegistrationSet,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_TOOL_PROFILES,
+  type OpenCodeToolProfile,
 } from "@oscharko-dev/keiko-tool-catalog";
-import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-tool-catalog";
+import type {
+  GatewayNativeToolAdvertisement,
+  GatewayToolCatalogAdvertisement,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   CatalogDigest,
   CompiledCatalogTool,
@@ -28,8 +29,15 @@ import {
   CODING_TOOL_READ_MAX_WINDOW_LINES,
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
+import { isOpenCodeNativeDeliveryToolName } from "./opencodeNativeDeliveryTools.js";
+import {
+  isAdmittedOpenCodeNativeToolContract,
+  openCodeNativeToolSetDigest,
+  OPENCODE_NATIVE_TOOL_NAMES,
+} from "./opencodeNativeTools.js";
 
-export const OPENCODE_PINNED_VERSION = "2.0.10";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+export { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 /**
@@ -582,6 +590,15 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   },
 ] as const;
 
+/**
+ * The generated-tool definitions the native profile registers (#3897): Keiko's Git delivery tools
+ * and nothing else (`opencodeNativeDeliveryTools.ts` names them and says why). Filtered from the
+ * one definition list the mapped profiles generate from, so a native run calls the identical tool
+ * source, schema and wire shape.
+ */
+export const OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS =
+  OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(({ name }) => isOpenCodeNativeDeliveryToolName(name));
+
 // OpenCode V2 no longer advertises `todowrite`; keep it blocked if it reappears.
 export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
   "invalid",
@@ -664,15 +681,23 @@ export function openCodeVisibleToolNames(
   profile: OpenCodeToolProfile = "direct",
 ): readonly string[] {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
+  if (profile === "native") return OPENCODE_NATIVE_TOOL_NAMES;
   if (profile === "direct") return OPENCODE_MODEL_VISIBLE_TOOL_NAMES;
   return [...CODE_MODE_GATEWAY_SCHEMA_DIGESTS.keys()];
 }
 
+/**
+ * The tool contract a provider request must carry for the profile. The two mapped profiles pin
+ * the exact Keiko-generated set and schema digests; the native profile admits the producer's own
+ * bounded tool advertisement (#3897), since those tools execute inside OpenCode and register
+ * nothing in Keiko.
+ */
 export function hasExactOpenCodeVisibleToolContract(
   tools: readonly OpenCodeToolInput[] | undefined,
   profile: OpenCodeToolProfile = "direct",
 ): boolean {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) return false;
+  if (profile === "native") return isAdmittedOpenCodeNativeToolContract(tools);
   const expected =
     profile === "direct" ? EXPECTED_GATEWAY_SCHEMA_DIGESTS : CODE_MODE_GATEWAY_SCHEMA_DIGESTS;
   if (tools?.length !== expected.size) return false;
@@ -858,6 +883,40 @@ export function openCodeGatewayCatalogProjection(
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
   if (profile === "code-mode") return qualifiedCodeModeProjection();
   return { catalog: OPENCODE_GATEWAY_CATALOG, projection: OPENCODE_GATEWAY_PROJECTION };
+}
+
+/**
+ * The native profile's advertisement (#3897): the admitted definitions OpenCode sent, pinned by
+ * the tool-set digest and bounded by the same offer lifetime as the catalog offer.
+ */
+export function createOpenCodeNativeToolAdvertisement(
+  tools: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: Readonly<Record<string, unknown>>;
+  }[],
+  now: number,
+  offerLifetimeMs: number,
+): GatewayNativeToolAdvertisement {
+  if (!Number.isFinite(offerLifetimeMs) || offerLifetimeMs <= 0) {
+    throw new RangeError("the gateway offer lifetime must be a positive number of milliseconds");
+  }
+  if (!isAdmittedOpenCodeNativeToolContract(tools))
+    throw new TypeError("native-tool-contract-invalid");
+  return {
+    kind: "native",
+    runtime: { id: "opencode", version: OPENCODE_PINNED_VERSION },
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })),
+    toolSetDigest: openCodeNativeToolSetDigest(tools),
+    offered: {
+      offerId: `opencode-native-${randomUUID()}`,
+      expiresAt: new Date(now + offerLifetimeMs).toISOString(),
+    },
+  };
 }
 
 export function createOpenCodeGatewayToolCatalogAdvertisement(

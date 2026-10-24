@@ -75,7 +75,8 @@ function helperByName(activation, name) {
 
 function validateActivation(activation, sourceCommitSha) {
   if (
-    !activationIdentityIsValid(activation, sourceCommitSha) ||
+    !activationIdentityIsValid(withoutOptionalNativeTools(activation), sourceCommitSha) ||
+    !optionalNativeToolsAreValid(activation) ||
     !activationRuntimeIsValid(activation)
   ) {
     fail("activation manifest is invalid");
@@ -83,6 +84,25 @@ function validateActivation(activation, sourceCommitSha) {
   helperByName(activation, "keiko-runtime-supervisor");
   helperByName(activation, "keiko-secure-workspace-read");
   if (!activationSidecarIsValid(activation)) fail("activation OpenCode binding is invalid");
+}
+
+// The pinned third-party tool section (ripgrep, Epic #3897) is the one optional activation key. It is
+// set aside before the closed-key check, so that check keeps its exact historical key list, and it
+// must be an array like its siblings.
+function withoutOptionalNativeTools(activation) {
+  if (activation === null || typeof activation !== "object" || Array.isArray(activation)) {
+    return activation;
+  }
+  return Object.fromEntries(Object.entries(activation).filter(([key]) => key !== "nativeTools"));
+}
+
+function optionalNativeToolsAreValid(activation) {
+  return (
+    activation === null ||
+    typeof activation !== "object" ||
+    activation.nativeTools === undefined ||
+    (Array.isArray(activation.nativeTools) && activation.nativeTools.length === 1)
+  );
 }
 
 function activationIdentityIsValid(activation, sourceCommitSha) {

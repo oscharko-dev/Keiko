@@ -62,6 +62,11 @@ Coding Workbench runs that start with less authority than the composer shows —
 workspace or Full access selection capped by the installation's deployment ceiling — are covered in
 the dedicated [Coding Workbench Authority Limit](coding-workbench-authority-limit.md) entry.
 
+Coding Workbench tasks whose next run or fork starts a fresh runtime with the task's history as
+context, instead of resuming the retained native session, are covered in
+[Coding Workbench task continues with context only](coding-workbench-session-not-resumed.md),
+including the closed reasons on the `coding-runtime.session-continuity` line.
+
 Chat answers that request a file already inside the connected folder are covered in
 [Restore connected-folder file grounding](chat-connected-folder-file-not-read.md). Use that entry
 for explicit path admission, narrowed scope, low-confidence selection, and insufficient follow-ups.

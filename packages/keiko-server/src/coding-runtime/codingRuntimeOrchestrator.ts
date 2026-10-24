@@ -1,8 +1,10 @@
+import type { ForkBoundary } from "./codingSessionContinuity.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
@@ -21,6 +23,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
+import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -32,6 +35,7 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  type CodingWorkbenchCommand,
   type CodingWorkbenchTurnFailureCode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
@@ -57,6 +61,7 @@ import {
 import type {
   CodingRuntimeApprovalIssueResult,
   CodingRuntimeFailureCode,
+  CodingRuntimeHoldResult,
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
 import type {
@@ -73,6 +78,8 @@ import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
+import type { CodingRuntimeInboxItems } from "./codingRuntimeInbox.js";
+import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 import {
   auxiliaryEventFacts,
   CodingRuntimeOrchestratorState,
@@ -135,6 +142,8 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
+import { CodingRuntimeUndoWindow, type UndoWindowHoldOutcome } from "./codingRuntimeUndoWindow.js";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 const CODING_RUNTIME_STATE_FIELD = {
@@ -537,7 +546,7 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["no-live-run", "run-mismatch"],
+      values: ["no-live-run", "run-mismatch", "challenge-invalid"],
     },
     liveRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
   },
@@ -1139,6 +1148,7 @@ type RuntimeStartFailureReason =
   | "history-initialization"
   | CodingRuntimeFailureCode
   | "initial-turn-dispatch"
+  | "initial-turn-inputs-refused"
   | "initial-turn-recovery"
   | "launch-resolution"
   | "manager-exception"
@@ -1156,6 +1166,24 @@ function isExactRunRevision(
   revision: number,
 ): snapshot is CodingRuntimeSnapshot {
   return snapshot?.runId === runId && snapshot.revision === revision;
+}
+
+/** The requested primary agent as an optional key, so an absent one adds no key at all. */
+function agentField(agent: CodingWorkbenchAgent | undefined): {
+  readonly agent?: CodingWorkbenchAgent;
+} {
+  return agent === undefined ? {} : { agent };
+}
+
+/** The first prompt's references and slash command as optional keys, so an absent one adds no key. */
+function promptInputFields(
+  request: Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command" | "mentions">,
+): Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command" | "mentions"> {
+  return {
+    ...(request.references === undefined ? {} : { references: request.references }),
+    ...(request.command === undefined ? {} : { command: request.command }),
+    ...(request.mentions === undefined ? {} : { mentions: request.mentions }),
+  };
 }
 
 function recordRuntimeStartFailure(
@@ -1417,6 +1445,7 @@ function recordRuntimeEventDropped(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
   current: CodingRuntimeSnapshot | undefined,
+  reason?: "challenge-invalid",
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1429,7 +1458,7 @@ function recordRuntimeEventDropped(
       {
         eventKind: event.kind,
         eventRunId: event.runId,
-        reason: current === undefined ? "no-live-run" : "run-mismatch",
+        reason: reason ?? (current === undefined ? "no-live-run" : "run-mismatch"),
         ...(current === undefined ? {} : { liveRunId: current.runId }),
       },
     ),
@@ -1876,6 +1905,8 @@ export class CodingRuntimeOrchestrator {
   // rolled up with the run host's counts on the settlement line.
   private readonly effort = new CodingRuntimeRunEffortLedger();
   private readonly operations: CodingRuntimeOperationCoordinator;
+  // #3904 AC3: the succeeded run whose runtime is held so its newest turn can still be undone.
+  private readonly undoWindow: CodingRuntimeUndoWindow;
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
   private readonly newRunId: () => string;
@@ -1916,6 +1947,7 @@ export class CodingRuntimeOrchestrator {
       settleTask: (runId, outcome): void => {
         this.queueTaskSettlement(runId, outcome);
       },
+      held: (): CodingRuntimeSnapshot | undefined => this.heldSnapshot(),
       questionPort: deps.questionPort,
       manager: deps.manager,
       // [P1] review 3941746512: this seam was never wired, so every question/follow-up transport
@@ -1923,6 +1955,7 @@ export class CodingRuntimeOrchestrator {
       // production actually reads.
       activityLog: deps.activityLog,
     });
+    this.undoWindow = this.createUndoWindow(deps);
     // Production bootstrap marks stale active rows recovery-required before composition. Restore only
     // that content-free slot; no adapter turn or productive action is ever replayed.
     this.activeRunId = deps.snapshots.listRecentActive(1)[0]?.runId;
@@ -1939,13 +1972,41 @@ export class CodingRuntimeOrchestrator {
    * `startFresh`.
    */
   start(input: unknown, correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serial(() =>
-      this.startFreshAgainstPredecessor(
+    return this.serial(async () => {
+      // The next run ends the previous run's undo window: its runtime holds the slot until then.
+      await this.undoWindow.close("next-run");
+      return this.startFreshAgainstPredecessor(
         input,
         this.acknowledgedRecoveryPredecessorId(),
         correlationId,
-      ),
-    );
+      );
+    });
+  }
+
+  private createUndoWindow(deps: CodingRuntimeOrchestratorDeps): CodingRuntimeUndoWindow {
+    return new CodingRuntimeUndoWindow({
+      canHold: (): boolean =>
+        deps.manager.hold !== undefined && deps.taskDispatcher.commitRevert !== undefined,
+      revertState: async (runId): Promise<CodingRuntimeRevertState | undefined> =>
+        deps.taskDispatcher.revertState?.(runId),
+      hold: async (runId): Promise<CodingRuntimeHoldResult> =>
+        (await deps.manager.hold?.(runId)) ?? deps.manager.stop(runId, "succeeded"),
+      commitStagedRevert: async (runId): Promise<"committed" | "none" | "failed"> =>
+        (await deps.taskDispatcher.commitRevert?.(runId)) ?? "none",
+      stop: async (runId): Promise<boolean> => (await deps.manager.stop(runId, "succeeded")).ok,
+      expire: (close): void => {
+        void this.serial(close);
+      },
+      now: (): number => this.now().getTime(),
+      windowMs: deps.undoWindowMs,
+      activityLog: deps.activityLog,
+    });
+  }
+
+  /** The settled run whose runtime is held for undo, while its window is open (#3904 AC3). */
+  private heldSnapshot(): CodingRuntimeSnapshot | undefined {
+    const runId = this.undoWindow.heldRunId();
+    return runId === undefined ? undefined : this.deps.snapshots.get(runId);
   }
 
   private acknowledgedRecoveryPredecessorId(): string | undefined {
@@ -1982,6 +2043,7 @@ export class CodingRuntimeOrchestrator {
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
+      await this.undoWindow.close("next-run");
       return this.startFreshAgainstPredecessor(input, runId, correlationId);
     });
   }
@@ -2045,6 +2107,49 @@ export class CodingRuntimeOrchestrator {
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
     return this.operations.submitFollowUp(runId, input, correlationId);
+  }
+
+  /** Undo or restore of the run's newest turn; see `CodingRuntimeOperationCoordinator.submitRevert`. */
+  submitRevert(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.submitRevert(runId, input, correlationId);
+  }
+
+  revertState(runId: string): Promise<CodingRuntimeRevertState | undefined> {
+    return this.operations.revertState(runId);
+  }
+
+  /** Withdraws or promotes a pending message; see `CodingRuntimeOperationCoordinator.submitInboxAction`. */
+  submitInboxAction(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.submitInboxAction(runId, input, correlationId);
+  }
+
+  /** The messages still waiting for the running turn; see `CodingRuntimeOperationCoordinator`. */
+  listInbox(runId: string, correlationId?: string): Promise<CodingRuntimeInboxItems | undefined> {
+    return this.operations.listInbox(runId, correlationId);
+  }
+
+  /** The subagents and skills the run's runtime lists right now; see the coordinator. */
+  listMentions(
+    runId: string,
+    correlationId?: string,
+  ): Promise<CodingRuntimeMentionables | undefined> {
+    return this.operations.listMentions(runId, correlationId);
+  }
+
+  /** The slash commands the run's runtime lists right now; see `CodingRuntimeOperationCoordinator`. */
+  listCommands(
+    runId: string,
+    correlationId?: string,
+  ): Promise<readonly CodingWorkbenchCommand[] | undefined> {
+    return this.operations.listCommands(runId, correlationId);
   }
 
   listQuestions(
@@ -2310,7 +2415,11 @@ export class CodingRuntimeOrchestrator {
       if (admitted === undefined) return this.fail("invalid-intent");
       const { decision, current, challenge, actionKind, request } = admitted;
       challenge.used = true;
-      if (decision === "approved") {
+      // A native action (#3897) mints no Keiko authority: the permission port carries the human's
+      // verdict back to the runtime's own permission evaluation, and that is the whole grant.
+      if (actionKind === undefined) {
+        // nothing to issue or decline on the server side
+      } else if (decision === "approved") {
         const rejection = await this.issueApprovedAuthority(
           current,
           challenge,
@@ -2386,7 +2495,8 @@ export class CodingRuntimeOrchestrator {
         readonly decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"];
         readonly current: CodingRuntimeSnapshot;
         readonly challenge: ApprovalChallenge;
-        readonly actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>;
+        /** Absent for a native action ask, which mints no authority. */
+        readonly actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"];
         readonly request: CodingWorkbenchRuntimeApprovalDecisionRequest;
       }
     | undefined {
@@ -2398,7 +2508,7 @@ export class CodingRuntimeOrchestrator {
       current?.runId !== runId ||
       current.state !== "awaiting-approval" ||
       !this.approvalChallengeMatches(challenge, parsed.value) ||
-      !challenge.permission.actionKind
+      (!challenge.permission.actionKind && !isNativeActionPermissionRequest(challenge.permission))
     )
       return undefined;
     return {
@@ -2567,7 +2677,10 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "permission-requested") {
       const challenge = this.approvalChallenge(current, event);
-      if (challenge === undefined) return this.fail("invalid-intent");
+      if (challenge === undefined) {
+        recordRuntimeEventDropped(this.deps.activityLog, event, current, "challenge-invalid");
+        return this.fail("invalid-intent");
+      }
       if (this.approvals.has(current.runId)) return await this.queueApproval(current, challenge);
       this.approvals.set(current.runId, challenge);
     }
@@ -2708,7 +2821,12 @@ export class CodingRuntimeOrchestrator {
     // behind an approval nobody can decide any more (1.1.9 lab).
     const live = this.retireExpiredApproval(current, true);
     const challenge = this.approvalChallenge(live, event);
-    if (challenge === undefined) return this.fail("invalid-intent");
+    if (challenge === undefined) {
+      // An ask nobody could decide (no action kind and not a native action, or already expired)
+      // used to vanish here while the asking tool waited for its whole decision window (#3897).
+      recordRuntimeEventDropped(this.deps.activityLog, event, live, "challenge-invalid");
+      return this.fail("invalid-intent");
+    }
     if (live.state === "awaiting-approval") {
       return await this.queueApproval(live, challenge);
     }
@@ -2810,8 +2928,10 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
   ): ApprovalChallenge | undefined {
-    if (!event.permissionRequest?.actionKind) return undefined;
-    const requested = Date.parse(event.permissionRequest.expiresAt);
+    const permission = event.permissionRequest;
+    if (permission === undefined) return undefined;
+    if (!permission.actionKind && !isNativeActionPermissionRequest(permission)) return undefined;
+    const requested = Date.parse(permission.expiresAt);
     const nowMs = this.now().getTime();
     if (!Number.isFinite(requested) || requested <= nowMs) return undefined;
     // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
@@ -2821,7 +2941,7 @@ export class CodingRuntimeOrchestrator {
     return {
       revision: current.revision + 1,
       expiresAt,
-      permission: { ...event.permissionRequest, expiresAt: new Date(expiresAt).toISOString() },
+      permission: { ...permission, expiresAt: new Date(expiresAt).toISOString() },
       used: false,
     };
   }
@@ -2991,10 +3111,32 @@ export class CodingRuntimeOrchestrator {
     const truthfulOutcome = verificationFailure?.state ?? outcome;
     if (verificationFailure !== undefined)
       this.recordVerificationContinuation(runId, "not-evidenced");
-    const stopped = await this.stopForSettlement(runId, truthfulOutcome);
+    const ended = await this.endForSettlement(runId, truthfulOutcome);
     const live = this.current();
-    if (live?.runId !== runId) return;
-    this.settleStoppedTask(live, truthfulOutcome, stopped, cause, verificationFailure);
+    if (live?.runId === runId)
+      this.settleStoppedTask(live, truthfulOutcome, ended.stopped, cause, verificationFailure);
+    if (ended.held) await this.openOrReleaseUndoWindow(runId);
+  }
+
+  /**
+   * #3904 AC3 (owner decision 2026-10-24): a native run that succeeded with an undoable newest turn
+   * keeps its runtime, with its authority revoked, for the post-completion undo window; every other
+   * settlement stops the runtime as before.
+   */
+  private async endForSettlement(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+  ): Promise<UndoWindowHoldOutcome> {
+    const held = outcome === "succeeded" ? await this.undoWindow.hold(runId) : undefined;
+    return held ?? { stopped: await this.stopForSettlement(runId, outcome), held: false };
+  }
+
+  private async openOrReleaseUndoWindow(runId: string): Promise<void> {
+    if (this.deps.snapshots.get(runId)?.state === "succeeded") {
+      this.undoWindow.open(runId);
+      return;
+    }
+    await this.undoWindow.release(runId, "not-succeeded");
   }
 
   private verificationMissing(runId: string, outcome: CodingRuntimeTaskOutcome): boolean {
@@ -3071,21 +3213,48 @@ export class CodingRuntimeOrchestrator {
     cause: RunSettlementCause | undefined,
     verificationFailure?: VerificationFailureSettlement,
   ): void {
-    const terminalResult = this.deps.manager.result(live.runId);
-    const runtimeAgrees =
-      (cause !== undefined && isRefusalEscalation(cause)) || terminalResult?.status === outcome;
-    if (!stopped || !runtimeAgrees) {
+    if (!stopped || !this.runtimeAgrees(live.runId, outcome, cause)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     const target =
       verificationFailure ?? this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome, cause));
+    if (target?.state === "cancelled") {
+      this.settleCancelledTurn(live);
+      return;
+    }
     if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
     this.transition(live, target.state, target.failureCode, undefined, settledCause);
+  }
+
+  private runtimeAgrees(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+    cause: RunSettlementCause | undefined,
+  ): boolean {
+    if (cause !== undefined && isRefusalEscalation(cause)) return true;
+    return this.deps.manager.result(runId)?.status === outcome;
+  }
+
+  /**
+   * A turn a person ended settles the way an operator stop does, through `stopping`, because a live
+   * run reaches `cancelled` only from there; the runtime was already stopped for the settlement.
+   */
+  private settleCancelledTurn(live: CodingRuntimeSnapshot): void {
+    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, "cancelled")) {
+      const stopping = this.transition(live, "stopping");
+      if (!stopping.ok) {
+        this.transition(live, "recovery-required", "recovery-required");
+        return;
+      }
+    }
+    const current = this.current();
+    if (current?.runId !== live.runId) return;
+    this.transition(current, "cancelled");
   }
 
   /**
@@ -3291,13 +3460,10 @@ export class CodingRuntimeOrchestrator {
    */
   private deliveryTruthfulOutcome(
     live: CodingRuntimeSnapshot,
-    target: {
-      readonly state: "failed" | "succeeded";
-      readonly failureCode?: TaskSettlementFailureCode | undefined;
-    },
+    target: TaskOutcomeTarget,
   ):
     | {
-        readonly state: "failed" | "succeeded";
+        readonly state: "cancelled" | "failed" | "succeeded";
         readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
       }
     | undefined {
@@ -3414,6 +3580,7 @@ export class CodingRuntimeOrchestrator {
    * confirmation (owner review, PR #3452).
    */
   async shutdown(correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
+    await this.undoWindow.close("shutdown");
     const current = this.current();
     if (current === undefined) {
       this.deps.safeActivityProjection?.purgeAll("shutdown", correlationId);
@@ -3466,6 +3633,7 @@ export class CodingRuntimeOrchestrator {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
+    if (this.forkRefused(parsed.value)) return this.fail("invalid-intent");
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
     const scope = this.historyStartScope(parsed.value);
@@ -3569,12 +3737,56 @@ export class CodingRuntimeOrchestrator {
     runId: string,
   ): boolean {
     try {
-      this.deps.history?.begin(request, active, runId);
+      if (request.fork === undefined) this.deps.history?.begin(request, active, runId);
+      const fork =
+        request.fork === undefined
+          ? undefined
+          : this.deps.history?.beginFork(request, active, runId);
+      this.declareContinuity(request, runId, fork?.boundary);
       return true;
     } catch (error) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "history-initialization", error);
       return false;
     }
+  }
+
+  /**
+   * Tells the runtime side what this run asks for: to resume the task it continues, or to fork the
+   * task it was made from (S02/S03, #3904). It is a request, not authority: the run is minted and
+   * bounded as any other, and the composition answers with what it actually did.
+   */
+  private declareContinuity(
+    request: CodingWorkbenchRuntimeStartRequest,
+    runId: string,
+    forkBoundary: ForkBoundary | undefined,
+  ): void {
+    const continuity = this.deps.sessionContinuity;
+    if (continuity === undefined) return;
+    if (request.fork !== undefined && forkBoundary !== undefined) {
+      continuity.declare(runId, {
+        kind: "fork",
+        sourceTaskId: request.fork.taskId,
+        boundary: forkBoundary,
+      });
+    } else if (request.conversationId !== undefined) {
+      continuity.declare(runId, { kind: "resume", taskId: request.conversationId });
+    }
+  }
+
+  /**
+   * A fork starts a NEW task from another task's conversation, so its source must be this operator's
+   * task of the active workspace and its fork point one of the source's user turns. The check runs
+   * before any run exists: a fork that cannot be made refuses the start instead of failing a run.
+   */
+  private forkRefused(request: CodingWorkbenchRuntimeStartRequest): boolean {
+    if (request.fork === undefined) return false;
+    const active = this.activeWorkspaceOrUndefined();
+    // Without an active workspace the start's own scope check refuses with its own cause.
+    if (active === undefined) return false;
+    return (
+      this.deps.history?.admits(request.fork.taskId, active) !== true ||
+      this.deps.history.planFork(request.fork, active) === undefined
+    );
   }
 
   private historyStartScope(request: CodingWorkbenchRuntimeStartRequest):
@@ -3588,6 +3800,7 @@ export class CodingRuntimeOrchestrator {
     const principal = this.deps.serverPrincipal();
     if (!active || !principal) return undefined;
     if (request.conversationId === undefined) return { active, principal, request };
+    // (a fork has no conversation id: it begins a new task, see `beginHistory`)
     if (!this.deps.history?.admits(request.conversationId, active)) return undefined;
     const priorId = this.deps.history.previousRunId(request.conversationId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
@@ -3753,6 +3966,8 @@ export class CodingRuntimeOrchestrator {
       expectedRevision: runningInternal.revision,
       taskIntent: request.taskIntent,
       ...(initialContext === undefined ? {} : { initialContext }),
+      ...agentField(request.agent),
+      ...promptInputFields(request),
     });
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
@@ -3770,9 +3985,24 @@ export class CodingRuntimeOrchestrator {
     // #3384). Advancing here restores the same one-bump-per-accepted-dispatch invariant every
     // other guarded mutation already provides.
     if (initialTurn === "accepted") return this.advanceRevision(runningInternal, "task-submitted");
+    return this.settleRefusedInitialTurn(initialTurn, runId);
+  }
+
+  // The first dispatch was not accepted and its run was stopped (or could not be): a runtime
+  // failure, the request's own refusal of the first prompt's inputs, or a run to recover.
+  private settleRefusedInitialTurn(
+    initialTurn: "failed" | "inputs-refused" | "recovery-required",
+    runId: string,
+  ): CodingRuntimeOrchestratorResult {
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");
+    }
+    if (initialTurn === "inputs-refused") {
+      // The first prompt named a file or a command the run cannot take (ADR-0137 D10): the start is
+      // refused with the request's own cause, never carried on without it.
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-inputs-refused");
+      return this.transitionActive("failed", "invalid-intent");
     }
     recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-recovery");
     return this.transitionActive("recovery-required", "recovery-required");
@@ -3784,10 +4014,18 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     attachment?: CodingRuntimeIssueAttachment,
   ): Promise<string | undefined> {
+    // A slash command's runtime expands its own template and has no field to hide a context in, so
+    // a command start builds none: nothing is read or recorded as included that the model never sees.
+    if (request.command !== undefined) return undefined;
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
-    const historyContext = this.deps.history?.initialContext(runId);
+    // A run whose runtime holds the task's conversation itself needs no replay of it (S02/S03).
+    const nativeHistory = this.deps.sessionContinuity?.outcome(runId)?.kind;
+    const historyContext =
+      nativeHistory === "resumed" || nativeHistory === "forked"
+        ? undefined
+        : this.deps.history?.initialContext(runId);
     // The repository's own AGENTS.md leads the context so its conventions frame the task; it is
     // loaded last so it can yield to the parts above under the sidecar prompt ceiling. No other
     // part can forge its frame: their `<repository-instructions` lookalikes are neutralized (#3873
@@ -3873,6 +4111,8 @@ export class CodingRuntimeOrchestrator {
         ...(request.modelId ? { modelId: request.modelId } : {}),
         ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
         projectMemoryEnabled: request.projectMemory?.enabled ?? true,
+        ...agentField(request.agent),
+        ...promptInputFields(request),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
@@ -4021,6 +4261,8 @@ export class CodingRuntimeOrchestrator {
       state: current.state,
       revision: current.revision + 1,
       updatedAt: this.now().toISOString(),
+      // An undo of a held, settled run (#3904 AC3) advances its revision, never its settlement time.
+      ...(current.terminalAt === undefined ? {} : { terminalAt: current.terminalAt }),
     });
     return this.projection.publish(next, eventKind)
       ? { ok: true, snapshot: this.publicSnapshotWithDescription(next) }
@@ -4638,16 +4880,21 @@ export const DELIVERY_CONTINUATION_INTENT =
 
 // A failed turn settles `runtime-failed` unless a cause named it: the escalation of its run's
 // refused edits (F5), or one of the run's bounds or its last failed model call (F9).
+// #3897 review: a turn a person ended (a refused or dismissed native question) settles as
+// cancelled, the outcome the runtime reported, never as a runtime failure. A cause of Keiko's own
+// (an escalation of refused edits) still settles the run as failed with that cause.
 function taskOutcomeState(
   outcome: CodingRuntimeTaskOutcome,
   cause: RunSettlementCause | undefined,
-): {
-  readonly state: "failed" | "succeeded";
+): TaskOutcomeTarget {
+  if (outcome === "succeeded") return { state: "succeeded" };
+  if (outcome === "cancelled" && cause === undefined) return { state: "cancelled" };
+  return { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
+}
+
+interface TaskOutcomeTarget {
+  readonly state: "cancelled" | "failed" | "succeeded";
   readonly failureCode?: TaskSettlementFailureCode | undefined;
-} {
-  return outcome === "succeeded"
-    ? { state: "succeeded" }
-    : { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
 }
 
 // #3873: a run awaiting an approval, or paused on a decision a governed tool waits for, is waiting

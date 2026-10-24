@@ -1,12 +1,22 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchMode,
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type {
+  CodingWorkbenchCommandRequest,
+  CodingWorkbenchPromptMentions,
+  CodingWorkbenchRuntimeForkRequest,
+  CodingWorkbenchRuntimeInboxAction,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
   codingWorkbenchRuntimeActionError,
@@ -15,13 +25,18 @@ import {
   pauseCodingWorkbenchRuntime,
   resumeCodingWorkbenchRuntime,
   retryCodingWorkbenchRuntime,
+  revertCodingWorkbenchRuntime,
   revokeCodingWorkbenchRuntimeResearchGrant,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
   submitCodingWorkbenchRuntimeFollowUp,
+  submitCodingWorkbenchRuntimeInboxAction,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
-import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state";
+import {
+  offeredCodingWorkbenchAgents,
+  type CodingWorkbenchRuntimeState,
+} from "./coding-workbench-live-state";
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
@@ -43,6 +58,37 @@ function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): Run
   };
 }
 
+/**
+ * The agent is sent only where the server offers a choice, so a deployment that offers the default
+ * alone keeps its request bodies exactly as before. Where the choice exists the selection is always
+ * stated, including `build`: a follow-up after a `plan` turn has to be able to switch back.
+ */
+function agentSelection(current: CodingWorkbenchRuntimeState): {
+  readonly agent?: CodingWorkbenchAgent;
+} {
+  return offeredCodingWorkbenchAgents(current).length > 1 ? { agent: current.agent } : {};
+}
+
+/**
+ * What the first prompt carries beside its text (ADR-0137 D10): the files it references with `@`, the
+ * slash command it starts with, and the task it forks (S03). All are absent for the ordinary start,
+ * which keeps its request body exactly as it was.
+ */
+function startPromptInputs(options: CodingWorkbenchStartOptions): {
+  readonly references?: readonly CodingWorkbenchPromptReference[];
+  readonly command?: CodingWorkbenchCommandRequest;
+  readonly mentions?: CodingWorkbenchPromptMentions;
+  readonly fork?: CodingWorkbenchRuntimeForkRequest;
+} {
+  const references = options.references ?? [];
+  return {
+    ...(references.length === 0 ? {} : { references }),
+    ...(options.command === undefined ? {} : { command: options.command }),
+    ...(options.mentions === undefined ? {} : { mentions: options.mentions }),
+    ...(options.fork === undefined ? {} : { fork: options.fork }),
+  };
+}
+
 function startRequest(
   id: string,
   taskIntent: string,
@@ -57,6 +103,8 @@ function startRequest(
     runtimePreference: current.runtimePreference,
     projectMemory: { enabled: options.projectMemoryEnabled },
     ...managedGatewayModelSelection(current),
+    ...agentSelection(current),
+    ...startPromptInputs(options),
   };
   if (options.issue === undefined) return request;
   return {
@@ -86,6 +134,12 @@ export function createStartMutation(
 ): CodingWorkbenchMutationCommand {
   if (!current.canStart)
     throw codingWorkbenchRuntimeActionError("The runtime is not ready to start.");
+  // A command turn carries none of an issue's context; the server refuses the pair, so never send it.
+  if (options.command !== undefined && options.issue !== undefined)
+    throw codingWorkbenchRuntimeActionError("A slash command cannot start a task from an issue.");
+  // A fork begins a new task, so it never also continues one; the server refuses the pair.
+  if (options.fork !== undefined && options.conversationId !== undefined)
+    throw codingWorkbenchRuntimeActionError("A fork cannot continue a task.");
   const id = newCodingWorkbenchRuntimeRequestId();
   return {
     requestId: id,
@@ -172,18 +226,66 @@ function validatedResumeMode(
   return requestedMode;
 }
 
+/** What a follow-up carries beside its text; all fields are absent for the ordinary follow-up. */
+export interface CodingWorkbenchFollowUpInputs {
+  /** Makes the message join the turn that is running; it never starts one (ADR-0137 D10). */
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  /** Workspace files the human referenced with `@`, by path relative to the run's workspace. */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /**
+   * Runs the turn as one of the runtime's slash commands; the text is then the command's arguments
+   * and may be empty. A command starts a turn, so it is never a delivery.
+   */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /** The subagents and skills the message mentions (#3906); the server confirms each. */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+}
+
+interface FollowUpTarget {
+  readonly runId: string;
+  readonly snapshot: CodingWorkbenchRuntimeSnapshot;
+}
+
+/** Whether the follow-up has anything to send: a text, or a command, which may take none. */
+function followUpHasText(taskIntent: string, inputs: CodingWorkbenchFollowUpInputs): boolean {
+  return taskIntent.length > 0 || inputs.command !== undefined;
+}
+
+/**
+ * The run a follow-up is admitted against, or the refusal. An ordinary follow-up is only ever
+ * admitted against a paused run; a delivered message (`steer` or `queue`) is the one thing a running
+ * run takes, and it takes it for the turn in flight. Only a command may carry an empty text, and a
+ * command starts a turn, so it is never a delivery.
+ */
+function followUpTarget(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null,
+  taskIntent: string,
+  inputs: CodingWorkbenchFollowUpInputs,
+): FollowUpTarget {
+  const { delivery, command } = inputs;
+  if (command !== undefined && delivery !== undefined) {
+    throw codingWorkbenchRuntimeActionError("A slash command cannot be delivered into a turn.");
+  }
+  const admissible = delivery === undefined ? "paused" : "running";
+  if (snapshot?.state !== admissible || !followUpHasText(taskIntent, inputs) || !snapshot.runId) {
+    throw codingWorkbenchRuntimeActionError(
+      delivery === undefined
+        ? "A follow-up can only be sent while the run is paused."
+        : "A message can only be sent to a task while its turn is running.",
+    );
+  }
+  return { runId: snapshot.runId, snapshot };
+}
+
 export function createFollowUpMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  inputs: CodingWorkbenchFollowUpInputs = {},
 ): CodingWorkbenchMutationCommand {
-  const snapshot = current.run.value;
-  const runId = snapshot?.runId;
-  // No hidden prompt queue: a drafted follow-up is only ever admitted against a paused run.
-  if (!runId || snapshot?.state !== "paused" || taskIntent.length === 0)
-    throw codingWorkbenchRuntimeActionError(
-      "A follow-up can only be sent while the run is paused.",
-    );
+  const { runId, snapshot } = followUpTarget(current.run.value, taskIntent, inputs);
   const id = newCodingWorkbenchRuntimeRequestId();
+  const { delivery, command, mentions } = inputs;
+  const references = inputs.references ?? [];
   return {
     requestId: id,
     expected: { runId, revision: snapshot.revision },
@@ -193,6 +295,76 @@ export function createFollowUpMutation(
         requestId: id,
         expectedRevision: snapshot.revision,
         taskIntent,
+        // A delivered message joins the turn that runs under its agent and never switches it.
+        ...(delivery === undefined ? agentSelection(current) : { delivery }),
+        ...(references.length === 0 ? {} : { references }),
+        ...(command === undefined ? {} : { command }),
+        ...(mentions === undefined ? {} : { mentions }),
+      }),
+  };
+}
+
+// A succeeded run is admitted while the server holds its runtime for undo (#3904 AC3).
+const REVERT_STATES: ReadonlySet<string> = new Set(["running", "paused", "succeeded"]);
+
+/**
+ * Undo or restore of the run's newest turn (B3, S04): bound to the observed revision like a
+ * follow-up, and only against a live run or a succeeded run whose undo window is open. The server
+ * refuses everything else; this keeps the browser from sending a request it knows cannot be
+ * admitted.
+ */
+export function createRevertMutation(
+  action: CodingWorkbenchRuntimeRevertAction,
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  if (!runId || snapshot === null || !REVERT_STATES.has(snapshot.state))
+    throw codingWorkbenchRuntimeActionError(
+      "The last turn can only be undone while the run is open.",
+    );
+  const id = newCodingWorkbenchRuntimeRequestId();
+  return {
+    requestId: id,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      revertCodingWorkbenchRuntime(runId, {
+        requestId: id,
+        expectedRevision: snapshot.revision,
+        action,
+      }),
+  };
+}
+
+/**
+ * Withdraws a message waiting for the running turn, or changes a queued one to Send now (S07):
+ * bound to the observed revision like a follow-up, and only against a run whose turn is running.
+ * A paused run has no turn to hold a message; the server refuses everything else, and this keeps
+ * the browser from sending a request it knows cannot be admitted.
+ */
+export function createInboxMutation(
+  action: CodingWorkbenchRuntimeInboxAction,
+  itemId: string,
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  if (!runId || snapshot?.state !== "running")
+    throw codingWorkbenchRuntimeActionError(
+      "A waiting message can only be changed while the task's turn is running.",
+    );
+  const id = newCodingWorkbenchRuntimeRequestId();
+  return {
+    requestId: id,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      submitCodingWorkbenchRuntimeInboxAction(runId, {
+        requestId: id,
+        expectedRevision: snapshot.revision,
+        action,
+        itemId,
       }),
   };
 }
@@ -217,6 +389,7 @@ export function createRetryMutation(
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
         ...managedGatewayModelSelection(current),
+        ...agentSelection(current),
       }),
   };
 }

@@ -2,13 +2,16 @@ import {
   gatewayVerificationContradictsReadiness,
   UNVERIFIED_GATEWAY,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { DEFAULT_CODING_WORKBENCH_AGENT } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSource,
@@ -110,6 +113,8 @@ export type CodingWorkbenchMutationKind =
   | "pause"
   | "resume"
   | "follow-up"
+  | "revert"
+  | "inbox"
   | "research-revoke";
 
 export interface CodingWorkbenchMutationState {
@@ -121,6 +126,24 @@ export interface CodingWorkbenchMutationState {
 
 export interface CodingWorkbenchRuntimeState {
   readonly requestedMode: CodingWorkbenchMode;
+  /**
+   * The primary agent the next turn runs under (#3897). Always one `offeredCodingWorkbenchAgents`
+   * lists: the reducer returns it to the default whenever the offer narrows.
+   */
+  readonly agent: CodingWorkbenchAgent;
+  /**
+   * The agents the server's last readiness read said its tool profile can honour. Kept across a
+   * mode change (which empties `runtime` while the next read loads) so the agent switch does not
+   * disappear and reappear; never widened by the browser.
+   */
+  readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  /**
+   * What the server's last readiness read said the composed runtime can do with a prompt's inputs
+   * (ADR-0137 D10): send a message while a turn runs, and attach referenced workspace files. Kept
+   * across a mode change like `selectableAgents`, so the controls do not flicker while the next
+   * read loads; never widened by the browser.
+   */
+  readonly promptInputs: CodingWorkbenchRuntimePromptInputs;
   readonly runtimePreference: CodingWorkbenchRuntimePreference;
   readonly selectedModelId: string | null;
   readonly reasoningEffort: ModelReasoningEffort | null;
@@ -143,6 +166,7 @@ export type CodingWorkbenchResourceKey =
 
 export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "select-mode"; readonly mode: CodingWorkbenchMode }
+  | { readonly kind: "select-agent"; readonly agent: CodingWorkbenchAgent }
   | {
       readonly kind: "select-runtime-preference";
       readonly preference: CodingWorkbenchRuntimePreference;
@@ -182,6 +206,12 @@ const emptyResource = <T>(
   status: CodingWorkbenchResourceStatus = "idle",
 ): CodingWorkbenchResourceState<T> => ({ status, value: null, error: null });
 
+/** What a runtime that reports nothing can do with a prompt's inputs: neither. */
+export const NO_CODING_WORKBENCH_PROMPT_INPUTS: CodingWorkbenchRuntimePromptInputs = Object.freeze({
+  delivery: false,
+  references: false,
+});
+
 const IDLE_MUTATION: CodingWorkbenchMutationState = {
   status: "idle",
   kind: null,
@@ -195,6 +225,9 @@ export function createInitialCodingWorkbenchRuntimeState(
 ): CodingWorkbenchRuntimeState {
   return {
     requestedMode,
+    agent: DEFAULT_CODING_WORKBENCH_AGENT,
+    selectableAgents: [DEFAULT_CODING_WORKBENCH_AGENT],
+    promptInputs: NO_CODING_WORKBENCH_PROMPT_INPUTS,
     runtimePreference,
     selectedModelId: null,
     reasoningEffort: null,
@@ -362,20 +395,63 @@ function selectMode(
   return projectReadiness({ ...state, requestedMode: mode, runtime: emptyResource() });
 }
 
+/**
+ * The primary agents the browser may offer right now. Only the managed gateway runs OpenCode, whose
+ * `plan` agent exists on the native tool profile; a Codex subscription run has no agent concept
+ * and the server refuses `plan` for it, so it offers the default agent alone.
+ */
+export function offeredCodingWorkbenchAgents(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "selectableAgents">,
+): readonly CodingWorkbenchAgent[] {
+  return state.runtimePreference === "managed-gateway"
+    ? state.selectableAgents
+    : [DEFAULT_CODING_WORKBENCH_AGENT];
+}
+
+/**
+ * The prompt inputs the browser may offer right now. Only the managed gateway runs OpenCode, whose
+ * native profile reads referenced files and takes a message while a turn runs; a Codex
+ * subscription run has neither, and the server refuses both for it.
+ */
+export function offeredCodingWorkbenchPromptInputs(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "promptInputs">,
+): CodingWorkbenchRuntimePromptInputs {
+  return state.runtimePreference === "managed-gateway"
+    ? state.promptInputs
+    : NO_CODING_WORKBENCH_PROMPT_INPUTS;
+}
+
+// The selection never outlives its offer: whatever narrows the offer returns it to the default.
+function withOfferedAgent(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  return offeredCodingWorkbenchAgents(state).includes(state.agent)
+    ? state
+    : { ...state, agent: DEFAULT_CODING_WORKBENCH_AGENT };
+}
+
+function selectAgent(
+  state: CodingWorkbenchRuntimeState,
+  agent: CodingWorkbenchAgent,
+): CodingWorkbenchRuntimeState {
+  if (state.agent === agent || !offeredCodingWorkbenchAgents(state).includes(agent)) return state;
+  return { ...state, agent };
+}
+
 function selectPreference(
   state: CodingWorkbenchRuntimeState,
   runtimePreference: CodingWorkbenchRuntimePreference,
 ): CodingWorkbenchRuntimeState {
   if (state.runtimePreference === runtimePreference) return state;
-  return projectReadiness({
-    ...state,
-    runtimePreference,
-    selectedModelId: null,
-    reasoningEffort: null,
-    profile: emptyResource(),
-    codexSetup: emptyResource(),
-    source: emptyResource(),
-  });
+  return projectReadiness(
+    withOfferedAgent({
+      ...state,
+      runtimePreference,
+      selectedModelId: null,
+      reasoningEffort: null,
+      profile: emptyResource(),
+      codexSetup: emptyResource(),
+      source: emptyResource(),
+    }),
+  );
 }
 
 function resourceLoading(
@@ -471,6 +547,7 @@ type RuntimeActionHandlers = {
 
 const runtimeActionHandlers = {
   "select-mode": (state, action): CodingWorkbenchRuntimeState => selectMode(state, action.mode),
+  "select-agent": (state, action): CodingWorkbenchRuntimeState => selectAgent(state, action.agent),
   "select-runtime-preference": (state, action): CodingWorkbenchRuntimeState =>
     selectPreference(state, action.preference),
   "select-model": (state, action): CodingWorkbenchRuntimeState =>
@@ -503,7 +580,14 @@ const runtimeActionHandlers = {
       ? state
       : projectReadiness({ ...state, source: ready(action.source) }),
   "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
-    projectReadiness({ ...state, runtime: ready(action.readiness) }),
+    projectReadiness(
+      withOfferedAgent({
+        ...state,
+        runtime: ready(action.readiness),
+        selectableAgents: action.readiness.selectableAgents,
+        promptInputs: action.readiness.promptInputs ?? NO_CODING_WORKBENCH_PROMPT_INPUTS,
+      }),
+    ),
   "workspace-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,

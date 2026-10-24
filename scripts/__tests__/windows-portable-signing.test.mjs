@@ -956,6 +956,39 @@ describe("Windows portable PE signing inventory", () => {
     ).toEqual([{ alg: "SHA-256", content: sha256(carrierBytes) }]);
   });
 
+  it("marks a declared native tool Authenticode verified with the attestation carrier", () => {
+    // Epic #3897: rg.exe is a PE file in the payload, so the PE-inventory signing covers it and the
+    // manifest then states it. A manifest that declares no tool is untouched.
+    const fixture = windowsPrepareStage();
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+    write(
+      join(fixture.stage, "payload", "Keiko", "runtime", "native", "keiko-runtime-attestation.exe"),
+      portableExecutable(10),
+    );
+    bindRuntimeAttestation(fixture.stage, manifest);
+    expect(manifest.nativeTools).toBeUndefined();
+    expect(manifest.releaseImpact.reviewedBinding.nativeTools).toBeUndefined();
+
+    manifest.nativeTools = [
+      { name: "ripgrep", executablePath: "runtime/native/rg.exe", signing: {} },
+    ];
+    bindRuntimeAttestation(fixture.stage, manifest);
+
+    expect(manifest.nativeTools[0].signing).toEqual({
+      signatureKind: "authenticode",
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    });
+    expect(manifest.releaseImpact.reviewedBinding.nativeTools).toEqual(manifest.nativeTools);
+
+    manifest.nativeTools.push({ name: "other" });
+    expect(() => bindRuntimeAttestation(fixture.stage, manifest)).toThrow(
+      /exactly one native tool/u,
+    );
+  });
+
   it("rejects a missing or aliased Windows runtime attestation carrier", () => {
     const fixture = windowsPrepareStage();
     const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));

@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeFollowUpRequest,
   CodingWorkbenchRuntimeQuestionAnswerRequest,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
@@ -25,9 +26,17 @@ import type {
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { validateCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
+  validateCodingWorkbenchRuntimeCommandsChannelPayload,
+  validateCodingWorkbenchRuntimeInboxChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
+  validateCodingWorkbenchRuntimeRevertChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
+  type CodingWorkbenchRuntimeCommandsChannelPayload,
+  type CodingWorkbenchRuntimeInboxChannelPayload,
+  type CodingWorkbenchRuntimeInboxRequest,
+  type CodingWorkbenchRuntimeRevertChannelPayload,
+  type CodingWorkbenchRuntimeRevertRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
@@ -142,6 +151,27 @@ function approvalReviewChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeApprovalReviewChannelPayload);
+}
+
+function revertChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeRevertChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeRevertChannelPayload);
+}
+
+function commandsChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeCommandsChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeCommandsChannelPayload);
+}
+
+function inboxChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeInboxChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeInboxChannelPayload);
 }
 
 export interface CodingWorkbenchDescriptionDraftResult {
@@ -282,9 +312,8 @@ export interface CodingWorkbenchRuntimeQuestionRejectBody extends CodingWorkbenc
   readonly questionId: string;
 }
 
-export interface CodingWorkbenchRuntimeFollowUpBody extends CodingWorkbenchRuntimeOperationRequest {
-  readonly taskIntent: string;
-}
+/** The follow-up body is the shared wire contract, which also carries the optional primary agent. */
+export type CodingWorkbenchRuntimeFollowUpBody = CodingWorkbenchRuntimeFollowUpRequest;
 
 /** Pause binds to the run by id only; the server owns the transition guard. */
 export interface CodingWorkbenchRuntimeLifecycleBody {
@@ -385,6 +414,79 @@ export function submitCodingWorkbenchRuntimeFollowUp(
   input: CodingWorkbenchRuntimeFollowUpBody,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/follow-up"), input);
+}
+
+/**
+ * Undo the run's newest turn or restore an undo (B3, S04). The server stops the turn in flight, if
+ * any, and restores the workspace files that turn changed; the run stays live until it is stopped.
+ */
+export function revertCodingWorkbenchRuntime(
+  runId: string,
+  input: CodingWorkbenchRuntimeRevertRequest,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/revert"), input);
+}
+
+/**
+ * Reads what an undo would do or has done over the authenticated app-session channel: counts only,
+ * never a path. Absent `revert` means the run offers no undo; an unpaired window receives the
+ * constant `{ session: "unpaired" }` projection instead of an error.
+ */
+export function getCodingWorkbenchRuntimeRevertState(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeRevertChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/revert"),
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: revertChannelValidator },
+  );
+}
+
+/**
+ * Lists the slash commands a live run's runtime offers over the authenticated app-session channel
+ * (ADR-0137 D10). The names and descriptions are runtime-authored display text, bounded by the
+ * contract validator. Absent `commands` means the run offers none or could not list them; an
+ * unpaired window receives the constant `{ session: "unpaired" }` projection instead of an error.
+ */
+export function fetchCodingWorkbenchRuntimeCommands(
+  runId: string,
+  init?: { readonly signal?: AbortSignal | undefined },
+): Promise<CodingWorkbenchRuntimeCommandsChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/commands"),
+    { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
+    { validator: commandsChannelValidator },
+  );
+}
+
+/**
+ * Withdraw a message waiting for the running turn, or change a queued one to Send now (S07, ADR-0137
+ * D10). Bound to the observed revision like a follow-up; the server proves the message is one the
+ * operator delivered into this turn and answers one the runtime already took as delivered.
+ */
+export function submitCodingWorkbenchRuntimeInboxAction(
+  runId: string,
+  input: CodingWorkbenchRuntimeInboxRequest,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/inbox"), input);
+}
+
+/**
+ * Reads the messages still waiting for the running turn over the authenticated app-session channel:
+ * the id, the delivery and the operator's own one-line preview, in the order the model receives
+ * them. Absent `items` means the run offers none; an unpaired window receives the constant
+ * `{ session: "unpaired" }` projection instead of an error.
+ */
+export function fetchCodingWorkbenchRuntimeInbox(
+  runId: string,
+  init?: { readonly signal?: AbortSignal | undefined },
+): Promise<CodingWorkbenchRuntimeInboxChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/inbox"),
+    { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
+    { validator: inboxChannelValidator },
+  );
 }
 
 /**

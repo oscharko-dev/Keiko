@@ -1,0 +1,52 @@
+/* The composer's Build | Plan switch. It matches the height and border of the neighbouring model
+   and authority chips; the active option is marked by the accent tint the context chips use. */
+.cmpAgentControl {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  align-items: stretch;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin: 0;
+  padding: 2px;
+  font-size: 12.5px;
+}
+
+.cmpAgentOption {
+  appearance: none;
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 var(--space-3);
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cmpAgentOption:hover:not(:disabled) {
+  color: var(--button-secondary-text);
+  background: var(--button-secondary-surface-hover);
+}
+
+.cmpAgentOption[aria-pressed="true"] {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-accent) 13%, var(--button-secondary-surface));
+}
+
+.cmpAgentOption:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.cmpAgentOption:disabled {
+  cursor: default;
+  opacity: 0.72;
+}

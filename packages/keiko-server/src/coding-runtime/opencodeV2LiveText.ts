@@ -34,7 +34,7 @@ import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/kei
 
 export type LiveTextKind = "text" | "reasoning";
 
-/** A text part is never longer than this many UTF-8 bytes, as the history projection admits it. */
+/** The history projection shows an answer part up to this many UTF-8 bytes and cuts a longer one. */
 export const MAX_LIVE_TEXT_UTF8_BYTES = 65_536;
 /** The projection's bound on a reasoning part: it shows at most this much of one. */
 export const MAX_LIVE_REASONING_UTF8_BYTES = 2 * CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES;
@@ -123,8 +123,9 @@ function eventPartKey(
 }
 
 // The longest prefix of `delta` whole characters that fits `room` more UTF-8 bytes. A lone surrogate
-// is one character of its own, exactly as the projection's own cut treats it.
-function fittingPrefix(delta: string, room: number): string {
+// is one character of its own. The history projection cuts a finished part with this very function,
+// so the live text and the finished part are cut at the same character.
+export function fittingUtf8Prefix(delta: string, room: number): string {
   let used = 0;
   let end = 0;
   for (const character of delta) {
@@ -140,7 +141,7 @@ function append(part: LivePart, delta: string, bound: number): boolean {
   if (part.full) return false;
   const room = bound - part.bytes;
   const taken =
-    Buffer.byteLength(delta, "utf8") <= room ? delta : fittingPrefix(delta, Math.max(0, room));
+    Buffer.byteLength(delta, "utf8") <= room ? delta : fittingUtf8Prefix(delta, Math.max(0, room));
   part.full = taken.length < delta.length || part.bytes + Buffer.byteLength(taken, "utf8") >= bound;
   if (taken.length === 0) return false;
   part.text += taken;

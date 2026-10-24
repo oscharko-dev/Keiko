@@ -31,6 +31,10 @@
       "types": "./dist/context-observations.d.ts",
       "import": "./dist/context-observations.js"
     },
+    "./sensitive-path-patterns": {
+      "types": "./dist/sensitive-path-patterns.d.ts",
+      "import": "./dist/sensitive-path-patterns.js"
+    },
     "./text-safety": {
       "types": "./dist/text-safety.d.ts",
       "import": "./dist/text-safety.js"
@@ -174,6 +178,10 @@
     "./runtime/coding-workbench-runtime-api": {
       "types": "./dist/coding-workbench-runtime-api.d.ts",
       "import": "./dist/coding-workbench-runtime-api.js"
+    },
+    "./runtime/mcp-servers": {
+      "types": "./dist/mcp-servers.d.ts",
+      "import": "./dist/mcp-servers.js"
     },
     "./runtime/coding-workbench-runtime-approval-review": {
       "types": "./dist/coding-workbench-runtime-approval-review.d.ts",
@@ -850,10 +858,6 @@
     "./runtime/governed-tool-bridge": {
       "types": "./dist/governed-tool-bridge.d.ts",
       "import": "./dist/governed-tool-bridge.js"
-    },
-    "./runtime/opencode-service-host": {
-      "types": "./dist/opencode-service-host.d.ts",
-      "import": "./dist/opencode-service-host.js"
     }
   },
   "scripts": {

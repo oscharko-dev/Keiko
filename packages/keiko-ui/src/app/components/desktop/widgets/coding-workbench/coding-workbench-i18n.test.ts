@@ -120,6 +120,49 @@ describe("Coding Workbench translations", () => {
     expect(note).not.toMatch(/\b(?:Ihnen|Ihre?)\b/u);
   });
 
+  // ADR-0137 D10: the `/` command menu, the sentence that holds a send until the run's commands are
+  // known, and the refusal of a start whose files or command were not accepted. Both catalogs
+  // carry every key, the German one translated rather than copied, in the informal du-form.
+  it.each([
+    "codingWorkbench.composer.commands.title",
+    "codingWorkbench.composer.commands.results",
+    "codingWorkbench.composer.commands.option",
+    "codingWorkbench.composer.commands.active",
+    "codingWorkbench.composer.commands.loading",
+    "codingWorkbench.composer.commands.found",
+    "codingWorkbench.composer.commands.empty",
+    "codingWorkbench.composer.commands.none",
+    "codingWorkbench.composer.commands.error",
+    "codingWorkbench.composer.commands.retry",
+    "codingWorkbench.composer.commands.init.description",
+    "codingWorkbench.composer.commands.review.description",
+    "codingWorkbench.composer.blocked.commandsLoading",
+    "codingWorkbench.event.failure.invalid-intent",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
+    const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    // Only the position announcement `/{name}, {position} of {total}` shares its words with German.
+    if (key !== "codingWorkbench.composer.commands.active") expect(de).not.toBe(en);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+    expect(de).not.toMatch(/\{\w+\}/u);
+  });
+
+  it("keeps the placeholders the command menu fills in both languages", () => {
+    for (const locale of ["en", "de"] as const) {
+      expect(
+        translateCodingWorkbench(locale, "codingWorkbench.composer.commands.option"),
+      ).toContain("{name}");
+      expect(translateCodingWorkbench(locale, "codingWorkbench.composer.commands.found")).toContain(
+        "{count}",
+      );
+      expect(translateCodingWorkbench(locale, "codingWorkbench.composer.commands.active")).toMatch(
+        /\{name\}.*\{position\}.*\{total\}/u,
+      );
+    }
+  });
+
   it("interpolates runtime state and revision in both catalogs", () => {
     expect(
       translateCodingWorkbench("en", "codingWorkbench.announcement.runRevision", {
@@ -423,5 +466,126 @@ describe("Coding Workbench translations", () => {
     expect(Object.keys(DE_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),
     );
+  });
+});
+
+// #3897 review: the native OpenCode profile's approval card, tool names, plan progress and mode
+// texts. Every key resolves in both catalogs with a distinct German text, and the German product
+// wording addresses nobody (neither "Sie" nor "du"), like the approval strings around it.
+describe("Coding Workbench native profile copy", () => {
+  const NATIVE_KEYS = [
+    "codingWorkbench.approval.native.help",
+    "codingWorkbench.approval.native.help.shell",
+    "codingWorkbench.approval.native.help.edit",
+    "codingWorkbench.approval.native.help.internet",
+    "codingWorkbench.approval.native.noResources",
+    "codingWorkbench.approval.native.nothingNamed",
+    "codingWorkbench.approval.native.resources",
+    "codingWorkbench.approval.native.unavailable",
+    "codingWorkbench.activity.plan.progress",
+    "codingWorkbench.timeline.tool.read",
+    "codingWorkbench.timeline.tool.glob",
+    "codingWorkbench.timeline.tool.grep",
+    "codingWorkbench.timeline.tool.list",
+    "codingWorkbench.timeline.tool.edit",
+    "codingWorkbench.timeline.tool.write",
+    "codingWorkbench.timeline.tool.patch",
+    "codingWorkbench.timeline.tool.shell",
+    "codingWorkbench.timeline.tool.webfetch",
+    "codingWorkbench.timeline.tool.websearch",
+    "codingWorkbench.timeline.tool.skill",
+    "codingWorkbench.timeline.tool.subagent",
+    "codingWorkbench.timeline.tool.todo",
+    "codingWorkbench.timeline.tool.question",
+    "codingWorkbench.mode.governed-assist.short",
+    "codingWorkbench.mode.supervised-coding.short",
+    "codingWorkbench.mode.autonomous-delivery.short",
+    "codingWorkbench.mode.governed-assist.description",
+    "codingWorkbench.mode.supervised-coding.description",
+    "codingWorkbench.mode.autonomous-delivery.description",
+  ] as const;
+
+  it.each(NATIVE_KEYS)("localizes %s in both catalogs without addressing the reader", (key) => {
+    const en = translateCodingWorkbench("en", key, { completed: 1, total: 2 });
+    const de = translateCodingWorkbench("de", key, { completed: 1, total: 2 });
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    // "Skill", "Subagent" and the plan counter are the same word or number in both languages.
+    if (!/\.tool\.(?:skill|subagent)$|plan\.progress$/u.test(key)) expect(de).not.toBe(en);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?|du|dich|dir|dein\w*)\b/u);
+  });
+
+  it("states grammatically correct German when a native ask names nothing", () => {
+    expect(translateCodingWorkbench("de", "codingWorkbench.approval.native.noResources")).toBe(
+      "Weder Befehl noch Pfad noch Adresse wurde genannt.",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.approval.native.unavailable")).toBe(
+      "Die angeforderte Aktion ist nicht abrufbar. Fenster erneut koppeln, um sie vor der Entscheidung zu sehen.",
+    );
+  });
+
+  it("counts completed plan steps in both catalogs", () => {
+    expect(
+      translateCodingWorkbench("en", "codingWorkbench.activity.plan.progress", {
+        completed: 2,
+        total: 5,
+      }),
+    ).toBe("2/5 completed");
+    expect(
+      translateCodingWorkbench("de", "codingWorkbench.activity.plan.progress", {
+        completed: 2,
+        total: 5,
+      }),
+    ).toBe("2/5 abgeschlossen");
+  });
+
+  it("limits the internet help to Full access and the shell help to the task workspace", () => {
+    for (const locale of ["en", "de"] as const) {
+      const internet = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.approval.native.help.internet",
+      );
+      const shell = translateCodingWorkbench(locale, "codingWorkbench.approval.native.help.shell");
+      expect(internet).toMatch(locale === "en" ? /Full access/u : /Vollzugriff/u);
+      expect(internet).not.toMatch(/workspace|Workspace|Arbeitsbereich/u);
+      expect(shell).toMatch(locale === "en" ? /task workspace/u : /Aufgaben-Workspace/u);
+    }
+  });
+
+  // The three modes as the native OpenCode profile enforces them: what asks, what runs, where the
+  // internet is, and what no mode ever allows (Keiko delivers through Git, never the agent's shell;
+  // nothing outside the workspace; no secret files).
+  it("describes each mode for the native profile in both catalogs", () => {
+    const modes = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+    for (const mode of modes) {
+      for (const locale of ["en", "de"] as const) {
+        const text = translateCodingWorkbench(locale, `codingWorkbench.mode.${mode}.description`);
+        expect(text).toContain(".env");
+        expect(text).toMatch(locale === "en" ? /Keiko/u : /Keiko/u);
+        expect(text).toMatch(
+          locale === "en" ? /never by the agent's shell/u : /nie die Shell des Agenten/u,
+        );
+        expect(text).toMatch(
+          locale === "en" ? /outside the workspace/u : /außerhalb des Arbeitsbereichs/u,
+        );
+      }
+    }
+    expect(translateCodingWorkbench("en", "codingWorkbench.mode.governed-assist.short")).toBe(
+      "Reads freely; asks before every file change and command",
+    );
+    expect(translateCodingWorkbench("en", "codingWorkbench.mode.supervised-coding.short")).toBe(
+      "Routine edits and vetted project commands run; other commands ask",
+    );
+    expect(translateCodingWorkbench("en", "codingWorkbench.mode.autonomous-delivery.short")).toBe(
+      "Works without asking within the task's authority; internet only here",
+    );
+    for (const mode of ["governed-assist", "supervised-coding"] as const) {
+      expect(translateCodingWorkbench("en", `codingWorkbench.mode.${mode}.description`)).toContain(
+        "no internet access",
+      );
+      expect(translateCodingWorkbench("de", `codingWorkbench.mode.${mode}.description`)).toContain(
+        "Internetzugriff gibt es nicht",
+      );
+    }
   });
 });

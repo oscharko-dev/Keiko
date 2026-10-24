@@ -278,6 +278,51 @@ describe("Linux portable qualification sealing", () => {
     );
   });
 
+  it("qualifies a pinned third-party tool together with the rest of the component set", () => {
+    // Epic #3897: the ripgrep section is optional for older artifacts but, once present, it is
+    // marked, bound and checked exactly like the addon beside it.
+    const value = fixture();
+    const manifestPath = join(value.stageRoot, "manifest", "portable-manifest.json");
+    const staged = JSON.parse(readFileSync(manifestPath, "utf8"));
+    staged.nativeTools = [{ name: "ripgrep", signing: {} }];
+    writeFileSync(manifestPath, `${JSON.stringify(staged)}\n`);
+
+    prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), dependencies(value.receipt));
+
+    const prepared = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(prepared.nativeTools[0].signing).toEqual(prepared.nativeAddons[0].signing);
+    expect(prepared.nativeTools[0].signing).toMatchObject({
+      signatureKind: "github-oidc-attested",
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    });
+    expect(prepared.releaseImpact.reviewedBinding.nativeTools).toEqual(prepared.nativeTools);
+  });
+
+  it.each([
+    [
+      "two tools",
+      [
+        { name: "ripgrep", signing: {} },
+        { name: "other", signing: {} },
+      ],
+    ],
+    ["no tool", []],
+    ["a non-array", { name: "ripgrep" }],
+  ])("refuses a production component set whose tool section is %s", (_label, nativeTools) => {
+    const value = fixture();
+    const manifestPath = join(value.stageRoot, "manifest", "portable-manifest.json");
+    const staged = JSON.parse(readFileSync(manifestPath, "utf8"));
+    staged.nativeTools = nativeTools;
+    writeFileSync(manifestPath, `${JSON.stringify(staged)}\n`);
+
+    expect(() =>
+      prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), dependencies(value.receipt)),
+    ).toThrow("manifest production component set is invalid");
+  });
+
   it("finalizes and independently verifies the receipt, archive, and production discovery", async () => {
     const value = fixture();
     const deps = dependencies(value.receipt);

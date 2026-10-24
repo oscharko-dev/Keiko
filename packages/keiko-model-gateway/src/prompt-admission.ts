@@ -58,6 +58,9 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
     },
     promptTokens: { type: "integer", dataClass: "count", required: true },
     imageCount: { type: "integer", dataClass: "count", required: true },
+    // PDF document parts; with the images they make up the media that imageAccounting and
+    // imageReserveTokens describe.
+    documentCount: { type: "integer", dataClass: "count", required: false },
     imageAccounting: {
       type: "string",
       dataClass: "closed-enum",
@@ -133,6 +136,7 @@ export function admitGatewayPrompt(
 
 interface PromptTokenEvidence {
   readonly imageCount: number;
+  readonly documentCount?: number;
   readonly imageAccounting:
     "none" | "fallback-estimated" | "provider-measured" | "retained-measurement";
   readonly imageReserveTokens: number;
@@ -149,16 +153,14 @@ function promptTokenEvidence(
   measured: ProviderTokenCount,
   retainedTokens: number | undefined,
 ): PromptTokenEvidence {
-  const imageCount = request.messages.reduce(
-    (count, message) =>
-      count + (message.contentParts?.filter((part) => part.type === "image_url").length ?? 0),
-    0,
-  );
-  const imageAccounting = imageAccountingSource(imageCount, measured.tokens, retainedTokens);
+  const imageCount = contentPartCount(request, "image_url");
+  const documentCount = contentPartCount(request, "file");
+  const mediaCount = imageCount + documentCount;
+  const imageAccounting = imageAccountingSource(mediaCount, measured.tokens, retainedTokens);
   const options = { contextWindow: profile.maxInputTokens };
   const fallbackPromptTokens = countGatewayPromptTokens(request, profile.tokenAccounting, options);
   const textFloor =
-    imageCount === 0
+    mediaCount === 0
       ? fallbackPromptTokens
       : countGatewayPromptTokens(request, profile.tokenAccounting, {
           ...options,
@@ -178,6 +180,7 @@ function promptTokenEvidence(
   );
   return {
     imageCount,
+    ...(documentCount === 0 ? {} : { documentCount }),
     imageAccounting,
     imageReserveTokens: localPromptTokens - textFloor,
     localPromptTokens,
@@ -188,12 +191,20 @@ function promptTokenEvidence(
   };
 }
 
+function contentPartCount(request: GatewayPromptTokenInput, type: "image_url" | "file"): number {
+  return request.messages.reduce(
+    (count, message) =>
+      count + (message.contentParts?.filter((part) => part.type === type).length ?? 0),
+    0,
+  );
+}
+
 function imageAccountingSource(
-  imageCount: number,
+  mediaCount: number,
   current: number | undefined,
   retained: number | undefined,
 ): PromptTokenEvidence["imageAccounting"] {
-  if (imageCount === 0) return "none";
+  if (mediaCount === 0) return "none";
   if ((current ?? 0) > 0) return "provider-measured";
   return (retained ?? 0) > 0 ? "retained-measurement" : "fallback-estimated";
 }

@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { buildGatewaySeatbeltCommand, type WrappedCommand } from "./backends.js";
-import type { NetworkGatewayPolicy, RuntimeGatewayFilesystem } from "./types.js";
+import type {
+  NetworkGatewayPolicy,
+  RuntimeGatewayEgress,
+  RuntimeGatewayFilesystem,
+  RuntimeGatewayProfile,
+} from "./types.js";
 import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
 
 /** Transient server-owned destination and identity; never persist the URL or wrapper profile. */
@@ -12,11 +17,18 @@ export interface RuntimeGatewayConfinementInput {
   readonly runtimeArtifactDigest: string;
   readonly modelProfileDigest: string;
   readonly filesystem?: RuntimeGatewayFilesystem | undefined;
+  /** Absent selects the loopback-gateway-only profile. */
+  readonly profile?: RuntimeGatewayProfile | undefined;
+  /**
+   * Native profile only: `inherited` at Full access, `loopback-only` below it. Absent fails closed
+   * to `loopback-only`; the gateway profile is always loopback-gateway-only and refuses a value.
+   */
+  readonly egress?: RuntimeGatewayEgress | undefined;
 }
 
 export interface RuntimeGatewayConfinement {
   readonly schemaVersion: 1;
-  readonly profile: "keiko-gateway";
+  readonly profile: RuntimeGatewayProfile;
   readonly addressFamily: "ipv4" | "ipv6";
   readonly port: number;
   readonly runId: string;
@@ -26,8 +38,15 @@ export interface RuntimeGatewayConfinement {
   readonly modelProfileDigest: string;
   readonly policyDigest: string;
   readonly filesystem?: RuntimeGatewayFilesystem | undefined;
+  /** Present exactly when `profile` is `keiko-native`. */
+  readonly egress?: RuntimeGatewayEgress | undefined;
 }
 
+const OPTIONAL_POLICY_KEYS: ReadonlySet<string> = new Set(["filesystem", "egress"]);
+const EGRESS_DISPOSITIONS: ReadonlySet<unknown> = new Set<RuntimeGatewayEgress>([
+  "inherited",
+  "loopback-only",
+]);
 const DIGEST = /^[a-f0-9]{64}$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const POLICY_KEYS = new Set([
@@ -85,7 +104,10 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
         policy.envelopeDigest,
         policy.runtimeArtifactDigest,
         policy.modelProfileDigest,
-        "fork-allowed-exec-runtime-and-apple-git-only-no-mach-lookup-no-appleevents-no-lsopen",
+        policy.profile === "keiko-native"
+          ? "native-exec-inherited-own-sandbox-process-targets-no-appleevents-no-lsopen"
+          : "fork-allowed-exec-runtime-and-apple-git-only-own-sandbox-process-targets-no-mach-lookup-no-appleevents-no-lsopen",
+        ...(policy.egress === undefined ? [] : [`native-egress-${policy.egress}-v1`]),
         ...(policy.filesystem === undefined
           ? []
           : [
@@ -94,6 +116,19 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
               policy.filesystem.workspaceAccess,
               policy.filesystem.privateStateRoot,
               policy.filesystem.runtimeReadRoot,
+              ...(policy.filesystem.deniedReadRoots ?? []),
+              ...(policy.filesystem.toolchainReadRoots === undefined
+                ? []
+                : ["native-toolchain-read-roots-v1", ...policy.filesystem.toolchainReadRoots]),
+              ...(policy.filesystem.gitMetadataReadRoots === undefined
+                ? []
+                : ["native-git-metadata-read-roots-v1", ...policy.filesystem.gitMetadataReadRoots]),
+              ...(policy.filesystem.protectedWriteRoots === undefined
+                ? []
+                : ["native-protected-write-roots-v1", ...policy.filesystem.protectedWriteRoots]),
+              ...(policy.filesystem.linkFreeWriteRoots === undefined
+                ? []
+                : ["native-link-free-write-roots-v1", ...policy.filesystem.linkFreeWriteRoots]),
             ]),
       ]),
     )
@@ -104,9 +139,18 @@ export function createRuntimeGatewayConfinement(
   input: RuntimeGatewayConfinementInput,
 ): RuntimeGatewayConfinement {
   const filesystem = closedFilesystem(input.filesystem);
+  const profile = input.profile ?? "keiko-gateway";
+  // A filesystem block, where the platform has one, must agree with the profile: the native
+  // profile writes the workspace; the gateway profile never does.
+  if (
+    filesystem !== undefined &&
+    (profile === "keiko-native") !== (filesystem.workspaceAccess === "read-write")
+  )
+    invalidPolicy();
+  const egress = resolvedEgress(profile, input.egress);
   const policy = {
     schemaVersion: 1,
-    profile: "keiko-gateway",
+    profile,
     ...gatewayAddress(input.gatewayUrl),
     runId: input.runId,
     treeBindingId: input.treeBindingId,
@@ -114,10 +158,21 @@ export function createRuntimeGatewayConfinement(
     runtimeArtifactDigest: input.runtimeArtifactDigest,
     modelProfileDigest: input.modelProfileDigest,
     ...(filesystem === undefined ? {} : { filesystem }),
+    ...(egress === undefined ? {} : { egress }),
   } as const;
   const result = Object.freeze({ ...policy, policyDigest: policyDigest(policy) });
   if (!isRuntimeGatewayConfinement(result)) invalidPolicy();
   return result;
+}
+
+/** The native profile always records its disposition; the gateway profile never has one. */
+function resolvedEgress(
+  profile: RuntimeGatewayProfile,
+  egress: RuntimeGatewayEgress | undefined,
+): RuntimeGatewayEgress | undefined {
+  if (profile !== "keiko-native") return egress === undefined ? undefined : invalidPolicy();
+  if (egress === undefined) return "loopback-only";
+  return EGRESS_DISPOSITIONS.has(egress) ? egress : invalidPolicy();
 }
 
 function closedFilesystem(value: unknown): RuntimeGatewayFilesystem | undefined {
@@ -152,12 +207,14 @@ function ownPolicyData(value: unknown): Record<string, unknown> | undefined {
   if (prototype !== Object.prototype && prototype !== null) return undefined;
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const keys = Reflect.ownKeys(descriptors);
-  if (keys.length !== POLICY_KEYS.size && keys.length !== POLICY_KEYS.size + 1) return undefined;
+  if (keys.length < POLICY_KEYS.size || keys.length > POLICY_KEYS.size + OPTIONAL_POLICY_KEYS.size)
+    return undefined;
   const entries = Object.entries(descriptors);
   if (
     !entries.every(
       ([key, descriptor]) =>
-        (POLICY_KEYS.has(key) || key === "filesystem") && Object.hasOwn(descriptor, "value"),
+        (POLICY_KEYS.has(key) || OPTIONAL_POLICY_KEYS.has(key)) &&
+        Object.hasOwn(descriptor, "value"),
     )
   )
     return undefined;
@@ -168,14 +225,20 @@ function ownPolicyData(value: unknown): Record<string, unknown> | undefined {
   return record;
 }
 
+const PROFILES: ReadonlySet<unknown> = new Set<RuntimeGatewayProfile>([
+  "keiko-gateway",
+  "keiko-native",
+]);
+const ADDRESS_FAMILIES: ReadonlySet<unknown> = new Set(["ipv4", "ipv6"]);
+
 function validPolicy(value: unknown): value is RuntimeGatewayConfinement {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (!hasPolicyKeys(record)) return false;
   if (
     record.schemaVersion !== 1 ||
-    record.profile !== "keiko-gateway" ||
-    (record.addressFamily !== "ipv4" && record.addressFamily !== "ipv6")
+    !PROFILES.has(record.profile) ||
+    !ADDRESS_FAMILIES.has(record.addressFamily)
   )
     return false;
   return (
@@ -186,12 +249,13 @@ function validPolicy(value: unknown): value is RuntimeGatewayConfinement {
 
 function hasPolicyKeys(record: Record<string, unknown>): boolean {
   return (
-    (Object.keys(record).length === POLICY_KEYS.size ||
-      Object.keys(record).length === POLICY_KEYS.size + 1) &&
     [...POLICY_KEYS].every((key) => Object.hasOwn(record, key)) &&
-    Object.keys(record).every((key) => POLICY_KEYS.has(key) || key === "filesystem") &&
+    Object.keys(record).every((key) => POLICY_KEYS.has(key) || OPTIONAL_POLICY_KEYS.has(key)) &&
     (!Object.hasOwn(record, "filesystem") ||
-      copyRuntimeGatewayFilesystem(record.filesystem) !== undefined)
+      copyRuntimeGatewayFilesystem(record.filesystem) !== undefined) &&
+    // The egress disposition exists exactly for the native profile and is one of the closed values.
+    Object.hasOwn(record, "egress") === (record.profile === "keiko-native") &&
+    (!Object.hasOwn(record, "egress") || EGRESS_DISPOSITIONS.has(record.egress))
   );
 }
 
@@ -232,5 +296,15 @@ export function buildRuntimeGatewaySeatbeltCommand(
     host: closed.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
     port: closed.port,
   };
-  return buildGatewaySeatbeltCommand(gateway, command, args, gitExecutable, closed.filesystem);
+  // The attested profile selects the formula: forgetting it here would confine a native run
+  // under the gateway allowlist, which the real-Seatbelt proof in the test suite pins.
+  return buildGatewaySeatbeltCommand(
+    gateway,
+    command,
+    args,
+    gitExecutable,
+    closed.filesystem,
+    closed.profile,
+    closed.egress,
+  );
 }

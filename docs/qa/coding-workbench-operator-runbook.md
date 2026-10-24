@@ -165,6 +165,67 @@ content. The helper's content ceiling of 65,536 bytes is pinned in its wire prot
 binary: a larger `AGENTS.md` is refused as `too-large` (at `warn`, the run proceeds) until the
 helper protocol gains a bounded window, so keep the file under 64 KiB for it to reach the model.
 
+## Repository agents, commands and skills
+
+On the native profile a run admits the workspace's Markdown-only items as sanitized copies in its
+private discovery directory (ADR-0137 D10, #3903): custom agents from `.opencode/agents` and
+`.opencode/agent`, custom commands from `.opencode/commands` and `.opencode/command`, and skills
+from `.opencode/skills`, `.opencode/skill` and `.agents/skills` (`<name>/SKILL.md` only). Each file
+is read through the secure read helper while the run's own workspace is the active one, its
+frontmatter is validated against a closed allowlist and rendered anew (`model`, permissions, tools,
+MCP and plugin keys never survive), and the copy is written before the runtime starts. The
+project's `opencode.json`, plugins, nested discovery and `.claude/` stay unloaded, except a
+skill's `.claude/skills/<name>/SKILL.md`, which is admitted like the other skill directories. A command whose template contains a shell-substitution block is refused. Limits: 16
+agents, 32 commands and 16 skills of at most 32 KiB each; names lowercase with hyphens and not a
+built-in (`build`, `plan`, `general`, `explore`, `init`, `review`, `opencode`, `report`, ...).
+
+It is on by default. An operator sets `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED=false` before starting
+the server to disable it; any value other than `true` disables it. Each native run records one
+body-free `coding-runtime.repository-items.admitted` line (`disabled`, `unavailable`, `empty`,
+`completed` or `failed`, with admitted and refused counts per kind, the closed refusal reasons, the
+stripped-key counts and a digest of the copies, never a name or a body). To see why an item did not
+appear, read its `refusalReasons`: `invalid-name`, `reserved-name`, `duplicate-name`,
+`frontmatter-malformed`, `frontmatter-unsupported`, `value-invalid`, `description-missing`,
+`body-empty`, `unsafe-characters`, `oversize`, `template-shell-substitution`, `agent-not-admitted`,
+`name-mismatch`, `not-regular-file`, `unreadable`, `directory-unreadable` or `limit-exceeded`.
+
+## MCP servers
+
+A native run admits only the MCP servers the operator names in `mcp-servers.json` in Keiko's state
+directory (the directory that holds the UI database). The file must belong to the user Keiko runs
+as and must not be group- or world-writable (`chmod 600`); a missing file means no MCP server.
+Changes apply to the next run.
+
+```json
+{
+  "schemaVersion": 1,
+  "servers": [
+    {
+      "name": "docs",
+      "description": "Internal documentation search",
+      "transport": {
+        "kind": "local",
+        "command": ["/opt/tools/bin/docs-mcp", "--stdio"],
+        "environment": { "DOCS_INDEX": "/srv/docs" }
+      },
+      "tools": { "search": "read", "page.update": "write" }
+    }
+  ]
+}
+```
+
+- `name` is a lowercase word without `_`; at most 16 servers and 64 tools each.
+- A local server's command starts with an absolute executable; arguments and variables are
+  literal. `{env:…}` and `{file:…}` placeholders are refused, and no secret belongs in this file.
+- A remote server (`"kind": "remote"`, an `https` URL) is used only in Full access.
+- Every tool the model may call is named with `read` or `write`. A tool the file does not name is
+  refused. Ask for approval asks before an MCP tool; Supervised workspace allows `read` tools and
+  asks before `write` tools; Full access allows both.
+- The server starts with an empty environment plus `PATH`, the run's private `HOME` and its own
+  variables, inside the run's sandbox.
+- The Activity Log records `mcp.registry.loaded` per run (`absent`, `loaded` or `refused` with a
+  closed reason) and `coding-runtime.native-policy.decided` with `permission: mcp` per call.
+
 ## Review Commands
 
 Run focused closeout checks:

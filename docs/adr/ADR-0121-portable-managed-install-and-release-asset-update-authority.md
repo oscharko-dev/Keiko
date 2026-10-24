@@ -394,7 +394,9 @@ The helper runs in a temporary launchd job in the current user's GUI login domai
 its own kernel resource coalition. Its descendants inherit that membership through fork, exec,
 reparenting and `setsid`; an unprivileged descendant cannot select another resource coalition.
 The job is loaded from a private temporary definition with `KeepAlive` disabled, then removed after
-the helper exits. Admission first checks that the target GUI domain is available under a bounded
+the helper exits. It declares launchd's `Interactive` process type: the job runs the app's own
+runtime, and the `Background` class would throttle the whole job's CPU and I/O (Darwin priority band
+4), so that on a busy machine the root could not load within its startup grant. Admission first checks that the target GUI domain is available under a bounded
 read-only launchctl query. It is not installed as a persistent LaunchAgent. A same-user socket checks the
 peer's executable and transfers only the existing lifecycle descriptors. The receiver acknowledges
 their installation before the sender releases its copies; descriptor presence is preserved exactly.
@@ -1051,6 +1053,7 @@ Security review for implementation under this ADR must cover:
 | 1.0     | 2026-07-05 | Accepted the portable managed-install and release-asset authority. |
 | 1.1     | 2026-09-10 | Added `linux-x64` as the fourth release-blocking archive for Issue #3451 so the production packaging model matches the qualified runtime target set. |
 | 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
+| 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
 
 ## Amendment history
 

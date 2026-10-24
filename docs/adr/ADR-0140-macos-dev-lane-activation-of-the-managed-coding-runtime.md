@@ -98,6 +98,26 @@ both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Li
 packaged lanes: Windows needs the native supervisor and Linux the sandbox isolation, neither of
 which this lane ships.
 
+**Amended 2026-10-24 — the runtime package carries the pinned ripgrep (#3897, #4064).** OpenCode's
+`glob` and `grep` tools run ripgrep and would otherwise download it on first use, which a
+firewalled customer on a clean `npm install -g` cannot do; only a developer override
+(`KEIKO_RIPGREP_BINARY_PATH`) made search work there. The runtime package therefore also ships the
+unmodified upstream ripgrep release pinned in `ripgrepRuntime.ts` (ADR-0163 D1 amendment of
+2026-10-23) at the portable payload's own paths: `runtime/native/rg`, its MIT text at
+`runtime/licenses/ripgrep/LICENSE-MIT` and a CycloneDX component record at
+`runtime/licenses/ripgrep/sbom.cdx.json`. `scripts/build-coding-runtime-npm-package.mjs` stages them
+through the same provisioning and `stageRipgrepTool` the portable build uses, for the TARGET's
+release, and the candidate inspection pins all three files (and the executable bit) and binds the
+release in the sealed receipt. The trust anchor is unchanged: the digest is the one compiled into
+the server (not `npmLaneRuntimeApprovals.ts`, which keeps describing only the OpenCode tree, SBOM,
+license and helper), and the server verifies `<package>/runtime/native/rg` against it at every run
+launch with the same owner, mode and symlink checks as every other layout, so the package vouches
+for nothing. The lane's native-directory check admits that one file name beside the secure-read
+helper and nothing else; the bytes are judged by the ripgrep verifier, so a missing, tampered or
+linked `rg` degrades search with a closed reason on `coding-runtime.ripgrep.resolved`
+(`layout: "npm-package"`) and never refuses the engine. Runtime packages published before this
+amendment carry no `rg`; they stay active and report `missing`.
+
 ### D3 — Verified payload, declared forgone guarantees
 
 The lane's trust anchor is the review-approved redistribution catalog

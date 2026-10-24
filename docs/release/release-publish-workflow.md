@@ -184,10 +184,10 @@ is the only promotion path and preserves the current complete install on failure
 Sidecar execution authority is owned by the Coding Workbench runtime manager under ADR-0124: the
 manager launches only manifest-verified sidecar payloads from the attested managed install root.
 
-The schema-v2 OpenCode approval binds version `2.0.10` to commit
-`b8cedc1a7a5e2916bbb65dc1d4b620729c261638` and HTTP/SSE compatibility to the raw bytes of
+The schema-v2 OpenCode approval binds version `2.1.4` to commit
+`68bc26b7da1990ce10ffecfbc1e09eb13aa5d824` and HTTP/SSE compatibility to the raw bytes of
 `packages/protocol/openapi.json` at that commit (SHA-256
-`1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec`). Reformatted JSON does not
+`4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9`). Reformatted JSON does not
 satisfy this provenance. Codex is not an approved payload or support claim: pending redistribution
 or subscription-auth approval yields `redistribution-unapproved`, with no global-install fallback.
 
@@ -204,7 +204,9 @@ it:
    `scripts/run-portable-assets-stage.mjs` (Linux x64 on Linux, Windows x64 on Windows, and both
    macOS targets on native runners, with each native launcher compiled in place). Manual dispatch
    can smoke the same targets but cannot reach assembly or publication.
-4. Runs the real launch/setup, USearch, and secure-read smoke on each native target. Linux binds an
+4. Runs the real launch/setup, USearch, ripgrep, and secure-read smoke on each native target. The
+   ripgrep smoke starts the staged `runtime/native/rg` (`rg.exe` on Windows) outside `PATH` and the
+   user's configuration and makes it find text in a fixture tree. Linux binds an
    OIDC-attested qualification receipt and reruns the namespace-gateway proof on a fresh runner
    without token authority. The Windows job builds `keiko-windows-x64-setup.exe` from the finalized
    ZIP and verifies its embedded script and ZIP digest. No Apple or Microsoft signing service is
@@ -273,12 +275,18 @@ The product publisher is root-only. It does not publish
 does not publish them either. Keep the root manifest and lockfile on the existing public runtime
 versions until both replacement packages have been published and verified.
 
-Use `scripts/build-coding-runtime-npm-package.mjs` to build the approved payload and native helper
-into an empty absolute package directory. After the usual workspace build, its `--pack` mode
+Use `scripts/build-coding-runtime-npm-package.mjs` to build the approved payload, native helper and
+the pinned ripgrep (#3897, #4064) into an empty absolute package directory. The build provisions the
+TARGET's ripgrep release through `provision-ripgrep` if `.ripgrep/` lacks it (a build-time download of
+the one digest-verified upstream archive, like the OpenCode archive; one Mac builds both
+architectures) and stages it through the portable `stageRipgrepTool`. Installed Keiko verifies
+`runtime/native/rg` against the digest compiled into its own `ripgrepRuntime.ts` at every run launch;
+a package without it still activates and only degrades search. After the usual workspace build, its `--pack` mode
 checks an existing candidate against the server's compiled npm-lane approvals and the canonical
 helper source-tree digest, produces a real `npm pack --ignore-scripts` tarball, and writes a
-separate `receipt.json`. It checks the package name, version, architecture, six-file inventory,
-executable permissions, helper and OpenCode bytes, license and SBOM before sealing the artifacts.
+separate `receipt.json`. It checks the package name, version, architecture, nine-file inventory (the
+original six plus the pinned ripgrep executable, its MIT text and its component SBOM), executable
+permissions, helper, OpenCode and ripgrep bytes, licenses and SBOMs before sealing the artifacts.
 It verifies the actual archive's ordinary-file inventory, permissions and bounded file bodies
 without extracting files into the filesystem. Changing both a tarball and its receipt's integrity
 cannot authorize unapproved bytes. The artifact directory must be empty; prepared candidates are
@@ -315,6 +323,12 @@ Publication order is explicit:
    assembled npm and Yarn installation qualification against the resulting product and native
    artifacts, then publish the corrected product under a new unpublished version through the
    existing release workflow. A published product version cannot be replaced.
+
+A runtime package published before the ripgrep amendment carries no `rg`: it stays active, search
+reports `missing` on `coding-runtime.ripgrep.resolved`, and a clean npm installation only gains
+search from the republished packages. Republish both with the pinned ripgrep, then change the pins
+as in step 3; the customer-shape qualifier drops its `KEIKO_RIPGREP_BINARY_PATH` hand-off in that
+same change.
 
 The 1.1.4 preparation addresses F18's one-MiB secure-read helper. Public 1.1.3 remains capped at
 64 KiB even when the updated server accepts it. Private tarball preparation does not complete

@@ -1,3 +1,4 @@
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
@@ -47,6 +48,7 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_CONTEXT_ADDENDUM } from "./opencodeNativeContext.js";
+import type { OpenCodeTurnOutcome } from "./opencodeRuntimeAdapter.js";
 import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeV2HttpClient,
@@ -84,7 +86,7 @@ const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
 const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const PROTOCOL_HANDSHAKE_DIGEST =
-  "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b";
+  "81534c659753414ae1db9b5a73bf23d6e54da9d23d1d15acc1579efc3355d341";
 const PROTOCOL_HANDSHAKE_ALGORITHM = "keiko-opencode-protocol-surface-v2" as const;
 // Structural sentinel required only by the manager's test seam; it is not a native release receipt.
 const FUNCTIONAL_TEST_QUALIFICATION_RECEIPT = `sha256:${"0".repeat(64)}`;
@@ -1390,7 +1392,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
       try {
         await startNativeCompactionHarness(harness);
-        const terminals: boolean[] = [];
+        const terminals: OpenCodeTurnOutcome[] = [];
         for (let turn = 1; turn <= 3; turn += 1) {
           await expect(
             harness.runtime.runPort.submitTask(
@@ -1659,9 +1661,10 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(sessionStatuses.slice(statusSampleOffset)).toEqual([]);
         expect(gateway.responseCloses()).toBeLessThan(gateway.calls());
         expect(gateway.requests).toHaveLength(5);
-        expect(gateway.requests.at(-1)?.toolCatalog?.projection.projectionDigest).toBe(
-          expectedProjection.projectionDigest,
-        );
+        expect(
+          boundGatewayToolCatalog(gateway.requests.at(-1)?.toolCatalog)?.projection
+            .projectionDigest,
+        ).toBe(expectedProjection.projectionDigest);
         const aborted = await runtime.runPort.abortTask(RUN_ID);
         expect(
           aborted,

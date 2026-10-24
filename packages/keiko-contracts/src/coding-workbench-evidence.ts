@@ -351,6 +351,13 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   // its own either, so this evidence label has been silently rejected since the action class was
   // introduced. Added as a literal, verified clean against hasDisallowedEvidenceContent.
   "network-egress",
+  // #3897: closed labels of the native OpenCode policy's approval asks. The card names the class
+  // of native action the agent waits on; the action's resources ride the approval-review channel.
+  "native-read",
+  "native-edit",
+  "native-shell",
+  "native-egress",
+  "native-execute",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

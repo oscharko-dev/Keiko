@@ -1830,12 +1830,13 @@ function refreshGatewayModelsInBackground(): void {
   if (backgroundGatewayReadInflight || document.visibilityState === "hidden") return;
   const generation = gatewayModelRefreshGeneration;
   const correlationId = newClientCorrelationId();
+  const startedAt = performance.now();
   backgroundGatewayReadInflight = true;
   void fetchModels(correlationId)
     .then(
       ({ models }): void => {
         if (generation !== gatewayModelRefreshGeneration) return;
-        adoptBackgroundGatewayModels(models, correlationId);
+        adoptBackgroundGatewayModels(models, correlationId, performance.now() - startedAt);
       },
       (error: unknown): void => {
         if (generation === gatewayModelRefreshGeneration) {
@@ -1848,11 +1849,13 @@ function refreshGatewayModelsInBackground(): void {
     });
 }
 
+// `readMs` is the catalog read the adoption waited for (#3905): request sent to catalog adopted.
 function recordCatalogAdoption(
   models: readonly ModelCapability[],
   source: ClientModelCatalogEvidence["source"],
   outcome: "adopted" | "changed",
   correlationId: string,
+  readMs: number,
 ): void {
   backgroundGatewayModelSnapshot = JSON.stringify(models);
   reportModelCatalogStage(
@@ -1865,12 +1868,14 @@ function recordCatalogAdoption(
       usableModelCount: models.filter(isUsableConversationModel).length,
     },
     correlationId,
+    readMs,
   );
 }
 
 function adoptBackgroundGatewayModels(
   models: readonly ModelCapability[],
   correlationId: string,
+  readMs: number,
 ): void {
   const snapshot = JSON.stringify(models);
   const changed =
@@ -1882,7 +1887,7 @@ function adoptBackgroundGatewayModels(
   publishGatewayModelRefresh({ kind: "success", models, source: "background", correlationId });
   if (!changed) return;
   invalidateSharedBootstrap();
-  recordCatalogAdoption(models, "background", "changed", correlationId);
+  recordCatalogAdoption(models, "background", "changed", correlationId, readMs);
   notifyGatewayModelCatalogUpdated(correlationId);
 }
 
@@ -1943,10 +1948,17 @@ function refreshGatewayModels(): void {
   // after its failure.
   publishGatewayModelRefresh({ kind: "pending" });
   const correlationId = newClientCorrelationId();
+  const startedAt = performance.now();
   void fetchModels(correlationId).then(
     ({ models }): void => {
       if (generation === gatewayModelRefreshGeneration) {
-        recordCatalogAdoption(models, "foreground", "adopted", correlationId);
+        recordCatalogAdoption(
+          models,
+          "foreground",
+          "adopted",
+          correlationId,
+          performance.now() - startedAt,
+        );
         publishGatewayModelRefresh({
           kind: "success",
           models,
@@ -2361,8 +2373,15 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const refresh = !gatewayBootstrapRefreshRequested;
   gatewayBootstrapRefreshRequested = true;
   const correlationId = newClientCorrelationId();
+  const startedAt = performance.now();
   const modelPayload = await fetchModels(correlationId, refresh);
-  recordCatalogAdoption(modelPayload.models, "bootstrap", "adopted", correlationId);
+  recordCatalogAdoption(
+    modelPayload.models,
+    "bootstrap",
+    "adopted",
+    correlationId,
+    performance.now() - startedAt,
+  );
   const catalog = sessionCatalogState(modelPayload.models, "bootstrap", correlationId);
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server

@@ -1,5 +1,7 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchModelRefusalReason,
@@ -51,6 +53,20 @@ export interface CodingRuntimeLaunchResolver {
     readonly modelId?: CodingWorkbenchRuntimeStartRequest["modelId"];
     readonly reasoningEffort?: CodingWorkbenchRuntimeStartRequest["reasoningEffort"];
     readonly projectMemoryEnabled?: boolean | undefined;
+    /**
+     * The primary agent the first turn asked for (#3897). A resolver whose runtime cannot honour
+     * it throws `CodingRuntimeAgentUnsupportedError` before any run is minted.
+     */
+    readonly agent?: CodingWorkbenchAgent | undefined;
+    /**
+     * The first prompt's references and slash command (ADR-0137 D10). A resolver whose runtime
+     * cannot honour them throws `CodingRuntimeInputsUnsupportedError` before any run is minted;
+     * resolving the paths against the run's workspace waits until its first turn is dispatched.
+     */
+    readonly references?: CodingWorkbenchRuntimeStartRequest["references"];
+    readonly command?: CodingWorkbenchRuntimeStartRequest["command"];
+    /** The first prompt's subagent and skill mentions (S15, #3906), refused like references. */
+    readonly mentions?: CodingWorkbenchRuntimeStartRequest["mentions"];
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;
@@ -79,6 +95,12 @@ export interface CodingRuntimeApprovalAuthority {
 
 export interface CodingRuntimeOrchestratorDeps {
   readonly history?: CodingRuntimeHistory | undefined;
+  /**
+   * Native session continuity (S02/S03, #3904): how the orchestrator asks a run to resume a task's
+   * saved session or fork it, and learns whether the run's runtime holds the task's history itself.
+   * Absent leaves every run on a fresh session with the history replayed as context.
+   */
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
   readonly manager: CodingRuntimeManager;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly deploymentCeiling?: CodingWorkbenchRuntimeStartRequest["requestedMode"] | undefined;
@@ -135,6 +157,8 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly now?: () => Date;
+  /** How long a succeeded run's runtime is held for undo (#3904 AC3); defaults to 30 minutes. */
+  readonly undoWindowMs?: number | undefined;
   readonly newRunId?: () => string;
 }
 

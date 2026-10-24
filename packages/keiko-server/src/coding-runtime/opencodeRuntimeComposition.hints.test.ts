@@ -3,7 +3,7 @@
 // up while a read runs collapse into one; control hints keep their order and are never dropped.
 import { describe, expect, it, vi } from "vitest";
 
-import { coalescedSyncHints } from "./opencodeRuntimeComposition.js";
+import { coalescedSyncHints, v2SyncHint } from "./opencodeRuntimeComposition.js";
 import type { OpenCodeSyncHint } from "./opencodeRuntimeAdapter.js";
 
 type EventRecord = Readonly<Record<string, unknown>>;
@@ -425,5 +425,32 @@ describe("coalescedSyncHints", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(closed.value).toBe(true);
+  });
+});
+
+// PR #4064: the runtime ends a turn a human refused (a dismissed question) with an interruption and
+// writes no idle message, so the live stream's interruption is the control hint that says so.
+describe("the V2 execution events as control hints", () => {
+  const hintFor = (type: string, sessionID = "ses_1"): OpenCodeSyncHint =>
+    v2SyncHint({ type, id: "evt_1", data: { sessionID } }, "ses_1", undefined);
+
+  it.each([
+    ["session.execution.started", "activity"],
+    ["session.execution.succeeded", "terminal"],
+    ["session.execution.failed", "terminal"],
+    ["session.execution.cancelled", "terminal"],
+    ["session.execution.interrupted", "interrupted"],
+  ] as const)("maps %s of the run's session to %s", (type, state) => {
+    expect(hintFor(type)).toEqual({
+      requiresHistoryIdentity: false,
+      control: { sessionId: "ses_1", state },
+    });
+  });
+
+  it("carries no control for another session's execution or for any other event", () => {
+    expect(hintFor("session.execution.interrupted", "ses_child")).toEqual({
+      requiresHistoryIdentity: false,
+    });
+    expect(hintFor("session.text.delta")).toEqual({ requiresHistoryIdentity: false });
   });
 });

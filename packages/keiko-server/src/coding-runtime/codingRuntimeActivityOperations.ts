@@ -253,13 +253,19 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["keiko-gateway"],
+      values: ["keiko-gateway", "keiko-native"],
     },
     childExecutablePolicy: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["namespace-inherited", "runtime-and-attested-git-only"],
+      values: ["namespace-inherited", "runtime-and-attested-git-only", "toolchain-inherited"],
+    },
+    egressDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["inherited", "loopback-only"],
     },
     parentLifetime: {
       type: "string",
@@ -283,13 +289,13 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["native-root-union-v1"],
+      values: ["native-root-union-v1", "native-workspace-rw-v1"],
     },
     workspaceAccess: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["read-only-outside-private-state"],
+      values: ["read-only-outside-private-state", "read-write"],
     },
     privateStateAccess: {
       type: "string",

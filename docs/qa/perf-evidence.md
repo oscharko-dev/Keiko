@@ -441,6 +441,29 @@ variance of the new kernel. The two workload metrics that the change could plaus
 cold start and the bounded throughput, both tightened. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
 
+**Reference re-established, 2026-10-23 (epic #3897, PR #4064).** Two inputs of the recorded
+environment moved, so neither `--recalibrate` nor `--recalibrate-runtime` could match the
+2026-10-07 calibration. First, the approved runtime moved from OpenCode 2.0.10 to 2.1.4 (new
+payload digest), which `--recalibrate-runtime` permits on its own. Second, the secure-read helper
+digest changed (`8fabdaf2…` to `1c758e0c…`), because `dev` commit `040bcc685` (#3895, 2026-10-09)
+changed `native/secure-workspace-read/secure_workspace_read.c` without re-measuring. Both modes
+therefore refuse with `recalibration-reference-environment-differs`, and the committed calibration
+was already unreachable on `dev`. Host, kernel 27.0.0, cores, memory, CPU model digest and the
+Node 24.18.0 / npm 11.16.0 pair are unchanged. Measured with the step 2 procedure (fresh
+`--calibrate`, an independent measurement, the freshness check), then the shrink-only ratchet was
+applied against the previously reviewed budget, so no ceiling widened.
+
+| Metric                | Previous ceiling (2026-10-07) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1562.4                        | 1519.1                    | 1519.1            | 1426.4       |
+| `readinessMs`         | 3.26                          | 8.99                      | 3.26              | 1.81         |
+| `sseFirstByteMs`      | 4.65                          | 4.78                      | 4.65              | 2.18         |
+| `boundedThroughputMs` | 98.4                          | 115.7                     | 98.4              | 79.9         |
+
+The fresh calibration's own ranges are wider for three metrics. The committed budget keeps the
+previously reviewed ceiling for those three and takes the tighter cold-start ceiling. Every measured
+p95 is below its committed ceiling, so the move hides no regression.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for

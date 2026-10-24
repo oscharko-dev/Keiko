@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,28 +25,6 @@ import { describe, expect, it } from "vitest";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const workflow = YAML.parse(readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"));
 const jobs = workflow.jobs;
-
-it("publishes measured native host coverage in the existing Sonar script report", () => {
-  const steps = jobs["coverage-scripts"].steps;
-  const install = steps.findIndex((step) =>
-    step.run?.startsWith("npm ci --prefix native/opencode-service-host"),
-  );
-  const measure = steps.findIndex((step) => step.run === "npm run test:coverage:scripts");
-  const native = steps.findIndex(
-    (step) => step.run === "npm run test:coverage:opencode-service-host",
-  );
-  const upload = steps.findIndex((step) => step.with?.name === "coverage-report-scripts");
-  expect(install).toBeGreaterThan(-1);
-  expect(measure).toBeGreaterThan(install);
-  expect(native).toBeGreaterThan(measure);
-  expect(upload).toBeGreaterThan(native);
-  expect(steps[native].if).toBe(steps[measure].if);
-  expect(steps[native]["continue-on-error"]).toBeUndefined();
-  const { scripts } = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-  expect(scripts["test:coverage:opencode-service-host"]).toContain("--experimental-test-coverage");
-  expect(scripts["test:coverage:opencode-service-host"]).toContain("--test-reporter=lcov");
-  expect(scripts["test:coverage:opencode-service-host"]).toContain(">> coverage/scripts/lcov.info");
-});
 
 /** Every job whose verdict a verified tree lets this run reuse. */
 const GATED_JOBS = Object.freeze([
@@ -500,36 +478,6 @@ describe("the aggregator still fails closed", () => {
       "${{ needs.portable-secure-read.result }}",
     );
   });
-  it("runs the original OpenCode host suites on every required native platform", () => {
-    const steps = jobs["portable-secure-read"].steps;
-    const build = steps.findIndex((step) => step.run === "npm run build:packages");
-    const install = steps.findIndex(
-      (step) =>
-        step.run ===
-        "npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false",
-    );
-    const qualify = steps.findIndex((step) => step.run === "npm run test:opencode-service-host");
-    expect(build).toBeGreaterThan(-1);
-    expect(install).toBeGreaterThan(build);
-    expect(qualify).toBeGreaterThan(install);
-    for (const index of [build, install, qualify]) {
-      expect(steps[index].if).toBeUndefined();
-      expect(steps[index]["continue-on-error"]).toBeUndefined();
-    }
-  });
-
-  it("keeps every original OpenCode host suite reachable with bounded startup concurrency", () => {
-    const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-    const suites = readdirSync(join(repoRoot, "native/opencode-service-host"))
-      .filter((name) => name.endsWith(".test.mjs"))
-      .sort()
-      .map((name) => `native/opencode-service-host/${name}`);
-    expect(suites.length).toBeGreaterThan(0);
-    expect(manifest.scripts["test:opencode-service-host"]).toBe(
-      `node --test --test-concurrency=1 ${suites.join(" ")}`,
-    );
-  });
-
   it("accepts a complete reuse claim whose gates were skipped by the guard", () => {
     expect(runAggregator(REUSING)).toBe(0);
   });

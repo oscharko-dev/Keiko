@@ -17,6 +17,7 @@ import {
   openNativeFileDialog,
   startRun,
 } from "@/lib/api";
+import { fetchMarkdownSkills } from "@/lib/markdown-skills-api";
 import { resetNativeFileDialogCapabilityCacheForTests } from "@/lib/native-file-dialog";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { DE_MESSAGES } from "@/lib/i18n-messages.de";
@@ -53,6 +54,10 @@ vi.mock("@/lib/api", () => ({
     rejectedSelectionCount: 0,
     partial: false,
   })),
+}));
+
+vi.mock("@/lib/markdown-skills-api", () => ({
+  fetchMarkdownSkills: vi.fn(async () => []),
 }));
 
 beforeEach(() => {
@@ -495,6 +500,52 @@ describe("NewWindowDialog agents: start-run contract", () => {
         },
       }),
     );
+  });
+
+  it("sends only the identity of the private skill the human selected (#4025 AC1)", async () => {
+    const user = userEvent.setup();
+    const skill = {
+      id: "msk_00000000-0000-4000-8000-000000000001",
+      revision: 3,
+      digest: "a".repeat(64),
+      name: "Synthetic test method",
+      byteCount: 64,
+      createdAt: 1,
+    };
+    vi.mocked(fetchMarkdownSkills).mockResolvedValueOnce([skill]);
+    await renderAgentDialog();
+
+    await chooseComboboxOption(
+      user,
+      await screen.findByRole("combobox", { name: "Skill" }),
+      "Synthetic test method",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "unit-test-generation",
+          skill: { id: skill.id, revision: 3, digest: "a".repeat(64) },
+        }),
+      ),
+    );
+  });
+
+  it("starts without a skill by default and when the library cannot be read", async () => {
+    vi.mocked(fetchMarkdownSkills).mockRejectedValueOnce(new Error("library unavailable"));
+    await renderAgentDialog();
+
+    expect(
+      await screen.findByText(
+        "Private skills could not be loaded. The run starts without a skill.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Skill" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() => expect(startRun).toHaveBeenCalled());
+    expect(vi.mocked(startRun).mock.calls[0]?.[0]).not.toHaveProperty("skill");
   });
 
   it("picks the unit-test source file natively and normalizes it repo-relative", async () => {

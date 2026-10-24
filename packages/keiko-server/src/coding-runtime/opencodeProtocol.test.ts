@@ -143,7 +143,8 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
         reason: "frame-invalid",
       });
     }
-    for (const tool of ["bash", "keiko_repository_read", "keiko_submit_changeset"]) {
+    // #3897: admissible tool ids (native and mapped alike) are not drift; inadmissible shapes are.
+    for (const tool of ["../bash", "keiko repository read", ""]) {
       expect(
         parseOpenCodeSse(
           `data: ${JSON.stringify({
@@ -868,7 +869,8 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       state: { status: "pending", input, raw: "bounded" },
     };
     for (const invalid of [
-      { ...part, tool: "bash" },
+      // #3897: native tool ids are admissible; a name outside the admissible shape is not.
+      { ...part, tool: "not a tool!" },
       { ...part, unexpected: true },
       { ...part, state: { ...part.state, unexpected: true } },
       // The raw-argument bound is the catalog argument ceiling that admitted the call at the
@@ -1049,7 +1051,8 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
   });
 
   it("labels unreviewed tools, statuses and part types without echoing them", () => {
-    const sentinel = "SENTINEL_UNREVIEWED_NAME";
+    // #3897: an admissible native tool id is accepted; the sentinel is deliberately not one.
+    const sentinel = "SENTINEL UNREVIEWED NAME!";
     const running = {
       status: "running",
       input: {},
@@ -1168,16 +1171,35 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
         syncRow(27, "message.part.updated.1", { sessionID: "ses_1", part: planPart, time: 27 }),
       ]),
     ).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
-    for (const rejected of [
-      syncRow(27, "message.part.updated.1", {
-        sessionID: "ses_1",
-        part: { ...planPart, tool: "todoread" },
-        time: 27,
-      }),
-      syncRow(27, "todo.updated", { sessionID: "ses_1", todos }),
-    ]) {
-      expect(parseOpenCodeHistory([rejected])).toEqual({ ok: false, reason: "event-unknown" });
+    // #3897: a native tool part (`todoread`, `todo`) parses as an observation (the safe-activity
+    // projection decides what it becomes, #2480); a plan-surface tool *call* stays refused in
+    // every profile, and so does the unchosen plan event type.
+    expect(
+      parseOpenCodeHistory([
+        syncRow(27, "message.part.updated.1", {
+          sessionID: "ses_1",
+          part: { ...planPart, tool: "todoread" },
+          time: 27,
+        }),
+      ]),
+    ).toMatchObject({ ok: true });
+    for (const tool of ["todowrite", "todoread", "todo"]) {
+      expect(
+        parseOpenCodeHistory([
+          syncRow(28, "session.next.tool.called", {
+            timestamp: "2026-07-12T00:00:00.000Z",
+            sessionID: "ses_1",
+            assistantMessageID: "msg_1",
+            callID: "call_plan",
+            tool,
+            provider: "keiko",
+          }),
+        ]),
+      ).toEqual({ ok: false, reason: "event-unknown" });
     }
+    expect(
+      parseOpenCodeHistory([syncRow(27, "todo.updated", { sessionID: "ses_1", todos })]),
+    ).toEqual({ ok: false, reason: "event-unknown" });
   });
 
   it("classifies exact live session controls without projecting them through history", () => {
@@ -1413,7 +1435,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     expect(projectOpenCodePermissionRequestId("permission-1")).toBeUndefined();
   });
 
-  it("fails closed when history reports an upstream built-in tool invocation", () => {
+  it("fails closed when history reports an inadmissible tool invocation", () => {
     expect(
       parseOpenCodeHistory([
         {
@@ -1426,7 +1448,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
             sessionID: "ses_1",
             assistantMessageID: "msg_1",
             callID: "call_1",
-            tool: "bash",
+            tool: "../bash",
             input: {},
             provider: "keiko-runtime",
           },

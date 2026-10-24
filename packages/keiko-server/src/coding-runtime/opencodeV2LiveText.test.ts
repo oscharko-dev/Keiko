@@ -7,6 +7,7 @@ import {
   MAX_LIVE_REASONING_UTF8_BYTES,
   MAX_LIVE_TEXT_UTF8_BYTES,
   createOpenCodeV2LiveText,
+  fittingUtf8Prefix,
   type LiveTextKind,
 } from "./opencodeV2LiveText.js";
 
@@ -336,5 +337,24 @@ describe("OpenCode V2 live text overlay", () => {
 
     expect(live.takeCounts()).toEqual({ applied: 1, dropped: 1, diverged: 1 });
     expect(live.takeCounts()).toEqual({ applied: 0, dropped: 0, diverged: 0 });
+  });
+});
+
+// The history projection cuts a finished part with this very function, so a streamed part and the
+// finished one are cut at the same character.
+describe("fittingUtf8Prefix", () => {
+  it.each([
+    ["ASCII", "abcdef", 4, "abcd"],
+    ["two-byte characters", "ééé", 5, "éé"],
+    ["three-byte characters", "€€€", 8, "€€"],
+    ["a four-byte character", "a𝒳b", 4, "a"],
+    ["no room", "abc", 0, ""],
+    ["text that fits", "abc", 3, "abc"],
+  ])("keeps whole characters only: %s", (_name, text, room, expected) => {
+    expect(fittingUtf8Prefix(text, room)).toBe(expected);
+  });
+
+  it("treats a lone surrogate as one character of its own", () => {
+    expect(fittingUtf8Prefix("a\ud83dz", 4)).toBe("a\ud83d");
   });
 });

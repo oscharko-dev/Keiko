@@ -205,16 +205,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
   ],
   [
-    "packages/keiko-contracts/src/opencode-service-host.ts:dataRecord",
-    "Pure supplemental metadata validation maps hostile or revoked proxies to absent approval; no host selection, installation or launch is performed.",
-  ],
-  [
     "packages/keiko-sandbox/src/seatbelt-execution-root.ts:copyRuntimeGatewayFilesystem",
     "Pure filesystem capability validation returns absent data. The owning planner returns gateway-filesystem-isolation-unsupported or the confinement producer throws runtime-gateway-policy-invalid before execution.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/opencodeServiceHostArtifact.ts:closedHostEnvironment",
-    "Pure inactive fixed-program validation maps hostile descriptors to host-environment-invalid; it neither attests a disk artifact nor authorizes a launch.",
   ],
   [
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeSnapshotHelperResponse",

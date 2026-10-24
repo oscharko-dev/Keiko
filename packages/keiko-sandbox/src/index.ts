@@ -14,6 +14,7 @@ export {
 } from "./backends.js";
 export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
+export { nativeHomeDeniedReadRoots, nativeToolchainReadRoots } from "./native-toolchain-roots.js";
 export { planIsolatedRun, GATEWAY_UNSUPPORTED_ON_HOST_REASON } from "./plan.js";
 export {
   DEBUG_CAPSULE_RUNTIME_MOUNT,
@@ -83,5 +84,7 @@ export type {
   NetworkPolicy,
   SandboxAttestation,
   SandboxBackend,
+  RuntimeGatewayEgress,
   RuntimeGatewayFilesystem,
+  RuntimeGatewayProfile,
 } from "./types.js";
