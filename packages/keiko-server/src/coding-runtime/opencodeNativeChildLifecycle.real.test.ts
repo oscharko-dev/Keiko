@@ -91,6 +91,8 @@ interface Gateway {
   readonly server: Server;
   port: number;
   readonly requests: { readonly at: number; readonly role: Role; readonly lastText: string }[];
+  /** When a Code Mode program reached `/hang`, which is never answered. */
+  readonly hangs: number[];
   script: (context: ModelContext) => ModelPlan;
 }
 
@@ -174,9 +176,15 @@ async function startGateway(): Promise<Gateway> {
     server: createServer(),
     port: 0,
     requests: [],
+    hangs: [],
     script: () => ({ kind: "text", text: "done" }),
   };
   gateway.server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+    // A program's request that only an interruption ends; `closeServer` drops the connection.
+    if (request.url === "/hang") {
+      gateway.hangs.push(Date.now());
+      return;
+    }
     void readBody(request).then(async (text) => {
       const context = modelContext(JSON.parse(text) as unknown);
       gateway.requests.push({ at: Date.now(), role: context.role, lastText: context.lastText });
@@ -756,7 +764,7 @@ describe("pinned native OpenCode session tree: background subagents", () => {
             runId: RUN_ID,
             activityLog: owners.activityLog,
           });
-          expect(stopped).toEqual({ interruptedChildren: 1, settled: true });
+          expect(stopped).toEqual({ interruptedChildren: 1, stoppedShells: 0, settled: true });
           expect(await activeIds(run)).toEqual([]);
           expect(await sessionOutcome(run, child)).toBe("interrupted");
           // The stop took a moment, not the child's scripted thirty seconds.
@@ -813,6 +821,63 @@ describe("pinned native OpenCode session tree: background subagents", () => {
 // #3897 review: the run's admission cache holds 64 children. With 64 linked sessions proven while
 // idle, a 65th child that is genuinely active must keep the tree active and receive the interrupt;
 // a full cache that skipped its proof read the tree as terminal while the child ran.
+// #3903 AC4: a Code Mode program is a tool call of the primary session, so stopping the turn must
+// end a program that is still waiting, not let the run wait for the program.
+describe("pinned native OpenCode Code Mode cancellation", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "interrupts a Code Mode program that is still waiting and settles the turn at once",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          const code = `return (await fetch("http://127.0.0.1:${String(run.gateway.port)}/hang")).status;`;
+          run.gateway.script = (context): ModelPlan =>
+            context.lastRole === "tool"
+              ? { kind: "text", text: "The program ended." }
+              : { kind: "tool", name: "execute", arguments: { code } };
+          const turn = startTurn(run, owners, "PARENT_TASK run a long program");
+          await until(() => Promise.resolve(run.gateway.hangs[0]));
+          expect(Object.keys(await run.client.active())).toContain(run.sessionId);
+          const stoppedAt = Date.now();
+          const stopped = await interruptNativeTree(run.client, owners.tree, {
+            signal: AbortSignal.timeout(20_000),
+            pause,
+            runId: RUN_ID,
+            activityLog: owners.activityLog,
+          });
+          expect(stopped).toEqual({ interruptedChildren: 0, stoppedShells: 0, settled: true });
+          expect(await activeIds(run)).toEqual([]);
+          expect(Date.now() - stoppedAt).toBeLessThan(10_000);
+          await turn.settled;
+          // The producer settles the program's part as aborted, its pending fetch with it.
+          const program = (await run.client.messages(run.sessionId))
+            .flatMap((message): unknown[] =>
+              Array.isArray(message.content) ? (message.content as unknown[]) : [],
+            )
+            .map(object)
+            .find((part) => part?.name === "execute");
+          expect(object(program?.state)).toMatchObject({
+            status: "error",
+            error: { type: "aborted" },
+            metadata: { toolCalls: [{ tool: "fetch", status: "error" }] },
+          });
+          expect(await sessionOutcome(run, run.sessionId)).toBe("interrupted");
+          // The program never got an answer, and no later model call continued as if it had.
+          expect(run.gateway.hangs).toHaveLength(1);
+          expect(run.gateway.requests.map((request) => request.lastText)).not.toContainEqual(
+            expect.stringContaining("The program ended."),
+          );
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    120_000,
+  );
+});
+
 describe("pinned native OpenCode session tree: beyond the cached bound", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 
@@ -879,7 +944,7 @@ describe("pinned native OpenCode session tree: beyond the cached bound", () => {
             runId: RUN_ID,
             activityLog: owners.activityLog,
           });
-          expect(outcome).toEqual({ interruptedChildren: 1, settled: true });
+          expect(outcome).toEqual({ interruptedChildren: 1, stoppedShells: 0, settled: true });
           expect(await activeIds(run)).not.toContain(late);
         } finally {
           await owners.stop();
