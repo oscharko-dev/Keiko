@@ -1581,37 +1581,7 @@ function validateRuntimeStoppedEventFields(
   value: Record<string, unknown>,
   errors: string[],
 ): boolean {
-  let valid = true;
-  valid = [
-    validateRequiredEnumField(
-      value,
-      "runtimeSource",
-      CODING_WORKBENCH_RUNTIME_SOURCES,
-      "event",
-      errors,
-    ),
-    valid,
-  ].every(Boolean);
-  valid = [
-    validateRequiredEnumField(
-      value,
-      "modelSource",
-      CODING_WORKBENCH_MODEL_SOURCES,
-      "event",
-      errors,
-    ),
-    valid,
-  ].every(Boolean);
-  valid = [
-    validateRequiredEnumField(
-      value,
-      "health",
-      CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
-      "event",
-      errors,
-    ),
-    valid,
-  ].every(Boolean);
+  let valid = validateRuntimeHealthEventFields(value, errors);
   valid = [
     validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors),
     valid,
