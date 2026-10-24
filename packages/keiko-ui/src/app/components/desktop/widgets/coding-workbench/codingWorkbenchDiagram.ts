@@ -11,7 +11,12 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 //    (the theme, its CSS and variables, labels, fonts and every limit below).
 //  - The SVG is parsed into an inert document and every node must pass an SVG-only allowlist: no
 //    script, no event handler, no link or URL-bearing attribute, no `foreignObject`, no style that
-//    loads anything. The nodes that were checked are the nodes inserted; nothing reaches `innerHTML`.
+//    loads anything. A reference may only name an element by its id (`url(#id)`, how Mermaid ties a
+//    marker, gradient, filter or clip path to a shape); any other `url(`, an image function and a CSS
+//    escape refuse the diagram. The nodes that were checked are the nodes inserted; nothing reaches
+//    `innerHTML`.
+//  - A `switch` that offers HTML in a `foreignObject` keeps only its plain SVG alternative: the
+//    `foreignObject` is removed before the check, never drawn.
 //  - The checked nodes go into a shadow root, so the diagram's own stylesheet styles that diagram
 //    and nothing else on the page.
 //
@@ -35,7 +40,8 @@ export const DIAGRAM_MAX_CHARS = 20_000;
 const DIAGRAM_MAX_EDGES = 500;
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MAX_MARKUP_DEPTH = 256;
-// What Mermaid draws with. Anything else (a `foreignObject`, `script`, `a`, `use`, `image`,
+// What Mermaid 11 draws with, every diagram type measured against its real output in Chromium.
+// Anything else (a `foreignObject` outside a `switch`, `script`, `a`, `use`, `image`, `feImage`,
 // animation or `iframe`) refuses the whole diagram.
 const SVG_ELEMENTS: ReadonlySet<string> = new Set([
   "circle",
@@ -43,6 +49,8 @@ const SVG_ELEMENTS: ReadonlySet<string> = new Set([
   "defs",
   "desc",
   "ellipse",
+  "fedropshadow",
+  "filter",
   "g",
   "line",
   "lineargradient",
@@ -55,6 +63,7 @@ const SVG_ELEMENTS: ReadonlySet<string> = new Set([
   "stop",
   "style",
   "svg",
+  "switch",
   "symbol",
   "text",
   "title",
@@ -69,8 +78,15 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set([
   "data",
   "background",
 ]);
+// Checked after every reference to an element id has been removed, so any `url(` left loads a
+// resource. The image functions take a plain string as a resource address, without `url(`.
 const ACTIVE_TOKENS: readonly string[] = [
   "url(",
+  "image(",
+  "image-set(",
+  "cross-fade(",
+  "element(",
+  "src(",
   "expression(",
   "javascript:",
   "@import",
@@ -117,8 +133,14 @@ function mermaidConfig(dark: boolean): MermaidConfig {
   };
 }
 
+// `url(#id)`, `url('#id')` or `url("#id")`: a reference to an element of the same drawing, which
+// loads nothing. It is the only `url(` Mermaid writes.
+const ELEMENT_REFERENCE = /url\(\s*(["']?)#[A-Za-z_][\w-]*\1\s*\)/giu;
+
 function hasActiveToken(value: string): boolean {
-  const compact = value.toLowerCase().replaceAll(/\s+/gu, "");
+  // A CSS escape can spell any function name (`\75 rl(` is `url(`); Mermaid writes none.
+  if (value.includes("\\")) return true;
+  const compact = value.replaceAll(ELEMENT_REFERENCE, "").toLowerCase().replaceAll(/\s+/gu, "");
   return ACTIVE_TOKENS.some((token) => compact.includes(token));
 }
 
@@ -144,14 +166,42 @@ function isInertNode(node: Node, depth: number): boolean {
   return [...node.childNodes].every((child) => isInertNode(child, depth + 1));
 }
 
+function isHtmlAlternative(element: Element): boolean {
+  return element.namespaceURI === SVG_NAMESPACE && element.localName === "foreignObject";
+}
+
+// The fallback text carries the section's own class, whose fill is the section's background; the
+// HTML label it stands in for is drawn in the text colour, and so is the fallback.
+function inTextColour(text: Element): void {
+  const style = (text.getAttribute("style") ?? "").trim();
+  text.setAttribute(
+    "style",
+    `${style}${style === "" || style.endsWith(";") ? "" : ";"} fill: currentColor;`,
+  );
+}
+
+// A `switch` draws its first alternative the browser supports; without the HTML one, that is the
+// plain SVG fallback Mermaid writes beside it (the user-journey diagram's section and task labels).
+function withoutHtmlAlternatives(root: Element): void {
+  for (const choice of [...root.getElementsByTagNameNS(SVG_NAMESPACE, "switch")]) {
+    const alternatives = [...choice.children];
+    if (!alternatives.some(isHtmlAlternative)) continue;
+    for (const alternative of alternatives) {
+      if (isHtmlAlternative(alternative)) alternative.remove();
+      else if (alternative.localName === "text") inTextColour(alternative);
+    }
+  }
+}
+
 /** The checked root of an SVG document, or null when anything beyond plain SVG is present. */
 export function inertSvgNodes(markup: string): readonly Node[] | null {
   if (typeof DOMParser === "undefined") return null;
   const document = new DOMParser().parseFromString(markup, "image/svg+xml");
   const root = document.documentElement;
   if (root.getElementsByTagName("parsererror").length > 0) return null;
-  if (root.localName !== "svg" || !isInertNode(root, 0)) return null;
-  return [root];
+  if (root.localName !== "svg") return null;
+  withoutHtmlAlternatives(root);
+  return isInertNode(root, 0) ? [root] : null;
 }
 
 function prefersDark(): boolean {
