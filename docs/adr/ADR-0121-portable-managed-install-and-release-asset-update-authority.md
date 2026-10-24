@@ -393,9 +393,13 @@ uses the existing persistent native app-owner protocol with a separate account-f
 The helper runs in a temporary launchd job in the current user's GUI login domain. Each job receives
 its own kernel resource coalition. Its descendants inherit that membership through fork, exec,
 reparenting and `setsid`; an unprivileged descendant cannot select another resource coalition.
-The job is loaded from a private temporary definition with `KeepAlive` disabled, then removed after
-the helper exits. Admission first checks that the target GUI domain is available under a bounded
-read-only launchctl query. It is not installed as a persistent LaunchAgent. A same-user socket checks the
+The job is loaded from a private temporary definition with `KeepAlive` disabled and
+`ProcessType=Interactive`, then removed after the helper exits. This is the human-requested UI
+lifecycle: launchd's `Background` class is intended for work not directly requested by the user
+and throttles CPU and I/O. The scheduling class does not change the lifecycle's startup or stop
+deadlines, resource-coalition ownership or authority. Admission first checks that the target GUI
+domain is available under a bounded read-only launchctl query. It is not installed as a persistent
+LaunchAgent. A same-user socket checks the
 peer's executable and transfers only the existing lifecycle descriptors. The receiver acknowledges
 their installation before the sender releases its copies; descriptor presence is preserved exactly.
 Setup errors before descriptor transfer return the existing KRS1 observation error. Once descriptors
