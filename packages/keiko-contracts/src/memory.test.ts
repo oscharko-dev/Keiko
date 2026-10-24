@@ -100,6 +100,38 @@ import {
   validateMemoryRecord,
 } from "./memory-record-validation.js";
 
+describe("supported memory count bounds", () => {
+  it("exposes the tag count bound used by the public record validator", () => {
+    const maximum = publicMemory.MEMORY_TAGS_MAX_COUNT;
+    expect(maximum).toBeGreaterThan(0);
+    const tags = Array.from({ length: maximum }, () => "tag");
+    expect(publicMemory.validateMemoryRecord({ ...happyRecord(), tags }).ok).toBe(true);
+    expect(
+      publicMemory.validateMemoryRecord({ ...happyRecord(), tags: [...tags, "extra"] }).ok,
+    ).toBe(false);
+  });
+
+  it("exposes the entry count bound used by both public payload variants", () => {
+    const maximum = publicMemory.MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES;
+    expect(maximum).toBeGreaterThan(0);
+    const items = Array.from({ length: maximum }, () => "item");
+    const entries = Array.from({ length: maximum }, () => ({ key: "key", value: "value" }));
+    const overflowingItems = { kind: "string-list", items: [...items, "extra"] };
+    const overflowingEntries = {
+      kind: "key-value",
+      entries: [...entries, { key: "extra", value: "value" }],
+    };
+    expect(publicMemory.validateMemoryStructuredPayload({ kind: "string-list", items }).ok).toBe(
+      true,
+    );
+    expect(publicMemory.validateMemoryStructuredPayload(overflowingItems).ok).toBe(false);
+    expect(publicMemory.validateMemoryStructuredPayload({ kind: "key-value", entries }).ok).toBe(
+      true,
+    );
+    expect(publicMemory.validateMemoryStructuredPayload(overflowingEntries).ok).toBe(false);
+  });
+});
+
 // ─── Branded-ID helpers ───────────────────────────────────────────────────────
 const mem = (s: string): MemoryId => s as MemoryId;
 const reviewer = (s: string): MemoryReviewerId => s as MemoryReviewerId;

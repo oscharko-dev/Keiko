@@ -44,6 +44,8 @@ export {
 } from "./memory-contracts.js";
 
 // ─── Record types ─────────────────────────────────────────────────────────────
+export { MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES, MEMORY_TAGS_MAX_COUNT } from "./memory-internal.js";
+
 export type {
   AcceptMemoryProposalOptions,
   MemoryCorrectionPredecessorsResponse,

@@ -32,6 +32,7 @@ import {
   FORBIDDEN_CONTROL_RE,
   MEMORY_BODY_MAX_CHARS,
   MEMORY_RATIONALE_MAX_CHARS,
+  MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES,
   MEMORY_TAG_MAX_CHARS,
   isFiniteNonNegativeNumber,
   isMember,
@@ -41,8 +42,6 @@ import {
   isUnitInterval,
   validateOptionalReference,
 } from "./memory-internal.js";
-
-const MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES = 128;
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 export interface MemoryValidationOk<T> {

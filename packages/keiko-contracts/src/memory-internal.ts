@@ -1,7 +1,7 @@
 // Internal helpers shared by the memory contract validators (Epic #204, Issue #205).
-// NOT part of the public package surface. Other validator modules in this directory
-// import from here so primitive guards, bounded-text caps, and the control-character
-// safety gate stay defined exactly once.
+// Not a package subpath. The supported memory barrel re-exports the canonical count bounds;
+// primitive helpers and other caps remain internal. Validator modules import from here so
+// primitive guards, bounded-text caps, and the control-character safety gate stay defined once.
 
 // Bounded text caps. Chosen to keep audit summaries and rationales safe to ship to a
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
@@ -14,6 +14,7 @@ export const MEMORY_RATIONALE_MAX_CHARS = 1024;
 export const MEMORY_REASON_MAX_CHARS = 1024;
 export const MEMORY_TAG_MAX_CHARS = 64;
 export const MEMORY_TAGS_MAX_COUNT = 32;
+export const MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES = 128;
 export const MEMORY_SUMMARY_MAX_CHARS = 512;
 
 // Intentional control-range match — this is the safety gate. `no-control-regex` guards
