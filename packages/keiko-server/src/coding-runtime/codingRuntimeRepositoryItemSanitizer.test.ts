@@ -220,6 +220,69 @@ describe("custom agent sanitization", () => {
     );
   });
 
+  // #3897 review: the canonical V2 form is the rule array (https://opencode.ai/v2/docs/agents).
+  it("keeps the deny rules of a V2 permissions list and drops its allow and ask rules", () => {
+    const outcome = admitted(
+      sanitize(
+        "agent",
+        [
+          "---",
+          "description: Reviewer",
+          "permissions:",
+          "  - action: edit",
+          '    resource: "*"',
+          "    effect: deny",
+          "  - action: shell",
+          "    resource: git status",
+          "    effect: allow",
+          "  - effect: deny",
+          "    action: webfetch",
+          "    resource: '*'",
+          "---",
+          "body",
+        ].join("\n"),
+      ),
+    );
+
+    expect(outcome.content).toBe(
+      [
+        "---",
+        'description: "Reviewer"',
+        "permissions:",
+        '  - action: "edit"',
+        '    resource: "*"',
+        "    effect: deny",
+        '  - action: "webfetch"',
+        '    resource: "*"',
+        "    effect: deny",
+        "mode: subagent",
+        "---",
+        "body",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it.each([
+    ["a flow list", 'permissions: [{action: edit, resource: "*", effect: deny}]'],
+    ["a missing field", "permissions:\n  - action: edit\n    effect: deny"],
+    [
+      "a repeated field",
+      'permissions:\n  - action: edit\n    action: shell\n    resource: "*"\n    effect: deny',
+    ],
+    [
+      "an unknown field",
+      'permissions:\n  - action: edit\n    resource: "*"\n    effect: deny\n    note: x',
+    ],
+    ["an unknown effect", 'permissions:\n  - action: edit\n    resource: "*"\n    effect: never'],
+    ["a misaligned field", 'permissions:\n  - action: edit\n      resource: "*"\n    effect: deny'],
+    ["a scalar item", "permissions:\n  - edit"],
+  ])("refuses an agent whose V2 rule list cannot be kept: %s", (_label, frontmatter) => {
+    expect(refusal(sanitize("agent", `---\n${frontmatter}\n---\nbody`))).toBe(
+      "restriction-unrepresentable",
+    );
+  });
+
   it("reads the permission block at its own indentation", () => {
     const outcome = admitted(
       sanitize("agent", "---\npermission:\n    bash:\n        ls *: deny\n---\nbody"),

@@ -378,6 +378,7 @@ function agentFields(entries: readonly FrontmatterEntry[]): Step<ReadFields> {
     optionalField(entries, "temperature", boundedNumberReader(TEMPERATURE_MAX)),
     optionalField(entries, "top_p", boundedNumberReader(TOP_P_MAX)),
     agentRestrictions(entries),
+    agentRuleList(entries),
   ]);
   if (!fields.ok) return fields;
   const effective = mode.value?.[1] === "primary" ? "primary" : "subagent";
@@ -404,6 +405,89 @@ function agentRestrictions(entries: readonly FrontmatterEntry[]): Step<Field | u
   const denied = deniedRules(permission.rawContinuation);
   if (denied === undefined) return refuse("restriction-unrepresentable");
   return ok(denied.length === 0 ? undefined : (["permission", `\n${denied.join("\n")}`] as const));
+}
+
+/**
+ * The canonical V2 rule array (`permissions: [{action, resource, effect}]`, written as a block
+ * list), kept the same way as the map above: each `deny` rule re-rendered, `allow` and `ask`
+ * dropped. A flow list, an unknown key, a missing field or any other shape refuses the agent.
+ */
+function agentRuleList(entries: readonly FrontmatterEntry[]): Step<Field | undefined> {
+  const permissions = entryNamed(entries, "permissions");
+  if (permissions === undefined) return ok(undefined);
+  if (permissions.value.length > 0) return refuse("restriction-unrepresentable");
+  const rules = permissionRules(permissions.rawContinuation);
+  if (rules === undefined) return refuse("restriction-unrepresentable");
+  const denied = rules.filter((rule) => rule.effect === "deny");
+  if (denied.length === 0) return ok(undefined);
+  const rendered = denied.flatMap((rule) => [
+    `  - action: ${rule.action}`,
+    `    resource: ${rule.resource}`,
+    "    effect: deny",
+  ]);
+  return ok(["permissions", `\n${rendered.join("\n")}`] as const);
+}
+
+interface PermissionRule {
+  action?: string;
+  resource?: string;
+  effect?: string;
+}
+
+const RULE_FIELD_LINE = /^(action|resource|effect):[ \t]+(.+?)[ \t]*$/u;
+
+/** The rules of a block list, or undefined when any line or item is outside the closed shape. */
+function permissionRules(
+  lines: readonly string[],
+): readonly Required<PermissionRule>[] | undefined {
+  const rules: PermissionRule[] = [];
+  const shape = { itemIndent: undefined as number | undefined };
+  for (const line of lines) {
+    if (line.trim().startsWith("#")) continue;
+    if (!ruleLine(rules, shape, line)) return undefined;
+  }
+  return rules.every(completeRule) ? (rules as Required<PermissionRule>[]) : undefined;
+}
+
+// One line: `- key: value` opens an item at the list's indentation, `key: value` two columns
+// deeper continues it.
+function ruleLine(
+  rules: PermissionRule[],
+  shape: { itemIndent: number | undefined },
+  line: string,
+): boolean {
+  const indent = /^ */u.exec(line)?.[0].length ?? 0;
+  shape.itemIndent ??= indent;
+  const content = line.slice(indent);
+  const opens = indent === shape.itemIndent && content.startsWith("- ");
+  if (opens) rules.push({});
+  else if (indent !== shape.itemIndent + 2) return false;
+  const current = rules.at(-1);
+  return current !== undefined && ruleField(current, opens ? content.slice(2) : content);
+}
+
+function ruleField(rule: PermissionRule, content: string): boolean {
+  const match = RULE_FIELD_LINE.exec(content);
+  const key = match?.[1] as keyof PermissionRule | undefined;
+  const value = match?.[2];
+  if (key === undefined || value === undefined || rule[key] !== undefined) return false;
+  const parsed = ruleValue(key, value);
+  if (parsed === undefined) return false;
+  rule[key] = parsed;
+  return true;
+}
+
+function ruleValue(key: keyof PermissionRule, value: string): string | undefined {
+  if (key === "effect") return /^(deny|allow|ask)$/u.test(value) ? value : undefined;
+  const line =
+    key === "action"
+      ? PERMISSION_ACTION_LINE.exec(`${value}: deny`)
+      : PERMISSION_PATTERN_LINE.exec(`${value}: deny`);
+  return line?.[1] === undefined ? undefined : quotedName(line[1]);
+}
+
+function completeRule(rule: PermissionRule): boolean {
+  return rule.action !== undefined && rule.resource !== undefined && rule.effect !== undefined;
 }
 
 function disablesTools(tools: FrontmatterEntry | undefined): boolean {

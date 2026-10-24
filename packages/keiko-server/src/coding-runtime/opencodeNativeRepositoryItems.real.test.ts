@@ -676,6 +676,18 @@ permission:
 ---
 Guarded reviewer prompt.
 `,
+  "agents/guardedlist.md": `---
+description: Reviews without editing, in the V2 rule list
+mode: subagent
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+---
+Guarded list reviewer prompt.
+`,
+  "commands/guardedlistwork.md":
+    "---\ndescription: Delegate to the list reviewer\nagent: guardedlist\n---\nList work on $ARGUMENTS\n",
   "commands/guardedwork.md":
     "---\ndescription: Delegate to the guarded reviewer\nagent: guarded\n---\nGuarded work on $ARGUMENTS\n",
   "commands/helperwork.md":
@@ -688,13 +700,18 @@ function guardedCopy(run: Run): string {
 
 /**
  * Runs a command whose agent answers with one scripted write of `file`, and reports whether the
- * file landed and whether the native policy hook was asked for the edit.
+ * file landed, whether the native policy hook was asked for the edit, and under which agent. The
+ * run's tree is idle first: a delegated command's parent reads the subagent's report in a turn of
+ * its own, which would otherwise take the next scripted call.
  */
 async function commandWrite(
   run: Run,
   command: string,
   file: string,
-): Promise<{ readonly written: boolean; readonly asked: boolean }> {
+): Promise<{ readonly written: boolean; readonly asked: boolean; readonly agent?: unknown }> {
+  await expect
+    .poll(async () => Object.keys(await run.client.active()).length, { timeout: 30_000 })
+    .toBe(0);
   const path = join(run.fixture.workspace, file);
   const asked = run.facade.requests.length;
   const before = run.gateway.requests.length;
@@ -704,10 +721,15 @@ async function commandWrite(
   await expect
     .poll(() => run.gateway.requests.length, { timeout: 60_000 })
     .toBeGreaterThanOrEqual(before + 2);
-  const editAsked = run.facade.requests
+  const edit = run.facade.requests
     .slice(asked)
-    .some((recorded) => object(recorded.body)?.permission === "edit");
-  return { written: existsSync(path), asked: editAsked };
+    .map((recorded) => object(recorded.body))
+    .find((body) => body?.permission === "edit");
+  return {
+    written: existsSync(path),
+    asked: edit !== undefined,
+    ...(edit === undefined ? {} : { agent: edit.agent }),
+  };
 }
 
 describe("pinned native OpenCode repository items", () => {
@@ -950,13 +972,21 @@ describe("pinned native OpenCode repository items", () => {
           written: false,
           asked: false,
         });
+        // The canonical V2 rule array keeps its denial the same way.
+        expect(await commandWrite(run, "guardedlistwork", "GUARDED-LIST.txt")).toEqual({
+          written: false,
+          asked: false,
+        });
+        // The hook is asked under the delegated subagent itself, never the parent's `build`.
         expect(await commandWrite(run, "delegated", "REVIEWED.txt")).toEqual({
           written: true,
           asked: true,
+          agent: "reviewer",
         });
         expect(await commandWrite(run, "helperwork", "HELPED.txt")).toEqual({
           written: true,
           asked: true,
+          agent: "helper",
         });
       });
     },

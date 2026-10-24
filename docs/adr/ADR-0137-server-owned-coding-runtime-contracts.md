@@ -1254,11 +1254,14 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - **Authority.** An admitted agent has the producer's default rules for a plain agent (allow by
     default, `.env` reads ask, `browser` denied) plus whatever `keiko.native-policy` decides for
     every action by mode: no key that could widen it survives. Its own restrictions do survive:
-    the copy keeps every `deny` rule of its `permission` block, re-rendered from a closed grammar
-    (an action with a value, or an action with one level of quoted or plain patterns), and drops
+    the copy keeps every `deny` rule of its V1 `permission` map and of its canonical V2
+    `permissions` rule array (block items of `action`, `resource` and `effect`), re-rendered from a
+    closed grammar (for the map, an action with a value or with one level of quoted or plain
+    patterns), and drops
     `allow` and `ask`, because the runtime lets a later rule override an earlier one and a
     forwarded `allow` could undo one of Keiko's own denials before the hook is asked. Dropping an
-    `allow` exception only narrows the agent. A permission block outside that grammar, or a
+    `allow` exception only narrows the agent. A permission map or rule array outside that grammar
+    (a flow list among them), or a
     `tools` switch that turns a tool off, refuses the agent (`restriction-unrepresentable`)
     instead of silently losing the restriction. The original executable proves it: the guarded
     agent's write is refused before the hook is asked, while an ordinary admitted agent's write is
