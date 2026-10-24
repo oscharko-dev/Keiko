@@ -337,16 +337,19 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
 
 /**
  * A linked worktree's common Git directory, read-only. It is re-allowed after the denied roots
- * because a repository Keiko cloned can sit inside its own state directory; Git resolves the path
- * with `lstat` on every ancestor, which see their metadata only. The credential names stay denied
- * by the rule that follows every other one.
+ * because a repository Keiko cloned can sit inside its own state directory. Its ancestor directory
+ * NODES are readable too, like the ancestors of the workspace: Git and the runtime resolve the
+ * repository's own working tree (the common directory's parent) with `realpath`, which opens each
+ * node, and the original runtime fails to start an instance when that resolution is refused
+ * (#3897, customer-shape qualification). A node shows its entry names only, never a file or a
+ * sibling subtree. The credential names stay denied by the rule that follows every other one.
  */
 function gitMetadataSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
   const roots = closed.gitMetadataReadRoots ?? [];
   if (roots.length === 0) return "";
   return (
     `(allow file-read* ${pathFilters("subpath", roots)})` +
-    `(allow file-read-metadata ${pathFilters("literal", roots.flatMap(ancestors))})`
+    `(allow file-read* ${pathFilters("literal", roots.flatMap(ancestors))})`
   );
 }
 

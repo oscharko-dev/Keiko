@@ -529,6 +529,10 @@ describe("native Git metadata read roots (#3897 review)", () => {
     expect(rules.indexOf(allow)).toBeLessThan(rules.lastIndexOf("(deny file-read"));
     expect(rules).not.toMatch(/file-write\*[^)]*repos\/app\/\.git/u);
     expect(rules).toContain('(literal "/Users/owner/Library/Application Support/Keiko/repos/app")');
+    // The repository's own working tree is a node the runtime resolves, never a readable subtree.
+    expect(rules).not.toContain(
+      '(subpath "/Users/owner/Library/Application Support/Keiko/repos/app")',
+    );
   });
 
   it("adds nothing when no Git metadata root is named", () => {

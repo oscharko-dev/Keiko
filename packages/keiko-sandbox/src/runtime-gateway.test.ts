@@ -1606,6 +1606,10 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
           ),
           writeCommon: `fs.writeFileSync(${JSON.stringify(join(common, "keiko-probe"))}, "x")`,
           readCredential: `fs.readFileSync(${JSON.stringify(join(common, ".env"))})`,
+          // The original runtime resolves the repository's own working tree when Git works, and
+          // its resolution opens the directory node (OpenCode 2.1.4: `FileSystem.realPath`).
+          resolveRepository: `fs.closeSync(fs.openSync(${JSON.stringify(repository)}, "r"))`,
+          readRepositoryFile: `fs.readFileSync(${JSON.stringify(join(repository, "app.js"))})`,
         });
 
         const without = runNative(linked, nativeConfinement(linked, "loopback-only"), probe);
@@ -1628,6 +1632,8 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
           blame: true,
           writeCommon: false,
           readCredential: false,
+          resolveRepository: true,
+          readRepositoryFile: false,
         });
       } finally {
         tree.cleanup();

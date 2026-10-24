@@ -1487,7 +1487,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   registration, bound to the managed task's own repository; the kernel re-allows it read-only after
   the denied roots (a repository Keiko cloned may sit in its state directory) and before the
   credential names, so native `status`, `diff`, `log`, `show` and `blame` work while a write to it
-  stays refused. A forged, stale or misdirected `.git` file names nothing and is recorded as
+  stays refused. Its ancestor directory nodes are readable like the workspace's (entry names only,
+  never a file or a sibling subtree): once Git works, the original runtime resolves the repository's
+  own working tree with `FileSystem.realPath`, which opens the node, and refused that resolution it
+  answers every instance request with HTTP 500 (found by the customer-shape qualification). A forged, stale or misdirected `.git` file names nothing and is recorded as
   `unproven` on `coding-runtime.git-metadata.resolved` (#3897 review). A shell child is refused each of these by the real kernel
   (`runtime-gateway.test.ts`, and through the real runtime's own shell tool in
   `opencodeNativeProjectBoundary.real.test.ts`, whose control without the protected root rewrites
