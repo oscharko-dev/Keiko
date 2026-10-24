@@ -2408,3 +2408,81 @@ describe("OpenCode V2 slash command presentation", () => {
     expect(seen).toEqual(["msg_user"]);
   });
 });
+
+// #3897 (T19): OpenCode 2.1.4 registers one plan tool, `todowrite`, behind its opt-in
+// `experimental.todo` (`opencodeNativeQualification.real.test.ts`). Its completed part is the
+// governed plan snapshot and never productive tool activity (#2480); a part that has not completed
+// carries no final step list and shows nothing.
+describe("OpenCode V2 plan carrier tool parts (#3897)", () => {
+  const todos = [
+    { content: "Read the module", status: "completed", priority: "high" },
+    { content: "Write the fix", status: "in_progress", priority: "medium" },
+    { content: "Run the checks", status: "pending", priority: "low" },
+    { content: "Drop the idea", status: "cancelled", priority: "low" },
+  ];
+
+  function planHistory(
+    name: string,
+    state: Readonly<Record<string, unknown>>,
+  ): readonly Record<string, unknown>[] {
+    return [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Plan the work." },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        time: { created: 2 },
+        content: [{ type: "tool", id: "call_plan", name, time: { created: 2 }, state }],
+      },
+    ];
+  }
+
+  function toolAndPlanSignals(history: readonly Record<string, unknown>[]): readonly unknown[] {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-plan",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    return projection
+      .project("ses_plan", history, undefined)
+      .flatMap((event) => projection.takeSignal(event) ?? [])
+      .filter((signal) => signal.kind === "plan" || signal.kind === "tool");
+  }
+
+  it.each(["todowrite", "todo"])(
+    "projects a completed %s part as the plan snapshot and not as a tool",
+    (name) => {
+      expect(
+        toolAndPlanSignals(planHistory(name, { status: "completed", input: { todos } })),
+      ).toEqual([
+        {
+          kind: "plan",
+          anchorMessageId: "msg_assistant",
+          steps: [
+            { text: "Read the module", state: "completed" },
+            { text: "Write the fix", state: "active" },
+            { text: "Run the checks", state: "pending" },
+            { text: "Drop the idea", state: "cancelled" },
+          ],
+          occurredAt: new Date(2).toISOString(),
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    ["streaming", "PRIVATE_PARTIAL_ARGUMENT"],
+    ["running", { todos }],
+    ["error", { todos }],
+  ])("shows nothing for a %s plan part", (status, input) => {
+    expect(toolAndPlanSignals(planHistory("todowrite", { status, input }))).toEqual([]);
+  });
+
+  it("keeps an unreadable completed plan visible as the tool it is rather than losing it", () => {
+    const malformed = [{ content: "No priority", status: "pending" }];
+    expect(
+      toolAndPlanSignals(
+        planHistory("todowrite", { status: "completed", input: { todos: malformed } }),
+      ),
+    ).toEqual([expect.objectContaining({ kind: "tool", tool: "todowrite", state: "succeeded" })]);
+  });
+});

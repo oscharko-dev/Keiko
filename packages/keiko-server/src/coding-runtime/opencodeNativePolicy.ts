@@ -104,7 +104,7 @@ const READ_ACTIONS = new Set([
   "skill",
   "subagent",
   "question",
-  "todo",
+  "todowrite",
   "doom_loop",
 ]);
 const EDIT_ACTIONS = new Set(["edit", "write", "patch"]);
@@ -123,7 +123,7 @@ const PERMISSION_LOG_VALUES = [
   "skill",
   "subagent",
   "question",
-  "todo",
+  "todowrite",
   "execute",
   "external_directory",
   "doom_loop",
@@ -873,7 +873,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "skill",
         "subagent",
         "question",
-        "todo",
+        "todowrite",
         "execute",
         "external_directory",
         "doom_loop",

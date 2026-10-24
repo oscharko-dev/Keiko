@@ -179,6 +179,20 @@ function partSignal(data: Record<string, unknown>): CodingSafeActivitySignalOutc
   return { kind: "skip" };
 }
 
+/**
+ * The plan snapshot of one plan-carrier tool part, for the history that reports tool parts in the
+ * OpenCode 2.x shape (`opencodeV2History.ts`): the same projection of the same `todos`, so the two
+ * histories cannot disagree on what a plan step is. `skip` means the part carries no final step
+ * list yet (or failed); `dropped` means the final list is unreadable (#2480, #3897).
+ */
+export function openCodePlanCarrierSignal(
+  messageId: string,
+  state: Readonly<Record<string, unknown>>,
+  occurredAt: string,
+): OpenCodeSafeActivityOutcome<CodingSafeActivitySignal> {
+  return planSignal({ messageID: messageId, state }, occurredAt);
+}
+
 /** The plan tool projects as a plan snapshot, never as productive tool activity (#2480). */
 function planSignal(
   part: Record<string, unknown>,

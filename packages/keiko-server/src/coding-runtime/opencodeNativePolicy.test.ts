@@ -130,7 +130,9 @@ describe("native policy effects per autonomy mode", () => {
     for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
       expect(effectOf(mode, "read", ["src/a.ts"])).toBe("allow");
       expect(effectOf(mode, "glob", ["**/*.ts"])).toBe("allow");
-      expect(effectOf(mode, "todo", [])).toBe("allow");
+      // The pinned producer asks for its plan tool as `todowrite` with the resource `*` (observed
+      // through the permission hook of the real executable; `opencodeNativeQualification.real.test.ts`).
+      expect(effectOf(mode, "todowrite", ["*"])).toBe("allow");
       expect(effectOf(mode, "subagent", ["explore"])).toBe("allow");
     }
     expect(effectOf("governed-assist", "edit", ["src/a.ts"])).toBe("ask");
@@ -337,9 +339,17 @@ describe("native policy evidence", () => {
       decision: decide("autonomous-delivery", "teleport", []),
       outcome: "unsupported-action",
     });
-    expect(captured.records).toHaveLength(3);
-    const [first, second, third] = captured.records;
-    if (first === undefined || second === undefined || third === undefined) throw new Error("log");
+    // The pinned producer's plan tool asks as `todowrite`; the line names it in the closed vocabulary.
+    recordOpenCodeNativePolicyDecision(captured.activityLog, "run-native-1", {
+      mode: "governed-assist",
+      request: request("todowrite", ["*"]),
+      decision: decide("governed-assist", "todowrite", ["*"]),
+      outcome: "allowed",
+    });
+    expect(captured.records).toHaveLength(4);
+    const [first, second, third, fourth] = captured.records;
+    if (first === undefined || second === undefined || third === undefined || fourth === undefined)
+      throw new Error("log");
     expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",
@@ -365,6 +375,12 @@ describe("native policy evidence", () => {
         formatActivityLogProofLine(third),
       ),
     ).toMatchObject({ permission: "other", effect: "deny", outcome: "unsupported-action" });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.native-policy.decided.emitted-line",
+        formatActivityLogProofLine(fourth),
+      ),
+    ).toMatchObject({ permission: "todowrite", effect: "allow", outcome: "allowed" });
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain("git push");
     expect(serialized).not.toContain("example.com");

@@ -35,6 +35,8 @@ import {
   isAdmissibleOpenCodeToolName,
   isOpenCodeCodeModeExecutionFailure,
 } from "./opencodeNativeTools.js";
+import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
+import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
@@ -688,7 +690,29 @@ function assistantPartCandidates(
   }
   if (part?.type !== "tool") return [];
   const signal = toolState(part, messageId, context.toolProfile);
-  return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
+  return [
+    candidate(
+      `${messageId}:tool:${String(index)}`,
+      "tool",
+      part,
+      toolOrPlanSignal(part, messageId, signal),
+    ),
+  ];
+}
+
+// The plan tool is the governed plan snapshot and never productive tool activity (#2480): a
+// completed part shows its step list, a part that has not completed (or failed) shows nothing, and
+// a completed list that cannot be read stays visible as the tool it is rather than being lost.
+function toolOrPlanSignal(
+  part: Readonly<Record<string, unknown>>,
+  messageId: string,
+  tool: CodingSafeActivitySignal & { kind: "tool" },
+): CodingSafeActivitySignal | undefined {
+  const state = record(part.state);
+  if (!OPENCODE_PLAN_CARRIER_TOOLS.has(toolIdentity(part).name) || state === undefined) return tool;
+  const plan = openCodePlanCarrierSignal(messageId, state, tool.occurredAt);
+  if (plan.kind === "value") return plan.value;
+  return plan.kind === "skip" ? undefined : tool;
 }
 
 /**

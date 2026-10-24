@@ -59,7 +59,7 @@ export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefini
         ["skill", "skill", false],
         ["subagent", "subagent", false],
         ["question", "question", false],
-        ["todo", "todo", false],
+        ["todowrite", "todowrite", false],
         ["execute", "execute", true],
         ["opencode_session_rename", "execute", true],
         ["opencode_session_move", "execute", true],
@@ -75,8 +75,12 @@ export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefini
 
 /**
  * The native tools outside Code Mode, in producer order: the registry the native profile draws its
- * advertisement from. The producer advertises the subset it enables for the agent and model alias
- * (the real-binary suite observed `patch` and the task-list tool registered but not advertised).
+ * advertisement from. The producer advertises the subset it enables for the agent and model alias,
+ * and `opencodeNativeQualification.real.test.ts` pins the two rules against the real executable:
+ * `patch` is registered for every model but advertised only to a model whose id contains `gpt-`
+ * (not `gpt-4`, not `oss`), where it replaces `edit` and `write`, so the alias `coding` never sees
+ * it; `todowrite` is registered only under the producer's opt-in `experimental.todo`, which Keiko
+ * leaves off.
  */
 export const OPENCODE_NATIVE_TOOL_NAMES: readonly string[] = Object.freeze(
   OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => !tool.codemode).map((tool) => tool.id),
@@ -95,7 +99,7 @@ export const OPENCODE_NATIVE_PERMISSION_ACTIONS: readonly string[] = Object.free
   "skill",
   "subagent",
   "question",
-  "todo",
+  "todowrite",
   "execute",
   "external_directory",
   "doom_loop",

@@ -54,7 +54,7 @@ describe("native tool inventory", () => {
       "skill",
       "subagent",
       "question",
-      "todo",
+      "todowrite",
     ]);
   });
 
